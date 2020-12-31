@@ -2,5 +2,7 @@ using Eisenia
 using Test
 
 @testset "Eisenia.jl" begin
-    # Write your tests here.
+    @testset "dummy-tests" begin
+        @test 1 + 1 == 2
+    end
 end
