@@ -19,10 +19,14 @@ import StatsPlots
 # use this to build up a story as we go, where outputs of earlier defined functions feed into
 # tests for further downstream functions
 
-"""
-$(DocStringExtensions.SIGNATURES)
+# if things fall out of date but look correct, update them automatically
+# https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Fixing-Outdated-Doctests
 
-A short description of the function
+"""
+$(DocStringExtensions.TYPEDEF)
+$(DocStringExtensions.TYPEDFIELDS)
+
+A short description of the Type
 
 ```jldoctest
 julia> 1 + 1
@@ -44,7 +48,7 @@ const AA_ALPHABET = filter(
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -91,7 +95,7 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -110,7 +114,7 @@ function get_kmer_index(kmers, kmer)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -128,7 +132,7 @@ function ordered_edge(a, b)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -167,7 +171,7 @@ function initialize_graph(observations, kmers::Vector{T}) where {T <: BioSequenc
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -183,7 +187,7 @@ function determine_edge_probabilities(graph, kmers, edge_evidence)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -233,7 +237,7 @@ function determine_edge_probabilities(graph, kmers, edge_evidence, strand)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -252,7 +256,7 @@ function assess_alignment(a, b)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -294,7 +298,7 @@ function assess_path_orientations(path, kmers, initial_orientation)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -326,7 +330,7 @@ function assess_path_likelihood(oriented_path, kmers, counts, outgoing_edge_prob
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -341,7 +345,7 @@ function orient_path(path, orientations)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -358,7 +362,7 @@ function assess_emission_match(a, b, orientation)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -395,7 +399,7 @@ function assess_emission(current_orientation, current_kmer_index, observed_kmer,
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -428,7 +432,7 @@ function assess_path(path,
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -452,7 +456,7 @@ function find_outneighbors(orientation, kmer_index, outgoing_edge_probabilities,
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -478,7 +482,7 @@ function assess_insertion(previous_orientation, current_kmer_index, observed_kme
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -492,7 +496,7 @@ function assess_alignment_accuracy(alignment_result)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -523,7 +527,7 @@ function assess_optimal_alignment(kmer, observed_kmer)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -542,7 +546,7 @@ function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) whe
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -561,7 +565,7 @@ function count_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -579,7 +583,7 @@ function orient_oriented_kmer(kmers, kmer)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -605,7 +609,7 @@ function oriented_path_to_sequence(oriented_path, kmers)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -626,7 +630,7 @@ function sequence_to_oriented_path(sequence, kmers::Vector{T}) where {T <: BioSe
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -724,7 +728,7 @@ function find_optimal_path(observed_kmer,
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -762,7 +766,7 @@ function backtrack_optimal_path(kmer_likelihoods, arrival_paths, edit_distances)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -801,7 +805,7 @@ function initialize_viterbi(graph, observed_path, kmers, counts, error_rate)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -887,7 +891,7 @@ function viterbi_maximum_likelihood_path(graph, observation, kmers, counts, erro
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -914,7 +918,7 @@ function plot_kmer_frequency_spectra(counts)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -923,7 +927,7 @@ julia> 1 + 1
 2
 ```
 """
-function my_show(x::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int64},Array{NamedTuple{(:observation_index, :edge_index),Tuple{Int64,Int64}},1}})
+function my_show(x::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int},Array{NamedTuple{(:observation_index, :edge_index),Tuple{Int,Int}},1}})
     for (k, vs) in x
         println(k)
         for v in vs
@@ -933,7 +937,7 @@ function my_show(x::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int64},Array{NamedT
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -950,7 +954,7 @@ function my_show(vector::AbstractVector{T}; kwargs...) where T <: OrientedKmer
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -969,7 +973,7 @@ function my_show(array::AbstractMatrix, kmers; kwargs...)
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 
@@ -996,7 +1000,7 @@ function my_show(arrival_paths::AbstractMatrix{T}, kmers; kwargs...) where {T <:
 end
 
 """
-$(DocStringExtensions.SIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
 

@@ -3,6 +3,21 @@ uuid = "453d265d-8292-4a7b-a57c-dce3f9ae6acd"
 authors = ["Cameron Prybol <cameron.prybol@gmail.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+BioAlignments = "00701ae9-d1dc-5365-b64a-a3a3ebf5695e"
+BioSequences = "7e6ae17a-c86d-528c-b3b9-7f778a29fe59"
+BioSymbols = "3c28c6f8-a34d-59c4-9654-267d177fcfa9"
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+GraphRecipes = "bd48cda9-67a9-57be-86fa-5b3c104eda73"
+LightGraphs = "093fc24a-ae57-5d10-9952-331d41423f4d"
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+PrettyTables = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
+
 [compat]
 julia = "1.5"
 
