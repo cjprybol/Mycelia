@@ -13,3 +13,10 @@ using Documenter
         doctest(Eisenia)
     end
 end
+
+# Benchmarking
+using PkgBenchmark
+
+# compares this current state against master branch
+results = judge(Eisenia, "master")
+export_markdown(stdout, results, export_invariants=true)
