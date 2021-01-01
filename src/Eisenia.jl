@@ -22,6 +22,13 @@ import StatsPlots
 # if things fall out of date but look correct, update them automatically
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Fixing-Outdated-Doctests
 
+const DNA_ALPHABET = BioSymbols.ACGT
+const RNA_ALPHABET = BioSymbols.ACGU
+const AA_ALPHABET = filter(
+    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+    BioSymbols.alphabet(BioSymbols.AminoAcid))
+
+
 """
 $(DocStringExtensions.TYPEDEF)
 $(DocStringExtensions.TYPEDFIELDS)
@@ -41,11 +48,47 @@ struct OrientedKmer
     end
 end
 
-const DNA_ALPHABET = BioSymbols.ACGT
-const RNA_ALPHABET = BioSymbols.ACGU
-const AA_ALPHABET = filter(
-    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
-    BioSymbols.alphabet(BioSymbols.AminoAcid))
+
+"""
+$(DocStringExtensions.TYPEDEF)
+$(DocStringExtensions.TYPEDFIELDS)
+
+A short description of the Type
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+struct EdgeEvidence
+    observation_index::Int
+    edge_index::Int
+    function EdgeEvidence(;observation_index, edge_index)
+        return new(observation_index, edge_index)
+    end
+end
+
+
+"""
+$(DocStringExtensions.TYPEDEF)
+$(DocStringExtensions.TYPEDFIELDS)
+
+A short description of the Type
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+struct KmerGraph{KmerType}
+    graph::LightGraphs.SimpleGraphs.SimpleGraph{Int}
+    edge_evidence::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}
+    kmers::AbstractVector{KmerType}
+    counts::AbstractVector{Int}
+    function KmerGraph(;graph, edge_evidence, kmers::AbstractVector{KmerType}, counts) where {KmerType <: BioSequences.AbstractMer}
+        new{KmerType}(graph, edge_evidence, kmers, counts)
+    end
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -141,34 +184,38 @@ julia> 1 + 1
 2
 ```
 """
-function initialize_graph(observations, kmers::Vector{T}) where {T <: BioSequences.AbstractMer{A, K}} where {A, K}
+function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+
+    kmer_counts = count_kmers(KMER_TYPE, observations)
+    kmers = collect(keys(kmer_counts))
+    counts = collect(values(kmer_counts))
+
     # initalize graph
     graph = LightGraphs.SimpleGraph(length(kmers))
-    
-    EDGE_TYPE = LightGraphs.SimpleGraphs.SimpleEdge{Int}
 
     # an individual piece of evidence takes the form of
     # (observation_index = observation #, edge_index = edge # starting from beginning of the observation)
-
-    EVIDENCE_TYPE = NamedTuple{(:observation_index, :edge_index),Tuple{Int,Int}}
     
     # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
-    edge_evidence = Dict{EDGE_TYPE, Vector{EVIDENCE_TYPE}}()
+    edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
     for (observation_index, observation) in enumerate(observations)
         for edge_index in 1:length(observation)-K
             a_to_b_connection = observation[edge_index:edge_index+K]
-            a = BioSequences.canonical(T{A,K}(a_to_b_connection[1:end-1]))
-            b = BioSequences.canonical(T{A,K}(a_to_b_connection[2:end]))
+            a = BioSequences.canonical(KMER_TYPE(a_to_b_connection[1:end-1]))
+            b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
             a_index = get_kmer_index(kmers, a)
             b_index = get_kmer_index(kmers, b)
             edge = ordered_edge(a_index, b_index)
             LightGraphs.add_edge!(graph, edge)
-            evidence = (;observation_index, edge_index)
-            edge_evidence[edge] = push!(get(edge_evidence, edge, EVIDENCE_TYPE[]), evidence)
+            evidence = EdgeEvidence(;observation_index, edge_index)
+            edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
         end
     end
-    return (graph = graph, edge_evidence = edge_evidence)
+    return KmerGraph(;graph, edge_evidence, kmers, counts)
 end
+
+
+LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -180,9 +227,9 @@ julia> 1 + 1
 2
 ```
 """
-function determine_edge_probabilities(graph, kmers, edge_evidence)
-    outgoing_edge_probabilities = determine_edge_probabilities(graph, kmers, edge_evidence, true)
-    incoming_edge_probabilities = determine_edge_probabilities(graph, kmers, edge_evidence, false)
+function determine_edge_probabilities(graph)
+    outgoing_edge_probabilities = determine_edge_probabilities(graph, true)
+    incoming_edge_probabilities = determine_edge_probabilities(graph, false)
     return outgoing_edge_probabilities, incoming_edge_probabilities
 end
 
@@ -196,17 +243,17 @@ julia> 1 + 1
 2
 ```
 """
-function determine_edge_probabilities(graph, kmers, edge_evidence, strand)
-    outgoing_edge_probabilities = SparseArrays.spzeros(length(kmers), length(kmers))
+function determine_edge_probabilities(graph, strand)
+    outgoing_edge_probabilities = SparseArrays.spzeros(length(graph.kmers), length(graph.kmers))
     
-    for (kmer_index, kmer) in enumerate(kmers)
+    for (kmer_index, kmer) in enumerate(graph.kmers)
         if !strand
             kmer = BioSequences.reverse_complement(kmer)
         end
         
         downstream_neighbor_indices = Int[]
         for neighbor in BioSequences.neighbors(kmer)
-            index = get_kmer_index(kmers, BioSequences.canonical(neighbor))
+            index = get_kmer_index(graph.kmers, BioSequences.canonical(neighbor))
             if !isnothing(index)
                 push!(downstream_neighbor_indices, index)
             end
@@ -218,10 +265,10 @@ function determine_edge_probabilities(graph, kmers, edge_evidence, strand)
         filter!(neighbor_index -> LightGraphs.has_edge(graph, ordered_edge(kmer_index, neighbor_index)), downstream_neighbor_indices)
         sort!(downstream_neighbor_indices)
         
-        EDGE_EVIDENCE_TYPE = eltype(values(edge_evidence))
+#         EDGE_EVIDENCE_TYPE = eltype(values(edge_evidence))
         
         downstream_edge_weights = Int[
-            length(get(edge_evidence, ordered_edge(kmer_index, neighbor_index), EDGE_EVIDENCE_TYPE())) for neighbor_index in downstream_neighbor_indices
+            length(get(graph.edge_evidence, ordered_edge(kmer_index, neighbor_index), EdgeEvidence[])) for neighbor_index in downstream_neighbor_indices
         ]
         
         non_zero_indices = downstream_edge_weights .> 0
@@ -645,8 +692,6 @@ function find_optimal_path(observed_kmer,
     current_kmer_index,
     graph, 
     shortest_paths, 
-    kmers, 
-    counts, 
     outgoing_edge_probabilities, 
     incoming_edge_probabilities,
     error_rate)
@@ -662,8 +707,8 @@ function find_optimal_path(observed_kmer,
             this_oriented_path, this_likelihood, this_edit_distance = 
                 assess_path(this_path,
                             observed_kmer,
-                            kmers,
-                            counts,
+                            graph.kmers,
+                            graph.counts,
                             previous_orientation,
                             outgoing_edge_probabilities,
                             incoming_edge_probabilities,
@@ -693,8 +738,8 @@ function find_optimal_path(observed_kmer,
                 this_oriented_path, this_likelihood, this_edit_distance = 
                     assess_path(this_path,
                                 observed_kmer,
-                                kmers,
-                                counts,
+                                graph.kmers,
+                                graph.counts,
                                 previous_orientation,
                                 outgoing_edge_probabilities,
                                 incoming_edge_probabilities,
@@ -711,8 +756,8 @@ function find_optimal_path(observed_kmer,
         this_oriented_path, this_likelihood, this_edit_distance = 
             assess_path(this_path,
                         observed_kmer,
-                        kmers,
-                        counts,
+                        graph.kmers,
+                        graph.counts,
                         previous_orientation,
                         outgoing_edge_probabilities,
                         incoming_edge_probabilities,
@@ -775,15 +820,15 @@ julia> 1 + 1
 2
 ```
 """
-function initialize_viterbi(graph, observed_path, kmers, counts, error_rate)
+function initialize_viterbi(graph, observed_path, error_rate)
 
     edit_distances = Array{Union{Int, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
     arrival_paths = Array{Union{Vector{OrientedKmer}, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
     kmer_likelihoods = Array{Float64}(undef, LightGraphs.nv(graph.graph), length(observed_path)) .= -Inf
-    kmer_likelihoods[:, 1] .= counts ./ sum(counts)
+    kmer_likelihoods[:, 1] .= graph.counts ./ sum(graph.counts)
 
-    observed_kmer_sequence = orient_oriented_kmer(kmers, first(observed_path))
-    for (kmer_index, kmer) in enumerate(kmers)
+    observed_kmer_sequence = orient_oriented_kmer(graph.kmers, first(observed_path))
+    for (kmer_index, kmer) in enumerate(graph.kmers)
         
         alignment_result, orientation = assess_optimal_alignment(kmer, observed_kmer_sequence)
 
@@ -814,15 +859,21 @@ julia> 1 + 1
 2
 ```
 """
-function viterbi_maximum_likelihood_path(graph, observation, kmers, counts, error_rate; debug = false)
+function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug = false)
 
-    observed_path = sequence_to_oriented_path(observation, kmers)
+    observed_path = sequence_to_oriented_path(observation, graph.kmers)
     
-    outgoing_edge_probabilities, incoming_edge_probabilities = determine_edge_probabilities(graph.graph, kmers, graph.edge_evidence)
+    outgoing_edge_probabilities, incoming_edge_probabilities = determine_edge_probabilities(graph)
     
     shortest_paths = LightGraphs.enumerate_paths(LightGraphs.floyd_warshall_shortest_paths(graph.graph))
     
-    kmer_likelihoods, arrival_paths, edit_distances = initialize_viterbi(graph, observed_path, kmers, counts, error_rate)
+    kmer_likelihoods, arrival_paths, edit_distances = initialize_viterbi(graph, observed_path, error_rate)
+
+    if debug
+        my_show(arrival_paths, graph.kmers, title = "Arrival Paths")
+        my_show(kmer_likelihoods, graph.kmers, title="Kmer Likelihoods")
+        my_show(edit_distances, graph.kmers, title="Edit Distances")
+    end
     
     for current_observation_index in 2:length(observed_path)
         observed_kmer = observed_path[current_observation_index]
@@ -830,12 +881,12 @@ function viterbi_maximum_likelihood_path(graph, observation, kmers, counts, erro
             println("current_observation_index = $(current_observation_index)")
             println("observed_kmer = $(observed_kmer)")
         end
-        for (current_kmer_index, current_kmer) in enumerate(kmers)
+        for (current_kmer_index, current_kmer) in enumerate(graph.kmers)
             if debug
                 println("\t\tcurrent_kmer_index = $(current_kmer_index)")
                 println("\t\tcurrent_kmer = $(current_kmer)")
             end
-            for (previous_kmer_index, previous_kmer) in enumerate(kmers)
+            for (previous_kmer_index, previous_kmer) in enumerate(graph.kmers)
                 if debug
                     println("\tprevious_kmer_index = $(previous_kmer_index)")
                     println("\tprevious_kmer = $(previous_kmer)")
@@ -858,10 +909,8 @@ function viterbi_maximum_likelihood_path(graph, observation, kmers, counts, erro
                             previous_kmer_index,
                             previous_orientation,
                             current_kmer_index,
-                            graph.graph, 
-                            shortest_paths, 
-                            kmers, 
-                            counts,
+                            graph, 
+                            shortest_paths,
                             outgoing_edge_probabilities, 
                             incoming_edge_probabilities,
                             error_rate)
@@ -883,9 +932,9 @@ function viterbi_maximum_likelihood_path(graph, observation, kmers, counts, erro
         end
     end
     if debug
-        my_show(arrival_paths, kmers, title = "Arrival Paths")
-        my_show(kmer_likelihoods, kmers, title="Kmer Likelihoods")
-        my_show(edit_distances, kmers, title="Edit Distances")
+        my_show(arrival_paths, graph.kmers, title = "Arrival Paths")
+        my_show(kmer_likelihoods, graph.kmers, title="Kmer Likelihoods")
+        my_show(edit_distances, graph.kmers, title="Edit Distances")
     end
     return backtrack_optimal_path(kmer_likelihoods, arrival_paths, edit_distances)
 end
@@ -1009,13 +1058,13 @@ julia> 1 + 1
 2
 ```
 """
-function plot_graph(graph, kmers, counts)
+function plot_graph(graph)
     graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
 
     p = GraphRecipes.graphplot(
         graph.graph,
-        names = 1:length(kmers),
-        node_weights = counts,
+        names = 1:length(graph.kmers),
+        node_weights = graph.counts,
         markersize = 0.2,
         hover=false,
         fontsize=12)
