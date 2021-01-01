@@ -27,7 +27,7 @@ for f in (sin, cos, tan)
 end
 
 # any time that I update the benchmarks or want to modify the tunings,
-# just delete them and then re run this script
+# just delete the tune.json file and then re run this script
 # https://github.com/JuliaCI/BenchmarkTools.jl/blob/master/doc/manual.md#caching-parameters
 tuning_file = "$(@__DIR__)/tune.json"
 if !isfile(tuning_file)
