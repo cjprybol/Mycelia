@@ -1,5 +1,6 @@
 using BenchmarkTools
 using Random
+using Eisenia
 
 const SUITE = BenchmarkGroup()
 
