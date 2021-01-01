@@ -2,4 +2,5 @@ using Eisenia
 using PkgBenchmark
 
 # compares this current state against master branch
-judge(Eisenia, "master")
+results = judge(Eisenia, "master")
+export_markdown(results)
