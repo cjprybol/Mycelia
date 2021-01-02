@@ -185,6 +185,10 @@ julia> 1 + 1
 ```
 """
 function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+    
+    if !isodd(K)
+        error("Even kmers are not supported")
+    end
 
     kmer_counts = count_kmers(KMER_TYPE, observations)
     kmers = collect(keys(kmer_counts))
@@ -216,6 +220,7 @@ end
 
 
 LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
+LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -254,18 +259,12 @@ function determine_edge_probabilities(graph, strand)
         downstream_neighbor_indices = Int[]
         for neighbor in BioSequences.neighbors(kmer)
             index = get_kmer_index(graph.kmers, BioSequences.canonical(neighbor))
-            if !isnothing(index)
+            # kmer must be in our dataset and there must be a connecting edge
+            if !isnothing(index) && LightGraphs.has_edge(graph, ordered_edge(kmer_index, index))
                 push!(downstream_neighbor_indices, index)
             end
         end
-        
-        # kmer must be in our dataset
-        filter!(neighbor_index -> neighbor_index != nothing, downstream_neighbor_indices)
-        # must have edge between kmers
-        filter!(neighbor_index -> LightGraphs.has_edge(graph, ordered_edge(kmer_index, neighbor_index)), downstream_neighbor_indices)
-        sort!(downstream_neighbor_indices)
-        
-#         EDGE_EVIDENCE_TYPE = eltype(values(edge_evidence))
+        sort!(unique!(downstream_neighbor_indices))
         
         downstream_edge_weights = Int[
             length(get(graph.edge_evidence, ordered_edge(kmer_index, neighbor_index), EdgeEvidence[])) for neighbor_index in downstream_neighbor_indices
@@ -276,6 +275,7 @@ function determine_edge_probabilities(graph, strand)
         downstream_edge_weights = downstream_edge_weights[non_zero_indices]
         
         downstream_edge_likelihoods = downstream_edge_weights ./ sum(downstream_edge_weights)
+        
         for (neighbor_index, likelihood) in zip(downstream_neighbor_indices, downstream_edge_likelihoods)
             outgoing_edge_probabilities[kmer_index, neighbor_index] = likelihood
         end
@@ -312,34 +312,56 @@ julia> 1 + 1
 2
 ```
 """
+function assess_suffix_match(kmer_a, kmer_b, orientation)
+    if !orientation
+        kmer_b = BioSequences.reverse_complement(kmer_b)
+    end
+    la = length(kmer_a)
+    lb = length(kmer_b)
+    all_match = true
+    for (ia, ib) in zip(2:la, 1:lb-1)
+        this_match = kmer_a[ia] == kmer_b[ib]
+        all_match &= this_match
+    end
+    return all_match
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function assess_path_orientations(path, kmers, initial_orientation)
     
     orientations = Vector{Union{Bool, Missing}}(missing, length(path))
-    orientations[1] = true
+    orientations[1] = initial_orientation
     
     for (i, (a, b)) in enumerate(zip(path[1:end-1], path[2:end]))
         kmer_a = kmers[a]
         kmer_b = kmers[b]
-        forward_match = all(kmer_a[a_index] == kmer_b[b_index] for (a_index, b_index) in zip(2:length(kmer_a), 1:length(kmer_b)-1))
-        reverse_match = all(kmer_a[a_index] == BioSequences.reverse_complement(kmer_b)[b_index] for (a_index, b_index) in zip(2:length(kmer_a), 1:length(kmer_b)-1))
+        if !ismissing(orientations[i]) && !orientations[i]
+            kmer_a = BioSequences.reverse_complement(kmer_a)
+        end
+        forward_match = assess_suffix_match(kmer_a, kmer_b, true)
+        reverse_match = assess_suffix_match(kmer_a, kmer_b, false)
         if forward_match && reverse_match
             # ambiguous orientation
             this_orientation = missing
         elseif forward_match && !reverse_match
-#             this_orientation = true
-            this_orientation = orientations[i]
+            this_orientation = true
         elseif !forward_match && reverse_match
-#             this_orientation = false
-            this_orientation = !orientations[i]
+            this_orientation = false
         else
-            error("neither orientation matches $kmer_a, $kmer_b")
+#             error("neither orientation matches $kmer_a, $kmer_b")
+            # I think this only applies when the path is possible but in the wrong orientation
+            return nothing
         end
         orientations[i+1] = this_orientation
-    end
-    if !ismissing(initial_orientation) && !initial_orientation
-        for i in eachindex(orientations)
-            orientations[i] = !orientations[i]
-        end
     end
     return orientations
 end
@@ -465,16 +487,24 @@ function assess_path(path,
     error_rate)
     
     orientations = assess_path_orientations(path, kmers, initial_orientation)
-    emission_match, evaluated_orientation = assess_emission(last(orientations), last(path), observed_kmer, kmers)
-    # assert an orientation if we found one
-    if ismissing(last(orientations)) && !ismissing(evaluated_orientation)
-        orientations[end] = evaluated_orientation
+    if orientations == nothing
+        path_likelihood = 0.0
+        edit_distance = Inf
+        oriented_path = OrientedKmer[]
+    else
+        emission_match, evaluated_orientation = assess_emission(last(orientations), last(path), observed_kmer, kmers)
+        # assert an orientation if we found one
+        if ismissing(last(orientations)) && !ismissing(evaluated_orientation)
+            orientations[end] = evaluated_orientation
+        end
+        oriented_path = orient_path(path, orientations)
+        path_likelihood = assess_path_likelihood(oriented_path, kmers, counts, outgoing_edge_probabilities, incoming_edge_probabilities)
+
+        insertion_deletion_magnitue = abs(length(path) - 2)
+        edit_distance = !emission_match + insertion_deletion_magnitue
+
+        path_likelihood *= edit_distance == 0 ? (1.0 - error_rate) : (error_rate^edit_distance)
     end
-    oriented_path = orient_path(path, orientations)
-    path_likelihood = assess_path_likelihood(oriented_path, kmers, counts, outgoing_edge_probabilities, incoming_edge_probabilities)
-    path_likelihood *= emission_match ? (1.0 - error_rate) : error_rate
-    edit_distance = !emission_match + abs(length(path) - 2)
-    
     return (oriented_path = oriented_path, path_likelihood = path_likelihood, edit_distance = edit_distance)    
 end
 
@@ -499,7 +529,7 @@ function find_outneighbors(orientation, kmer_index, outgoing_edge_probabilities,
     else
         outneighbors = first(SparseArrays.findnz(incoming_edge_probabilities[kmer_index, :]))
     end
-    return outneighbors
+    return filter!(x -> x != kmer_index, unique!(outneighbors))
 end
 
 """
@@ -513,17 +543,24 @@ julia> 1 + 1
 ```
 """
 function assess_insertion(previous_orientation, current_kmer_index, observed_kmer, kmers, counts, error_rate)    
-    transition_likelihood = error_rate
+    
+    # I'm not sure if I should evaluate the emission or just accept it as an error
+    # here we accept it as wrong without 
+    transition_likelihood = emission_likelihood = error_rate
+    edit_distance = 2
+    oriented_path = [OrientedKmer(index = current_kmer_index, orientation = previous_orientation)]
+    
+#     # here we actually check
+#     emission_match, evaluated_orientation = assess_emission(previous_orientation, current_kmer_index, observed_kmer, kmers)
+#     oriented_path = [OrientedKmer(index = current_kmer_index, orientation = evaluated_orientation)]
+#     transition_likelihood = error_rate
+#     emission_likelihood = emission_match ? (1.0 - error_rate) : error_rate
+#     transition_edit_distance = 1
+#     edit_distance = !emission_match + 1
+    
+    # universal downstream
     state_likelihood = counts[current_kmer_index] / sum(counts)
-    emission_match, evaluated_orientation = assess_emission(previous_orientation, current_kmer_index, observed_kmer, kmers)
-    
-    oriented_path = [OrientedKmer(index = current_kmer_index, orientation = evaluated_orientation)]
-    
-    emission_likelihood = emission_match ? (1.0 - error_rate) : error_rate
     path_likelihood = state_likelihood * transition_likelihood * emission_likelihood
-    
-    transition_edit_distance = 1
-    edit_distance = !emission_match + transition_edit_distance
     
     return (oriented_path = oriented_path, path_likelihood = path_likelihood, edit_distance = edit_distance)
 end
@@ -623,7 +660,7 @@ julia> 1 + 1
 """
 function orient_oriented_kmer(kmers, kmer)
     oriented_kmer_sequence = kmers[kmer.index]
-    if !kmer.orientation
+    if !ismissing(kmer.orientation) && !kmer.orientation
         oriented_kmer_sequence = BioSequences.reverse_complement(oriented_kmer_sequence)
     end
     return oriented_kmer_sequence
@@ -640,16 +677,11 @@ julia> 1 + 1
 ```
 """
 function oriented_path_to_sequence(oriented_path, kmers)
-    initial_kmer = first(oriented_path)
-    initial_kmer_sequence = orient_oriented_kmer(kmers, initial_kmer)
+    initial_kmer_sequence = orient_oriented_kmer(kmers, oriented_path[1])
     
     sequence = BioSequences.LongDNASeq(initial_kmer_sequence)
     for i in 2:length(oriented_path)
-        this_kmer = oriented_path[i]
-        this_kmer_sequence = kmers[this_kmer.index]
-        if !this_kmer.orientation
-            this_kmer_sequence = BioSequences.reverse_complement(this_kmer_sequence)
-        end
+        this_kmer_sequence = orient_oriented_kmer(kmers, oriented_path[i])
         push!(sequence, this_kmer_sequence[end])
     end
     return sequence
@@ -721,7 +753,8 @@ function find_optimal_path(observed_kmer,
         end
         
         # consider an insertion in observed sequence relative to the reference graph
-        this_oriented_path, this_likelihood, this_edit_distance = assess_insertion(previous_orientation, current_kmer_index, observed_kmer, kmers, counts, error_rate)
+        this_oriented_path, this_likelihood, this_edit_distance =
+            assess_insertion(previous_orientation, current_kmer_index, observed_kmer, graph.kmers, graph.counts, error_rate)
         if this_likelihood > path_likelihood
             path_likelihood = this_likelihood
             oriented_path = this_oriented_path
@@ -794,9 +827,8 @@ function backtrack_optimal_path(kmer_likelihoods, arrival_paths, edit_distances)
 
 
     for observed_path_index in size(kmer_likelihoods, 2)-1:-1:1
-        maximum_likelihood_arrival_path = arrival_paths[maximum_likelihood_path_index, observed_path_index][1:end-1]
-        maximum_likelihood_path = vcat(maximum_likelihood_arrival_path, maximum_likelihood_path)::Vector{OrientedKmer}
-        maximum_likelihood_path_index = Int(first(maximum_likelihood_path).index)::Int
+        maximum_likelihood_arrival_path = arrival_paths[first(maximum_likelihood_path).index, observed_path_index][1:end-1]
+        maximum_likelihood_path = vcat(maximum_likelihood_arrival_path, maximum_likelihood_path)
     end
     
     unlogged_maximum_likelihood = MathConstants.e^BigFloat(maximum_likelihood)
