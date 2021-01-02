@@ -4,6 +4,7 @@ import BioAlignments
 import BioSequences
 import BioSymbols
 import DataStructures
+import Distributions
 import DocStringExtensions
 import GraphRecipes
 import LightGraphs
@@ -123,7 +124,10 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
                 push!(new_seq, rand(setdiff(alphabet, character)))
             elseif error_type == 2
                 # insertion
-                push!(new_seq, rand(alphabet))
+                total_insertions = 1 + rand(Distributions.Poisson(error_rate))
+                for i in 1:total_insertions
+                    push!(new_seq, rand(alphabet))
+                end
                 push!(new_seq, character)
             else
                 # deletion
@@ -981,20 +985,25 @@ julia> 1 + 1
 2
 ```
 """
-function plot_kmer_frequency_spectra(counts)
+function plot_kmer_frequency_spectra(counts; log_scaled = true, kwargs...)
     kmer_counts_hist = StatsBase.countmap(c for c in counts)
     xs = collect(keys(kmer_counts_hist))
     ys = collect(values(kmer_counts_hist))
-
+    if log_scaled
+        xs = log.(xs)
+        ys = log.(ys)
+    end
+    
     StatsPlots.plot(
         xs,
         ys,
-        xlims = (0, maximum(xs) + 1),
-        ylims = (0, maximum(ys) + 1),
+        xlims = (0, maximum(xs) + max(1, ceil(0.1 * maximum(xs)))),
+        ylims = (0, maximum(ys) + max(1, ceil(0.1 * maximum(ys)))),
         seriestype = :scatter,
         legend = false,
-        xlabel = "observed frequency",
-        ylabel = "# of kmers"
+        xlabel = log_scaled ? "log(observed frequency)" : "observed frequency",
+        ylabel = log_scaled ? "log(# of kmers)" : "observed frequency",
+        ;kwargs...
     )
 end
 
