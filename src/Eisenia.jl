@@ -839,6 +839,57 @@ function assess_emission(a, b, kmers)
     return is_match, orientation
 end
 
+
+function assess_optimal_path(
+    graph,
+    oriented_path,
+    path_likelihood,
+    observed_kmer,
+    current_kmer_likelihood,
+    prior_state_likelihood,
+    previous_kmer_index,
+    current_observation_index,
+    prior_edit_distance,
+    error_rate)
+    
+    path_likelihood *= current_kmer_likelihood
+    path_likelihood *= prior_state_likelihood
+    emission_match, orientation = assess_emission(observed_kmer, last(oriented_path), graph.kmers)
+    # assert final orientation if it's missing
+    if ismissing(last(oriented_path).orientation) && !ismissing(orientation)
+        oriented_path[end] = OrientedKmer(index = last(oriented_path).index, orientation = orientation)
+    end
+    edit_distance = !emission_match + abs(length(oriented_path) - 2)
+    if edit_distance == 0
+        path_likelihood *= (1 - error_rate)
+    else
+        for i in 1:edit_distance
+            path_likelihood *= error_rate
+        end
+    end
+    edit_distance += prior_edit_distance
+    return oriented_path, path_likelihood, edit_distance
+end
+
+function assess_insertion(
+    insertion_arrival_path,
+    current_kmer_likelihood,
+    prior_state_likelihood,
+    prior_edit_distance,
+    error_rate
+    )
+    
+    oriented_path = [last(insertion_arrival_path)]
+    path_likelihood = current_kmer_likelihood
+    path_likelihood *= prior_state_likelihood
+    # here we are squaring the error rate for 1. failure to emit 2. failure to transition
+    # this produces more accurate results in practice
+    path_likelihood *= error_rate^2
+    edit_distance = prior_edit_distance + 1 
+    
+    return oriented_path, path_likelihood, edit_distance
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -912,27 +963,24 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
                         incoming_edge_probabilities,
                         error_rate)
                 if !isempty(oriented_path)
-                    path_likelihood *= current_kmer_likelihood
-                    path_likelihood *= state_likelihoods[previous_kmer_index, current_observation_index - 1]
-                    emission_match, orientation = assess_emission(observed_kmer, last(oriented_path), graph.kmers)
-                    # assert final orientation if it's missing
-                    if ismissing(last(oriented_path).orientation) && !ismissing(orientation)
-                        oriented_path[end] = OrientedKmer(index = last(oriented_path).index, orientation = orientation)
-                    end
-                    this_edit_distance = !emission_match + abs(length(oriented_path) - 2)
-                    if this_edit_distance == 0
-                        path_likelihood *= (1 - error_rate)
-                    else
-                        for i in 1:this_edit_distance
-                            path_likelihood *= error_rate
-                        end
-                    end
-                    previous_edit_distance = edit_distances[previous_kmer_index, current_observation_index-1]
-                    this_edit_distance += previous_edit_distance
+                    prior_state_likelihood = state_likelihoods[previous_kmer_index, current_observation_index - 1]
+                    prior_edit_distance = edit_distances[previous_kmer_index, current_observation_index-1]
+                    oriented_path, path_likelihood, edit_distance = 
+                        assess_optimal_path(
+                            graph,
+                            oriented_path,
+                            path_likelihood,
+                            observed_kmer,
+                            current_kmer_likelihood,
+                            prior_state_likelihood,
+                            previous_kmer_index,
+                            current_observation_index,
+                            prior_edit_distance,
+                            error_rate)
                     if path_likelihood > best_state_likelihood
                         best_state_likelihood = path_likelihood
                         best_arrival_path = oriented_path
-                        best_edit_distance = this_edit_distance
+                        best_edit_distance = edit_distance
                     end
                 end
             end
@@ -940,18 +988,19 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
             # not totally sure if this is correct
             insertion_arrival_path = arrival_paths[current_kmer_index, current_observation_index - 1]
             if !ismissing(insertion_arrival_path) && !isempty(insertion_arrival_path)
-                oriented_path = [last(insertion_arrival_path)]
-                path_likelihood = current_kmer_likelihood
-                path_likelihood *= state_likelihoods[current_kmer_index, current_observation_index - 1]
-                # here we are squaring the error rate for 1. failure to emit 2. failure to transition
-                # this produces more accurate results in practice
-                path_likelihood *= error_rate^2
-                previous_edit_distance = edit_distances[current_kmer_index, current_observation_index-1]
-                this_edit_distance = previous_edit_distance + 1            
+                prior_state_likelihood = state_likelihoods[current_kmer_index, current_observation_index - 1]
+                prior_edit_distance = edit_distances[current_kmer_index, current_observation_index-1]
+                oriented_path, path_likelihood, edit_distance = assess_insertion(
+                    insertion_arrival_path,
+                    current_kmer_likelihood,
+                    prior_state_likelihood,
+                    prior_edit_distance,
+                    error_rate
+                    )
                 if path_likelihood > best_state_likelihood
                     best_state_likelihood = path_likelihood
                     best_arrival_path = oriented_path
-                    best_edit_distance = this_edit_distance
+                    best_edit_distance = edit_distance
                 end
             end
             
