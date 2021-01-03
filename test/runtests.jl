@@ -97,7 +97,7 @@ Test.@testset "viterbi, variable-error-rates" begin
     Test.@testset "k=1" begin
         k = 1
         for seqlen in k:k+2
-            for error_rate in [0.01, 0.05, 0.10]
+            for error_rate in [0.01, 0.05, 0.10, 0.15]
                 for nucleotides in Iterators.product([Eisenia.DNA_ALPHABET for i in 1:seqlen]...)
                     # convert tuple into actual longdnaseq
                     observation = BioSequences.LongDNASeq([nucleotides...])
@@ -112,7 +112,7 @@ Test.@testset "viterbi, variable-error-rates" begin
     Test.@testset "k=3" begin
         k = 3
         for seqlen in k:k+2
-            for error_rate in [0.01, 0.05, 0.10]
+            for error_rate in [0.01, 0.05, 0.10, 0.15]
                 for nucleotides in Iterators.product([Eisenia.DNA_ALPHABET for i in 1:seqlen]...)
                     # convert tuple into actual longdnaseq
                     observation = BioSequences.LongDNASeq([nucleotides...])
@@ -129,7 +129,7 @@ Test.@testset "viterbi, variable-error-rates, both orientations" begin
     Test.@testset "k=1" begin
         k = 1
         for seqlen in k:k+2
-            for error_rate in [0.01, 0.05, 0.10]
+            for error_rate in [0.01, 0.05, 0.10, 0.15]
                 for nucleotides in Iterators.product([Eisenia.DNA_ALPHABET for i in 1:seqlen]...)
                     # convert tuple into actual longdnaseq
                     observation = BioSequences.LongDNASeq([nucleotides...])
@@ -152,7 +152,7 @@ Test.@testset "viterbi, variable-error-rates, both orientations" begin
     Test.@testset "k=3" begin
         k = 3
         for seqlen in k:k+2
-            for error_rate in [0.01, 0.05, 0.10]
+            for error_rate in [0.01, 0.05, 0.10, 0.15]
                 for nucleotides in Iterators.product([Eisenia.DNA_ALPHABET for i in 1:seqlen]...)
                     # convert tuple into actual longdnaseq
                     observation = BioSequences.LongDNASeq([nucleotides...])

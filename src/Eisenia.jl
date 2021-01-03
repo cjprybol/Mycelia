@@ -427,60 +427,6 @@ julia> 1 + 1
 2
 ```
 """
-function assess_emission_match(a, b, orientation)
-    if !orientation
-        a = BioSequences.reverse_complement(a)
-    end
-    return a[end] == b[end]
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function assess_emission(current_orientation, current_kmer_index, observed_kmer, kmers)
-    
-    current_kmer_sequence = kmers[current_kmer_index]
-    if observed_kmer.orientation
-        observed_kmer_sequence = kmers[observed_kmer.index]
-    else
-        observed_kmer_sequence = BioSequences.reverse_complement(kmers[observed_kmer.index])
-    end
-    
-    if !ismissing(current_orientation)
-        emission_match = assess_emission_match(current_kmer_sequence, observed_kmer_sequence, current_orientation)
-        evaluated_orientation = current_orientation
-    else
-        forward_emission_match = assess_emission_match(current_kmer_sequence, observed_kmer_sequence, true)
-        reverse_emission_match = assess_emission_match(current_kmer_sequence, observed_kmer_sequence, false)
-        emission_match = forward_emission_match || reverse_emission_match
-        if forward_emission_match && !reverse_emission_match
-            evaluated_orientation = true
-        elseif !forward_emission_match && reverse_emission_match
-            evaluated_orientation = false
-        else
-            evaluated_orientation = missing
-        end
-    end
-    return (emission_match, evaluated_orientation)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 function assess_path(path,
     observed_kmer,
     kmers,
@@ -496,20 +442,10 @@ function assess_path(path,
         edit_distance = Inf
         oriented_path = OrientedKmer[]
     else
-        emission_match, evaluated_orientation = assess_emission(last(orientations), last(path), observed_kmer, kmers)
-        # assert an orientation if we found one
-        if ismissing(last(orientations)) && !ismissing(evaluated_orientation)
-            orientations[end] = evaluated_orientation
-        end
         oriented_path = orient_path(path, orientations)
         path_likelihood = assess_path_likelihood(oriented_path, kmers, counts, outgoing_edge_probabilities, incoming_edge_probabilities)
-
-        insertion_deletion_magnitue = abs(length(path) - 2)
-        edit_distance = !emission_match + insertion_deletion_magnitue
-
-        path_likelihood *= edit_distance == 0 ? (1.0 - error_rate) : (error_rate^edit_distance)
     end
-    return (oriented_path = oriented_path, path_likelihood = path_likelihood, edit_distance = edit_distance)    
+    return (oriented_path = oriented_path, path_likelihood = path_likelihood)    
 end
 
 """
@@ -553,14 +489,6 @@ function assess_insertion(previous_orientation, current_kmer_index, observed_kme
     transition_likelihood = emission_likelihood = error_rate
     edit_distance = 2
     oriented_path = [OrientedKmer(index = current_kmer_index, orientation = previous_orientation)]
-    
-#     # here we actually check
-#     emission_match, evaluated_orientation = assess_emission(previous_orientation, current_kmer_index, observed_kmer, kmers)
-#     oriented_path = [OrientedKmer(index = current_kmer_index, orientation = evaluated_orientation)]
-#     transition_likelihood = error_rate
-#     emission_likelihood = emission_match ? (1.0 - error_rate) : error_rate
-#     transition_edit_distance = 1
-#     edit_distance = !emission_match + 1
     
     # universal downstream
     state_likelihood = counts[current_kmer_index] / sum(counts)
@@ -734,13 +662,12 @@ function find_optimal_path(observed_kmer,
 
     path_likelihood = 0.0
     oriented_path = Vector{OrientedKmer}()
-    edit_distance = 0
 
     if current_kmer_index == previous_kmer_index
         # could be a self loop, check this first
         if LightGraphs.has_edge(graph, LightGraphs.Edge(previous_kmer_index, current_kmer_index))
             this_path = [previous_kmer_index, current_kmer_index]
-            this_oriented_path, this_likelihood, this_edit_distance = 
+            this_oriented_path, this_likelihood = 
                 assess_path(this_path,
                             observed_kmer,
                             graph.kmers,
@@ -752,17 +679,7 @@ function find_optimal_path(observed_kmer,
             if this_likelihood > path_likelihood
                 path_likelihood = this_likelihood
                 oriented_path = this_oriented_path
-                edit_distance = this_edit_distance
             end
-        end
-        
-        # consider an insertion in observed sequence relative to the reference graph
-        this_oriented_path, this_likelihood, this_edit_distance =
-            assess_insertion(previous_orientation, current_kmer_index, observed_kmer, graph.kmers, graph.counts, error_rate)
-        if this_likelihood > path_likelihood
-            path_likelihood = this_likelihood
-            oriented_path = this_oriented_path
-            edit_distance = this_edit_distance
         end
         
         # consider a deletion in observed sequene relative to the reference graph
@@ -771,8 +688,8 @@ function find_optimal_path(observed_kmer,
         for outneighbor in outneighbors
             if LightGraphs.has_path(graph, outneighbor, current_kmer_index)
                 # manually build path
-                this_path = [previous_kmer_index, shortest_paths[previous_kmer_index][current_kmer_index]...]
-                this_oriented_path, this_likelihood, this_edit_distance = 
+                this_path = [previous_kmer_index, shortest_paths[outneighbor][current_kmer_index]...]
+                this_oriented_path, this_likelihood = 
                     assess_path(this_path,
                                 observed_kmer,
                                 graph.kmers,
@@ -784,13 +701,12 @@ function find_optimal_path(observed_kmer,
                 if this_likelihood > path_likelihood
                     path_likelihood = this_likelihood
                     oriented_path = this_oriented_path
-                    edit_distance = this_edit_distance
                 end
             end
         end
     elseif LightGraphs.has_path(graph, previous_kmer_index, current_kmer_index)   
         this_path = shortest_paths[previous_kmer_index][current_kmer_index]
-        this_oriented_path, this_likelihood, this_edit_distance = 
+        this_oriented_path, this_likelihood = 
             assess_path(this_path,
                         observed_kmer,
                         graph.kmers,
@@ -802,11 +718,10 @@ function find_optimal_path(observed_kmer,
         if this_likelihood > path_likelihood
             path_likelihood = this_likelihood
             oriented_path = this_oriented_path
-            edit_distance = this_edit_distance
         end
     end
     
-    return (oriented_path = oriented_path, path_likelihood = path_likelihood, edit_distance = edit_distance)
+    return (oriented_path = oriented_path, path_likelihood = path_likelihood)
 end
 
 """
@@ -860,8 +775,8 @@ function initialize_viterbi(graph, observed_path, error_rate)
 
     edit_distances = Array{Union{Int, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
     arrival_paths = Array{Union{Vector{OrientedKmer}, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
-    kmer_likelihoods = Array{Float64}(undef, LightGraphs.nv(graph.graph), length(observed_path)) .= -Inf
-    kmer_likelihoods[:, 1] .= graph.counts ./ sum(graph.counts)
+    state_likelihoods = zeros(BigFloat, LightGraphs.nv(graph.graph), length(observed_path))
+    state_likelihoods[:, 1] .= graph.counts ./ sum(graph.counts)
 
     observed_kmer_sequence = orient_oriented_kmer(graph.kmers, first(observed_path))
     for (kmer_index, kmer) in enumerate(graph.kmers)
@@ -869,20 +784,59 @@ function initialize_viterbi(graph, observed_path, error_rate)
         alignment_result, orientation = assess_optimal_alignment(kmer, observed_kmer_sequence)
 
         for match in 1:alignment_result.total_matches
-            kmer_likelihoods[kmer_index, 1] *= (1.0 - error_rate)
+            state_likelihoods[kmer_index, 1] *= (1.0 - error_rate)
         end
         for edit in 1:alignment_result.total_edits
-            kmer_likelihoods[kmer_index, 1] *= error_rate
+            state_likelihoods[kmer_index, 1] *= error_rate
         end
-        if kmer_likelihoods[kmer_index, 1] > 0.0
+        if state_likelihoods[kmer_index, 1] > 0.0
             arrival_paths[kmer_index, 1] = [OrientedKmer(index = kmer_index, orientation = orientation)]
             edit_distances[kmer_index, 1] = alignment_result.total_edits
         end
     end
-    kmer_likelihoods[:, 1] ./= sum(kmer_likelihoods[:, 1])
-    kmer_likelihoods[:, 1] .= log.(kmer_likelihoods[:, 1])
+    state_likelihoods[:, 1] ./= sum(state_likelihoods[:, 1])
+#     kmer_likelihoods[:, 1] .= log.(kmer_likelihoods[:, 1])
     
-    return (kmer_likelihoods = kmer_likelihoods, arrival_paths = arrival_paths, edit_distances = edit_distances)
+    return (state_likelihoods = state_likelihoods, arrival_paths = arrival_paths, edit_distances = edit_distances)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function assess_emission(a, b, kmers)
+    if a.orientation
+        a_sequence = kmers[a.index]
+    else
+        a_sequence = BioSequences.reverse_complement(kmers[a.index])
+    end
+    if !ismissing(b.orientation)
+        if b.orientation
+            b_sequence = kmers[b.index]
+        else
+            b_sequence = BioSequences.reverse_complement(kmers[b.index])
+        end
+        is_match = a_sequence[end] == b_sequence[end]
+        orientation = b.orientation
+    else
+        forward_match = a_sequence[end] == kmers[b.index][end]
+        reverse_match = a_sequence[end] == BioSequences.reverse_complement(kmers[b.index])[end]
+        is_match = forward_match || reverse_match
+        if forward_match && !reverse_match
+            orientation = true
+        elseif !forward_match && reverse_match
+            orientation = false
+        else
+            orientation = missing
+        end
+    end
+    return is_match, orientation
 end
 
 """
@@ -903,76 +857,115 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
     
     shortest_paths = LightGraphs.enumerate_paths(LightGraphs.floyd_warshall_shortest_paths(graph.graph))
     
-    kmer_likelihoods, arrival_paths, edit_distances = initialize_viterbi(graph, observed_path, error_rate)
+    state_likelihoods, arrival_paths, edit_distances = initialize_viterbi(graph, observed_path, error_rate)
 
     if debug
         my_show(arrival_paths, graph.kmers, title = "Arrival Paths")
-        my_show(kmer_likelihoods, graph.kmers, title="Kmer Likelihoods")
+        my_show(state_likelihoods, graph.kmers, title="State Likelihoods")
         my_show(edit_distances, graph.kmers, title="Edit Distances")
     end
     
     for current_observation_index in 2:length(observed_path)
         observed_kmer = observed_path[current_observation_index]
+        
         if debug
             println("current_observation_index = $(current_observation_index)")
             println("observed_kmer = $(observed_kmer)")
         end
+        
         for (current_kmer_index, current_kmer) in enumerate(graph.kmers)
+            
             if debug
                 println("\t\tcurrent_kmer_index = $(current_kmer_index)")
                 println("\t\tcurrent_kmer = $(current_kmer)")
             end
+            
+            current_kmer_likelihood = BigFloat(graph.counts[current_kmer_index] / sum(graph.counts))
+            
+            best_state_likelihood = BigFloat(0.0)
+            best_arrival_path = Vector{Eisenia.OrientedKmer}()
+            best_edit_distance = 0
+
             for (previous_kmer_index, previous_kmer) in enumerate(graph.kmers)
+                
                 if debug
                     println("\tprevious_kmer_index = $(previous_kmer_index)")
                     println("\tprevious_kmer = $(previous_kmer)")
                 end
-
-                previous_likelihood = kmer_likelihoods[previous_kmer_index, current_observation_index - 1]
-                current_likelihood = kmer_likelihoods[current_kmer_index, current_observation_index]
-                previous_arrival_path = arrival_paths[previous_kmer_index, current_observation_index - 1]
-                if current_likelihood > previous_likelihood && !ismissing(previous_arrival_path)
-                    # we've determined that there is no way to get to this kmer being evaluated
+                
+                if state_likelihoods[previous_kmer_index, current_observation_index - 1] == 0.0
                     continue
+                    # unreachable condition
                 else
-                    if ismissing(previous_arrival_path)
-                        previous_orientation = missing
-                    else
-                        previous_orientation = last(arrival_paths[previous_kmer_index, current_observation_index - 1]).orientation
+                    previous_arrival_path = arrival_paths[previous_kmer_index, current_observation_index - 1]
+                    previous_orientation = last(arrival_paths[previous_kmer_index, current_observation_index - 1]).orientation
+                end
+
+                oriented_path, path_likelihood =
+                    Eisenia.find_optimal_path(observed_kmer,
+                        previous_kmer_index,
+                        previous_orientation,
+                        current_kmer_index,
+                        graph, 
+                        shortest_paths,
+                        outgoing_edge_probabilities, 
+                        incoming_edge_probabilities,
+                        error_rate)
+                if !isempty(oriented_path)
+                    path_likelihood *= current_kmer_likelihood
+                    path_likelihood *= state_likelihoods[previous_kmer_index, current_observation_index - 1]
+                    emission_match, orientation = assess_emission(observed_kmer, last(oriented_path), graph.kmers)
+                    # assert final orientation if it's missing
+                    if ismissing(last(oriented_path).orientation) && !ismissing(orientation)
+                        oriented_path[end] = OrientedKmer(index = last(oriented_path).index, orientation = orientation)
                     end
-                    optimal_path_result =
-                        find_optimal_path(observed_kmer,
-                            previous_kmer_index,
-                            previous_orientation,
-                            current_kmer_index,
-                            graph, 
-                            shortest_paths,
-                            outgoing_edge_probabilities, 
-                            incoming_edge_probabilities,
-                            error_rate)
-                    if debug
-                        for propertyname in propertynames(optimal_path_result)
-                            println("\t\t\t$propertyname = $(getproperty(optimal_path_result, propertyname))")
+                    this_edit_distance = !emission_match + abs(length(oriented_path) - 2)
+                    if this_edit_distance == 0
+                        path_likelihood *= (1 - error_rate)
+                    else
+                        for i in 1:this_edit_distance
+                            path_likelihood *= error_rate
                         end
                     end
-                    this_likelihood = previous_likelihood + log(optimal_path_result.path_likelihood)
-
-                    if this_likelihood > current_likelihood
-                        kmer_likelihoods[current_kmer_index, current_observation_index] = this_likelihood
-                        arrival_paths[current_kmer_index, current_observation_index] = optimal_path_result.oriented_path
-                        previous_edit_distance = edit_distances[previous_kmer_index, current_observation_index - 1]
-                        edit_distances[current_kmer_index, current_observation_index] = previous_edit_distance + optimal_path_result.edit_distance 
+                    previous_edit_distance = edit_distances[previous_kmer_index, current_observation_index-1]
+                    this_edit_distance += previous_edit_distance
+                    if path_likelihood > best_state_likelihood
+                        best_state_likelihood = path_likelihood
+                        best_arrival_path = oriented_path
+                        best_edit_distance = this_edit_distance
                     end
                 end
             end
+            # consider insertion
+            # not totally sure if this is correct
+            insertion_arrival_path = arrival_paths[current_kmer_index, current_observation_index - 1]
+            if !ismissing(insertion_arrival_path) && !isempty(insertion_arrival_path)
+                oriented_path = [last(insertion_arrival_path)]
+                path_likelihood = current_kmer_likelihood
+                path_likelihood *= state_likelihoods[current_kmer_index, current_observation_index - 1]
+                # here we are squaring the error rate for 1. failure to emit 2. failure to transition
+                # this produces more accurate results in practice
+                path_likelihood *= error_rate^2
+                previous_edit_distance = edit_distances[current_kmer_index, current_observation_index-1]
+                this_edit_distance = previous_edit_distance + 1            
+                if path_likelihood > best_state_likelihood
+                    best_state_likelihood = path_likelihood
+                    best_arrival_path = oriented_path
+                    best_edit_distance = this_edit_distance
+                end
+            end
+            
+            state_likelihoods[current_kmer_index, current_observation_index] = best_state_likelihood
+            arrival_paths[current_kmer_index, current_observation_index] = best_arrival_path
+            edit_distances[current_kmer_index, current_observation_index] = best_edit_distance
         end
     end
     if debug
         my_show(arrival_paths, graph.kmers, title = "Arrival Paths")
-        my_show(kmer_likelihoods, graph.kmers, title="Kmer Likelihoods")
+        my_show(state_likelihoods, graph.kmers, title="State Likelihoods")
         my_show(edit_distances, graph.kmers, title="Edit Distances")
     end
-    return backtrack_optimal_path(kmer_likelihoods, arrival_paths, edit_distances)
+    return backtrack_optimal_path(state_likelihoods, arrival_paths, edit_distances)
 end
 
 """
