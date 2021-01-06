@@ -12,6 +12,7 @@ import Plots
 import PrettyTables
 import Random
 import SparseArrays
+import Statistics
 import StatsBase
 import StatsPlots
 
@@ -893,6 +894,44 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Given a graph with known edge probabilities, determine the median likelihood of non-zero 2-step transitions.
+This value is then used to set the likelihood of 0-step transitions, which cannot be measured directly.
+This enables an approximately balanced likelihood of insertions and deletions
+
+It may be better to fit a probability distribution and allow sampling from that probability distribution
+rather than taking the median non-zero value and fixing all 0-step transitions to that likelihood, but
+that would require simulations to confirm
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function determine_insertion_path_likelihoods(graph, shortest_paths, outgoing_edge_probabilities, incoming_edge_probabilities)
+    # could switch this to use online stats to be more efficient
+    two_step_probabilities = Float64[]
+    for i in 1:length(shortest_paths)
+        for j in 1:length(shortest_paths[i])
+            if length(shortest_paths[i][j]) == 3
+                two_step_path = shortest_paths[i][j]
+		a, b, c = two_step_path
+                step_1_probability = max(outgoing_edge_probabilities[a, b], incoming_edge_probabilities[a, b])
+                step_2_probability = max(outgoing_edge_probabilities[b, c], incoming_edge_probabilities[b, c])
+                middle_state_probability = graph.counts[b] / sum(graph.counts)
+                two_step_probability = step_1_probability * middle_state_probability * step_2_probability
+                # here we skip any zero-likelihood probabilities
+                if two_step_probability > 0
+                    push!(two_step_probabilities, two_step_probability)
+                end
+            end
+        end
+    end
+    return Statistics.mean(two_step_probabilities)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 A short description of the function
 
 ```jldoctest
@@ -907,6 +946,9 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
     outgoing_edge_probabilities, incoming_edge_probabilities = determine_edge_probabilities(graph)
     
     shortest_paths = LightGraphs.enumerate_paths(LightGraphs.floyd_warshall_shortest_paths(graph.graph))
+    
+    insertion_path_likelihoods = determine_insertion_path_likelihoods(graph, shortest_paths, outgoing_edge_probabilities, incoming_edge_probabilities)
+#    @show insertion_path_likelihoods
     
     state_likelihoods, arrival_paths, edit_distances = initialize_viterbi(graph, observed_path, error_rate)
 
@@ -990,13 +1032,10 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
             if !ismissing(insertion_arrival_path) && !isempty(insertion_arrival_path)
                 prior_state_likelihood = state_likelihoods[current_kmer_index, current_observation_index - 1]
                 prior_edit_distance = edit_distances[current_kmer_index, current_observation_index-1]
-                oriented_path, path_likelihood, edit_distance = assess_insertion(
-                    insertion_arrival_path,
-                    current_kmer_likelihood,
-                    prior_state_likelihood,
-                    prior_edit_distance,
-                    error_rate
-                    )
+		oriented_path = [last(insertion_arrival_path)]
+		path_likelihood = prior_state_likelihood * insertion_path_likelihoods * current_kmer_likelihood * error_rate
+		edit_distance = 1 + prior_edit_distance
+
                 if path_likelihood > best_state_likelihood
                     best_state_likelihood = path_likelihood
                     best_arrival_path = oriented_path
