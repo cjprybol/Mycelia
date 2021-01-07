@@ -3,12 +3,6 @@ import Test
 import Documenter
 import BioSequences
 
-Test.@testset "documentation" begin
-    # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Doctesting-as-Part-of-Testing
-    # doctest(Eisenia; manual = false)
-    Documenter.doctest(Eisenia)
-end
-
 
 Test.@testset "Don't support even kmers" begin
     k = 2
@@ -171,6 +165,12 @@ Test.@testset "viterbi, variable-error-rates, both orientations" begin
             end
         end
     end
+end
+
+Test.@testset "documentation" begin
+    # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Doctesting-as-Part-of-Testing
+    # doctest(Eisenia; manual = false)
+    Documenter.doctest(Eisenia)
 end
 
 # # Benchmarking

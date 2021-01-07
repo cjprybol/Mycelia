@@ -384,10 +384,10 @@ julia> 1 + 1
 function assess_path_likelihood(oriented_path, kmers, counts, outgoing_edge_probabilities, incoming_edge_probabilities)
     # we take it as a given that we are at the current node, so initialize with p=1 and then update with other node likelihoods
     likelihood = 1.0
-    total_kmer_count = sum(counts)
-    for node in oriented_path[2:end]
-        likelihood *= counts[node.index] / total_kmer_count
-    end
+#     total_kmer_count = sum(counts)
+#     for node in oriented_path[2:end-1]
+#         likelihood *= counts[node.index] / total_kmer_count
+#     end
     for (a, b) in zip(oriented_path[1:end-1], oriented_path[2:end])
         if ismissing(a.orientation)
             # ambiguous orientation
@@ -429,18 +429,15 @@ julia> 1 + 1
 ```
 """
 function assess_path(path,
-    observed_kmer,
     kmers,
     counts,
     initial_orientation,
     outgoing_edge_probabilities,
-    incoming_edge_probabilities,
-    error_rate)
+    incoming_edge_probabilities)
     
     orientations = assess_path_orientations(path, kmers, initial_orientation)
     if orientations == nothing
         path_likelihood = 0.0
-        edit_distance = Inf
         oriented_path = OrientedKmer[]
     else
         oriented_path = orient_path(path, orientations)
@@ -471,31 +468,6 @@ function find_outneighbors(orientation, kmer_index, outgoing_edge_probabilities,
         outneighbors = first(SparseArrays.findnz(incoming_edge_probabilities[kmer_index, :]))
     end
     return filter!(x -> x != kmer_index, unique!(outneighbors))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function assess_insertion(previous_orientation, current_kmer_index, observed_kmer, kmers, counts, error_rate)    
-    
-    # I'm not sure if I should evaluate the emission or just accept it as an error
-    # here we accept it as wrong without 
-    transition_likelihood = emission_likelihood = error_rate
-    edit_distance = 2
-    oriented_path = [OrientedKmer(index = current_kmer_index, orientation = previous_orientation)]
-    
-    # universal downstream
-    state_likelihood = counts[current_kmer_index] / sum(counts)
-    path_likelihood = state_likelihood * transition_likelihood * emission_likelihood
-    
-    return (oriented_path = oriented_path, path_likelihood = path_likelihood, edit_distance = edit_distance)
 end
 
 """
@@ -670,13 +642,11 @@ function find_optimal_path(observed_kmer,
             this_path = [previous_kmer_index, current_kmer_index]
             this_oriented_path, this_likelihood = 
                 assess_path(this_path,
-                            observed_kmer,
-                            graph.kmers,
-                            graph.counts,
-                            previous_orientation,
-                            outgoing_edge_probabilities,
-                            incoming_edge_probabilities,
-                            error_rate)
+                    graph.kmers,
+                    graph.counts,
+                    previous_orientation,
+                    outgoing_edge_probabilities,
+                    incoming_edge_probabilities)
             if this_likelihood > path_likelihood
                 path_likelihood = this_likelihood
                 oriented_path = this_oriented_path
@@ -692,13 +662,11 @@ function find_optimal_path(observed_kmer,
                 this_path = [previous_kmer_index, shortest_paths[outneighbor][current_kmer_index]...]
                 this_oriented_path, this_likelihood = 
                     assess_path(this_path,
-                                observed_kmer,
-                                graph.kmers,
-                                graph.counts,
-                                previous_orientation,
-                                outgoing_edge_probabilities,
-                                incoming_edge_probabilities,
-                                error_rate)
+                        graph.kmers,
+                        graph.counts,
+                        previous_orientation,
+                        outgoing_edge_probabilities,
+                        incoming_edge_probabilities)
                 if this_likelihood > path_likelihood
                     path_likelihood = this_likelihood
                     oriented_path = this_oriented_path
@@ -708,14 +676,12 @@ function find_optimal_path(observed_kmer,
     elseif LightGraphs.has_path(graph, previous_kmer_index, current_kmer_index)   
         this_path = shortest_paths[previous_kmer_index][current_kmer_index]
         this_oriented_path, this_likelihood = 
-            assess_path(this_path,
-                        observed_kmer,
-                        graph.kmers,
-                        graph.counts,
-                        previous_orientation,
-                        outgoing_edge_probabilities,
-                        incoming_edge_probabilities,
-                        error_rate)
+             assess_path(this_path,
+                graph.kmers,
+                graph.counts,
+                previous_orientation,
+                outgoing_edge_probabilities,
+                incoming_edge_probabilities)
         if this_likelihood > path_likelihood
             path_likelihood = this_likelihood
             oriented_path = this_oriented_path
@@ -774,6 +740,7 @@ julia> 1 + 1
 """
 function initialize_viterbi(graph, observed_path, error_rate)
 
+    # WHEN CODE STABILIZES, SWITCH BIGFLOAT STATE LIKELIHOODS BACK INTO LOG-ED FLOAT64!!!
     edit_distances = Array{Union{Int, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
     arrival_paths = Array{Union{Vector{OrientedKmer}, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
     state_likelihoods = zeros(BigFloat, LightGraphs.nv(graph.graph), length(observed_path))
@@ -840,7 +807,16 @@ function assess_emission(a, b, kmers)
     return is_match, orientation
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function assess_optimal_path(
     graph,
     oriented_path,
@@ -872,25 +848,6 @@ function assess_optimal_path(
     return oriented_path, path_likelihood, edit_distance
 end
 
-function assess_insertion(
-    insertion_arrival_path,
-    current_kmer_likelihood,
-    prior_state_likelihood,
-    prior_edit_distance,
-    error_rate
-    )
-    
-    oriented_path = [last(insertion_arrival_path)]
-    path_likelihood = current_kmer_likelihood
-    path_likelihood *= prior_state_likelihood
-    # here we are squaring the error rate for 1. failure to emit 2. failure to transition
-    # this produces more accurate results in practice
-    path_likelihood *= error_rate^2
-    edit_distance = prior_edit_distance + 1 
-    
-    return oriented_path, path_likelihood, edit_distance
-end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -909,24 +866,29 @@ julia> 1 + 1
 """
 function determine_insertion_path_likelihoods(graph, shortest_paths, outgoing_edge_probabilities, incoming_edge_probabilities)
     # could switch this to use online stats to be more efficient
-    two_step_probabilities = Float64[]
+    likelihoods = Float64[]
     for i in 1:length(shortest_paths)
         for j in 1:length(shortest_paths[i])
             if length(shortest_paths[i][j]) == 3
-                two_step_path = shortest_paths[i][j]
-		a, b, c = two_step_path
-                step_1_probability = max(outgoing_edge_probabilities[a, b], incoming_edge_probabilities[a, b])
-                step_2_probability = max(outgoing_edge_probabilities[b, c], incoming_edge_probabilities[b, c])
-                middle_state_probability = graph.counts[b] / sum(graph.counts)
-                two_step_probability = step_1_probability * middle_state_probability * step_2_probability
-                # here we skip any zero-likelihood probabilities
-                if two_step_probability > 0
-                    push!(two_step_probabilities, two_step_probability)
+                path = shortest_paths[i][j]
+                for orientation in (true, false)
+                    this_oriented_path, this_likelihood =
+                        assess_path(path,
+                            graph.kmers,
+                            graph.counts,
+                            orientation,
+                            outgoing_edge_probabilities,
+                            incoming_edge_probabilities)
+                    push!(likelihoods, this_likelihood)
                 end
             end
         end
     end
-    return Statistics.mean(two_step_probabilities)
+    if all(x -> x == 0.0, likelihoods)
+        return 0.0
+    else
+        return Statistics.median(filter!(x -> x > 0.0, likelihoods))
+    end
 end
 
 """
@@ -1032,9 +994,10 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
             if !ismissing(insertion_arrival_path) && !isempty(insertion_arrival_path)
                 prior_state_likelihood = state_likelihoods[current_kmer_index, current_observation_index - 1]
                 prior_edit_distance = edit_distances[current_kmer_index, current_observation_index-1]
-		oriented_path = [last(insertion_arrival_path)]
-		path_likelihood = prior_state_likelihood * insertion_path_likelihoods * current_kmer_likelihood * error_rate
-		edit_distance = 1 + prior_edit_distance
+                oriented_path = [last(insertion_arrival_path)]
+#                 path_likelihood = prior_state_likelihood * rand(insertion_path_likelihoods) * current_kmer_likelihood * error_rate
+                path_likelihood = prior_state_likelihood * insertion_path_likelihoods * current_kmer_likelihood * error_rate
+                edit_distance = 1 + prior_edit_distance
 
                 if path_likelihood > best_state_likelihood
                     best_state_likelihood = path_likelihood
@@ -1181,15 +1144,16 @@ julia> 1 + 1
 ```
 """
 function plot_graph(graph)
-    graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
 
+    n = length(graph.kmers)
     p = GraphRecipes.graphplot(
         graph.graph,
-        names = 1:length(graph.kmers),
-        node_weights = graph.counts,
-        markersize = 0.2,
-        hover=false,
-        fontsize=12)
+#         names = 1:n,
+        markersize = 1/log2(n),
+        size = (100 * log(n), 66 * log(n)),
+        node_weights = graph.counts)
+#         hover=false,
+#         fontsize=12)
 end
 
 end # module
