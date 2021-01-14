@@ -1317,7 +1317,7 @@ julia> 1 + 1
 2
 ```
 """
-function assess_observations(graph::Eisenia.KmerGraph{KMER_TYPE}, observations, error_rate) where {KMER_TYPE}
+function assess_observations(graph::Eisenia.KmerGraph{KMER_TYPE}, observations, error_rate; verbose = isinteractive()) where {KMER_TYPE}
     k = last(KMER_TYPE.parameters)
     total_edits_accepted = 0
     total_bases_evaluated = 0
@@ -1336,9 +1336,11 @@ function assess_observations(graph::Eisenia.KmerGraph{KMER_TYPE}, observations, 
         end
     end
     inferred_error_rate = round(total_edits_accepted / total_bases_evaluated, digits = 3)
-    display("reads_processed = $(reads_processed)")
-    display("total_edits_accepted = $(total_edits_accepted)")
-    display("inferred_error_rate = $(inferred_error_rate)")
+    if verbose
+        display("reads_processed = $(reads_processed)")
+        display("total_edits_accepted = $(total_edits_accepted)")
+        display("inferred_error_rate = $(inferred_error_rate)")
+    end
     if total_edits_accepted == 0
         has_converged = true
     else
@@ -1357,16 +1359,20 @@ julia> 1 + 1
 2
 ```
 """
-function iterate_until_convergence(ks, observations, error_rate)
+function iterate_until_convergence(ks, observations, error_rate; verbose = isinteractive())
     for k in ks
         graph = Eisenia.KmerGraph(BioSequences.DNAMer{k}, observations)
-        display("k = $k")
-        my_plot(graph)
-        observations, has_converged = assess_observations(graph, observations, error_rate)
+        if verbose
+            display("k = $k")
+            my_plot(graph)
+        end
+        observations, has_converged = assess_observations(graph, observations, error_rate; verbose = verbose)
     end
     graph = Eisenia.KmerGraph(BioSequences.DNAMer{last(ks)}, observations)
-    display("final graph")
-    my_plot(graph)
+    if verbose
+        display("final graph")
+        my_plot(graph)
+    end
     return graph, observations
 end
 
