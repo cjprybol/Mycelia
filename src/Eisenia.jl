@@ -190,7 +190,7 @@ julia> 1 + 1
 ```
 """
 function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
-    
+
     if !isodd(K)
         error("Even kmers are not supported")
     end
@@ -198,6 +198,25 @@ function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSeque
     kmer_counts = count_kmers(KMER_TYPE, observations)
     kmers = collect(keys(kmer_counts))
     counts = collect(values(kmer_counts))
+
+    return KmerGraph(KMER_TYPE, observations, kmers, counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+
+    if !isodd(K)
+        error("Even kmers are not supported")
+    end
 
     # initalize graph
     graph = LightGraphs.SimpleGraph(length(kmers))
@@ -214,15 +233,16 @@ function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSeque
             b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
             a_index = get_kmer_index(kmers, a)
             b_index = get_kmer_index(kmers, b)
-            edge = ordered_edge(a_index, b_index)
-            LightGraphs.add_edge!(graph, edge)
-            evidence = EdgeEvidence(;observation_index, edge_index)
-            edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
+            if (a_index != nothing) && (b_index != nothing)
+                edge = ordered_edge(a_index, b_index)
+                LightGraphs.add_edge!(graph, edge)
+                evidence = EdgeEvidence(;observation_index, edge_index)
+                edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
+            end
         end
     end
     return KmerGraph(;graph, edge_evidence, kmers, counts)
 end
-
 
 LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
 LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
