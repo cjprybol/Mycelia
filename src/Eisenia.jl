@@ -102,6 +102,60 @@ julia> 1 + 1
 2
 ```
 """
+function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+    
+    if !isodd(K)
+        error("Even kmers are not supported")
+    end
+
+    kmer_counts = count_kmers(KMER_TYPE, observations)
+    kmers = collect(keys(kmer_counts))
+    counts = collect(values(kmer_counts))
+
+    return KmerGraph(KMER_TYPE, observations, kmers, counts)
+end
+
+function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+    
+    if !isodd(K)
+        error("Even kmers are not supported")
+    end
+    # initalize graph
+    graph = LightGraphs.SimpleGraph(length(kmers))
+
+    # an individual piece of evidence takes the form of
+    # (observation_index = observation #, edge_index = edge # starting from beginning of the observation)
+    
+    # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
+    edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
+    for (observation_index, observation) in enumerate(observations)
+        for edge_index in 1:length(observation)-K
+            a_to_b_connection = observation[edge_index:edge_index+K]
+            a = BioSequences.canonical(KMER_TYPE(a_to_b_connection[1:end-1]))
+            b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
+            a_index = get_kmer_index(kmers, a)
+            b_index = get_kmer_index(kmers, b)
+            if (a_index != nothing) && (b_index != nothing)
+                edge = ordered_edge(a_index, b_index)
+                LightGraphs.add_edge!(graph, edge)
+                evidence = EdgeEvidence(;observation_index, edge_index)
+                edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
+            end
+        end
+    end
+    return KmerGraph(;graph, edge_evidence, kmers, counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where T
     
     if T <: BioSequences.DNAAlphabet
@@ -179,6 +233,7 @@ function ordered_edge(a, b)
     end
 end
 
+<<<<<<< HEAD
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -243,6 +298,8 @@ function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_T
     end
     return KmerGraph(;graph, edge_evidence, kmers, counts)
 end
+=======
+>>>>>>> f1c3e39eb8678fda039802d0e8de99935e476902
 
 LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
 LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
@@ -1174,6 +1231,257 @@ function plot_graph(graph)
         node_weights = graph.counts)
 #         hover=false,
 #         fontsize=12)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function is_equivalent(a, b)
+    if a == b
+        return true
+    elseif BioSequences.reverse_complement(a) == b
+        return true
+    else
+        return false
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function path_to_sequence(kmer_graph, path)
+    sequence = BioSequences.LongDNASeq(oriented_kmer_to_sequence(kmer_graph, first(path)))
+    for oriented_kmer in path[2:end]
+        nucleotide = last(oriented_kmer_to_sequence(kmer_graph, oriented_kmer))
+        push!(sequence, nucleotide)
+    end
+    return sequence
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function oriented_kmer_to_sequence(kmer_graph, oriented_kmer)
+    kmer_sequence = kmer_graph.kmers[oriented_kmer.index]
+    if !oriented_kmer.orientation
+        kmer_sequence = BioSequences.reverse_complement(kmer_sequence)
+    end
+    return kmer_sequence
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function maximum_likelihood_walk(graph, connected_component)
+    max_count = maximum(graph.counts[connected_component])
+    max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
+    initial_node_index = rand(max_count_indices)
+    initial_node = connected_component[initial_node_index]
+    outgoing_edge_probabilities, incoming_edge_probabilities = Eisenia.determine_edge_probabilities(graph)
+    forward_walk = maximum_likelihood_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    reverse_walk = maximum_likelihood_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    reversed_reverse_walk = reverse!(
+        [
+            Eisenia.OrientedKmer(index = oriented_kmer.index, orientation = oriented_kmer.orientation)
+            for oriented_kmer in reverse_walk[2:end]
+        ]
+        )
+    full_path = [reversed_reverse_walk..., forward_walk...]
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function maximum_likelihood_walk(graph, path::Vector{Eisenia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
+    done = false
+    while !done
+        maximum_path_likelihood = 0.0
+        maximum_likelihood_path = Vector{Eisenia.OrientedKmer}()
+        for neighbor in LightGraphs.neighbors(graph.graph, last(path).index)
+            this_path = [last(path).index, neighbor]
+            this_oriented_path, this_path_likelihood = 
+                Eisenia.assess_path(this_path,
+                    graph.kmers,
+                    graph.counts,
+                    last(path).orientation,
+                    outgoing_edge_probabilities,
+                    incoming_edge_probabilities)
+            if this_path_likelihood > maximum_path_likelihood
+                maximum_path_likelihood = this_path_likelihood
+                maximum_likelihood_path = this_oriented_path
+            end
+        end
+        if isempty(maximum_likelihood_path) && (maximum_path_likelihood == 0.0)
+            done = true
+        else
+            append!(path, maximum_likelihood_path[2:end])
+        end
+    end
+    return path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function my_plot(graph::Eisenia.KmerGraph)
+    graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
+    filename = "/assets/images/$(graph_hash).svg"
+    p = Eisenia.plot_graph(graph)
+    Plots.savefig(p, dirname(pwd()) * filename)
+    display(p)
+    display("text/markdown", "![]($filename)")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function assess_observations(graph::Eisenia.KmerGraph{KMER_TYPE}, observations, error_rate; verbose = isinteractive()) where {KMER_TYPE}
+    k = last(KMER_TYPE.parameters)
+    total_edits_accepted = 0
+    total_bases_evaluated = 0
+    reads_processed = 0
+    maximum_likelihood_observations = Vector{BioSequences.LongDNASeq}(undef, length(observations))
+    for (observation_index, observation) in enumerate(observations)
+        if length(observation) >= k
+            optimal_path, edit_distance, relative_likelihood = Eisenia.viterbi_maximum_likelihood_path(graph, observation, error_rate)
+            maximum_likelihood_observation = Eisenia.oriented_path_to_sequence(optimal_path, graph.kmers)
+            maximum_likelihood_observations[observation_index] = maximum_likelihood_observation
+            reads_processed += 1
+            total_bases_evaluated += length(observation)
+            total_edits_accepted += edit_distance
+        else
+            maximum_likelihood_observations[observation_index] = observation
+        end
+    end
+    inferred_error_rate = round(total_edits_accepted / total_bases_evaluated, digits = 3)
+    if verbose
+        display("reads_processed = $(reads_processed)")
+        display("total_edits_accepted = $(total_edits_accepted)")
+        display("inferred_error_rate = $(inferred_error_rate)")
+    end
+    if total_edits_accepted == 0
+        has_converged = true
+    else
+        has_converged = false
+    end
+    return maximum_likelihood_observations, has_converged
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function iterate_until_convergence(ks, observations, error_rate; verbose = isinteractive())
+    for k in ks
+        graph = Eisenia.KmerGraph(BioSequences.DNAMer{k}, observations)
+        if verbose
+            display("k = $k")
+            my_plot(graph)
+        end
+        observations, has_converged = assess_observations(graph, observations, error_rate; verbose = verbose)
+    end
+    graph = Eisenia.KmerGraph(BioSequences.DNAMer{last(ks)}, observations)
+    if verbose
+        display("final graph")
+        my_plot(graph)
+    end
+    return graph, observations
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function clip_low_coverage_tips(graph, observations)
+    connected_components = LightGraphs.connected_components(graph.graph)
+    vertices_to_keep = Int[]
+    for connected_component in connected_components
+        
+        component_coverage = graph.counts[connected_component]
+        median = Statistics.median(component_coverage)
+        standard_deviation = Statistics.std(component_coverage)
+        
+        for vertex in connected_component
+            keep = true
+            if LightGraphs.degree(graph.graph, vertex) == 1
+                this_coverage = graph.counts[vertex]
+                is_low_coverage = (graph.counts[vertex] == 1) || 
+                                    (median-this_coverage) > (3*standard_deviation)
+                if is_low_coverage
+                    keep = false
+                end
+            end
+            if keep
+                push!(vertices_to_keep, vertex)
+            end
+        end
+    end
+    
+    KmerType = first(typeof(graph).parameters)
+    pruned_graph = Eisenia.KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
+    
+    return pruned_graph
 end
 
 end # module

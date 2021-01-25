@@ -2,7 +2,9 @@ import Eisenia
 import Test
 import Documenter
 import BioSequences
-
+import Random
+import Primes
+import LightGraphs
 
 Test.@testset "Don't support even kmers" begin
     k = 2
@@ -164,6 +166,29 @@ Test.@testset "viterbi, variable-error-rates, both orientations" begin
                 end
             end
         end
+    end
+end
+
+Test.@testset "graph reconstruction with tip clipping" begin
+    n_sequences = 1
+    seqlen = 10
+    n_observations = 100
+    error_rate = 0.05
+
+    sequences = [BioSequences.randdnaseq(Random.seed!(i), seqlen) for i in 1:n_sequences]    
+    Random.seed!(1)
+    observations = [
+        Eisenia.observe(rand(sequences), error_rate = error_rate) 
+            for i in 1:n_observations
+    ]
+    
+    graph, corrected_observations = Eisenia.iterate_until_convergence(Primes.primes(3, 7), observations, error_rate);
+    pruned_graph = Eisenia.clip_low_coverage_tips(graph, corrected_observations)
+    
+    for connected_component in LightGraphs.connected_components(pruned_graph.graph)
+        primary_path = Eisenia.maximum_likelihood_walk(pruned_graph, connected_component)
+        reconstructed_sequence = Eisenia.path_to_sequence(pruned_graph, primary_path)
+        Test.@test Eisenia.is_equivalent(reconstructed_sequence, first(sequences))
     end
 end
 
