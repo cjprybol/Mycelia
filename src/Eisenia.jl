@@ -233,7 +233,6 @@ function ordered_edge(a, b)
     end
 end
 
-<<<<<<< HEAD
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -298,8 +297,6 @@ function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_T
     end
     return KmerGraph(;graph, edge_evidence, kmers, counts)
 end
-=======
->>>>>>> f1c3e39eb8678fda039802d0e8de99935e476902
 
 LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
 LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
@@ -659,11 +656,12 @@ julia> 1 + 1
 ```
 """
 function oriented_path_to_sequence(oriented_path, kmers)
+    k = length(first(kmers))
     initial_kmer_sequence = orient_oriented_kmer(kmers, oriented_path[1])
-    
     sequence = BioSequences.LongDNASeq(initial_kmer_sequence)
     for i in 2:length(oriented_path)
         this_kmer_sequence = orient_oriented_kmer(kmers, oriented_path[i])
+        @assert sequence[end-k+2:end] == BioSequences.LongDNASeq(this_kmer_sequence)[1:end-1]     
         push!(sequence, this_kmer_sequence[end])
     end
     return sequence
@@ -1243,26 +1241,6 @@ julia> 1 + 1
 2
 ```
 """
-function is_equivalent(a, b)
-    if a == b
-        return true
-    elseif BioSequences.reverse_complement(a) == b
-        return true
-    else
-        return false
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 function path_to_sequence(kmer_graph, path)
     sequence = BioSequences.LongDNASeq(oriented_kmer_to_sequence(kmer_graph, first(path)))
     for oriented_kmer in path[2:end]
@@ -1482,6 +1460,70 @@ function clip_low_coverage_tips(graph, observations)
     pruned_graph = Eisenia.KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
     
     return pruned_graph
+end
+
+
+function reverse_oriented_path(oriented_path)
+    reversed_path = copy(oriented_path)
+    for (index, state) in enumerate(oriented_path)
+        reversed_path[index] = Eisenia.OrientedKmer(index = state.index, orientation = !state.orientation)
+    end
+    return reverse!(reversed_path)
+end
+
+
+function take_a_walk(graph, connected_component)
+    max_count = maximum(graph.counts[connected_component])
+    max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
+    initial_node_index = rand(max_count_indices)
+    initial_node = connected_component[initial_node_index]
+    outgoing_edge_probabilities, incoming_edge_probabilities = Eisenia.determine_edge_probabilities(graph)
+    
+    # walk forwards from the initial starting node
+    forward_walk = take_a_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    
+    # walk backwards from the initial starting node
+    reverse_walk = take_a_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    
+    # we need to reverse everything to re-orient against the forward walk
+    reverse_walk = reverse_oriented_path(reverse_walk)
+    
+    # also need to drop the last node, which is equivalent to the first node of the 
+    @assert last(reverse_walk) == first(forward_walk)
+    full_path = [reverse_walk[1:end-1]..., forward_walk...]
+#     @show full_path
+end
+
+function take_a_walk(graph, path::Vector{Eisenia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
+    done = false
+    while !done
+        maximum_path_likelihood = 0.0
+        maximum_likelihood_path = Vector{Eisenia.OrientedKmer}()
+        for neighbor in LightGraphs.neighbors(graph.graph, last(path).index)
+            this_path = [last(path).index, neighbor]
+            this_oriented_path, this_path_likelihood = 
+                Eisenia.assess_path(this_path,
+                    graph.kmers,
+                    graph.counts,
+                    last(path).orientation,
+                    outgoing_edge_probabilities,
+                    incoming_edge_probabilities)
+            if this_path_likelihood > maximum_path_likelihood
+                maximum_path_likelihood = this_path_likelihood
+                maximum_likelihood_path = this_oriented_path
+            end
+        end
+        if isempty(maximum_likelihood_path) && (maximum_path_likelihood == 0.0)
+            done = true
+        else
+            append!(path, maximum_likelihood_path[2:end])
+        end
+    end
+    return path
+end
+
+function is_equivalent(a, b)
+    a == b || a == BioSequences.reverse_complement(b)
 end
 
 end # module
