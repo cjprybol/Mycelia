@@ -15,6 +15,7 @@ import SparseArrays
 import Statistics
 import StatsBase
 import StatsPlots
+import FASTX
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
@@ -74,6 +75,7 @@ end
 """
 $(DocStringExtensions.TYPEDEF)
 $(DocStringExtensions.TYPEDFIELDS)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the Type
 
@@ -92,16 +94,6 @@ struct KmerGraph{KmerType}
     end
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
     
     if !isodd(K)
@@ -231,71 +223,6 @@ function ordered_edge(a, b)
     else
         return LightGraphs.Edge(b, a)
     end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
-
-    if !isodd(K)
-        error("Even kmers are not supported")
-    end
-
-    kmer_counts = count_kmers(KMER_TYPE, observations)
-    kmers = collect(keys(kmer_counts))
-    counts = collect(values(kmer_counts))
-
-    return KmerGraph(KMER_TYPE, observations, kmers, counts)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
-
-    if !isodd(K)
-        error("Even kmers are not supported")
-    end
-
-    # initalize graph
-    graph = LightGraphs.SimpleGraph(length(kmers))
-
-    # an individual piece of evidence takes the form of
-    # (observation_index = observation #, edge_index = edge # starting from beginning of the observation)
-    
-    # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
-    edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
-    for (observation_index, observation) in enumerate(observations)
-        for edge_index in 1:length(observation)-K
-            a_to_b_connection = observation[edge_index:edge_index+K]
-            a = BioSequences.canonical(KMER_TYPE(a_to_b_connection[1:end-1]))
-            b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
-            a_index = get_kmer_index(kmers, a)
-            b_index = get_kmer_index(kmers, b)
-            if (a_index != nothing) && (b_index != nothing)
-                edge = ordered_edge(a_index, b_index)
-                LightGraphs.add_edge!(graph, edge)
-                evidence = EdgeEvidence(;observation_index, edge_index)
-                edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
-            end
-        end
-    end
-    return KmerGraph(;graph, edge_evidence, kmers, counts)
 end
 
 LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
@@ -608,16 +535,10 @@ function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) whe
     return canonical_kmer_counts
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    return count_kmers(KMER_TYPE, FASTX.sequence(record))    
+end
 
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 function count_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
     joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
     for sequence in sequences
@@ -1223,12 +1144,9 @@ function plot_graph(graph)
     n = length(graph.kmers)
     p = GraphRecipes.graphplot(
         graph.graph,
-#         names = 1:n,
         markersize = 1/log2(n),
         size = (100 * log(n), 66 * log(n)),
         node_weights = graph.counts)
-#         hover=false,
-#         fontsize=12)
 end
 
 """
