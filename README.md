@@ -16,31 +16,56 @@
 5. Return maximum likelihood assembly
 
 ### Database
-- Reference paths
+- Reference sequences
 
-| hash | id | description | sequence | 7mer path | 11mer path | ... | 61mer path |
-|------|----|-------------|----------|-----------|------------|-----|------------|
+| hash | id | description | sequence |
+|------|----|-------------|----------|
+
+- Reference sequence paths
+
+| id | k-length | path |
+|----|----------|------|
+
+- annotations
+
+| reference sequence ID | start | stop | strand | other stuff in GFF files? | is_protein_coding |
+|-----------------------|-------|------|--------|---------------------------|-------------------|
 
 - Kmer tables
-  - all primes from 7 <= x <= 63 (3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
+  - DNA+RNA: all primes from 7 <= x <= 63 (3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
     - necessiates using BigKmers in design
+  - AA: 3, 5, 7
 
 | hash | sequence |
 |------|----------|
 
-- link tables
+- Kmer to path
+
+| hash (kmer) | hash (reference path) | index (reference path) |
+|-------------|-----------------------|------------------------|
+
+- edge tables
 
 | hash | orientation | hash | orientation |
 |------|-------------|------|-------------|
 
-- Datasets
+- Dataset metadata
 
-| hash | description | lat | long | country | state | city | zip code | source type |
-|------|-------------|-----|------|---------|-------|------|----------|-------------|
+| joint hash of fastq files (ID) | id | description | lat | long | country | state | city | zip code | source type |
+|--------------------------------|----|-------------|-----|------|---------|-------|------|----------|-------------|
+
+### External data
+
+- Dataset by dataset analysis
+  - HDF5
+    - raw fastq
+    - kmer spectra primes 7 - 63
+    - correction stage k=7
+    - correction stage k=...
+    - correction stage k=61
 
 ### Implementation requirements
 
-- raw reads -> kmer spectra
 - kmer spectra -> signal detection
 - kmer size with signal -> initial assembly graph
     - bandage visualization
@@ -55,3 +80,18 @@
     - try and verify against prodigal to make sure that we aren’t missing any
 
 - graph -> path -> sequence -> amino acid sequence
+
+### API
+
+Need to allow users to add individual datasets to database
+
+- does a sequence exist?
+  - does a sequence exist allowing n mismatches
+  - relative frequency of most similar paths
+- reads supporting traversal, and the datasets they came from
+- connected components (species) containing path
+- phylogenetic hierarchy with component
+
+
+
+- which datasets are a given kmer present in?
