@@ -1,4 +1,4 @@
-# [Eisenia](https://en.wikipedia.org/wiki/Eisenia_fetida)
+# [Eisenia](https://en.wikipedia.org/wiki/Eisenia_fetida), A meta-pan-(gen|transcript|prote)omics graph framework
 
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Eisenia.jl/dev) -->
 <!-- [![Build Status](https://github.com/cjprybol/Eisenia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Eisenia.jl/pipelines) -->
@@ -8,10 +8,35 @@
 <!-- [![Coverage](https://codecov.io/gh/cjprybol/Eisenia.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/cjprybol/Eisenia.jl) -->
 <!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
 
-Probablistic pan-omics graphs
-
+### Creating probabilistic genome assemblies
 1. Build weighted [de-bruijn graphs](https://en.wikipedia.org/wiki/De_Bruijn_graph) with observed data
 2. Use the weighted de-bruijn graph as a [hidden markov model](https://en.wikipedia.org/wiki/Hidden_Markov_model) to [error correct observations](https://en.wikipedia.org/wiki/Viterbi_algorithm)
 3. Use the error-corrected observations to build a new, more accurate weighted de-bruijn graph
 4. Repeat 1-3 until convergence
 5. Return maximum likelihood assembly
+
+### Database
+- Reference paths
+
+| hash | id | description | sequence | 7mer path | 11mer path | ... | 61mer path |
+|------|----|-------------|----------|-----------|------------|-----|------------|
+
+- Kmer tables
+  - all primes from 7 <= x <= 63 (3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
+    - necessiates using BigKmers in design
+
+| hash | sequence |
+|------|----------|
+
+- link tables
+
+| hash | orientation | hash | orientation |
+|------|-------------|------|-------------|
+
+- Datasets
+
+| hash | description | lat | long | country | state | city | zip code | source type |
+|------|-------------|-----|------|---------|-------|------|----------|-------------|
+
+
+
