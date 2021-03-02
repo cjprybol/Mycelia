@@ -15,6 +15,12 @@
 4. Repeat 1-3 until convergence
 5. Return maximum likelihood assembly
 
+Consider for graph cleaning:
+  - [x] Solve most likely path (slow but robust) vs
+  - [ ] resample most likely paths (fast, less theoretically sound)
+    - fairly certain that this is what the Flye assembler does
+
+
 ## Database
 
 ### Kmer Nodes
@@ -77,6 +83,19 @@
 
 | joint hash of fastq files (ID) | id | description | lat | long | country | state | city | zip code | source type |
 |--------------------------------|----|-------------|-----|------|---------|-------|------|----------|-------------|
+
+### Actual database to use
+- Neo4J? - graph based, should be best in theory
+  - https://console.cloud.google.com/marketplace/product/endpoints/prod.n4gcp.neo4j.io
+  - also available in desktop
+- postgreSQL - SQL and no-SQL styles, best SQL database option with flexibility for key-value stores
+  - https://cloud.google.com/sql
+- SQLlite - limited to single node
+  - https://github.com/JuliaDatabases/SQLite.jl
+- HDF5 - limited to single node
+  - https://github.com/JuliaIO/HDF5.jl
+
+PLAN: start with memory mapped flat files in binary format?
 
 ### External data
 
