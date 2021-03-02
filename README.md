@@ -1,4 +1,4 @@
-# [Eisenia](https://en.wikipedia.org/wiki/Eisenia_fetida), A meta-pan-(gen|transcript|prote)omics graph framework
+# [Eisenia](https://en.wikipedia.org/wiki/Eisenia_fetida), A meta-pan-omics graph framework
 
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Eisenia.jl/dev) -->
 <!-- [![Build Status](https://github.com/cjprybol/Eisenia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Eisenia.jl/pipelines) -->
