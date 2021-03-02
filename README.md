@@ -38,5 +38,20 @@
 | hash | description | lat | long | country | state | city | zip code | source type |
 |------|-------------|-----|------|---------|-------|------|----------|-------------|
 
+### Implementation requirements
 
+- raw reads -> kmer spectra
+- kmer spectra -> signal detection
+- kmer size with signal -> initial assembly graph
+    - bandage visualization
+- initial assembly graph + reads -> iterative assembly
+    - bandage visualization
+- final assembly
+    - bandage visualization
+- annotation
+    - find all start codons
+    - find all stop codons
+    - report in fasta format all coding regions
+    - try and verify against prodigal to make sure that we aren’t missing any
 
+- graph -> path -> sequence -> amino acid sequence
