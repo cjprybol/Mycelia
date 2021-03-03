@@ -90,6 +90,8 @@ Consider for graph cleaning:
   - also available in desktop
 - postgreSQL - SQL and no-SQL styles, best SQL database option with flexibility for key-value stores
   - https://cloud.google.com/sql
+  - https://www.ibm.com/cloud/blog/an-introduction-to-postgresqls-hstore
+    - Can store key-value pairs using hstore as shown above
 - SQLlite - limited to single node
   - https://github.com/JuliaDatabases/SQLite.jl
 - HDF5 - limited to single node
