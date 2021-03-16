@@ -1,6 +1,6 @@
 # [Eisenia](https://en.wikipedia.org/wiki/Eisenia_fetida), A pan-meta-omics graph framework
 
-## Powered by JuliaGraphs, BioJulia, and Neo4J
+Powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
 
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Eisenia.jl/dev) -->
 <!-- [![Build Status](https://github.com/cjprybol/Eisenia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Eisenia.jl/pipelines) -->
@@ -10,11 +10,12 @@
 <!-- [![Coverage](https://codecov.io/gh/cjprybol/Eisenia.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/cjprybol/Eisenia.jl) -->
 <!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
 
-## Building a pan-meta-genome graph (multi-dataset)
+## Schema for a pan-meta-genome graph (multi-dataset)
 
 ![pan-meta-genome-graph](pan-meta-genome-graph.svg)
 
 ```
+//Neo4J
 CREATE (dnamer:DNAmer {label: "DNAmer"})
 CREATE (read:Read {label: "Read"})
 CREATE (aamer:AAmer {label: "AAmer"})
@@ -90,9 +91,12 @@ pathway,
 annotation_pathway
 ```
 
-## Building a metagenome graph (single dataset)
+## Schema for a metagenome graph (single dataset)
+
+![meta-genome-graph](meta-genome-graph.svg)
 
 ```
+//Neo4J
 CREATE (dnamer:DNAmer {label: "DNAmer"})
 CREATE (aamer:AAmer {label: "AAmer"})
 CREATE (read:Read {label: "Read"})
@@ -105,17 +109,14 @@ CREATE (aamer)-[aamer_annotation:CONTAINED_IN]->(annotation)
 CREATE (genome)-[genome_annotation:CONTAINED_IN]->(annotation)
 CREATE (annotation)-[annotation_pathway:CONTAINED_IN]->(pathway)
 CREATE (dnamer)-[dnamer_genome:CONTAINED_IN]->(genome)
-CREATE (read)-[read_dataset:CONTAINED_IN]->(dataset)
 CREATE (aamer)-[aamer_read:CONTAINED_IN]->(read)
 CREATE (dnamer)-[dnamer_read:CONTAINED_IN]->(read)
 CREATE (dnamer)-[dnamer_aamer:TRANSLATES_TO]->(aamer)
 CREATE (aamer)-[aamer_genome:CONTAINED_IN]->(genome)
-CREATE (genome)-[genome_entity:GENOME_OF]->(entity)
 
 RETURN dnamer,
 read,
 aamer,
-dataset,
 genome,
 annotation,
 pathway,
@@ -140,15 +141,67 @@ CYPHER
 - Give me all datasets containing pathway x
 - Give me all reads supporting path/variant x
 
+## Creating a blank database
 
+https://neo4j.com/developer/neo4j-desktop/#desktop-create-project
+
+## Interacting with a Database
+
+- username: neo4j
+- password: password
+    - I set this and yours may be different!
+   
+
+https://neo4j.com/developer/manage-multiple-databases/
+
+Use this to list all available databases
+```
+:dbs
+```
+
+use the system database to create and manage databases
+```
+:use system
+```
+
+Use this to create a new pan-meta-genome-graph
+```
+create database panmetagenome
+```
+
+Use this to create a new dataset-specific meta-genome
+```
+create database dataset
+```
+
+Switch to the appropriate graph
+```
+use dataset
+```
+
+Show schema
+```
+CALL db.schema.visualization()
+```
 
 ## Database
 
-- Kmer tables
-  - DNA+RNA: all primes from 7 <= x <= 63 (7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
-    - necessitates using BigKmers in design
-  - AA: 3, 5, 7 (this means we need to include all 9mers, 15mers, and 21mers of DNA so that we have equivalencies between AAmers and DNAmers
-
+- Basic Alphabets
+    - Canonical Nucleic Acids
+    - Canonical Amino Acids
+- Types of paths
+    - DNAmers
+        - DNAmers are canonical dna sequences of k-length
+        - we track all odd primes between 1 and 31 for DNA mers
+        - we track DNAmers 3, 9, 15, and 21 for interoperability between AAmers and the DNAmers they translate from
+        - kmers store both their full sequences AND their sequences as paths through shorter kmers
+    - AAmers
+        - we track all odd primes between 1 and 5 for AA mers
+        - kmers store both their full sequences AND their sequences as paths through shorter kmers
+    - Genomes
+        - genomes are paths through DNA kmers
+    - annotations
+        - annotations are paths through DNA kmers and possibly also through AA kmers
 
 
 ## Creating probabilistic assemblies
@@ -194,7 +247,7 @@ Consider for graph cleaning:
   - nodes <-> kmers
 - which datasets are a given kmer present in?
 - export and import with GFA
-- condense and expand between simplified and kmer graphs
+- condense kmer graphs to simplified graphs
 - visualization 
   - with Bandage (works automatically with GFA)
-  - cytoscape (needs to be built out)
+  - with Neo4J visualization library
