@@ -1,5 +1,7 @@
 # [Eisenia](https://en.wikipedia.org/wiki/Eisenia_fetida), A meta-pan-omics graph framework
 
+## Powered by JuliaGraphs and BioJulia and backed by Neo4J
+
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Eisenia.jl/dev) -->
 <!-- [![Build Status](https://github.com/cjprybol/Eisenia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Eisenia.jl/pipelines) -->
 <!-- [![Coverage](https://github.com/cjprybol/Eisenia.jl/badges/master/coverage.svg)](https://github.com/cjprybol/Eisenia.jl/commits/master) -->
@@ -23,91 +25,17 @@ Consider for graph cleaning:
 
 ## Database
 
-### Kmer Nodes
 - Kmer tables
-  - DNA+RNA: all primes from 7 <= x <= 63 (3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
+  - DNA+RNA: all primes from 7 <= x <= 63 (7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61)
     - necessitates using BigKmers in design
-  - AA: 3, 5, 7
+  - AA: 3, 5, 7 (this means we need to include all 9mers, 15mers, and 21mers of DNA so that we have equivalencies between AAmers and DNAmers
 
-| hash | sequence |
-|------|----------|
 
-### Edges
 
-- edge tables with evidence
 
-| hash | orientation | hash | orientation | sequence ID | sequence index | reference_or_observation |
-|------|-------------|------|-------------|-------------|----------------|--------------------------|
 
-### Reference Sequences
 
-- Reference sequences
 
-| hash | id | description | sequence |
-|------|----|-------------|----------|
-
-- Reference sequence paths
-
-| id | k-length | path |
-|----|----------|------|
-
-- Kmer to reference paths
-
-| hash (kmer) | hash (reference path) | index (reference path) |
-|-------------|-----------------------|------------------------|
-
-- reference sequence kmer spectra
-
-| id | kmer | count |
-|----|------|-------|
-
-- annotations
-  - these will be re-interpreted into the graph as needed to interconvert between linear and graph contexts
-
-| reference sequence ID | start | stop | strand | other stuff in GFF files? | is_protein_coding |
-|-----------------------|-------|------|--------|---------------------------|-------------------|
-
-### Datasets
-
-- kmer to dataset
-
-| kmer | dataset | sequence id | index |
-|------|---------|-------------|-------|
-
-- dataset kmer spectra
-
-| id | kmer | count |
-|----|------|-------|
-
-- Dataset metadata
-
-| joint hash of fastq files (ID) | id | description | lat | long | country | state | city | zip code | source type |
-|--------------------------------|----|-------------|-----|------|---------|-------|------|----------|-------------|
-
-### Actual database to use
-- Neo4J? - graph based, should be best in theory
-  - https://console.cloud.google.com/marketplace/product/endpoints/prod.n4gcp.neo4j.io
-  - also available in desktop
-- postgreSQL - SQL and no-SQL styles, best SQL database option with flexibility for key-value stores
-  - https://cloud.google.com/sql
-  - https://www.ibm.com/cloud/blog/an-introduction-to-postgresqls-hstore
-    - Can store key-value pairs using hstore as shown above
-- SQLlite - limited to single node
-  - https://github.com/JuliaDatabases/SQLite.jl
-- HDF5 - limited to single node
-  - https://github.com/JuliaIO/HDF5.jl
-
-PLAN: start with memory mapped flat files in binary format?
-
-### External data
-
-- Dataset by dataset analysis
-  - HDF5
-    - raw fastq
-    - kmer spectra primes 7 - 63
-    - correction stage k=7
-    - correction stage k=...
-    - correction stage k=61
 
 ## Implementation requirements
 
