@@ -16,6 +16,7 @@ import Statistics
 import StatsBase
 import StatsPlots
 import FASTX
+import CodecZlib
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
@@ -132,6 +133,63 @@ function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_T
                 LightGraphs.add_edge!(graph, edge)
                 evidence = EdgeEvidence(;observation_index, edge_index)
                 edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
+            end
+        end
+    end
+    return KmerGraph(;graph, edge_evidence, kmers, counts)
+end
+
+
+function KmerGraph(::Type{KMER_TYPE}, fastxs::Array{String}) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+    
+    if !isodd(K)
+        error("Even kmers are not supported")
+    end
+
+    kmer_counts = count_kmers_from_files(KMER_TYPE, fastxs)
+    kmers = collect(keys(kmer_counts))
+    counts = collect(values(kmer_counts))
+
+    return KmerGraph(KMER_TYPE, fastxs, kmers, counts)
+end
+
+function KmerGraph(::Type{KMER_TYPE}, fastxs::Array{String}, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+    
+    if !isodd(K)
+        error("Even kmers are not supported")
+    end
+    # initalize graph
+    graph = LightGraphs.SimpleGraph(length(kmers))
+
+    # an individual piece of evidence takes the form of
+    # (observation_index = observation #, edge_index = edge # starting from beginning of the observation)
+    
+    # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
+    edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
+#     EDGE_MER = BioSequences.Mer{A, K+1}
+    for fastx in fastxs
+        fastx_io = open_fastx(fastx)
+        observation_index = 0
+        for record in fastx_io
+            observation_index += 1
+            observation = FASTX.sequence(record)
+            for edge_index in 1:length(observation)-K
+#             for (edge_index, forward_observation, reverse_complement_observation) in BioSequences.each(EDGE_MER, observation)
+                if any(BioSequences.isambiguous, observation)
+                    continue
+                else
+                    a_to_b_connection = observation[edge_index:edge_index+K]
+                    a = BioSequences.canonical(KMER_TYPE(a_to_b_connection[1:end-1]))
+                    b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
+                    a_index = Eisenia.get_kmer_index(kmers, a)
+                    b_index = Eisenia.get_kmer_index(kmers, b)
+                    if (a_index != nothing) && (b_index != nothing)
+                        edge = Eisenia.ordered_edge(a_index, b_index)
+                        LightGraphs.add_edge!(graph, edge)
+                        evidence = Eisenia.EdgeEvidence(;observation_index, edge_index)
+                        edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
+                    end
+                end
             end
         end
     end
@@ -546,6 +604,59 @@ function count_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
         merge!(+, joint_kmer_counts, sequence_kmer_counts)
     end
     sort!(joint_kmer_counts)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function count_kmers_from_files(KMER_TYPE, files::Array)
+    kmer_counts = count_kmers_from_files(KMER_TYPE, first(files))
+    for file in files[2:end]
+        _kmer_counts = count_kmers_from_files(KMER_TYPE, file)
+        kmer_counts = merge!(+, kmer_counts, _kmer_counts)
+    end
+    return kmer_counts
+end
+
+function count_kmers_from_files(KMER_TYPE, file::String)
+    fastx_io = open_fastx(file)
+    @show typeof(fastx_io)
+    kmer_counts = Eisenia.count_kmers(KMER_TYPE, fastx_io)
+    close(fastx_io)
+    return kmer_counts
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function open_fastx(file::String)
+    @assert isfile(file)
+    io = open(file)
+    if occursin(r"\.gz$", file)
+        io = CodecZlib.GzipDecompressorStream(io)
+        file = replace(file, ".gz" => "")
+    end
+    if occursin(r"\.(fasta|fna|fa)$", file)
+        fastx_io = FASTX.FASTA.Reader(io)
+    elseif occursin(r"\.(fastq|fq)$", file)
+        fastx_io = FASTX.FASTQ.Reader(io)
+    end
+    return fastx_io
 end
 
 """
@@ -1322,19 +1433,11 @@ julia> 1 + 1
 2
 ```
 """
-function iterate_until_convergence(ks, observations, error_rate; verbose = isinteractive())
+function iterate_until_convergence(ks, observations, error_rate)
+    graph = nothing
     for k in ks
         graph = Eisenia.KmerGraph(BioSequences.DNAMer{k}, observations)
-        if verbose
-            display("k = $k")
-            my_plot(graph)
-        end
         observations, has_converged = assess_observations(graph, observations, error_rate; verbose = verbose)
-    end
-    graph = Eisenia.KmerGraph(BioSequences.DNAMer{last(ks)}, observations)
-    if verbose
-        display("final graph")
-        my_plot(graph)
     end
     return graph, observations
 end
