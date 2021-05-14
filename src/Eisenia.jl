@@ -64,10 +64,10 @@ julia> 1 + 1
 ```
 """
 struct EdgeEvidence
-    observation_index::Int
+    record_identifier::String
     edge_index::Int
-    function EdgeEvidence(;observation_index, edge_index)
-        return new(observation_index, edge_index)
+    function EdgeEvidence(;record_identifier, edge_index)
+        return new(record_identifier, edge_index)
     end
 end
 
@@ -94,20 +94,24 @@ struct KmerGraph{KmerType}
     end
 end
 
-function KmerGraph(::Type{KMER_TYPE}, observations) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+function KmerGraph(::Type{KMER_TYPE}, record) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+    return KmerGraph(KMER_TYPE, [record])
+end
+
+function KmerGraph(::Type{KMER_TYPE}, records::Vector{T}) where {T, KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
     
     if !isodd(K)
         error("Even kmers are not supported")
     end
 
-    kmer_counts = count_kmers(KMER_TYPE, observations)
+    kmer_counts = count_kmers(KMER_TYPE, records)
     kmers = collect(keys(kmer_counts))
     counts = collect(values(kmer_counts))
 
-    return KmerGraph(KMER_TYPE, observations, kmers, counts)
+    return KmerGraph(KMER_TYPE, records, kmers, counts)
 end
 
-function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+function KmerGraph(::Type{KMER_TYPE}, records, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
     
     if !isodd(K)
         error("Even kmers are not supported")
@@ -115,14 +119,13 @@ function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_T
     # initalize graph
     graph = LightGraphs.SimpleGraph(length(kmers))
 
-    # an individual piece of evidence takes the form of
-    # (observation_index = observation #, edge_index = edge # starting from beginning of the observation)
-    
     # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
     edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
-    for (observation_index, observation) in enumerate(observations)
-        for edge_index in 1:length(observation)-K
-            a_to_b_connection = observation[edge_index:edge_index+K]
+    for record in records
+        sequence = FASTX.sequence(record)
+        record_identifier = FASTX.identifier(record)
+        for edge_index in 1:length(sequence)-K
+            a_to_b_connection = sequence[edge_index:edge_index+K]
             a = BioSequences.canonical(KMER_TYPE(a_to_b_connection[1:end-1]))
             b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
             a_index = get_kmer_index(kmers, a)
@@ -130,7 +133,7 @@ function KmerGraph(::Type{KMER_TYPE}, observations, kmers, counts) where {KMER_T
             if (a_index != nothing) && (b_index != nothing)
                 edge = ordered_edge(a_index, b_index)
                 LightGraphs.add_edge!(graph, edge)
-                evidence = EdgeEvidence(;observation_index, edge_index)
+                evidence = EdgeEvidence(;record_identifier, edge_index)
                 edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
             end
         end
