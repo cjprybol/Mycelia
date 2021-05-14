@@ -86,8 +86,18 @@ julia> 1 + 1
 2
 ```
 """
+
+# vertex:
+# kmer
+# evidence
+
+# edge: kmer_index -> kmer_index
+# orientations
+
+
+
 struct KmerGraph{KmerType}
-    graph::LightGraphs.SimpleGraphs.SimpleGraph{Int}
+    graph::MetaGraphs.MetaDiGraph{Int}
     edge_evidence::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}
     kmers::AbstractVector{KmerType}
     counts::AbstractVector{Int}
