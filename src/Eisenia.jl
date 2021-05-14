@@ -8,6 +8,7 @@ import Distributions
 import DocStringExtensions
 import GraphRecipes
 import LightGraphs
+import MetaGraphs
 import Plots
 import PrettyTables
 import Random
@@ -95,11 +96,11 @@ struct KmerGraph{KmerType}
     end
 end
 
-function KmerGraph(::Type{KMER_TYPE}, record) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+function KmerGraph(::Type{KMER_TYPE}, record::T) where {T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}, KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
     return KmerGraph(KMER_TYPE, [record])
 end
 
-function KmerGraph(::Type{KMER_TYPE}, records::Vector{T}) where {T, KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+function KmerGraph(::Type{KMER_TYPE}, records::AbstractVector{<:Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
     
     if !isodd(K)
         error("Even kmers are not supported")
@@ -112,7 +113,7 @@ function KmerGraph(::Type{KMER_TYPE}, records::Vector{T}) where {T, KMER_TYPE <:
     return KmerGraph(KMER_TYPE, records, kmers, counts)
 end
 
-function KmerGraph(::Type{KMER_TYPE}, records, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+function KmerGraph(::Type{KMER_TYPE}, records::AbstractVector{<:Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}, kmers, counts) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
     
     if !isodd(K)
         error("Even kmers are not supported")
@@ -148,7 +149,7 @@ function KmerGraph(::Type{KMER_TYPE}, fastxs::Array{String}) where {KMER_TYPE <:
     if !isodd(K)
         error("Even kmers are not supported")
     end
-
+    
     kmer_counts = count_kmers_from_files(KMER_TYPE, fastxs)
     kmers = collect(keys(kmer_counts))
     counts = collect(values(kmer_counts))
@@ -172,24 +173,25 @@ function KmerGraph(::Type{KMER_TYPE}, fastxs::Array{String}, kmers, counts) wher
 #     EDGE_MER = BioSequences.Mer{A, K+1}
     for fastx in fastxs
         fastx_io = open_fastx(fastx)
-        observation_index = 0
         for record in fastx_io
-            observation_index += 1
-            observation = FASTX.sequence(record)
-            for edge_index in 1:length(observation)-K
-#             for (edge_index, forward_observation, reverse_complement_observation) in BioSequences.each(EDGE_MER, observation)
-                if any(BioSequences.isambiguous, observation)
+            sequence = FASTX.sequence(record)
+            record_identifier = FASTX.identifier(record)
+            for edge_index in 1:length(sequence)-K
+                if any(BioSequences.isambiguous, sequence)
                     continue
                 else
-                    a_to_b_connection = observation[edge_index:edge_index+K]
-                    a = BioSequences.canonical(KMER_TYPE(a_to_b_connection[1:end-1]))
-                    b = BioSequences.canonical(KMER_TYPE(a_to_b_connection[2:end]))
+                    a_to_b_connection = sequence[edge_index:edge_index+K]
+                    a_observed = KMER_TYPE(a_to_b_connection[1:end-1])
+                    b_observed = KMER_TYPE(a_to_b_connection[2:end])
+                    a = BioSequences.canonical(a_observed)
+                    b = BioSequences.canonical(b_observed)
                     a_index = Eisenia.get_kmer_index(kmers, a)
                     b_index = Eisenia.get_kmer_index(kmers, b)
                     if (a_index != nothing) && (b_index != nothing)
                         edge = Eisenia.ordered_edge(a_index, b_index)
                         LightGraphs.add_edge!(graph, edge)
-                        evidence = Eisenia.EdgeEvidence(;observation_index, edge_index)
+                        
+                        evidence = Eisenia.EdgeEvidence(;record_identifier, edge_index)
                         edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
                     end
                 end
@@ -197,6 +199,62 @@ function KmerGraph(::Type{KMER_TYPE}, fastxs::Array{String}, kmers, counts) wher
         end
     end
     return KmerGraph(;graph, edge_evidence, kmers, counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function kmer_pair_to_oriented_path(kmer_pair, graph)
+    path = [kmer_pair[1], kmer_pair[2]]
+    orientations = Eisenia.assess_path_orientations(path, graph.kmers, true)
+    if orientations == nothing
+        orientations = Eisenia.assess_path_orientations(path, graph.kmers, false)
+    end
+    if orientations == nothing
+        @show graph.kmers[path]
+        error()
+    end
+    return Eisenia.orient_path(path, orientations)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function kmer_graph_to_gfa(;kmer_graph, outfile)
+    open(outfile, "w") do io
+        println(io, "H\tVN:Z:1.0")
+        for (i, kmer) in enumerate(kmer_graph.kmers)
+            fields = ["S", "$i", string(kmer)]
+            line = join(fields, '\t')
+            println(io, line)
+        end
+        for edge in LightGraphs.edges(kmer_graph.graph)
+            oriented_src, oriented_dst = kmer_pair_to_oriented_path(edge.src => edge.dst, kmer_graph)
+            overlap = length(kmer_graph.kmers[1]) - 1
+            link = ["L",
+                        oriented_src.index,
+                        oriented_src.orientation ? '+' : '-',
+                        oriented_dst.index,
+                        oriented_dst.orientation ? '+' : '-',
+                        "$(overlap)M"]
+            line = join(link, '\t')
+            println(io, line)
+        end
+    end
 end
 
 """
@@ -631,7 +689,6 @@ end
 
 function count_kmers_from_files(KMER_TYPE, file::String)
     fastx_io = open_fastx(file)
-    @show typeof(fastx_io)
     kmer_counts = Eisenia.count_kmers(KMER_TYPE, fastx_io)
     close(fastx_io)
     return kmer_counts
