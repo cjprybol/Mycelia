@@ -655,13 +655,45 @@ julia> 1 + 1
 2
 ```
 """
-function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
+function count_canonical_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
     canonical_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
     canonical_kmer_iterator = (BioSequences.canonical(kmer.fw) for kmer in BioSequences.each(KMER_TYPE, sequence))
     for canonical_kmer in canonical_kmer_iterator
         canonical_kmer_counts[canonical_kmer] = get(canonical_kmer_counts, canonical_kmer, 0) + 1
     end
     return canonical_kmer_counts
+end
+
+function count_canonical_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    return count_canonical_kmers(KMER_TYPE, FASTX.sequence(record))    
+end
+
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
+    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
+    for sequence in sequences
+        sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
+        merge!(+, joint_kmer_counts, sequence_kmer_counts)
+    end
+    sort!(joint_kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
+    kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
+    kmer_iterator = (kmer.fw for kmer in BioSequences.each(KMER_TYPE, sequence))
+    for kmer in kmer_iterator
+        kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
+    end
+    return kmer_counts
 end
 
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
