@@ -486,3 +486,8 @@ https://neo4j.com/docs/cypher-manual/current/functions/
 
 
 merge nodes to avoid creating again
+
+!important!
+
+When merging new information into nodes, need to first match on unique key to get all existing fields.
+Merging matches on all fields, and merging on partial matches will duplicate nodes which we don't want
