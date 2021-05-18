@@ -1,4 +1,4 @@
-module Eisenia
+module Mycelia
 
 import BioAlignments
 import BioSequences
@@ -195,13 +195,13 @@ function KmerGraph(::Type{KMER_TYPE}, fastxs::Array{String}, kmers, counts) wher
                     b_observed = KMER_TYPE(a_to_b_connection[2:end])
                     a = BioSequences.canonical(a_observed)
                     b = BioSequences.canonical(b_observed)
-                    a_index = Eisenia.get_kmer_index(kmers, a)
-                    b_index = Eisenia.get_kmer_index(kmers, b)
+                    a_index = Mycelia.get_kmer_index(kmers, a)
+                    b_index = Mycelia.get_kmer_index(kmers, b)
                     if (a_index != nothing) && (b_index != nothing)
-                        edge = Eisenia.ordered_edge(a_index, b_index)
+                        edge = Mycelia.ordered_edge(a_index, b_index)
                         LightGraphs.add_edge!(graph, edge)
                         
-                        evidence = Eisenia.EdgeEvidence(;record_identifier, edge_index)
+                        evidence = Mycelia.EdgeEvidence(;record_identifier, edge_index)
                         edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
                     end
                 end
@@ -223,15 +223,15 @@ julia> 1 + 1
 """
 function kmer_pair_to_oriented_path(kmer_pair, graph)
     path = [kmer_pair[1], kmer_pair[2]]
-    orientations = Eisenia.assess_path_orientations(path, graph.kmers, true)
+    orientations = Mycelia.assess_path_orientations(path, graph.kmers, true)
     if orientations == nothing
-        orientations = Eisenia.assess_path_orientations(path, graph.kmers, false)
+        orientations = Mycelia.assess_path_orientations(path, graph.kmers, false)
     end
     if orientations == nothing
         @show graph.kmers[path]
         error()
     end
-    return Eisenia.orient_path(path, orientations)
+    return Mycelia.orient_path(path, orientations)
 end
 
 """
@@ -731,7 +731,7 @@ end
 
 function count_kmers_from_files(KMER_TYPE, file::String)
     fastx_io = open_fastx(file)
-    kmer_counts = Eisenia.count_kmers(KMER_TYPE, fastx_io)
+    kmer_counts = Mycelia.count_kmers(KMER_TYPE, fastx_io)
     close(fastx_io)
     return kmer_counts
 end
@@ -1147,7 +1147,7 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
             current_kmer_likelihood = BigFloat(graph.counts[current_kmer_index] / sum(graph.counts))
             
             best_state_likelihood = BigFloat(0.0)
-            best_arrival_path = Vector{Eisenia.OrientedKmer}()
+            best_arrival_path = Vector{Mycelia.OrientedKmer}()
             best_edit_distance = 0
 
             for (previous_kmer_index, previous_kmer) in enumerate(graph.kmers)
@@ -1166,7 +1166,7 @@ function viterbi_maximum_likelihood_path(graph, observation, error_rate; debug =
                 end
 
                 oriented_path, path_likelihood =
-                    Eisenia.find_optimal_path(observed_kmer,
+                    Mycelia.find_optimal_path(observed_kmer,
                         previous_kmer_index,
                         previous_orientation,
                         current_kmer_index,
@@ -1414,12 +1414,12 @@ function maximum_likelihood_walk(graph, connected_component)
     max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
     initial_node_index = rand(max_count_indices)
     initial_node = connected_component[initial_node_index]
-    outgoing_edge_probabilities, incoming_edge_probabilities = Eisenia.determine_edge_probabilities(graph)
-    forward_walk = maximum_likelihood_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
-    reverse_walk = maximum_likelihood_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    outgoing_edge_probabilities, incoming_edge_probabilities = Mycelia.determine_edge_probabilities(graph)
+    forward_walk = maximum_likelihood_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    reverse_walk = maximum_likelihood_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
     reversed_reverse_walk = reverse!(
         [
-            Eisenia.OrientedKmer(index = oriented_kmer.index, orientation = oriented_kmer.orientation)
+            Mycelia.OrientedKmer(index = oriented_kmer.index, orientation = oriented_kmer.orientation)
             for oriented_kmer in reverse_walk[2:end]
         ]
         )
@@ -1436,15 +1436,15 @@ julia> 1 + 1
 2
 ```
 """
-function maximum_likelihood_walk(graph, path::Vector{Eisenia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
+function maximum_likelihood_walk(graph, path::Vector{Mycelia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
     done = false
     while !done
         maximum_path_likelihood = 0.0
-        maximum_likelihood_path = Vector{Eisenia.OrientedKmer}()
+        maximum_likelihood_path = Vector{Mycelia.OrientedKmer}()
         for neighbor in LightGraphs.neighbors(graph.graph, last(path).index)
             this_path = [last(path).index, neighbor]
             this_oriented_path, this_path_likelihood = 
-                Eisenia.assess_path(this_path,
+                Mycelia.assess_path(this_path,
                     graph.kmers,
                     graph.counts,
                     last(path).orientation,
@@ -1474,10 +1474,10 @@ julia> 1 + 1
 2
 ```
 """
-function my_plot(graph::Eisenia.KmerGraph)
+function my_plot(graph::Mycelia.KmerGraph)
     graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
     filename = "/assets/images/$(graph_hash).svg"
-    p = Eisenia.plot_graph(graph)
+    p = Mycelia.plot_graph(graph)
     Plots.savefig(p, dirname(pwd()) * filename)
     display(p)
     display("text/markdown", "![]($filename)")
@@ -1493,7 +1493,7 @@ julia> 1 + 1
 2
 ```
 """
-function assess_observations(graph::Eisenia.KmerGraph{KMER_TYPE}, observations, error_rate; verbose = isinteractive()) where {KMER_TYPE}
+function assess_observations(graph::Mycelia.KmerGraph{KMER_TYPE}, observations, error_rate; verbose = isinteractive()) where {KMER_TYPE}
     k = last(KMER_TYPE.parameters)
     total_edits_accepted = 0
     total_bases_evaluated = 0
@@ -1501,8 +1501,8 @@ function assess_observations(graph::Eisenia.KmerGraph{KMER_TYPE}, observations, 
     maximum_likelihood_observations = Vector{BioSequences.LongDNASeq}(undef, length(observations))
     for (observation_index, observation) in enumerate(observations)
         if length(observation) >= k
-            optimal_path, edit_distance, relative_likelihood = Eisenia.viterbi_maximum_likelihood_path(graph, observation, error_rate)
-            maximum_likelihood_observation = Eisenia.oriented_path_to_sequence(optimal_path, graph.kmers)
+            optimal_path, edit_distance, relative_likelihood = Mycelia.viterbi_maximum_likelihood_path(graph, observation, error_rate)
+            maximum_likelihood_observation = Mycelia.oriented_path_to_sequence(optimal_path, graph.kmers)
             maximum_likelihood_observations[observation_index] = maximum_likelihood_observation
             reads_processed += 1
             total_bases_evaluated += length(observation)
@@ -1538,7 +1538,7 @@ julia> 1 + 1
 function iterate_until_convergence(ks, observations, error_rate)
     graph = nothing
     for k in ks
-        graph = Eisenia.KmerGraph(BioSequences.DNAMer{k}, observations)
+        graph = Mycelia.KmerGraph(BioSequences.DNAMer{k}, observations)
         observations, has_converged = assess_observations(graph, observations, error_rate; verbose = verbose)
     end
     return graph, observations
@@ -1580,7 +1580,7 @@ function clip_low_coverage_tips(graph, observations)
     end
     
     KmerType = first(typeof(graph).parameters)
-    pruned_graph = Eisenia.KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
+    pruned_graph = Mycelia.KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
     
     return pruned_graph
 end
@@ -1589,7 +1589,7 @@ end
 function reverse_oriented_path(oriented_path)
     reversed_path = copy(oriented_path)
     for (index, state) in enumerate(oriented_path)
-        reversed_path[index] = Eisenia.OrientedKmer(index = state.index, orientation = !state.orientation)
+        reversed_path[index] = Mycelia.OrientedKmer(index = state.index, orientation = !state.orientation)
     end
     return reverse!(reversed_path)
 end
@@ -1600,13 +1600,13 @@ function take_a_walk(graph, connected_component)
     max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
     initial_node_index = rand(max_count_indices)
     initial_node = connected_component[initial_node_index]
-    outgoing_edge_probabilities, incoming_edge_probabilities = Eisenia.determine_edge_probabilities(graph)
+    outgoing_edge_probabilities, incoming_edge_probabilities = Mycelia.determine_edge_probabilities(graph)
     
     # walk forwards from the initial starting node
-    forward_walk = take_a_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    forward_walk = take_a_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
     
     # walk backwards from the initial starting node
-    reverse_walk = take_a_walk(graph, [Eisenia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
+    reverse_walk = take_a_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
     
     # we need to reverse everything to re-orient against the forward walk
     reverse_walk = reverse_oriented_path(reverse_walk)
@@ -1617,15 +1617,15 @@ function take_a_walk(graph, connected_component)
 #     @show full_path
 end
 
-function take_a_walk(graph, path::Vector{Eisenia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
+function take_a_walk(graph, path::Vector{Mycelia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
     done = false
     while !done
         maximum_path_likelihood = 0.0
-        maximum_likelihood_path = Vector{Eisenia.OrientedKmer}()
+        maximum_likelihood_path = Vector{Mycelia.OrientedKmer}()
         for neighbor in LightGraphs.neighbors(graph.graph, last(path).index)
             this_path = [last(path).index, neighbor]
             this_oriented_path, this_path_likelihood = 
-                Eisenia.assess_path(this_path,
+                Mycelia.assess_path(this_path,
                     graph.kmers,
                     graph.counts,
                     last(path).orientation,
