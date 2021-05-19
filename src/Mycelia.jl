@@ -18,6 +18,7 @@ import StatsBase
 import StatsPlots
 import FASTX
 import CodecZlib
+import HTTP
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
@@ -317,24 +318,24 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
     return new_seq
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# A short description of the function
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function get_kmer_index(kmers, kmer)
-    index_range = searchsorted(kmers, kmer)
-    if !isempty(index_range)
-        return first(index_range)
-    else
-        return nothing
-    end
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function get_kmer_index(kmers, kmer)
+#     index_range = searchsorted(kmers, kmer)
+#     if !isempty(index_range)
+#         return first(index_range)
+#     else
+#         return nothing
+#     end
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1585,7 +1586,16 @@ function clip_low_coverage_tips(graph, observations)
     return pruned_graph
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function reverse_oriented_path(oriented_path)
     reversed_path = copy(oriented_path)
     for (index, state) in enumerate(oriented_path)
@@ -1594,7 +1604,16 @@ function reverse_oriented_path(oriented_path)
     return reverse!(reversed_path)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function take_a_walk(graph, connected_component)
     max_count = maximum(graph.counts[connected_component])
     max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
@@ -1617,6 +1636,16 @@ function take_a_walk(graph, connected_component)
 #     @show full_path
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function take_a_walk(graph, path::Vector{Mycelia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
     done = false
     while !done
@@ -1645,8 +1674,94 @@ function take_a_walk(graph, path::Vector{Mycelia.OrientedKmer}, outgoing_edge_pr
     return path
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function is_equivalent(a, b)
     a == b || a == BioSequences.reverse_complement(b)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_evidence!(kmer_graph, index::Int, evidence)
+    if MetaGraphs.has_prop(kmer_graph, index, :evidence)
+        push!(kmer_graph.vprops[index][:evidence], evidence)
+    else
+        MetaGraphs.set_prop!(kmer_graph, index, :evidence, Set([evidence]))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_evidence!(kmer_graph, edge::LightGraphs.SimpleGraphs.AbstractSimpleEdge, evidence)
+    if MetaGraphs.has_prop(kmer_graph, edge, :evidence)
+        push!(kmer_graph.eprops[edge][:evidence], evidence)
+    else
+        MetaGraphs.set_prop!(kmer_graph, edge, :evidence, Set([evidence]))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function get_kmer_index(kmers, kmer)
+    index = searchsortedfirst(kmers, kmer)
+    @assert kmers[index] == kmer "$kmer"
+    return index
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
+or get fasta directly from FTP site
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
+    if !isempty(db) && !isempty(accession)
+        # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
+        sleep(0.5)
+        url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=fasta&id=$(accession)"
+        return FASTX.FASTA.Reader(IOBuffer(HTTP.get(url).body))
+    elseif !isempty(ftp)
+        return FASTX.FASTA.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
+    else
+        @error "invalid call"
+    end
 end
 
 end # module
