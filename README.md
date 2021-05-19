@@ -10,6 +10,18 @@ biological knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGra
 <!-- [![Coverage](https://codecov.io/gh/cjprybol/Eisenia.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/cjprybol/Eisenia.jl) -->
 <!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
 
+## Related Software:
+- [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
+- [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
+- [Pangenome Graphs Review](https://doi.org/10.1146/annurev-genom-120219-080406)
+
+## Questions:
+- what is the kmer decomposition spectra of raw reads @ 90, 95, 99, 99.9, 99.99% accuracy
+    - isolates?
+    - communities?
+- what are the sequence likelihoods when evaluating original reads vs their corrected versions
+    - before -> after plots of alignment likelihood
+
 ## Behaviors
 
 - Input(s):
@@ -18,7 +30,17 @@ biological knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGra
 - Output(s):
     - maximum likelihood assembly graph
         - kmer frequencies
-        
+
+- default assembly sizes = 
+ 13
+ 17
+ 23
+ 29
+ 37
+ 41
+ 47
+ 53
+ 59
 
 - Input(s):
     - matrix of species frequency across samples
