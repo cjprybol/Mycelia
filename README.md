@@ -1,6 +1,6 @@
 # Mycelia
 
-pan-omics knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
+biological knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
 
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Mycelia.jl/dev) -->
 <!-- [![Build Status](https://github.com/cjprybol/Mycelia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines) -->
@@ -10,6 +10,18 @@ pan-omics knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGrap
 <!-- [![Coverage](https://codecov.io/gh/cjprybol/Mycelia.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/cjprybol/Mycelia.jl) -->
 <!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
 
+## Related Software:
+- [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
+- [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
+- [Pangenome Graphs Review](https://doi.org/10.1146/annurev-genom-120219-080406)
+
+## Questions:
+- what is the kmer decomposition spectra of raw reads @ 90, 95, 99, 99.9, 99.99% accuracy
+    - isolates?
+    - communities?
+- what are the sequence likelihoods when evaluating original reads vs their corrected versions
+    - before -> after plots of alignment likelihood
+
 ## Behaviors
 
 - Input(s):
@@ -18,7 +30,17 @@ pan-omics knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGrap
 - Output(s):
     - maximum likelihood assembly graph
         - kmer frequencies
-        
+
+- default assembly sizes = 
+ 13
+ 17
+ 23
+ 29
+ 37
+ 41
+ 47
+ 53
+ 59
 
 - Input(s):
     - matrix of species frequency across samples
@@ -486,3 +508,8 @@ https://neo4j.com/docs/cypher-manual/current/functions/
 
 
 merge nodes to avoid creating again
+
+!important!
+
+When merging new information into nodes, need to first match on unique key to get all existing fields.
+Merging matches on all fields, and merging on partial matches will duplicate nodes which we don't want
