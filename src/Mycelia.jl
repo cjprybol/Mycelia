@@ -358,85 +358,66 @@ end
 # LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
 # LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# A short description of the function
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function determine_edge_probabilities(graph)
-    outgoing_edge_probabilities = determine_edge_probabilities(graph, true)
-    incoming_edge_probabilities = determine_edge_probabilities(graph, false)
-    return outgoing_edge_probabilities, incoming_edge_probabilities
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function determine_edge_probabilities(graph)
+#     outgoing_edge_probabilities = determine_edge_probabilities(graph, true)
+#     incoming_edge_probabilities = determine_edge_probabilities(graph, false)
+#     return outgoing_edge_probabilities, incoming_edge_probabilities
+# end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# A short description of the function
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function determine_edge_probabilities(graph, strand)
-    outgoing_edge_probabilities = SparseArrays.spzeros(length(graph.kmers), length(graph.kmers))
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function determine_edge_probabilities(graph, strand)
+#     outgoing_edge_probabilities = SparseArrays.spzeros(length(graph.kmers), length(graph.kmers))
     
-    for (kmer_index, kmer) in enumerate(graph.kmers)
-        if !strand
-            kmer = BioSequences.reverse_complement(kmer)
-        end
+#     for (kmer_index, kmer) in enumerate(graph.kmers)
+#         if !strand
+#             kmer = BioSequences.reverse_complement(kmer)
+#         end
         
-        downstream_neighbor_indices = Int[]
-        for neighbor in BioSequences.neighbors(kmer)
-            index = get_kmer_index(graph.kmers, BioSequences.canonical(neighbor))
-            # kmer must be in our dataset and there must be a connecting edge
-            if !isnothing(index) && LightGraphs.has_edge(graph, ordered_edge(kmer_index, index))
-                push!(downstream_neighbor_indices, index)
-            end
-        end
-        sort!(unique!(downstream_neighbor_indices))
+#         downstream_neighbor_indices = Int[]
+#         for neighbor in BioSequences.neighbors(kmer)
+#             index = get_kmer_index(graph.kmers, BioSequences.canonical(neighbor))
+#             # kmer must be in our dataset and there must be a connecting edge
+#             if !isnothing(index) && LightGraphs.has_edge(graph, ordered_edge(kmer_index, index))
+#                 push!(downstream_neighbor_indices, index)
+#             end
+#         end
+#         sort!(unique!(downstream_neighbor_indices))
         
-        downstream_edge_weights = Int[
-            length(get(graph.edge_evidence, ordered_edge(kmer_index, neighbor_index), EdgeEvidence[])) for neighbor_index in downstream_neighbor_indices
-        ]
+#         downstream_edge_weights = Int[
+#             length(get(graph.edge_evidence, ordered_edge(kmer_index, neighbor_index), EdgeEvidence[])) for neighbor_index in downstream_neighbor_indices
+#         ]
         
-        non_zero_indices = downstream_edge_weights .> 0
-        downstream_neighbor_indices = downstream_neighbor_indices[non_zero_indices]
-        downstream_edge_weights = downstream_edge_weights[non_zero_indices]
+#         non_zero_indices = downstream_edge_weights .> 0
+#         downstream_neighbor_indices = downstream_neighbor_indices[non_zero_indices]
+#         downstream_edge_weights = downstream_edge_weights[non_zero_indices]
         
-        downstream_edge_likelihoods = downstream_edge_weights ./ sum(downstream_edge_weights)
+#         downstream_edge_likelihoods = downstream_edge_weights ./ sum(downstream_edge_weights)
         
-        for (neighbor_index, likelihood) in zip(downstream_neighbor_indices, downstream_edge_likelihoods)
-            outgoing_edge_probabilities[kmer_index, neighbor_index] = likelihood
-        end
-    end
-    return outgoing_edge_probabilities
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function assess_alignment(a, b)
-    pairwise_alignment = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(), a, b)
-    alignment_result = BioAlignments.alignment(pairwise_alignment)
-    total_aligned_bases = BioAlignments.count_aligned(alignment_result)
-    total_matches = Int(BioAlignments.count_matches(alignment_result))
-    total_edits = Int(total_aligned_bases - total_matches)
-    return (total_matches = total_matches, total_edits = total_edits)
-end
+#         for (neighbor_index, likelihood) in zip(downstream_neighbor_indices, downstream_edge_likelihoods)
+#             outgoing_edge_probabilities[kmer_index, neighbor_index] = likelihood
+#         end
+#     end
+#     return outgoing_edge_probabilities
+# end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -577,34 +558,36 @@ end
 #     return (oriented_path = oriented_path, path_likelihood = path_likelihood)    
 # end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function find_outneighbors(orientation, kmer_index, outgoing_edge_probabilities, incoming_edge_probabilities)
+#     if ismissing(orientation)
+#         outneighbors = vcat(
+#             first(SparseArrays.findnz(outgoing_edge_probabilities[kmer_index, :])),
+#             first(SparseArrays.findnz(incoming_edge_probabilities[kmer_index, :]))
+#         )
+#     elseif orientation
+#         outneighbors = first(SparseArrays.findnz(outgoing_edge_probabilities[kmer_index, :]))
+#     else
+#         outneighbors = first(SparseArrays.findnz(incoming_edge_probabilities[kmer_index, :]))
+#     end
+#     return filter!(x -> x != kmer_index, unique!(outneighbors))
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+Return proportion of matched bases in alignment to total matches + edits.
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function find_outneighbors(orientation, kmer_index, outgoing_edge_probabilities, incoming_edge_probabilities)
-    if ismissing(orientation)
-        outneighbors = vcat(
-            first(SparseArrays.findnz(outgoing_edge_probabilities[kmer_index, :])),
-            first(SparseArrays.findnz(incoming_edge_probabilities[kmer_index, :]))
-        )
-    elseif orientation
-        outneighbors = first(SparseArrays.findnz(outgoing_edge_probabilities[kmer_index, :]))
-    else
-        outneighbors = first(SparseArrays.findnz(incoming_edge_probabilities[kmer_index, :]))
-    end
-    return filter!(x -> x != kmer_index, unique!(outneighbors))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
+0-1, not %
 
 ```jldoctest
 julia> 1 + 1
@@ -618,7 +601,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+Used to determine which orientation provides an optimal alignment for initiating path likelihood analyses in viterbi analysis
 
 ```jldoctest
 julia> 1 + 1
@@ -644,6 +627,25 @@ function assess_optimal_alignment(kmer, observed_kmer)
     end
 
     return (alignment_result, orientation)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function assess_alignment(a, b)
+    pairwise_alignment = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(), a, b)
+    alignment_result = BioAlignments.alignment(pairwise_alignment)
+    total_aligned_bases = BioAlignments.count_aligned(alignment_result)
+    total_matches = Int(BioAlignments.count_matches(alignment_result))
+    total_edits = Int(total_aligned_bases - total_matches)
+    return (total_matches = total_matches, total_edits = total_edits)
 end
 
 """
