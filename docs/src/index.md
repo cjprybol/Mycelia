@@ -1,12 +1,12 @@
 ```@meta
-CurrentModule = Eisenia
+CurrentModule = Mycelia
 ```
 
-# Eisenia
+# Mycelia
 
 ```@index
 ```
 
 ```@autodocs
-Modules = [Eisenia]
+Modules = [Mycelia]
 ```

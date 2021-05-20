@@ -12,4 +12,4 @@ covered_lines, total_lines = get_summary(coverage)
 percent_coverage = round((covered_lines / total_lines) * 100, digits = 3)
 println("total_coverage = $(percent_coverage)")
 # Or process a single file
-# @show get_summary(process_file(joinpath("src", "Eisenia.jl")))
+# @show get_summary(process_file(joinpath("src", "Mycelia.jl")))
