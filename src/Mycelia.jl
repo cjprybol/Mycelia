@@ -19,6 +19,7 @@ import StatsPlots
 import FASTX
 import CodecZlib
 import HTTP
+import ProgressMeter
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
@@ -1766,6 +1767,107 @@ function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
     end
 end
 
+
+# function fastx_to_kmer_graph(::Type{KMER_TYPE}, fastxs) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
+function fastx_to_kmer_graph(KMER_TYPE, fastxs)
+    @info "assessing kmers"
+    kmer_set = Set{KMER_TYPE}()
+    ProgressMeter.@showprogress for fastxs in fastxs
+        kmer_set = union!(kmer_set, collect(keys(Mycelia.count_canonical_kmers(KMER_TYPE, fastxs))))
+    end
+    kmers = unique(sort(collect(kmer_set)))
+    
+    kmer_graph = MetaGraphs.MetaDiGraph(length(kmers))
+    k = length(first(kmers))
+    MetaGraphs.set_prop!(kmer_graph, :k, k)
+    for (vertex, kmer) in enumerate(kmers)
+        MetaGraphs.set_prop!(kmer_graph, vertex, :kmer, kmer)
+    end
+    EDGE_MER = BioSequences.DNAMer{k+1}
+    @info "creating graph"
+    ProgressMeter.@showprogress for fastx in fastxs
+        for record in fastx
+            sequence = FASTX.sequence(record)
+            record_identifier = FASTX.identifier(record) 
+            edge_iterator = BioSequences.each(EDGE_MER, sequence)
+            for sequence_edge in edge_iterator
+                forward_sequence_edge = BioSequences.LongDNASeq(sequence_edge.fw)
+
+                observed_source_kmer = BioSequences.DNAMer(forward_sequence_edge[1:end-1])
+
+                observed_destination_kmer = BioSequences.DNAMer(forward_sequence_edge[2:end])
+
+                oriented_source_kmer = 
+                    (canonical_kmer = BioSequences.canonical(observed_source_kmer),
+                     orientation = BioSequences.iscanonical(observed_source_kmer))
+
+                oriented_destination_kmer = 
+                    (canonical_kmer = BioSequences.canonical(observed_destination_kmer),
+                     orientation = BioSequences.iscanonical(observed_destination_kmer))
+
+                oriented_source_vertex = 
+                    (vertex = searchsortedfirst(kmers, oriented_source_kmer.canonical_kmer),
+                     orientation = oriented_source_kmer.orientation)
+
+                oriented_destination_vertex = 
+                    (vertex = searchsortedfirst(kmers, oriented_destination_kmer.canonical_kmer),
+                     orientation = oriented_destination_kmer.orientation)
+
+                source_evidence = 
+                    (record = record_identifier,
+                     index = sequence_edge.position,
+                     orientation = oriented_source_vertex.orientation)
+
+                destination_evidence = 
+                    (record = record_identifier,
+                     index = sequence_edge.position + 1,
+                     orientation = oriented_destination_vertex.orientation)
+
+                add_evidence!(kmer_graph, oriented_source_vertex.vertex, source_evidence)
+
+                add_evidence!(kmer_graph, oriented_destination_vertex.vertex, destination_evidence)
+
+                forward_edge = LightGraphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
+
+                LightGraphs.add_edge!(kmer_graph, forward_edge)
+
+                forward_edge_orientations = 
+                    (source_orientation = oriented_source_vertex.orientation,
+                     destination_orientation = oriented_destination_vertex.orientation)
+
+                MetaGraphs.set_prop!(kmer_graph, forward_edge, :orientations, forward_edge_orientations)
+
+                forward_edge_evidence = (
+                    record = record_identifier,
+                    index = sequence_edge.position,
+                    orientation = true
+                )
+
+                add_evidence!(kmer_graph, forward_edge, forward_edge_evidence)
+
+                reverse_edge = LightGraphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
+
+                LightGraphs.add_edge!(kmer_graph, reverse_edge)
+
+                reverse_edge_orientations = 
+                    (source_orientation = !oriented_destination_vertex.orientation,
+                     destination_orientation = !oriented_source_vertex.orientation)
+
+                MetaGraphs.set_prop!(kmer_graph, reverse_edge, :orientations, reverse_edge_orientations)
+
+                reverse_edge_evidence = (
+                    record = record_identifier,
+                    index = sequence_edge.position,
+                    orientation = false
+                )
+
+                add_evidence!(kmer_graph, reverse_edge, reverse_edge_evidence)
+            end
+        end
+    end
+    return kmer_graph
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1886,7 +1988,8 @@ end
 function determine_oriented_untigs(kmer_graph, untigs)
     oriented_untigs = []
     for path in untigs
-        sequence = BioSequences.LongDNASeq(kmers[first(path)])
+        @show path
+        sequence = BioSequences.LongDNASeq(kmer_graph.vprops[first(path)][:kmer])
         if length(path) == 1
             orientations = [true]
         elseif length(path) > 1
@@ -1921,101 +2024,6 @@ function determine_oriented_untigs(kmer_graph, untigs)
 
         push!(oriented_untigs, oriented_untig)
     end
-end
-
-function fastx_to_kmer_graph(KMER_TYPE, fastxs)
-    kmer_set = Set(collect(keys(Mycelia.count_canonical_kmers(KMER_TYPE, first(fastxs)))))
-    for fastx_open_function in fastx_open_functions
-        kmer_set = union!(kmer_set, collect(keys(Mycelia.count_canonical_kmers(KMER_TYPE, fastxs))))
-    end
-    kmers = unique(sort(collect(kmer_set)))
-    
-    kmer_graph = MetaGraphs.MetaDiGraph(length(kmers))
-    MetaGraphs.set_prop!(kmer_graph, :k, k)
-    for (vertex, kmer) in enumerate(kmers)
-        MetaGraphs.set_prop!(kmer_graph, vertex, :kmer, kmer)
-    end
-    for fastx in fastxs
-        for record in fastx
-            sequence = FASTX.sequence(record)
-            record_identifier = FASTX.identifier(record) 
-            edge_iterator = BioSequences.each(EDGE_MER, sequence)
-            for sequence_edge in edge_iterator
-                forward_sequence_edge = BioSequences.LongDNASeq(sequence_edge.fw)
-
-                observed_source_kmer = BioSequences.DNAMer(forward_sequence_edge[1:end-1])
-
-                observed_destination_kmer = BioSequences.DNAMer(forward_sequence_edge[2:end])
-
-                oriented_source_kmer = 
-                    (canonical_kmer = BioSequences.canonical(observed_source_kmer),
-                     orientation = BioSequences.iscanonical(observed_source_kmer))
-
-                oriented_destination_kmer = 
-                    (canonical_kmer = BioSequences.canonical(observed_destination_kmer),
-                     orientation = BioSequences.iscanonical(observed_destination_kmer))
-
-                oriented_source_vertex = 
-                    (vertex = searchsortedfirst(kmers, oriented_source_kmer.canonical_kmer),
-                     orientation = oriented_source_kmer.orientation)
-
-                oriented_destination_vertex = 
-                    (vertex = searchsortedfirst(kmers, oriented_destination_kmer.canonical_kmer),
-                     orientation = oriented_destination_kmer.orientation)
-
-                source_evidence = 
-                    (record = record_identifier,
-                     index = sequence_edge.position,
-                     orientation = oriented_source_vertex.orientation)
-
-                destination_evidence = 
-                    (record = record_identifier,
-                     index = sequence_edge.position + 1,
-                     orientation = oriented_destination_vertex.orientation)
-
-                add_evidence!(kmer_graph, oriented_source_vertex.vertex, source_evidence)
-
-                add_evidence!(kmer_graph, oriented_destination_vertex.vertex, destination_evidence)
-
-                forward_edge = LightGraphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
-
-                LightGraphs.add_edge!(kmer_graph, forward_edge)
-
-                forward_edge_orientations = 
-                    (source_orientation = oriented_source_vertex.orientation,
-                     destination_orientation = oriented_destination_vertex.orientation)
-
-                MetaGraphs.set_prop!(kmer_graph, forward_edge, :orientations, forward_edge_orientations)
-
-                forward_edge_evidence = (
-                    record = record_identifier,
-                    index = sequence_edge.position,
-                    orientation = true
-                )
-
-                add_evidence!(kmer_graph, forward_edge, forward_edge_evidence)
-
-                reverse_edge = LightGraphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
-
-                LightGraphs.add_edge!(kmer_graph, reverse_edge)
-
-                reverse_edge_orientations = 
-                    (source_orientation = !oriented_destination_vertex.orientation,
-                     destination_orientation = !oriented_source_vertex.orientation)
-
-                MetaGraphs.set_prop!(kmer_graph, reverse_edge, :orientations, reverse_edge_orientations)
-
-                reverse_edge_evidence = (
-                    record = record_identifier,
-                    index = sequence_edge.position,
-                    orientation = false
-                )
-
-                add_evidence!(kmer_graph, reverse_edge, reverse_edge_evidence)
-            end
-        end
-    end
-    return kmer_graph
 end
 
 function simplify_kmer_graph(kmer_graph)
