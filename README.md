@@ -1,6 +1,6 @@
 # Mycelia
 
-biological knowledge graphs powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
+biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
 
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Mycelia.jl/dev) -->
 <!-- [![Build Status](https://github.com/cjprybol/Mycelia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines) -->
