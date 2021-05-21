@@ -1783,7 +1783,7 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs)
     for (vertex, kmer) in enumerate(kmers)
         MetaGraphs.set_prop!(kmer_graph, vertex, :kmer, kmer)
     end
-    EDGE_MER = BioSequences.DNAMer{k+1}
+    EDGE_MER = BioSequences.BigDNAMer{k+1}
     @info "creating graph"
     ProgressMeter.@showprogress for fastx in fastxs
         for record in fastx
@@ -1793,9 +1793,9 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs)
             for sequence_edge in edge_iterator
                 forward_sequence_edge = BioSequences.LongDNASeq(sequence_edge.fw)
 
-                observed_source_kmer = BioSequences.DNAMer(forward_sequence_edge[1:end-1])
+                observed_source_kmer = BioSequences.BigDNAMer(forward_sequence_edge[1:end-1])
 
-                observed_destination_kmer = BioSequences.DNAMer(forward_sequence_edge[2:end])
+                observed_destination_kmer = BioSequences.BigDNAMer(forward_sequence_edge[2:end])
 
                 oriented_source_kmer = 
                     (canonical_kmer = BioSequences.canonical(observed_source_kmer),
@@ -1947,21 +1947,24 @@ function oriented_unbranching_walk(kmer_graph, vertex, orientation)
 end
 
 function resolve_untigs(kmer_graph)
-    untigs = []
-    visited = unique(sort(vcat([e.src for untig in untigs for e in untig], [e.dst for untig in untigs for e in untig])))
-    unvisited = setdiff(1:LightGraphs.nv(kmer_graph), visited)
-    if !isempty(unvisited)
-        first_unvisited = first(setdiff(1:LightGraphs.nv(kmer_graph), visited))
+    untigs = Vector{Int}[]
+    visited = falses(LightGraphs.nv(kmer_graph))
+    first_unvisited = findfirst(!, visited)
+    while first_unvisited != nothing
         forward_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, true)
         reverse_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, false)
         inverted_reverse_walk = [LightGraphs.Edge(e.dst, e.src) for e in reverse(reverse_walk)]
-        untig = vcat(inverted_reverse_walk, forward_walk)
-        if isempty(untig)
+        edges = vcat(inverted_reverse_walk, forward_walk)
+        if isempty(edges)
             untig = [first_unvisited]
+        else
+            untig = vcat([first(edges).src], [edge.dst for edge in edges])
         end
         push!(untigs, untig)
-#     else
-#         println("done!")
+        for vertex in untig
+            visited[vertex] = true
+        end
+        first_unvisited = findfirst(!, visited)
     end
     return untigs
 end
@@ -1985,156 +1988,208 @@ function edge_path_to_sequence(kmer_graph, edge_path)
     sequence
 end
 
-# function determine_oriented_untigs(kmer_graph, untigs)
-#     oriented_untigs = []
-#     for path in untigs
-#         @show path
-#         sequence = BioSequences.LongDNASeq(kmer_graph.vprops[first(path)][:kmer])
-#         if length(path) == 1
-#             orientations = [true]
-#         elseif length(path) > 1
-#             initial_edge = LightGraphs.Edge(path[1], path[2])
-#             initial_orientation = kmer_graph.eprops[initial_edge][:orientations].source_orientation
-#             orientations = [initial_orientation]
-#             if !initial_orientation
-#                 sequence = BioSequences.reverse_complement(sequence)
-#             end
+function determine_oriented_untigs(kmer_graph, untigs)
+    oriented_untigs = []
+    for path in untigs
+        sequence = BioSequences.LongDNASeq(kmer_graph.vprops[first(path)][:kmer])
+        if length(path) == 1
+            orientations = [true]
+        elseif length(path) > 1
+            initial_edge = LightGraphs.Edge(path[1], path[2])
+            initial_orientation = kmer_graph.eprops[initial_edge][:orientations].source_orientation
+            orientations = [initial_orientation]
+            if !initial_orientation
+                sequence = BioSequences.reverse_complement(sequence)
+            end
 
-#             for (src, dst) in zip(path[1:end-1], path[2:end])
-#                 edge = LightGraphs.Edge(src, dst)
-#                 destination = BioSequences.LongDNASeq(kmers[edge.dst])
-#                 destination_orientation = kmer_graph.eprops[edge][:orientations].destination_orientation
-#                 push!(orientations, destination_orientation)
-#                 if !destination_orientation
-#                     destination = BioSequences.reverse_complement(destination)
-#                 end
-#                 sequence_suffix = sequence[end-length(destination)+2:end]
-#                 destination_prefix = destination[1:end-1]
-#                 @assert sequence_suffix == destination_prefix
-#                 push!(sequence, destination[end])
-#             end
-#         end
+            for (src, dst) in zip(path[1:end-1], path[2:end])
+                edge = LightGraphs.Edge(src, dst)
+                destination = BioSequences.LongDNASeq(kmer_graph.vprops[edge.dst][:kmer])
+                destination_orientation = kmer_graph.eprops[edge][:orientations].destination_orientation
+                push!(orientations, destination_orientation)
+                if !destination_orientation
+                    destination = BioSequences.reverse_complement(destination)
+                end
+                sequence_suffix = sequence[end-length(destination)+2:end]
+                destination_prefix = destination[1:end-1]
+                @assert sequence_suffix == destination_prefix
+                push!(sequence, destination[end])
+            end
+        end
 
-#         oriented_untig = 
-#         (
-#             sequence = BioSequences.canonical(sequence),
-#             path = BioSequences.iscanonical(sequence) ? path : reverse(path),
-#             orientations = BioSequences.iscanonical(sequence) ? orientations : reverse(.!orientations)
-#         )
+        oriented_untig = 
+        (
+            sequence = BioSequences.canonical(sequence),
+            path = BioSequences.iscanonical(sequence) ? path : reverse(path),
+            orientations = BioSequences.iscanonical(sequence) ? orientations : reverse(.!orientations),
+            evidence = Statistics.mean([length(kmer_graph.vprops[v][:evidence]) for v in path])
+        )
 
-#         push!(oriented_untigs, oriented_untig)
-#     end
-# end
+        push!(oriented_untigs, oriented_untig)
+    end
+    return oriented_untigs
+end
 
-# function simplify_kmer_graph(kmer_graph)
-#     untigs = resolve_untigs(kmer_graph)
-#     oriented_untigs = determine_oriented_untigs(kmer_graph, untigs)
-#     simplified_graph = MetaGraphs.MetaDiGraph(length(oriented_untigs))
-#     MetaGraphs.set_prop!(simplified_graph, :k, kmer_graph.gprops[:k])
-#     for (vertex, untig) in enumerate(oriented_untigs)
-#         MetaGraphs.set_prop!(simplified_graph, vertex, :sequence, untig.sequence)
-#         MetaGraphs.set_prop!(simplified_graph, vertex, :path, untig.path)
-#         MetaGraphs.set_prop!(simplified_graph, vertex, :orientations, untig.orientations)
-#     end
+function simplify_kmer_graph(kmer_graph)
+    @info "simplifying kmer graph"
+    @info "resolving untigs..."
+    @time untigs = resolve_untigs(kmer_graph)
+    @info "determining untig orientations..."
+    oriented_untigs = determine_oriented_untigs(kmer_graph, untigs)
+    simplified_graph = MetaGraphs.MetaDiGraph(length(oriented_untigs))
+    MetaGraphs.set_prop!(simplified_graph, :k, kmer_graph.gprops[:k])
+    @info "initializing graph node metadata"
+    for (vertex, untig) in enumerate(oriented_untigs)
+        MetaGraphs.set_prop!(simplified_graph, vertex, :sequence, untig.sequence)
+        MetaGraphs.set_prop!(simplified_graph, vertex, :path, untig.path)
+        MetaGraphs.set_prop!(simplified_graph, vertex, :orientations, untig.orientations)
+        MetaGraphs.set_prop!(simplified_graph, vertex, :evidence, untig.evidence)
+    end
     
-#     # determine oriented edges of simplified graph
-#     simplified_untigs = []
-#     for vertex in LightGraphs.vertices(simplified_graph)
-#         in_kmer = simplified_graph.vprops[vertex][:path][1] => simplified_graph.vprops[vertex][:orientations][1]
-#         out_kmer = simplified_graph.vprops[vertex][:path][end] => simplified_graph.vprops[vertex][:orientations][end]
-#     #     @show vertex, in_kmer, out_kmer
-#         push!(simplified_untigs, in_kmer => out_kmer)
-#     end
+    # determine oriented edges of simplified graph
+    simplified_untigs = []
+    @info "creating simplified untigs to resolve connections"
+    for vertex in LightGraphs.vertices(simplified_graph)
+        in_kmer = simplified_graph.vprops[vertex][:path][1] => simplified_graph.vprops[vertex][:orientations][1]
+        out_kmer = simplified_graph.vprops[vertex][:path][end] => simplified_graph.vprops[vertex][:orientations][end]
+    #     @show vertex, in_kmer, out_kmer
+        push!(simplified_untigs, in_kmer => out_kmer)
+    end
 
-#     for (ui, u) in enumerate(simplified_untigs)
-#         for (vi, v) in enumerate(simplified_untigs)
-#     #         + => +
-#             source_kmer_index, source_orientation = last(u)
-#             destination_kmer_index, destination_orientation = first(v)
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
-#                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
-#                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
-#                 if source_orientation_matches && destination_orientation_matches
+    @info "resolving connections"
+    ProgressMeter.@showprogress for (ui, u) in enumerate(simplified_untigs)
+        for (vi, v) in enumerate(simplified_untigs)
+    #         + => +
+            source_kmer_index, source_orientation = last(u)
+            destination_kmer_index, destination_orientation = first(v)
+            edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
+            if LightGraphs.has_edge(kmer_graph, edge)
+                source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
+                destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
+                if source_orientation_matches && destination_orientation_matches
 #                     @show "right orientation!! + +"
 
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+                    simplified_graph_edge = LightGraphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
-#                     edge_orientations = (
-#                         source_orientation = source_orientation,
-#                         destination_orientation = destination_orientation
-#                     )
-#                     MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
-#                 end
-#             end
-#     #         + => -
-#             source_kmer_index, source_orientation = last(u)
-#             destination_kmer_index, destination_orientation = last(v)
-#             destination_orientation = !destination_orientation
+                    LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+                    edge_orientations = (
+                        source_orientation = source_orientation,
+                        destination_orientation = destination_orientation
+                    )
+                    MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
+                end
+            end
+    #         + => -
+            source_kmer_index, source_orientation = last(u)
+            destination_kmer_index, destination_orientation = last(v)
+            destination_orientation = !destination_orientation
 
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
-#                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
-#                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
-#                 if source_orientation_matches && destination_orientation_matches
+            edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
+            if LightGraphs.has_edge(kmer_graph, edge)
+                source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
+                destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
+                if source_orientation_matches && destination_orientation_matches
 #                     @show "right orientation!! + -"
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+                    simplified_graph_edge = LightGraphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
-#                     edge_orientations = (
-#                         source_orientation = source_orientation,
-#                         destination_orientation = destination_orientation
-#                     )
-#                     MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
-#                 end
-#             end
-#     #         - => +
-#             source_kmer_index, source_orientation = first(u)
-#             source_orientation = !source_orientation
-#             destination_kmer_index, destination_orientation = first(v)
+                    LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+                    edge_orientations = (
+                        source_orientation = source_orientation,
+                        destination_orientation = destination_orientation
+                    )
+                    MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
+                end
+            end
+    #         - => +
+            source_kmer_index, source_orientation = first(u)
+            source_orientation = !source_orientation
+            destination_kmer_index, destination_orientation = first(v)
 
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
-#                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
-#                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
-#                 if source_orientation_matches && destination_orientation_matches
+            edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
+            if LightGraphs.has_edge(kmer_graph, edge)
+                source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
+                destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
+                if source_orientation_matches && destination_orientation_matches
 #                     @show "right orientation!! - +"
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+                    simplified_graph_edge = LightGraphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
-#                     edge_orientations = (
-#                         source_orientation = source_orientation,
-#                         destination_orientation = destination_orientation
-#                     )
-#                     MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
-#                 end
-#             end
-#     #         - => -
-#             source_kmer_index, source_orientation = first(u)
-#             source_orientation = !source_orientation
-#             destination_kmer_index, destination_orientation = last(v)
-#             destination_orientation = !destination_orientation
+                    LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+                    edge_orientations = (
+                        source_orientation = source_orientation,
+                        destination_orientation = destination_orientation
+                    )
+                    MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
+                end
+            end
+    #         - => -
+            source_kmer_index, source_orientation = first(u)
+            source_orientation = !source_orientation
+            destination_kmer_index, destination_orientation = last(v)
+            destination_orientation = !destination_orientation
 
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
-#                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
-#                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
-#                 if source_orientation_matches && destination_orientation_matches
+            edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
+            if LightGraphs.has_edge(kmer_graph, edge)
+                source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
+                destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
+                if source_orientation_matches && destination_orientation_matches
 #                     @show "right orientation!! - -"
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+                    simplified_graph_edge = LightGraphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
-#                     edge_orientations = (
-#                         source_orientation = source_orientation,
-#                         destination_orientation = destination_orientation
-#                     )
-#                     MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
-#                 end
+                    LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+                    edge_orientations = (
+                        source_orientation = source_orientation,
+                        destination_orientation = destination_orientation
+                    )
+                    MetaGraphs.set_prop!(simplified_graph, simplified_graph_edge, :orientations, edge_orientations)
+                end
+            end
+        end
+    end
+    return simplified_graph
+end
+
+function graph_to_gfa(graph, outfile)
+    open(outfile, "w") do io
+        println(io, "H\tVN:Z:1.0")
+        for vertex in LightGraphs.vertices(graph)
+            if haskey(graph.vprops[vertex], :kmer)
+                sequence = graph.vprops[vertex][:kmer]
+            else
+                sequence = graph.vprops[vertex][:sequence]
+            end
+#             if haskey(graph.vprops[vertex], :evidence)
+#             @show graph.vprops[vertex][:evidence]
+            if graph.vprops[vertex][:evidence] isa Array
+                depth = length(graph.vprops[vertex][:evidence])
+            else
+                depth = graph.vprops[vertex][:evidence]
+            end
+#             @show depth
+#             @show 
+#             else
+#                 depth = 1
 #             end
-#         end
-#     end
-#     return simplified_graph
-# end
+#             depth *= length(sequence) - graph.gprops[:k]
+#             @show depth
+#             fields = ["S", "$vertex", sequence, "dp:f:$(depth)"]
+            fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
+            line = join(fields, '\t')
+            println(io, line)
+        end
+        for edge in LightGraphs.edges(graph)
+            overlap = graph.gprops[:k] - 1
+
+            link = ["L",
+                        edge.src,
+                        graph.eprops[edge][:orientations].source_orientation ? '+' : '-',
+                        edge.dst,
+                        graph.eprops[edge][:orientations].destination_orientation ? '+' : '-',
+                        "$(overlap)M"]
+            line = join(link, '\t')
+            println(io, line)
+        end
+    end
+    return outfile
+end
 
 end # module
