@@ -672,13 +672,38 @@ function count_canonical_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R
     return count_canonical_kmers(KMER_TYPE, FASTX.sequence(record))    
 end
 
-function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
     for sequence in sequences
         sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
         merge!(+, joint_kmer_counts, sequence_kmer_counts)
     end
     sort!(joint_kmer_counts)
+end
+
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
+    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
+    for sequence in sequences
+        sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
+        merge!(+, joint_kmer_counts, sequence_kmer_counts)
+    end
+    sort!(joint_kmer_counts)
+end
+
+function count_canonical_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{S}) where {KMER_TYPE, S <: AbstractString}
+    kmer_counts = count_canonical_kmers(KMER_TYPE, first(fastx_files))
+    for fastx_file in fastx_files[2:end]
+        _kmer_counts = count_canonical_kmers(KMER_TYPE, fastx_file)
+        kmer_counts = merge!(+, kmer_counts, _kmer_counts)
+    end
+    return kmer_counts
+end
+
+function count_canonical_kmers(::Type{KMER_TYPE}, fastx_file::S) where {KMER_TYPE, S <: AbstractString}
+    fastx_io = open_fastx(fastx_file)
+    kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastx_io)
+    close(fastx_io)
+    return kmer_counts
 end
 
 """
@@ -704,7 +729,7 @@ function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{
     return count_kmers(KMER_TYPE, FASTX.sequence(record))    
 end
 
-function count_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
+function count_kmers(::Type{KMER_TYPE}, sequences::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
     for sequence in sequences
         sequence_kmer_counts = count_kmers(KMER_TYPE, sequence)
@@ -713,28 +738,26 @@ function count_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
     sort!(joint_kmer_counts)
 end
 
+function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
+    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
+    for sequence in sequences
+        sequence_kmer_counts = count_kmers(KMER_TYPE, sequence)
+        merge!(+, joint_kmer_counts, sequence_kmer_counts)
+    end
+    sort!(joint_kmer_counts)
+end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function count_kmers_from_files(KMER_TYPE, files::Array)
-    kmer_counts = count_kmers_from_files(KMER_TYPE, first(files))
+function count_kmers(KMER_TYPE, fastx_files::AbstractVector{AbstractString})
+    kmer_counts = count_kmers(KMER_TYPE, first(files))
     for file in files[2:end]
-        _kmer_counts = count_kmers_from_files(KMER_TYPE, file)
+        _kmer_counts = count_kmers(KMER_TYPE, file)
         kmer_counts = merge!(+, kmer_counts, _kmer_counts)
     end
     return kmer_counts
 end
 
-function count_kmers_from_files(KMER_TYPE, file::String)
-    fastx_io = open_fastx(file)
+function count_kmers(KMER_TYPE, fastx_file::AbstractString)
+    fastx_io = open_fastx(fastx_file)
     kmer_counts = Mycelia.count_kmers(KMER_TYPE, fastx_io)
     close(fastx_io)
     return kmer_counts
@@ -1846,7 +1869,11 @@ end
 end
 
 # function fastx_to_kmer_graph(::Type{KMER_TYPE}, fastxs) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
-function fastx_to_kmer_graph(KMER_TYPE, fastxs)
+function fastx_to_kmer_graph(KMER_TYPE, fastx::AbstractString)
+    fastx_to_kmer_graph(KMER_TYPE, [fastx])
+end
+
+function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
     @info "assessing kmers"
     kmer_set = Set{KMER_TYPE}()
     ProgressMeter.@showprogress for fastxs in fastxs
@@ -1863,7 +1890,8 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs)
     EDGE_MER = BioSequences.BigDNAMer{k+1}
     @info "creating graph"
     ProgressMeter.@showprogress for fastx in fastxs
-        for record in fastx
+        fastx_io = open_fastx(fastx)
+        for record in fastx_io
             sequence = FASTX.sequence(record)
             record_identifier = FASTX.identifier(record) 
             edge_iterator = BioSequences.each(EDGE_MER, sequence)
@@ -1871,6 +1899,7 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs)
                 add_edge_to_kmer_graph!(kmer_graph, kmers, sequence_edge, record_identifier)
             end
         end
+        close(fastx_io)
     end
     return kmer_graph
 end
@@ -2340,7 +2369,7 @@ function graph_to_gfa(graph, outfile)
             end
 #             if haskey(graph.vprops[vertex], :evidence)
 #             @show graph.vprops[vertex][:evidence]
-            if graph.vprops[vertex][:evidence] isa Array
+            if typeof(graph.vprops[vertex][:evidence]) <: Union{AbstractSet, AbstractArray}
                 depth = length(graph.vprops[vertex][:evidence])
             else
                 depth = graph.vprops[vertex][:evidence]
