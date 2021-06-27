@@ -2576,7 +2576,6 @@ function polish_fastq(kmer_graph, fastq_file)
     
 #     @info "determining shortest paths between kmers"
     shortest_paths = LightGraphs.enumerate_paths(LightGraphs.floyd_warshall_shortest_paths(kmer_graph));
-
     
     @info "counting the number of records to establish runtime estimate"
     number_of_records = 0
