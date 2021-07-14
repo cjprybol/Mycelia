@@ -12,7 +12,7 @@ biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.
 
 ## Install
 ```julia
-(@v1.5) pkg> add git@github.com:cjprybol/Mycelia.git
+pkg> add git@github.com:cjprybol/Mycelia.git
 ```
 
 ## Related Software:
@@ -481,6 +481,11 @@ cypher-shell --address neo4j://localhost:7687 --username neo4j --password passwo
 cypher-shell --address neo4j://localhost:7687 --username neo4j --password password --database test --format auto 'MERGE (d1:DNAmer {sequence: "A"})-[d1d2:CONNECTION {orientations: [1,1]}]->(d2:DNAmer {sequence: "T"}) RETURN *'
 ```
 
+Find the import folder on 
+```
+# https://neo4j.com/docs/operations-manual/current/configuration/file-locations/
+/Users/cameronprybol/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-8ab8baac-5dea-4137-bb24-e0b426447940/import
+```
 
 find all nmers
 ```

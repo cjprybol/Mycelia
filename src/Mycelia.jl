@@ -20,6 +20,7 @@ import FASTX
 import CodecZlib
 import HTTP
 import ProgressMeter
+import LSHFunctions
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
@@ -1255,37 +1256,37 @@ end
 #     return backtrack_optimal_path(state_likelihoods, arrival_paths, edit_distances)
 # end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# A short description of the function
+A short description of the function
 
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function plot_kmer_frequency_spectra(counts; log_scaled = true, kwargs...)
-#     kmer_counts_hist = StatsBase.countmap(c for c in counts)
-#     xs = collect(keys(kmer_counts_hist))
-#     ys = collect(values(kmer_counts_hist))
-#     if log_scaled
-#         xs = log.(xs)
-#         ys = log.(ys)
-#     end
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function plot_kmer_frequency_spectra(counts; log_scaled = true, kwargs...)
+    kmer_counts_hist = StatsBase.countmap(c for c in counts)
+    xs = collect(keys(kmer_counts_hist))
+    ys = collect(values(kmer_counts_hist))
+    if log_scaled
+        xs = log.(xs)
+        ys = log.(ys)
+    end
     
-#     StatsPlots.plot(
-#         xs,
-#         ys,
-#         xlims = (0, maximum(xs) + max(1, ceil(0.1 * maximum(xs)))),
-#         ylims = (0, maximum(ys) + max(1, ceil(0.1 * maximum(ys)))),
-#         seriestype = :scatter,
-#         legend = false,
-#         xlabel = log_scaled ? "log(observed frequency)" : "observed frequency",
-#         ylabel = log_scaled ? "log(# of kmers)" : "observed frequency",
-#         ;kwargs...
-#     )
-# end
+    StatsPlots.plot(
+        xs,
+        ys,
+        xlims = (0, maximum(xs) + max(1, ceil(0.1 * maximum(xs)))),
+        ylims = (0, maximum(ys) + max(1, ceil(0.1 * maximum(ys)))),
+        seriestype = :scatter,
+        legend = false,
+        xlabel = log_scaled ? "log(observed frequency)" : "observed frequency",
+        ylabel = log_scaled ? "log(# of kmers)" : "observed frequency",
+        ;kwargs...
+    )
+end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -3017,10 +3018,14 @@ end
 
 
 function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
-    # min_depth = 3
     solid_vertices = filter(v -> simple_kmer_graph.vprops[v][:weight] >= min_depth, LightGraphs.vertices(simple_kmer_graph))
     filtered_simple_kmer_graph, vertex_map = LightGraphs.induced_subgraph(simple_kmer_graph, solid_vertices)
-    kmers = [filtered_simple_kmer_graph.vprops[v][:kmer] for v in LightGraphs.vertices(filtered_simple_kmer_graph)]
+#     display(simple_kmer_graph)
+#     display(filtered_simple_kmer_graph)
+    kmers = sort!(graph_to_kmers(filtered_simple_kmer_graph))
+    
+    old_kmers = graph_to_kmers(simple_kmer_graph)
+    
     k = filtered_simple_kmer_graph.gprops[:k]
     
     polished_fastq_file = replace(fastq_file, ".fastq" => ".k$k.d$(min_depth).fastq")
@@ -3028,11 +3033,19 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
     transition_probabilities = Mycelia.initialize_transition_probabilities(filtered_simple_kmer_graph)
     state_likelihoods = [Float64(filtered_simple_kmer_graph.vprops[v][:weight]) for v in LightGraphs.vertices(filtered_simple_kmer_graph)]
     state_likelihoods ./= sum(state_likelihoods)
+    
+#     @info "counting the number of records to establish runtime estimate"
+    number_of_records = 0
+    for fastq_record in FASTX.FASTQ.Reader(open(fastq_file))
+        number_of_records += 1
+    end
+    progress_bar = ProgressMeter.Progress(number_of_records, 1)
 
     fastq_reader = FASTX.FASTQ.Reader(open(fastq_file))
     fastq_writer = FASTX.FASTQ.Writer(open(polished_fastq_file, "w"))
 
     for fastx_record in fastq_reader
+        ProgressMeter.next!(progress_bar)
         bubble_start = 0
         updated_path = Vector{Pair{Int, Bool}}()
     #     @show FASTX.sequence(fastx_record)
@@ -3040,10 +3053,19 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
             canonical_kmer = min(kmer.fw, kmer.bw)
             orientation = canonical_kmer == kmer.fw
             kmer_index_range = searchsorted(kmers, canonical_kmer)
+            
+            old_kmer_index = searchsortedfirst(old_kmers, canonical_kmer)
+            
+#             FASTX.identifier(fastx_record) == "4" && @show kmer_index_range
+#             FASTX.identifier(fastx_record) == "4" && @show kmers[kmer_index_range]
+#             FASTX.identifier(fastx_record) == "4" && @show old_kmers[old_kmer_index]
             kmer_is_solid = !isempty(kmer_index_range)
-    #         @show kmer_is_solid
+#             FASTX.identifier(fastx_record) == "4" && @show canonical_kmer
+#             FASTX.identifier(fastx_record) == "4" &&  @show kmer_is_solid
+
             if kmer_is_solid
                 kmer_index = first(kmer_index_range)
+#                 FASTX.identifier(fastx_record) == "4" && @show filtered_simple_kmer_graph.vprops[kmer_index], simple_kmer_graph.vprops[old_kmer_index]
             else
                 kmer_index = 0
             end
@@ -3052,26 +3074,26 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
 
             if !kmer_is_solid
                 if !in_bubble
-    #                 @show "starting a bubble"
+#                     FASTX.identifier(fastx_record) == "4" && @show "starting a bubble"
                     bubble_start = i
                 else
-    #                 @show "continuing in a bubble"
+#                     FASTX.identifier(fastx_record) == "4" && @show "continuing in a bubble"
                 end
             else
                 if !in_bubble
-    #                 @show "pushing solid kmer to updated path"
+#                     FASTX.identifier(fastx_record) == "4" && @show "pushing solid kmer to updated path"
                     push!(updated_path, kmer_index => orientation)
                 else
                     if bubble_start == 1
-    #                     @show "ending an opening bubble"
+#                         FASTX.identifier(fastx_record) == "4" && @show "ending an opening bubble"
                         # we're in a bubble that began at the beginning of the read
                         # we'll do nothing and just remove this
                         # equivalent to tip clipping
-    #                     @show "pushing solid kmer to updated path"
+#                         FASTX.identifier(fastx_record) == "4" && @show "pushing solid kmer to updated path"
                         push!(updated_path, kmer_index => orientation)
                         bubble_start = 0
                     else
-    #                     @show "found end of an anchored bubble -- correcting"
+#                         FASTX.identifier(fastx_record) == "4" && @show "found end of an anchored bubble -- correcting"
                         source_vertex, source_orientation = last(updated_path)
                         destination_vertex, destination_orientation = kmer_index, orientation                
 
@@ -3080,10 +3102,14 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
                             source_vertex,
                             destination_vertex,
                             LightGraphs.weights(filtered_simple_kmer_graph),
-                            3).paths
+                            10).paths
 
                         if isempty(shortest_paths)
-                            error("no valid alternate paths found")
+                            @show source_vertex, destination_vertex
+                            @warn "no valid alternate paths found for $(FASTX.identifier(fastx_record)), continuing"
+                            break
+#                             @show fastx_record
+#                             error("try increasing min_depth")
                         end
                         candidate_path_probabilities = ones(length(shortest_paths))
                         oriented_candidate_paths = [
@@ -3109,7 +3135,11 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
                         end
                         non_zero_indices = findall(p -> p > 0, candidate_path_probabilities)
                         if isempty(non_zero_indices)
-                            error("no valid alternate path probabilities")
+#                             @show candidate_path_probabilities
+                            @warn "no resolution found for read $(FASTX.identifier(fastx_record))"
+                            break
+#                             error("no valid alternate path probabilities")
+#                             error("try increasing min_depth?")
                         end
 
                         candidate_path_probabilities = candidate_path_probabilities[non_zero_indices]
@@ -3169,5 +3199,65 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
     close(fastq_writer)
     return polished_fastq_file
 end
+
+function graph_to_kmers(g)
+    kmers = [g.vprops[v][:kmer] for v in LightGraphs.vertices(g)]
+    return kmers
+end
+
+function graph_to_edge_sequences(g)
+    edges = Set{BioSequences.BigDNAMer{g.gprops[:k]+1}}()
+    for edge in LightGraphs.edges(g)
+        src_kmer = g.vprops[edge.src][:kmer]
+        dst_kmer = g.vprops[edge.dst][:kmer]
+        for orientation in g.eprops[edge][:orientations]
+            if orientation.source_orientation
+                oriented_src_kmer = src_kmer
+            else
+                oriented_src_kmer = BioSequences.reverse_complement(src_kmer)
+            end
+            if orientation.destination_orientation
+                oriented_dst_kmer = dst_kmer
+            else
+                oriented_dst_kmer = BioSequences.reverse_complement(dst_kmer)
+            end
+            for i in 1:g.gprops[:k]-1
+                @assert oriented_src_kmer[i+1] == oriented_dst_kmer[i]
+            end
+            edge_mer = BioSequences.BigDNAMer((nuc for nuc in oriented_src_kmer)..., last(oriented_dst_kmer))
+            push!(edges, BioSequences.canonical(edge_mer))
+        end
+    end
+    return edges
+end
+
+function kmer_graph_distances(g1, g2)
+    g1_kmers = Set(graph_to_kmers(g1))
+    g1_edges = graph_to_edge_sequences(g1)
+    
+    g2_kmers = Set(graph_to_kmers(g2))
+    g2_edges = graph_to_edge_sequences(g2)
+    
+    kmer_distance = 1 - LSHFunctions.jaccard(g1_kmers, g2_kmers)
+    edge_distance = 1 - LSHFunctions.jaccard(g1_edges, g2_edges)
+    
+    result = (
+        kmer_distance = kmer_distance,
+        edge_distance = edge_distance
+    )
+end
+
+function cypher(cmd;
+    address="neo4j://localhost:7687",
+    username="neo4j",
+    password="password",
+    format="auto",
+    database="system"
+    )
+    cmd = `cypher-shell --address $(address) --username $(username) --password $(password) --format $(format) --database $(database) $(cmd)`
+    return cmd
+end
+
+neo_import_dir = "/Users/cameronprybol/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-8ab8baac-5dea-4137-bb24-e0b426447940/import"
 
 end # module
