@@ -280,6 +280,25 @@ julia> 1 + 1
 2
 ```
 """
+function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    
+    new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
+    new_seq_id = string(hash(new_seq))
+    new_seq_description = FASTX.identifier(record)
+    quality = fill(UInt8(60), length(new_seq))
+    return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where T
     
     if T <: BioSequences.DNAAlphabet
