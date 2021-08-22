@@ -3,6 +3,7 @@ module Mycelia
 import BioAlignments
 import BioSequences
 import BioSymbols
+import Dates
 import DataStructures
 import Distributions
 import DocStringExtensions
@@ -283,7 +284,7 @@ julia> 1 + 1
 function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     
     new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
-    new_seq_id = string(hash(new_seq))
+    new_seq_id = string(hash(new_seq)) * "-" * Random.randstring(32)
     new_seq_description = FASTX.identifier(record)
     quality = fill(UInt8(60), length(new_seq))
     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
@@ -379,66 +380,67 @@ end
 # LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
 # LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# A short description of the function
+A short description of the function
 
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function determine_edge_probabilities(graph)
-#     outgoing_edge_probabilities = determine_edge_probabilities(graph, true)
-#     incoming_edge_probabilities = determine_edge_probabilities(graph, false)
-#     return outgoing_edge_probabilities, incoming_edge_probabilities
-# end
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function determine_edge_probabilities(graph)
+    outgoing_edge_probabilities = determine_edge_probabilities(graph, true)
+    incoming_edge_probabilities = determine_edge_probabilities(graph, false)
+    return outgoing_edge_probabilities, incoming_edge_probabilities
+end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# A short description of the function
+A short description of the function
 
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function determine_edge_probabilities(graph, strand)
-#     outgoing_edge_probabilities = SparseArrays.spzeros(length(graph.kmers), length(graph.kmers))
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function determine_edge_probabilities(graph, strand)
+    kmers = graph.gprops[:kmers]
+    outgoing_edge_probabilities = SparseArrays.spzeros(length(kmers), length(kmers))
     
-#     for (kmer_index, kmer) in enumerate(graph.kmers)
-#         if !strand
-#             kmer = BioSequences.reverse_complement(kmer)
-#         end
+    for (kmer_index, kmer) in enumerate(kmers)
+        if !strand
+            kmer = BioSequences.reverse_complement(kmer)
+        end
         
-#         downstream_neighbor_indices = Int[]
-#         for neighbor in BioSequences.neighbors(kmer)
-#             index = get_kmer_index(graph.kmers, BioSequences.canonical(neighbor))
-#             # kmer must be in our dataset and there must be a connecting edge
-#             if !isnothing(index) && LightGraphs.has_edge(graph, ordered_edge(kmer_index, index))
-#                 push!(downstream_neighbor_indices, index)
-#             end
-#         end
-#         sort!(unique!(downstream_neighbor_indices))
+        downstream_neighbor_indices = Int[]
+        for neighbor in BioSequences.neighbors(kmer)
+            index = get_kmer_index(kmers, BioSequences.canonical(neighbor))
+            # kmer must be in our dataset and there must be a connecting edge
+            if !isnothing(index) && LightGraphs.has_edge(graph, ordered_edge(kmer_index, index))
+                push!(downstream_neighbor_indices, index)
+            end
+        end
+        sort!(unique!(downstream_neighbor_indices))
         
-#         downstream_edge_weights = Int[
-#             length(get(graph.edge_evidence, ordered_edge(kmer_index, neighbor_index), EdgeEvidence[])) for neighbor_index in downstream_neighbor_indices
-#         ]
+        downstream_edge_weights = Int[
+            length(get(graph.edge_evidence, ordered_edge(kmer_index, neighbor_index), EdgeEvidence[])) for neighbor_index in downstream_neighbor_indices
+        ]
         
-#         non_zero_indices = downstream_edge_weights .> 0
-#         downstream_neighbor_indices = downstream_neighbor_indices[non_zero_indices]
-#         downstream_edge_weights = downstream_edge_weights[non_zero_indices]
+        non_zero_indices = downstream_edge_weights .> 0
+        downstream_neighbor_indices = downstream_neighbor_indices[non_zero_indices]
+        downstream_edge_weights = downstream_edge_weights[non_zero_indices]
         
-#         downstream_edge_likelihoods = downstream_edge_weights ./ sum(downstream_edge_weights)
+        downstream_edge_likelihoods = downstream_edge_weights ./ sum(downstream_edge_weights)
         
-#         for (neighbor_index, likelihood) in zip(downstream_neighbor_indices, downstream_edge_likelihoods)
-#             outgoing_edge_probabilities[kmer_index, neighbor_index] = likelihood
-#         end
-#     end
-#     return outgoing_edge_probabilities
-# end
+        for (neighbor_index, likelihood) in zip(downstream_neighbor_indices, downstream_edge_likelihoods)
+            outgoing_edge_probabilities[kmer_index, neighbor_index] = likelihood
+        end
+    end
+    return outgoing_edge_probabilities
+end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1784,7 +1786,7 @@ julia> 1 + 1
 """
 function get_kmer_index(kmers, kmer)
     index = searchsortedfirst(kmers, kmer)
-    @assert kmers[index] == kmer "$kmer"
+    @assert kmers[index] == kmer "$kmer not found in kmer list"
     return index
 end
 
@@ -1872,8 +1874,13 @@ end
          orientation = oriented_destination_vertex.orientation)
 
     set_metadata!(kmer_graph, oriented_source_vertex.vertex, :evidence, source_evidence)
+    new_weight = length(kmer_graph.vprops[oriented_source_vertex.vertex][:evidence])
+    MetaGraphs.set_prop!(kmer_graph, oriented_source_vertex.vertex, :weight, new_weight)
 
     set_metadata!(kmer_graph, oriented_destination_vertex.vertex, :evidence, destination_evidence)
+    new_weight = length(kmer_graph.vprops[oriented_destination_vertex.vertex][:evidence])
+    MetaGraphs.set_prop!(kmer_graph, oriented_destination_vertex.vertex, :weight, new_weight)
+    
 
     forward_edge = LightGraphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
 
@@ -1892,6 +1899,8 @@ end
     )
 
     set_metadata!(kmer_graph, forward_edge, :evidence, forward_edge_evidence)
+    new_weight = length(kmer_graph.eprops[forward_edge][:evidence])
+    MetaGraphs.set_prop!(kmer_graph, forward_edge, :weight, new_weight)
 
     reverse_edge = LightGraphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
 
@@ -1910,6 +1919,8 @@ end
     )
 
     set_metadata!(kmer_graph, reverse_edge, :evidence, reverse_edge_evidence)
+    new_weight = length(kmer_graph.eprops[reverse_edge][:evidence])
+    MetaGraphs.set_prop!(kmer_graph, reverse_edge, :weight, new_weight)
 end
 
 # function fastx_to_kmer_graph(::Type{KMER_TYPE}, fastxs) where {KMER_TYPE <: BioSequences.AbstractMer{A, K}} where {A, K}
@@ -1928,6 +1939,7 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}
     kmer_graph = MetaGraphs.MetaDiGraph(length(kmers))
     k = length(first(kmers))
     MetaGraphs.set_prop!(kmer_graph, :k, k)
+    MetaGraphs.set_prop!(kmer_graph, :kmers, kmers)
     for (vertex, kmer) in enumerate(kmers)
         MetaGraphs.set_prop!(kmer_graph, vertex, :kmer, kmer)
     end
