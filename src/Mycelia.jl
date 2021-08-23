@@ -1939,7 +1939,8 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}
     kmer_graph = MetaGraphs.MetaDiGraph(length(kmers))
     k = length(first(kmers))
     MetaGraphs.set_prop!(kmer_graph, :k, k)
-    MetaGraphs.set_prop!(kmer_graph, :kmers, kmers)
+    # don't set this since when we filter an induced subgraph, these don't update
+#     MetaGraphs.set_prop!(kmer_graph, :kmers, kmers)
     for (vertex, kmer) in enumerate(kmers)
         MetaGraphs.set_prop!(kmer_graph, vertex, :kmer, kmer)
     end
