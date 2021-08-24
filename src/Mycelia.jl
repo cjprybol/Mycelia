@@ -2996,6 +2996,7 @@ end
 # end
 
 function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
+    @info "counting kmers"
     canonical_kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
     simple_kmer_graph = MetaGraphs.MetaDiGraph(length(canonical_kmer_counts))
     
@@ -3003,7 +3004,8 @@ function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:Abstract
 
     MetaGraphs.set_prop!(simple_kmer_graph, :k, k)
 
-    for (vertex, (kmer, count)) in enumerate(canonical_kmer_counts)
+    @info "setting metadata on vertices"
+    ProgressMeter.@showprogress for (vertex, (kmer, count)) in enumerate(canonical_kmer_counts)
         MetaGraphs.set_prop!(simple_kmer_graph, vertex, :kmer, kmer)
         MetaGraphs.set_prop!(simple_kmer_graph, vertex, :weight, count)
     end
@@ -3011,17 +3013,21 @@ function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:Abstract
     kmers = collect(keys(canonical_kmer_counts))
 
     EDGE_MER = BioSequences.BigDNAMer{k+1}
-    @info "creating graph"
+    @info "loading fastx files into graph"
     ProgressMeter.@showprogress for fastx in fastxs
-        fastx_io = Mycelia.open_fastx(fastx)
-        for record in fastx_io
+        n_records = 0
+        for record in (Mycelia.open_fastx(fastx))
+            n_records += 1
+        end
+        p = ProgressMeter.Progress(n_records, 1)   # minimum update interval: 1 second
+        for record in (Mycelia.open_fastx(fastx))
             sequence = FASTX.sequence(record)
             edge_iterator = BioSequences.each(EDGE_MER, sequence)
             for sequence_edge in edge_iterator
                 add_edge_to_simple_kmer_graph!(simple_kmer_graph, kmers, sequence_edge)
             end
+            ProgressMeter.next!(p)
         end
-        close(fastx_io)
     end
     return simple_kmer_graph
 end
