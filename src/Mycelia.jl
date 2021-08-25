@@ -1287,13 +1287,13 @@ julia> 1 + 1
 2
 ```
 """
-function plot_kmer_frequency_spectra(counts; log_scaled = true, kwargs...)
+function plot_kmer_frequency_spectra(counts; log_scale = log, kwargs...)
     kmer_counts_hist = StatsBase.countmap(c for c in counts)
     xs = collect(keys(kmer_counts_hist))
     ys = collect(values(kmer_counts_hist))
-    if log_scaled
-        xs = log.(xs)
-        ys = log.(ys)
+    if isa(log_scale, Function)
+        xs = log_scale.(xs)
+        ys = log_scale.(ys)
     end
     
     StatsPlots.plot(
@@ -1303,8 +1303,8 @@ function plot_kmer_frequency_spectra(counts; log_scaled = true, kwargs...)
         ylims = (0, maximum(ys) + max(1, ceil(0.1 * maximum(ys)))),
         seriestype = :scatter,
         legend = false,
-        xlabel = log_scaled ? "log(observed frequency)" : "observed frequency",
-        ylabel = log_scaled ? "log(# of kmers)" : "observed frequency",
+        xlabel = isa(log_scale, Function) ? "$(log_scale)(observed frequency)" : "observed frequency",
+        ylabel = isa(log_scale, Function) ? "$(log_scale)(# of kmers)" : "observed frequency",
         ;kwargs...
     )
 end
