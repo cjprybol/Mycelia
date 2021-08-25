@@ -2995,9 +2995,11 @@ end
 #     end
 # end
 
-function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
+function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}; minimum_coverage::Int=1)
     @info "counting kmers"
     canonical_kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
+    # hard filter any nodes that are less frequent than minimum coverage threshold
+    canonical_kmer_counts = filter!(pair -> pair[2] >= minimum_coverage, canonical_kmer_counts)
     simple_kmer_graph = MetaGraphs.MetaDiGraph(length(canonical_kmer_counts))
     
     k = length(first(keys(canonical_kmer_counts)))
@@ -3033,19 +3035,29 @@ function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:Abstract
 end
 
 
-function fastx_to_simple_kmer_graph(KMER_TYPE, fastx::AbstractString)
-    fastx_to_simple_kmer_graph(KMER_TYPE, [fastx])
+function fastx_to_simple_kmer_graph(KMER_TYPE, fastx::AbstractString; minimum_coverage::Int=1)
+    fastx_to_simple_kmer_graph(KMER_TYPE, [fastx], minimum_coverage=minimum_coverage)
 end
 
 @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, kmers, sequence_edge)
     observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(sequence_edge.fw)
+    canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
+    source_kmer_in_graph = !isempty(searchsorted(kmers, canonical_source_kmer))
+    if !source_kmer_in_graph
+        return
+    end
+    canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
+    destination_kmer_in_graph = !isempty(searchsorted(kmers, canonical_destination_kmer))
+    if !destination_kmer_in_graph
+        return
+    end
 
     oriented_source_kmer = 
-        (canonical_kmer = BioSequences.canonical(observed_source_kmer),
+        (canonical_kmer = canonical_source_kmer,
          orientation = BioSequences.iscanonical(observed_source_kmer))
 
     oriented_destination_kmer = 
-        (canonical_kmer = BioSequences.canonical(observed_destination_kmer),
+        (canonical_kmer = canonical_destination_kmer,
          orientation = BioSequences.iscanonical(observed_destination_kmer))
 
     oriented_source_vertex = 
