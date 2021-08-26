@@ -2999,7 +2999,7 @@ function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:Abstract
     @info "counting kmers"
     canonical_kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
     # hard filter any nodes that are less frequent than minimum coverage threshold
-    canonical_kmer_counts = filter!(pair -> pair[2] >= minimum_coverage, canonical_kmer_counts)
+    canonical_kmer_counts = filter(canonical_kmer_count -> last(canonical_kmer_count) >= minimum_coverage, canonical_kmer_counts)
     simple_kmer_graph = MetaGraphs.MetaDiGraph(length(canonical_kmer_counts))
     
     k = length(first(keys(canonical_kmer_counts)))
