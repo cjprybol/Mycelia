@@ -795,19 +795,52 @@ julia> 1 + 1
 2
 ```
 """
-function open_fastx(file::String)
-    @assert isfile(file)
-    io = open(file)
-    if occursin(r"\.gz$", file)
-        io = CodecZlib.GzipDecompressorStream(io)
-        file = replace(file, ".gz" => "")
+function open_fastx(path::String)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
     end
-    if occursin(r"\.(fasta|fna|fa)$", file)
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+        path_base = replace(path_base, ".gz" => "")
+    end
+    if occursin(r"\.(fasta|fna|fa)$", path_base)
         fastx_io = FASTX.FASTA.Reader(io)
-    elseif occursin(r"\.(fastq|fq)$", file)
+    elseif occursin(r"\.(fastq|fq)$", path_base)
         fastx_io = FASTX.FASTQ.Reader(io)
     end
     return fastx_io
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function open_gff(path::String)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
+    end
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+        path_base = replace(path_base, ".gz" => "")
+    end
+    gff_io = open(GFF3.Reader, path_base)
+    return gff_io
 end
 
 # """
