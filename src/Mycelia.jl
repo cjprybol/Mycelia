@@ -7,6 +7,7 @@ import Dates
 import DataStructures
 import Distributions
 import DocStringExtensions
+import GFF3
 import GraphRecipes
 import LightGraphs
 import MetaGraphs
@@ -33,8 +34,11 @@ import LSHFunctions
 
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
+# const AA_ALPHABET = filter(
+#     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+#     BioSymbols.alphabet(BioSymbols.AminoAcid))
 const AA_ALPHABET = filter(
-    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
 
@@ -799,6 +803,7 @@ function open_fastx(path::String)
     if isfile(path)
         io = open(path)
     elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
         io = IOBuffer(HTTP.get(path).body)
     else
         error("unable to locate file $path")
@@ -830,6 +835,7 @@ function open_gff(path::String)
     if isfile(path)
         io = open(path)
     elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
         io = IOBuffer(HTTP.get(path).body)
     else
         error("unable to locate file $path")
@@ -837,9 +843,9 @@ function open_gff(path::String)
     path_base = basename(path)
     if occursin(r"\.gz$", path_base)
         io = CodecZlib.GzipDecompressorStream(io)
-        path_base = replace(path_base, ".gz" => "")
+#         path_base = replace(path_base, ".gz" => "")
     end
-    gff_io = open(GFF3.Reader, path_base)
+    gff_io = GFF3.Reader(io)
     return gff_io
 end
 
