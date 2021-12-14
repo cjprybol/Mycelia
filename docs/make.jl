@@ -6,24 +6,27 @@ import Weave
 
 chapters = String[]
 
-println(pwd())
-for dir in readdir(pwd())
-    @show dir
-end
+# /home/runner/work/Mycelia/Mycelia
+# println(pwd())
+# for dir in readdir(pwd())
+#     @show dir
+# end
 
-for notebook in filter(x -> occursin(r"\.ipynb$", x), readdir("chapters/", join=true))
+PKG_BASE = dirname(dirname(pathof(Mycelia)))
+
+for notebook in filter(x -> occursin(r"\.ipynb$", x), readdir("$(PKG_BASE)/docs/chapters/", join=true))
     out = replace(basename(notebook), ".ipynb" => ".md")
 #     out = replace(basename(notebook), ".ipynb" => ".html")
 #     out = "src/$(html_out)"
 #     Weave.weave(notebook, out_path=out)
 #     Weave.convert_doc(notebook, out, outformat="markdown")
-    Weave.weave(notebook, out_path="src/$(out)", doctype="github")
+    Weave.weave(notebook, out_path="$(PKG_BASE)/docs/src/$(out)", doctype="github")
     push!(chapters, out)
 end
 
-cp("../README.md", "src/index.md", force=true)
-for svg in filter(x -> occursin(r"\.svg$", x), readdir("..", join=true))
-    cp(svg, "src/$(basename(svg))", force=true)
+cp("$(PKG_BASE)/README.md", "$(PKG_BASE)/docs/src/index.md", force=true)
+for svg in filter(x -> occursin(r"\.svg$", x), readdir(PKG_BASE, join=true))
+    cp(svg, "$(PKG_BASE)/docs/src/$(basename(svg))", force=true)
 end
 
 @show "here"
