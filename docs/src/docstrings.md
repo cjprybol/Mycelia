@@ -2,7 +2,7 @@
 CurrentModule = Mycelia
 ```
 
-# Mycelia
+# Docstrings
 
 ```@index
 ```
