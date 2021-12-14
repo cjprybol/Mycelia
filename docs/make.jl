@@ -15,6 +15,14 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Docuentation" => [
+            "page1.md",
+            "page2.md"
+        ],
+        "Chapters" => [
+            "chapter1.md",
+            "chapter2.md",
+        ]
     ],
 )
 
