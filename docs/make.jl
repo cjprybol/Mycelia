@@ -6,6 +6,8 @@ import Weave
 
 chapters = String[]
 
+println(pwd())
+
 for notebook in filter(x -> occursin(r"\.ipynb$", x), readdir("chapters/", join=true))
     out = replace(basename(notebook), ".ipynb" => ".md")
 #     out = replace(basename(notebook), ".ipynb" => ".html")
