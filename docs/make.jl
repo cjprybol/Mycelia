@@ -1,6 +1,8 @@
 using Mycelia
 using Documenter
 
+# run literate or pandoc .ipynb -> .md here
+
 makedocs(;
     modules=[Mycelia],
     authors="Cameron Prybol <cameron.prybol@gmail.com> and contributors",
