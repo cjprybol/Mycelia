@@ -66,6 +66,7 @@ uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 [compat]
 BenchmarkTools = "1.0"
 BioAlignments = "2.0"
+BioFetch = "0.2"
 BioSequences = "2.0"
 BioSymbols = "4.0, 5"
 CodecZlib = "0.7"
