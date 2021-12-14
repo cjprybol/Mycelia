@@ -7,6 +7,7 @@ import Dates
 import DataStructures
 import Distributions
 import DocStringExtensions
+import GFF3
 import GraphRecipes
 import LightGraphs
 import MetaGraphs
@@ -33,8 +34,11 @@ import LSHFunctions
 
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
+# const AA_ALPHABET = filter(
+#     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+#     BioSymbols.alphabet(BioSymbols.AminoAcid))
 const AA_ALPHABET = filter(
-    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
 
@@ -795,19 +799,54 @@ julia> 1 + 1
 2
 ```
 """
-function open_fastx(file::String)
-    @assert isfile(file)
-    io = open(file)
-    if occursin(r"\.gz$", file)
-        io = CodecZlib.GzipDecompressorStream(io)
-        file = replace(file, ".gz" => "")
+function open_fastx(path::String)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
     end
-    if occursin(r"\.(fasta|fna|fa)$", file)
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+        path_base = replace(path_base, ".gz" => "")
+    end
+    if occursin(r"\.(fasta|fna|fa)$", path_base)
         fastx_io = FASTX.FASTA.Reader(io)
-    elseif occursin(r"\.(fastq|fq)$", file)
+    elseif occursin(r"\.(fastq|fq)$", path_base)
         fastx_io = FASTX.FASTQ.Reader(io)
     end
     return fastx_io
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function open_gff(path::String)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
+    end
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+#         path_base = replace(path_base, ".gz" => "")
+    end
+    gff_io = GFF3.Reader(io)
+    return gff_io
 end
 
 # """
@@ -2256,164 +2295,164 @@ end
 #     return simplified_graph
 # end
 
-function simplify_kmer_graph(kmer_graph)
-    @info "simplifying kmer graph"
-    @info "resolving untigs..."
-    @time untigs = Mycelia.resolve_untigs(kmer_graph)
+# function simplify_kmer_graph(kmer_graph)
+#     @info "simplifying kmer graph"
+#     @info "resolving untigs..."
+#     @time untigs = Mycelia.resolve_untigs(kmer_graph)
 
-    @info "determining untig orientations..."
-    @time oriented_untigs = Mycelia.determine_oriented_untigs(kmer_graph, untigs)
+#     @info "determining untig orientations..."
+#     @time oriented_untigs = Mycelia.determine_oriented_untigs(kmer_graph, untigs)
 
-    simplified_graph = MetaGraphs.MetaDiGraph(length(oriented_untigs))
-    MetaGraphs.set_prop!(simplified_graph, :k, kmer_graph.gprops[:k])
-    @info "initializing graph node metadata"
-    ProgressMeter.@showprogress for (vertex, untig) in enumerate(oriented_untigs)
-        MetaGraphs.set_prop!(simplified_graph, vertex, :sequence, untig.sequence)
-        MetaGraphs.set_prop!(simplified_graph, vertex, :path, untig.path)
-        MetaGraphs.set_prop!(simplified_graph, vertex, :orientations, untig.orientations)
-        MetaGraphs.set_prop!(simplified_graph, vertex, :weight, untig.weight)
-    end
+#     simplified_graph = MetaGraphs.MetaDiGraph(length(oriented_untigs))
+#     MetaGraphs.set_prop!(simplified_graph, :k, kmer_graph.gprops[:k])
+#     @info "initializing graph node metadata"
+#     ProgressMeter.@showprogress for (vertex, untig) in enumerate(oriented_untigs)
+#         MetaGraphs.set_prop!(simplified_graph, vertex, :sequence, untig.sequence)
+#         MetaGraphs.set_prop!(simplified_graph, vertex, :path, untig.path)
+#         MetaGraphs.set_prop!(simplified_graph, vertex, :orientations, untig.orientations)
+#         MetaGraphs.set_prop!(simplified_graph, vertex, :weight, untig.weight)
+#     end
 
-    # determine oriented edges of simplified graph
-    simplified_untigs = Vector{Pair{Pair{Int64,Bool},Pair{Int64,Bool}}}(undef, length(LightGraphs.vertices(simplified_graph)))
-    @info "creating simplified unitgs to help resolve connections"
-    # use a pre-allocated array here to speed up
-    ProgressMeter.@showprogress for vertex in LightGraphs.vertices(simplified_graph)
-        in_kmer = simplified_graph.vprops[vertex][:path][1] => simplified_graph.vprops[vertex][:orientations][1]
-        out_kmer = simplified_graph.vprops[vertex][:path][end] => simplified_graph.vprops[vertex][:orientations][end]
-    #     @show vertex, in_kmer, out_kmer
-        simplified_untigs[vertex] = in_kmer => out_kmer
-    #     push!(simplified_untigs, )
-    end
+#     # determine oriented edges of simplified graph
+#     simplified_untigs = Vector{Pair{Pair{Int64,Bool},Pair{Int64,Bool}}}(undef, length(LightGraphs.vertices(simplified_graph)))
+#     @info "creating simplified unitgs to help resolve connections"
+#     # use a pre-allocated array here to speed up
+#     ProgressMeter.@showprogress for vertex in LightGraphs.vertices(simplified_graph)
+#         in_kmer = simplified_graph.vprops[vertex][:path][1] => simplified_graph.vprops[vertex][:orientations][1]
+#         out_kmer = simplified_graph.vprops[vertex][:path][end] => simplified_graph.vprops[vertex][:orientations][end]
+#     #     @show vertex, in_kmer, out_kmer
+#         simplified_untigs[vertex] = in_kmer => out_kmer
+#     #     push!(simplified_untigs, )
+#     end
 
-    # make a dictionary mapping endcap to oriented_untig index
+#     # make a dictionary mapping endcap to oriented_untig index
 
-    end_mer_map = Dict()
-    ProgressMeter.@showprogress for (i, oriented_untig) in enumerate(oriented_untigs)
-        end_mer_map[first(oriented_untig.path)] = i
-        end_mer_map[last(oriented_untig.path)] = i
-    end
+#     end_mer_map = Dict()
+#     ProgressMeter.@showprogress for (i, oriented_untig) in enumerate(oriented_untigs)
+#         end_mer_map[first(oriented_untig.path)] = i
+#         end_mer_map[last(oriented_untig.path)] = i
+#     end
 
-    ProgressMeter.@showprogress for (untig_index, oriented_untig) in enumerate(oriented_untigs)
-    #     @show untig_index
-        true_in_overlap = oriented_untig.sequence[1:simplified_graph.gprops[:k]-1]
+#     ProgressMeter.@showprogress for (untig_index, oriented_untig) in enumerate(oriented_untigs)
+#     #     @show untig_index
+#         true_in_overlap = oriented_untig.sequence[1:simplified_graph.gprops[:k]-1]
 
-        non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[1])
-        if length(oriented_untig.path) > 1
-            non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[2])
-        end
-        for non_backtracking_neighbor in non_backtracking_neighbors
-            neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
-            neighboring_untig = oriented_untigs[neighboring_untig_index]
+#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[1])
+#         if length(oriented_untig.path) > 1
+#             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[2])
+#         end
+#         for non_backtracking_neighbor in non_backtracking_neighbors
+#             neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
+#             neighboring_untig = oriented_untigs[neighboring_untig_index]
 
-            neighbor_true_out_overlap = neighboring_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
-            if neighbor_true_out_overlap == true_in_overlap
-                e = LightGraphs.Edge(neighboring_untig_index, untig_index)
-    #             o = true => true
-                o = (source_orientation = true, destination_orientation = true)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
+#             neighbor_true_out_overlap = neighboring_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
+#             if neighbor_true_out_overlap == true_in_overlap
+#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#     #             o = true => true
+#                 o = (source_orientation = true, destination_orientation = true)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
 
-            neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
-            if neighbor_false_out_overlap == true_in_overlap        
-                e = LightGraphs.Edge(neighboring_untig_index, untig_index)
-    #             o = false => true
-                o = (source_orientation = false, destination_orientation = true)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
-        end
+#             neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
+#             if neighbor_false_out_overlap == true_in_overlap        
+#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#     #             o = false => true
+#                 o = (source_orientation = false, destination_orientation = true)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
+#         end
 
-        true_out_overlap = oriented_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
-        non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[end])
-        if length(oriented_untig.path) > 1
-            non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[end-1])
-        end
-        for non_backtracking_neighbor in non_backtracking_neighbors
-            neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
-            neighboring_untig = oriented_untigs[neighboring_untig_index]
+#         true_out_overlap = oriented_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
+#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[end])
+#         if length(oriented_untig.path) > 1
+#             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[end-1])
+#         end
+#         for non_backtracking_neighbor in non_backtracking_neighbors
+#             neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
+#             neighboring_untig = oriented_untigs[neighboring_untig_index]
 
-            neighbor_true_in_overlap = neighboring_untig.sequence[1:simplified_graph.gprops[:k]-1]
-            if true_out_overlap == neighbor_true_in_overlap
-                e = LightGraphs.Edge(untig_index, neighboring_untig_index)
-    #             o = true => true
-                o = (source_orientation = true, destination_orientation = true)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
+#             neighbor_true_in_overlap = neighboring_untig.sequence[1:simplified_graph.gprops[:k]-1]
+#             if true_out_overlap == neighbor_true_in_overlap
+#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#     #             o = true => true
+#                 o = (source_orientation = true, destination_orientation = true)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
 
-            neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
-            if true_out_overlap == neighbor_false_in_overlap
-                e = LightGraphs.Edge(untig_index, neighboring_untig_index)
-    #             o = true => false
-                o = (source_orientation = true, destination_orientation = false)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
-        end
+#             neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
+#             if true_out_overlap == neighbor_false_in_overlap
+#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#     #             o = true => false
+#                 o = (source_orientation = true, destination_orientation = false)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
+#         end
 
-        false_in_overlap = BioSequences.reverse_complement(oriented_untig.sequence)[1:simplified_graph.gprops[:k]-1]
+#         false_in_overlap = BioSequences.reverse_complement(oriented_untig.sequence)[1:simplified_graph.gprops[:k]-1]
 
-        non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[end])
-        if length(oriented_untig.path) > 1
-            non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[end-1])
-        end
-        for non_backtracking_neighbor in non_backtracking_neighbors
-            neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
-            neighboring_untig = oriented_untigs[neighboring_untig_index]
+#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[end])
+#         if length(oriented_untig.path) > 1
+#             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[end-1])
+#         end
+#         for non_backtracking_neighbor in non_backtracking_neighbors
+#             neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
+#             neighboring_untig = oriented_untigs[neighboring_untig_index]
 
-            neighbor_true_out_overlap = neighboring_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
-            if neighbor_true_out_overlap == false_in_overlap
-                e = LightGraphs.Edge(neighboring_untig_index, untig_index)
-    #             o = true => false
-                o = (source_orientation = true, destination_orientation = false)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
+#             neighbor_true_out_overlap = neighboring_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
+#             if neighbor_true_out_overlap == false_in_overlap
+#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#     #             o = true => false
+#                 o = (source_orientation = true, destination_orientation = false)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
 
-            neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
-            if neighbor_false_out_overlap == false_in_overlap        
-                e = LightGraphs.Edge(neighboring_untig_index, untig_index)
-    #             o = false => false
-                o = (source_orientation = false, destination_orientation = false)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
-        end
+#             neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
+#             if neighbor_false_out_overlap == false_in_overlap        
+#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#     #             o = false => false
+#                 o = (source_orientation = false, destination_orientation = false)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
+#         end
 
-        false_out_overlap = BioSequences.reverse_complement(oriented_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
+#         false_out_overlap = BioSequences.reverse_complement(oriented_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
 
-        non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[1])
-        if length(oriented_untig.path) > 1
-            non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[2])
-        end
+#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[1])
+#         if length(oriented_untig.path) > 1
+#             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[2])
+#         end
 
-        for non_backtracking_neighbor in non_backtracking_neighbors
-            neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
-            neighboring_untig = oriented_untigs[neighboring_untig_index]
+#         for non_backtracking_neighbor in non_backtracking_neighbors
+#             neighboring_untig_index = end_mer_map[non_backtracking_neighbor]
+#             neighboring_untig = oriented_untigs[neighboring_untig_index]
 
-            neighbor_true_in_overlap = neighboring_untig.sequence[1:simplified_graph.gprops[:k]-1]
-            if false_out_overlap == neighbor_true_in_overlap
-                e = LightGraphs.Edge(untig_index, neighboring_untig_index)
-    #             o = false => true
-                o = (source_orientation = false, destination_orientation = true)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
+#             neighbor_true_in_overlap = neighboring_untig.sequence[1:simplified_graph.gprops[:k]-1]
+#             if false_out_overlap == neighbor_true_in_overlap
+#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#     #             o = false => true
+#                 o = (source_orientation = false, destination_orientation = true)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
 
-            neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
-            if false_out_overlap == neighbor_false_in_overlap
-                e = LightGraphs.Edge(untig_index, neighboring_untig_index)
-    #             o = false => false
-                o = (source_orientation = false, destination_orientation = false)
-                LightGraphs.add_edge!(simplified_graph, e)
-                Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
-            end
-        end
-    end
-    return simplified_graph
-end
+#             neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
+#             if false_out_overlap == neighbor_false_in_overlap
+#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#     #             o = false => false
+#                 o = (source_orientation = false, destination_orientation = false)
+#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#             end
+#         end
+#     end
+#     return simplified_graph
+# end
 
 function graph_to_gfa(graph, outfile)
     open(outfile, "w") do io
