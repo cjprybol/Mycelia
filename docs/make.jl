@@ -17,3 +17,10 @@ makedocs(;
         "Home" => "index.md",
     ],
 )
+
+deploydocs(
+    repo = "github.com/cjprybol/Mycelia.git",
+    push_preview = true,
+    deps = nothing,
+    make = nothing
+)
