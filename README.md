@@ -1,5 +1,13 @@
 # Mycelia
 
+notes to self:
+- Welcome page for documentation goes into docs/src/index.md
+- Chapters go into chapters
+- When running docs/make.jl, chapters are pulled into docs/src/index (make sure I can do this)
+- Have documentation and chapters be interleaved in same web page
+- Use literate or pandoc for .ipynb -> md, and then documenter.jl for .md -> .html
+
+
 biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
 
 <!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Mycelia.jl/dev) -->
