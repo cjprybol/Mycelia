@@ -38,6 +38,7 @@ makedocs(;
         "Home" => "index.md",
         "Documentation" => [
             "docstrings.md",
+            "neo4j-notes.md"
         ],
         "Chapters" => chapters
     ],
