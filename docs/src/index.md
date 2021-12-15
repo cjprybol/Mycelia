@@ -1,21 +1,10 @@
 # Mycelia
 
-notes to self:
-- Welcome page for documentation goes into docs/src/index.md
-- Chapters go into chapters
-- When running docs/make.jl, chapters are pulled into docs/src/index (make sure I can do this)
-- Have documentation and chapters be interleaved in same web page
-- Use literate or pandoc for .ipynb -> md, and then documenter.jl for .md -> .html
-
-
 biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/)
 
-<!-- [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cameronprybol.gitlab.io/Mycelia.jl/dev) -->
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 <!-- [![Build Status](https://github.com/cjprybol/Mycelia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines) -->
 <!-- [![Coverage](https://github.com/cjprybol/Mycelia.jl/badges/master/coverage.svg)](https://github.com/cjprybol/Mycelia.jl/commits/master) -->
-<!-- [![Build Status](https://ci.appveyor.com/api/projects/status/github/cjprybol/Mycelia.jl?svg=true)](https://ci.appveyor.com/project/cjprybol/Mycelia-jl) -->
-<!-- [![Build Status](https://cloud.drone.io/api/badges/cjprybol/Mycelia.jl/status.svg)](https://cloud.drone.io/cjprybol/Mycelia.jl) -->
-<!-- [![Coverage](https://codecov.io/gh/cjprybol/Mycelia.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/cjprybol/Mycelia.jl) -->
 <!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
 
 ## Install

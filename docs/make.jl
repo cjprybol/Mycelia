@@ -2,20 +2,23 @@ using Mycelia
 using Documenter
 import Weave
 
-# run literate or pandoc .ipynb -> .md here
-
 chapters = String[]
 
 PKG_BASE = dirname(dirname(pathof(Mycelia)))
 
+# cleanup all current .ipynb exports
+for converted_notebook_file in filter(x -> occursin(r"\.ipynb\.md", x), readdir("$(PKG_BASE)/docs/src", join=true))
+    rm(converted_notebook_file)
+end
+
+# weave all current chapter notebooks into markdown files
 for notebook in filter(x -> occursin(r"\.ipynb$", x), readdir("$(PKG_BASE)/docs/chapters/", join=true))
-    out = replace(basename(notebook), ".ipynb" => ".md")
-#     out = replace(basename(notebook), ".ipynb" => ".html")
-#     Weave.convert_doc(notebook, out, outformat="markdown")
+    out = basename(notebook) * ".md"
     Weave.weave(notebook, out_path="$(PKG_BASE)/docs/src/$(out)", doctype="github")
     push!(chapters, out)
 end
 
+# copy readme from repo to being main index file in documentation
 cp("$(PKG_BASE)/README.md", "$(PKG_BASE)/docs/src/index.md", force=true)
 for svg in filter(x -> occursin(r"\.svg$", x), readdir(PKG_BASE, join=true))
     cp(svg, "$(PKG_BASE)/docs/src/$(basename(svg))", force=true)
