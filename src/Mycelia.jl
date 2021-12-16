@@ -9,7 +9,7 @@ import Distributions
 import DocStringExtensions
 import GFF3
 import GraphRecipes
-import LightGraphs
+import Graphs
 import MetaGraphs
 import Plots
 import PrettyTables
@@ -106,7 +106,7 @@ const AA_ALPHABET = filter(
 
 # struct KmerGraph{KmerType}
 #     graph::MetaGraphs.MetaDiGraph{Int}
-#     edge_evidence::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}
+#     edge_evidence::Dict{Graphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}
 #     kmers::AbstractVector{KmerType}
 #     counts::AbstractVector{Int}
 #     function KmerGraph(;graph, edge_evidence, kmers::AbstractVector{KmerType}, counts) where {KmerType <: BioSequences.AbstractMer}
@@ -137,10 +137,10 @@ const AA_ALPHABET = filter(
 #         error("Even kmers are not supported")
 #     end
 #     # initalize graph
-#     graph = LightGraphs.SimpleGraph(length(kmers))
+#     graph = Graphs.SimpleGraph(length(kmers))
 
 #     # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
-#     edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
+#     edge_evidence = Dict{Graphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
 #     for record in records
 #         sequence = FASTX.sequence(record)
 #         record_identifier = FASTX.identifier(record)
@@ -152,7 +152,7 @@ const AA_ALPHABET = filter(
 #             b_index = get_kmer_index(kmers, b)
 #             if (a_index != nothing) && (b_index != nothing)
 #                 edge = ordered_edge(a_index, b_index)
-#                 LightGraphs.add_edge!(graph, edge)
+#                 Graphs.add_edge!(graph, edge)
 #                 evidence = EdgeEvidence(;record_identifier, edge_index)
 #                 edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
 #             end
@@ -181,13 +181,13 @@ const AA_ALPHABET = filter(
 #         error("Even kmers are not supported")
 #     end
 #     # initalize graph
-#     graph = LightGraphs.SimpleGraph(length(kmers))
+#     graph = Graphs.SimpleGraph(length(kmers))
 
 #     # an individual piece of evidence takes the form of
 #     # (observation_index = observation #, edge_index = edge # starting from beginning of the observation)
     
 #     # evidence takes the form of Edge => [(evidence_1), (evidence_2), ..., (evidence_N)]    
-#     edge_evidence = Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
+#     edge_evidence = Dict{Graphs.SimpleGraphs.SimpleEdge{Int}, Vector{EdgeEvidence}}()
 # #     EDGE_MER = BioSequences.Mer{A, K+1}
 #     for fastx in fastxs
 #         fastx_io = open_fastx(fastx)
@@ -207,7 +207,7 @@ const AA_ALPHABET = filter(
 #                     b_index = Mycelia.get_kmer_index(kmers, b)
 #                     if (a_index != nothing) && (b_index != nothing)
 #                         edge = Mycelia.ordered_edge(a_index, b_index)
-#                         LightGraphs.add_edge!(graph, edge)
+#                         Graphs.add_edge!(graph, edge)
                         
 #                         evidence = Mycelia.EdgeEvidence(;record_identifier, edge_index)
 #                         edge_evidence[edge] = push!(get(edge_evidence, edge, EdgeEvidence[]), evidence)
@@ -260,7 +260,7 @@ const AA_ALPHABET = filter(
 #             line = join(fields, '\t')
 #             println(io, line)
 #         end
-#         for edge in LightGraphs.edges(kmer_graph.graph)
+#         for edge in Graphs.edges(kmer_graph.graph)
 #             oriented_src, oriented_dst = kmer_pair_to_oriented_path(edge.src => edge.dst, kmer_graph)
 #             overlap = length(kmer_graph.kmers[1]) - 1
 #             link = ["L",
@@ -375,14 +375,14 @@ end
 # """
 # function ordered_edge(a, b)
 #     if a <= b
-#         return LightGraphs.Edge(a, b)
+#         return Graphs.Edge(a, b)
 #     else
-#         return LightGraphs.Edge(b, a)
+#         return Graphs.Edge(b, a)
 #     end
 # end
 
-# LightGraphs.has_edge(kmer_graph::KmerGraph, edge) = LightGraphs.has_edge(kmer_graph.graph, edge)
-# LightGraphs.has_path(kmer_graph::KmerGraph, u, v) = LightGraphs.has_path(kmer_graph.graph, u, v)
+# Graphs.has_edge(kmer_graph::KmerGraph, edge) = Graphs.has_edge(kmer_graph.graph, edge)
+# Graphs.has_path(kmer_graph::KmerGraph, u, v) = Graphs.has_path(kmer_graph.graph, u, v)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -423,7 +423,7 @@ function determine_edge_probabilities(graph, strand)
         for neighbor in BioSequences.neighbors(kmer)
             index = get_kmer_index(kmers, BioSequences.canonical(neighbor))
             # kmer must be in our dataset and there must be a connecting edge
-            if !isnothing(index) && LightGraphs.has_edge(graph, ordered_edge(kmer_index, index))
+            if !isnothing(index) && Graphs.has_edge(graph, ordered_edge(kmer_index, index))
                 push!(downstream_neighbor_indices, index)
             end
         end
@@ -935,7 +935,7 @@ end
 
 #     if current_kmer_index == previous_kmer_index
 #         # could be a self loop, check this first
-#         if LightGraphs.has_edge(graph, LightGraphs.Edge(previous_kmer_index, current_kmer_index))
+#         if Graphs.has_edge(graph, Graphs.Edge(previous_kmer_index, current_kmer_index))
 #             this_path = [previous_kmer_index, current_kmer_index]
 #             this_oriented_path, this_likelihood = 
 #                 assess_path(this_path,
@@ -954,7 +954,7 @@ end
 #         # see if this has any neighbors that circle back, and evaluate the likelihood for each
 #         outneighbors = find_outneighbors(previous_orientation, previous_kmer_index, outgoing_edge_probabilities, incoming_edge_probabilities)
 #         for outneighbor in outneighbors
-#             if LightGraphs.has_path(graph, outneighbor, current_kmer_index)
+#             if Graphs.has_path(graph, outneighbor, current_kmer_index)
 #                 # manually build path
 #                 this_path = [previous_kmer_index, shortest_paths[outneighbor][current_kmer_index]...]
 #                 this_oriented_path, this_likelihood = 
@@ -970,7 +970,7 @@ end
 #                 end
 #             end
 #         end
-#     elseif LightGraphs.has_path(graph, previous_kmer_index, current_kmer_index)   
+#     elseif Graphs.has_path(graph, previous_kmer_index, current_kmer_index)   
 #         this_path = shortest_paths[previous_kmer_index][current_kmer_index]
 #         this_oriented_path, this_likelihood = 
 #              assess_path(this_path,
@@ -1038,9 +1038,9 @@ end
 # function initialize_viterbi(graph, observed_path, error_rate)
 
 #     # WHEN CODE STABILIZES, SWITCH BIGFLOAT STATE LIKELIHOODS BACK INTO LOG-ED FLOAT64!!!
-#     edit_distances = Array{Union{Int, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
-#     arrival_paths = Array{Union{Vector{OrientedKmer}, Missing}}(missing, LightGraphs.nv(graph.graph), length(observed_path))
-#     state_likelihoods = zeros(BigFloat, LightGraphs.nv(graph.graph), length(observed_path))
+#     edit_distances = Array{Union{Int, Missing}}(missing, Graphs.nv(graph.graph), length(observed_path))
+#     arrival_paths = Array{Union{Vector{OrientedKmer}, Missing}}(missing, Graphs.nv(graph.graph), length(observed_path))
+#     state_likelihoods = zeros(BigFloat, Graphs.nv(graph.graph), length(observed_path))
 #     state_likelihoods[:, 1] .= graph.counts ./ sum(graph.counts)
 
 #     observed_kmer_sequence = orient_oriented_kmer(graph.kmers, first(observed_path))
@@ -1204,7 +1204,7 @@ end
     
 #     outgoing_edge_probabilities, incoming_edge_probabilities = determine_edge_probabilities(graph)
     
-#     shortest_paths = LightGraphs.enumerate_paths(LightGraphs.floyd_warshall_shortest_paths(graph.graph))
+#     shortest_paths = Graphs.enumerate_paths(Graphs.floyd_warshall_shortest_paths(graph.graph))
     
 #     insertion_path_likelihoods = determine_insertion_path_likelihoods(graph, shortest_paths, outgoing_edge_probabilities, incoming_edge_probabilities)
 # #    @show insertion_path_likelihoods
@@ -1358,7 +1358,7 @@ end
 # 2
 # ```
 # """
-# function my_show(x::Dict{LightGraphs.SimpleGraphs.SimpleEdge{Int},Array{NamedTuple{(:observation_index, :edge_index),Tuple{Int,Int}},1}})
+# function my_show(x::Dict{Graphs.SimpleGraphs.SimpleEdge{Int},Array{NamedTuple{(:observation_index, :edge_index),Tuple{Int,Int}},1}})
 #     for (k, vs) in x
 #         println(k)
 #         for v in vs
@@ -1529,7 +1529,7 @@ end
 #     while !done
 #         maximum_path_likelihood = 0.0
 #         maximum_likelihood_path = Vector{Mycelia.OrientedKmer}()
-#         for neighbor in LightGraphs.neighbors(graph.graph, last(path).index)
+#         for neighbor in Graphs.neighbors(graph.graph, last(path).index)
 #             this_path = [last(path).index, neighbor]
 #             this_oriented_path, this_path_likelihood = 
 #                 Mycelia.assess_path(this_path,
@@ -1643,7 +1643,7 @@ end
 # ```
 # """
 # function clip_low_coverage_tips(graph, observations)
-#     connected_components = LightGraphs.connected_components(graph.graph)
+#     connected_components = Graphs.connected_components(graph.graph)
 #     vertices_to_keep = Int[]
 #     for connected_component in connected_components
         
@@ -1653,7 +1653,7 @@ end
         
 #         for vertex in connected_component
 #             keep = true
-#             if LightGraphs.degree(graph.graph, vertex) == 1
+#             if Graphs.degree(graph.graph, vertex) == 1
 #                 this_coverage = graph.counts[vertex]
 #                 is_low_coverage = (graph.counts[vertex] == 1) || 
 #                                     (median-this_coverage) > (3*standard_deviation)
@@ -1738,7 +1738,7 @@ end
 #     while !done
 #         maximum_path_likelihood = 0.0
 #         maximum_likelihood_path = Vector{Mycelia.OrientedKmer}()
-#         for neighbor in LightGraphs.neighbors(graph.graph, last(path).index)
+#         for neighbor in Graphs.neighbors(graph.graph, last(path).index)
 #             this_path = [last(path).index, neighbor]
 #             this_oriented_path, this_path_likelihood = 
 #                 Mycelia.assess_path(this_path,
@@ -1804,7 +1804,7 @@ julia> 1 + 1
 2
 ```
 """
-function set_metadata!(kmer_graph, edge::E, key, value) where E <: LightGraphs.Edge
+function set_metadata!(kmer_graph, edge::E, key, value) where E <: Graphs.Edge
     if MetaGraphs.has_prop(kmer_graph, edge, key)
         push!(kmer_graph.eprops[edge][key], value)
     else
@@ -1921,9 +1921,9 @@ end
     MetaGraphs.set_prop!(kmer_graph, oriented_destination_vertex.vertex, :weight, new_weight)
     
 
-    forward_edge = LightGraphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
+    forward_edge = Graphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
 
-    LightGraphs.add_edge!(kmer_graph, forward_edge)
+    Graphs.add_edge!(kmer_graph, forward_edge)
 
     forward_edge_orientations = 
         (source_orientation = oriented_source_vertex.orientation,
@@ -1941,9 +1941,9 @@ end
     new_weight = length(kmer_graph.eprops[forward_edge][:evidence])
     MetaGraphs.set_prop!(kmer_graph, forward_edge, :weight, new_weight)
 
-    reverse_edge = LightGraphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
+    reverse_edge = Graphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
 
-    LightGraphs.add_edge!(kmer_graph, reverse_edge)
+    Graphs.add_edge!(kmer_graph, reverse_edge)
 
     reverse_edge_orientations = 
         (source_orientation = !oriented_destination_vertex.orientation,
@@ -2013,9 +2013,9 @@ julia> 1 + 1
 """
 function find_downstream_vertices(kmer_graph, vertex, orientation)
     viable_neighbors = Set{Int}()
-    for neighbor in LightGraphs.neighbors(kmer_graph, vertex)
+    for neighbor in Graphs.neighbors(kmer_graph, vertex)
         not_same_vertex = vertex != neighbor
-        candidate_edge = LightGraphs.Edge(vertex, neighbor)
+        candidate_edge = Graphs.Edge(vertex, neighbor)
         # palindromes can have multiple viable orientations
         # check each viable orientation individually
         edge_src_orientations = [e.source_orientation for e in kmer_graph.eprops[candidate_edge][:orientations]]
@@ -2048,7 +2048,7 @@ function find_unbranched_neighbors(kmer_graph, vertex, orientation)
     if length(downstream_vertices) == 1
         downstream_vertex = first(downstream_vertices)
 #         @show downstream_vertex
-        edge = LightGraphs.Edge(vertex, downstream_vertex)
+        edge = Graphs.Edge(vertex, downstream_vertex)
 #         @show edge
         destination_orientations = [o.destination_orientation for o in kmer_graph.eprops[edge][:orientations]]
 #         @show destination_orientations
@@ -2081,7 +2081,7 @@ function oriented_unbranching_walk(kmer_graph, vertex, orientation)
     while length(viable_neighbors) == 1
 #         @show "found a viable neighbor!!"
         viable_neighbor = first(viable_neighbors)
-        edge = LightGraphs.Edge(vertex, viable_neighbor)
+        edge = Graphs.Edge(vertex, viable_neighbor)
         push!(walk, edge)
         vertex = edge.dst
         viable_neighbors = Set{Int}()
@@ -2095,12 +2095,12 @@ end
 
 function resolve_untigs(kmer_graph)
     untigs = Vector{Int}[]
-    visited = falses(LightGraphs.nv(kmer_graph))
+    visited = falses(Graphs.nv(kmer_graph))
     first_unvisited = findfirst(!, visited)
     while first_unvisited != nothing
         forward_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, true)
         reverse_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, false)
-        inverted_reverse_walk = [LightGraphs.Edge(e.dst, e.src) for e in reverse(reverse_walk)]
+        inverted_reverse_walk = [Graphs.Edge(e.dst, e.src) for e in reverse(reverse_walk)]
         edges = vcat(inverted_reverse_walk, forward_walk)
         if isempty(edges)
             untig = [first_unvisited]
@@ -2142,7 +2142,7 @@ function determine_oriented_untigs(kmer_graph, untigs)
         if length(path) == 1
             orientations = [true]
         elseif length(path) > 1
-            initial_edge = LightGraphs.Edge(path[1], path[2])
+            initial_edge = Graphs.Edge(path[1], path[2])
             initial_orientation = first(kmer_graph.eprops[initial_edge][:orientations]).source_orientation
             orientations = [initial_orientation]
             if !initial_orientation
@@ -2150,7 +2150,7 @@ function determine_oriented_untigs(kmer_graph, untigs)
             end
 
             for (src, dst) in zip(path[1:end-1], path[2:end])
-                edge = LightGraphs.Edge(src, dst)
+                edge = Graphs.Edge(src, dst)
                 destination = BioSequences.LongDNASeq(kmer_graph.vprops[edge.dst][:kmer])
                 destination_orientation = first(kmer_graph.eprops[edge][:orientations]).destination_orientation
                 push!(orientations, destination_orientation)
@@ -2196,7 +2196,7 @@ end
 #     # determine oriented edges of simplified graph
 #     simplified_untigs = []
 #     @info "creating simplified untigs to resolve connections"
-#     for vertex in LightGraphs.vertices(simplified_graph)
+#     for vertex in Graphs.vertices(simplified_graph)
 #         in_kmer = simplified_graph.vprops[vertex][:path][1] => simplified_graph.vprops[vertex][:orientations][1]
 #         out_kmer = simplified_graph.vprops[vertex][:path][end] => simplified_graph.vprops[vertex][:orientations][end]
 #     #     @show vertex, in_kmer, out_kmer
@@ -2209,16 +2209,16 @@ end
 #     #         + => +
 #             source_kmer_index, source_orientation = last(u)
 #             destination_kmer_index, destination_orientation = first(v)
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
+#             edge = Graphs.Edge(source_kmer_index, destination_kmer_index)
+#             if Graphs.has_edge(kmer_graph, edge)
 #                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
 #                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
 #                 if source_orientation_matches && destination_orientation_matches
 # #                     @show "right orientation!! + +"
 
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+#                     simplified_graph_edge = Graphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+#                     Graphs.add_edge!(simplified_graph, simplified_graph_edge)
 #                     edge_orientations = (
 #                         source_orientation = source_orientation,
 #                         destination_orientation = destination_orientation
@@ -2231,15 +2231,15 @@ end
 #             destination_kmer_index, destination_orientation = last(v)
 #             destination_orientation = !destination_orientation
 
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
+#             edge = Graphs.Edge(source_kmer_index, destination_kmer_index)
+#             if Graphs.has_edge(kmer_graph, edge)
 #                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
 #                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
 #                 if source_orientation_matches && destination_orientation_matches
 # #                     @show "right orientation!! + -"
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+#                     simplified_graph_edge = Graphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+#                     Graphs.add_edge!(simplified_graph, simplified_graph_edge)
 #                     edge_orientations = (
 #                         source_orientation = source_orientation,
 #                         destination_orientation = destination_orientation
@@ -2252,15 +2252,15 @@ end
 #             source_orientation = !source_orientation
 #             destination_kmer_index, destination_orientation = first(v)
 
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
+#             edge = Graphs.Edge(source_kmer_index, destination_kmer_index)
+#             if Graphs.has_edge(kmer_graph, edge)
 #                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
 #                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
 #                 if source_orientation_matches && destination_orientation_matches
 # #                     @show "right orientation!! - +"
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+#                     simplified_graph_edge = Graphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+#                     Graphs.add_edge!(simplified_graph, simplified_graph_edge)
 #                     edge_orientations = (
 #                         source_orientation = source_orientation,
 #                         destination_orientation = destination_orientation
@@ -2274,15 +2274,15 @@ end
 #             destination_kmer_index, destination_orientation = last(v)
 #             destination_orientation = !destination_orientation
 
-#             edge = LightGraphs.Edge(source_kmer_index, destination_kmer_index)
-#             if LightGraphs.has_edge(kmer_graph, edge)
+#             edge = Graphs.Edge(source_kmer_index, destination_kmer_index)
+#             if Graphs.has_edge(kmer_graph, edge)
 #                 source_orientation_matches = (kmer_graph.eprops[edge][:orientations].source_orientation == source_orientation)
 #                 destination_orientation_matches = (kmer_graph.eprops[edge][:orientations].destination_orientation == destination_orientation)
 #                 if source_orientation_matches && destination_orientation_matches
 # #                     @show "right orientation!! - -"
-#                     simplified_graph_edge = LightGraphs.Edge(ui, vi)
+#                     simplified_graph_edge = Graphs.Edge(ui, vi)
 
-#                     LightGraphs.add_edge!(simplified_graph, simplified_graph_edge)
+#                     Graphs.add_edge!(simplified_graph, simplified_graph_edge)
 #                     edge_orientations = (
 #                         source_orientation = source_orientation,
 #                         destination_orientation = destination_orientation
@@ -2314,10 +2314,10 @@ end
 #     end
 
 #     # determine oriented edges of simplified graph
-#     simplified_untigs = Vector{Pair{Pair{Int64,Bool},Pair{Int64,Bool}}}(undef, length(LightGraphs.vertices(simplified_graph)))
+#     simplified_untigs = Vector{Pair{Pair{Int64,Bool},Pair{Int64,Bool}}}(undef, length(Graphs.vertices(simplified_graph)))
 #     @info "creating simplified unitgs to help resolve connections"
 #     # use a pre-allocated array here to speed up
-#     ProgressMeter.@showprogress for vertex in LightGraphs.vertices(simplified_graph)
+#     ProgressMeter.@showprogress for vertex in Graphs.vertices(simplified_graph)
 #         in_kmer = simplified_graph.vprops[vertex][:path][1] => simplified_graph.vprops[vertex][:orientations][1]
 #         out_kmer = simplified_graph.vprops[vertex][:path][end] => simplified_graph.vprops[vertex][:orientations][end]
 #     #     @show vertex, in_kmer, out_kmer
@@ -2337,7 +2337,7 @@ end
 #     #     @show untig_index
 #         true_in_overlap = oriented_untig.sequence[1:simplified_graph.gprops[:k]-1]
 
-#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[1])
+#         non_backtracking_neighbors = Graphs.neighbors(kmer_graph, oriented_untig.path[1])
 #         if length(oriented_untig.path) > 1
 #             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[2])
 #         end
@@ -2347,25 +2347,25 @@ end
 
 #             neighbor_true_out_overlap = neighboring_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
 #             if neighbor_true_out_overlap == true_in_overlap
-#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#                 e = Graphs.Edge(neighboring_untig_index, untig_index)
 #     #             o = true => true
 #                 o = (source_orientation = true, destination_orientation = true)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
 #             if neighbor_false_out_overlap == true_in_overlap        
-#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#                 e = Graphs.Edge(neighboring_untig_index, untig_index)
 #     #             o = false => true
 #                 o = (source_orientation = false, destination_orientation = true)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 
 #         true_out_overlap = oriented_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
-#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[end])
+#         non_backtracking_neighbors = Graphs.neighbors(kmer_graph, oriented_untig.path[end])
 #         if length(oriented_untig.path) > 1
 #             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[end-1])
 #         end
@@ -2375,26 +2375,26 @@ end
 
 #             neighbor_true_in_overlap = neighboring_untig.sequence[1:simplified_graph.gprops[:k]-1]
 #             if true_out_overlap == neighbor_true_in_overlap
-#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#                 e = Graphs.Edge(untig_index, neighboring_untig_index)
 #     #             o = true => true
 #                 o = (source_orientation = true, destination_orientation = true)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
 #             if true_out_overlap == neighbor_false_in_overlap
-#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#                 e = Graphs.Edge(untig_index, neighboring_untig_index)
 #     #             o = true => false
 #                 o = (source_orientation = true, destination_orientation = false)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 
 #         false_in_overlap = BioSequences.reverse_complement(oriented_untig.sequence)[1:simplified_graph.gprops[:k]-1]
 
-#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[end])
+#         non_backtracking_neighbors = Graphs.neighbors(kmer_graph, oriented_untig.path[end])
 #         if length(oriented_untig.path) > 1
 #             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[end-1])
 #         end
@@ -2404,26 +2404,26 @@ end
 
 #             neighbor_true_out_overlap = neighboring_untig.sequence[end-simplified_graph.gprops[:k]+2:end]
 #             if neighbor_true_out_overlap == false_in_overlap
-#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#                 e = Graphs.Edge(neighboring_untig_index, untig_index)
 #     #             o = true => false
 #                 o = (source_orientation = true, destination_orientation = false)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
 #             if neighbor_false_out_overlap == false_in_overlap        
-#                 e = LightGraphs.Edge(neighboring_untig_index, untig_index)
+#                 e = Graphs.Edge(neighboring_untig_index, untig_index)
 #     #             o = false => false
 #                 o = (source_orientation = false, destination_orientation = false)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 
 #         false_out_overlap = BioSequences.reverse_complement(oriented_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
 
-#         non_backtracking_neighbors = LightGraphs.neighbors(kmer_graph, oriented_untig.path[1])
+#         non_backtracking_neighbors = Graphs.neighbors(kmer_graph, oriented_untig.path[1])
 #         if length(oriented_untig.path) > 1
 #             non_backtracking_neighbors = setdiff(non_backtracking_neighbors, oriented_untig.path[2])
 #         end
@@ -2434,19 +2434,19 @@ end
 
 #             neighbor_true_in_overlap = neighboring_untig.sequence[1:simplified_graph.gprops[:k]-1]
 #             if false_out_overlap == neighbor_true_in_overlap
-#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#                 e = Graphs.Edge(untig_index, neighboring_untig_index)
 #     #             o = false => true
 #                 o = (source_orientation = false, destination_orientation = true)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
 #             if false_out_overlap == neighbor_false_in_overlap
-#                 e = LightGraphs.Edge(untig_index, neighboring_untig_index)
+#                 e = Graphs.Edge(untig_index, neighboring_untig_index)
 #     #             o = false => false
 #                 o = (source_orientation = false, destination_orientation = false)
-#                 LightGraphs.add_edge!(simplified_graph, e)
+#                 Graphs.add_edge!(simplified_graph, e)
 #                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
@@ -2457,7 +2457,7 @@ end
 function graph_to_gfa(graph, outfile)
     open(outfile, "w") do io
         println(io, "H\tVN:Z:1.0")
-        for vertex in LightGraphs.vertices(graph)
+        for vertex in Graphs.vertices(graph)
             if haskey(graph.vprops[vertex], :kmer)
                 sequence = graph.vprops[vertex][:kmer]
             else
@@ -2465,7 +2465,7 @@ function graph_to_gfa(graph, outfile)
             end
 #             if haskey(graph.vprops[vertex], :evidence)
 #             @show graph.vprops[vertex][:evidence]
-#             depth = LightGraphs.weights(graph)[vertex]
+#             depth = Graphs.weights(graph)[vertex]
             depth = graph.vprops[vertex][:weight]
 #             if typeof(graph.vprops[vertex][:evidence]) <: Union{AbstractSet, AbstractArray}
 #                 depth = length(graph.vprops[vertex][:evidence])
@@ -2484,7 +2484,7 @@ function graph_to_gfa(graph, outfile)
             line = join(fields, '\t')
             println(io, line)
         end
-        for edge in LightGraphs.edges(graph)
+        for edge in Graphs.edges(graph)
             overlap = graph.gprops[:k] - 1
             for o in graph.eprops[edge][:orientations]
                 link = ["L",
@@ -2513,13 +2513,13 @@ end
 
 function initialize_transition_probabilities(kmer_graph)
     
-    total_kmers = LightGraphs.nv(kmer_graph)
+    total_kmers = Graphs.nv(kmer_graph)
     transition_likelihoods = Dict(
         true => SparseArrays.spzeros(total_kmers, total_kmers),
         false => SparseArrays.spzeros(total_kmers, total_kmers)
     )
 
-    for edge in collect(LightGraphs.edges(kmer_graph))
+    for edge in collect(Graphs.edges(kmer_graph))
 #         weight = length(kmer_graph.eprops[edge][:evidence])
         weight = kmer_graph.eprops[edge][:weight]
         for o in kmer_graph.eprops[edge][:orientations]
@@ -2550,7 +2550,7 @@ function set_initial_state_likelihoods!(
         state_likelihoods,
         arrival_paths
     )
-    for vertex in collect(LightGraphs.vertices(kmer_graph))
+    for vertex in collect(Graphs.vertices(kmer_graph))
         hidden_kmer = kmer_graph.vprops[vertex][:kmer]
 
         fw_alignment = 
@@ -2662,16 +2662,16 @@ end
 function polish_fastq(kmer_graph, fastq_file)
 
 #     @info "Assessing kmer likelihoods"
-    kmers = [kmer_graph.vprops[v][:kmer] for v in LightGraphs.vertices(kmer_graph)]
-#     kmer_counts = [length(kmer_graph.vprops[v][:evidence]) for v in LightGraphs.vertices(kmer_graph)]
-    kmer_counts = [kmer_graph.vprops[v][:weight] for v in LightGraphs.vertices(kmer_graph)]
+    kmers = [kmer_graph.vprops[v][:kmer] for v in Graphs.vertices(kmer_graph)]
+#     kmer_counts = [length(kmer_graph.vprops[v][:evidence]) for v in Graphs.vertices(kmer_graph)]
+    kmer_counts = [kmer_graph.vprops[v][:weight] for v in Graphs.vertices(kmer_graph)]
     kmer_likelihoods = kmer_counts ./ sum(kmer_counts)
     k = kmer_graph.gprops[:k]
     kmer_type = BioSequences.BigDNAMer{k}
     total_kmers = length(kmers)
     
 #     @info "determining shortest paths between kmers"
-    shortest_paths = LightGraphs.enumerate_paths(LightGraphs.floyd_warshall_shortest_paths(kmer_graph));
+    shortest_paths = Graphs.enumerate_paths(Graphs.floyd_warshall_shortest_paths(kmer_graph));
     
     @info "counting the number of records to establish runtime estimate"
     number_of_records = 0
@@ -2871,7 +2871,7 @@ function run_viterbi!(
         terminal_orientation_prior_state = last(last(arrival_paths[prior_vertex, prior_state]))
 #         @show arrival_paths[prior_vertex, prior_state]
 #         @show "we were at vertex $(prior_vertex) in orientation $(terminal_orientation_prior_state)"
-        candidate_edge = LightGraphs.Edge(shortest_path[1], shortest_path[2])
+        candidate_edge = Graphs.Edge(shortest_path[1], shortest_path[2])
                 
         if !ismissing(terminal_orientation_prior_state) && 
             !any(o -> o.source_orientation == terminal_orientation_prior_state, kmer_graph.eprops[candidate_edge][:orientations])
@@ -2886,7 +2886,7 @@ function run_viterbi!(
     
     # zero step path - insertion in observed sequence relative to kmer graph
     is_same_vertex = (current_vertex == prior_vertex)
-    has_edge = LightGraphs.has_edge(kmer_graph, LightGraphs.Edge(prior_vertex, current_vertex))
+    has_edge = Graphs.has_edge(kmer_graph, Graphs.Edge(prior_vertex, current_vertex))
     if is_same_vertex && has_edge
         shortest_path = [prior_vertex, current_vertex]
     end
@@ -2922,7 +2922,7 @@ function run_viterbi!(
 
             this_vertex = shortest_path[i]
             prior_vertex, prior_orientation = path[i-1]
-            edge = LightGraphs.Edge(prior_vertex, this_vertex)
+            edge = Graphs.Edge(prior_vertex, this_vertex)
 
             possible_edge_orientations::Set{NamedTuple{(:source_orientation, :destination_orientation), Tuple{Bool, Bool}}} = kmer_graph.eprops[edge][:orientations]
             
@@ -3107,22 +3107,22 @@ end
         (vertex = searchsortedfirst(kmers, oriented_destination_kmer.canonical_kmer),
          orientation = oriented_destination_kmer.orientation)
 
-    forward_edge = LightGraphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
+    forward_edge = Graphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
     forward_edge_orientations = 
         (source_orientation = oriented_source_vertex.orientation,
          destination_orientation = oriented_destination_vertex.orientation)
     
-    reverse_edge = LightGraphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
+    reverse_edge = Graphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
     reverse_edge_orientations = 
         (source_orientation = !oriented_destination_vertex.orientation,
          destination_orientation = !oriented_source_vertex.orientation)
     
     for (edge, edge_orientations) in ((forward_edge, forward_edge_orientations), (reverse_edge, reverse_edge_orientations))
-        if LightGraphs.has_edge(simple_kmer_graph, edge)
+        if Graphs.has_edge(simple_kmer_graph, edge)
             edge_weight = simple_kmer_graph.eprops[edge][:weight] + 1
             MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, edge_weight)
         else
-            LightGraphs.add_edge!(simple_kmer_graph, edge)
+            Graphs.add_edge!(simple_kmer_graph, edge)
             MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, 1)
         end
         Mycelia.set_metadata!(simple_kmer_graph, edge, :orientations, edge_orientations)
@@ -3131,8 +3131,8 @@ end
 
 
 function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
-    solid_vertices = filter(v -> simple_kmer_graph.vprops[v][:weight] >= min_depth, LightGraphs.vertices(simple_kmer_graph))
-    filtered_simple_kmer_graph, vertex_map = LightGraphs.induced_subgraph(simple_kmer_graph, solid_vertices)
+    solid_vertices = filter(v -> simple_kmer_graph.vprops[v][:weight] >= min_depth, Graphs.vertices(simple_kmer_graph))
+    filtered_simple_kmer_graph, vertex_map = Graphs.induced_subgraph(simple_kmer_graph, solid_vertices)
 #     display(simple_kmer_graph)
 #     display(filtered_simple_kmer_graph)
     kmers = sort!(graph_to_kmers(filtered_simple_kmer_graph))
@@ -3144,7 +3144,7 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
     polished_fastq_file = replace(fastq_file, ".fastq" => ".k$k.d$(min_depth).fastq")
 
     transition_probabilities = Mycelia.initialize_transition_probabilities(filtered_simple_kmer_graph)
-    state_likelihoods = [Float64(filtered_simple_kmer_graph.vprops[v][:weight]) for v in LightGraphs.vertices(filtered_simple_kmer_graph)]
+    state_likelihoods = [Float64(filtered_simple_kmer_graph.vprops[v][:weight]) for v in Graphs.vertices(filtered_simple_kmer_graph)]
     state_likelihoods ./= sum(state_likelihoods)
     
 #     @info "counting the number of records to establish runtime estimate"
@@ -3210,11 +3210,11 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
                         source_vertex, source_orientation = last(updated_path)
                         destination_vertex, destination_orientation = kmer_index, orientation                
 
-                        shortest_paths = LightGraphs.yen_k_shortest_paths(
+                        shortest_paths = Graphs.yen_k_shortest_paths(
                             filtered_simple_kmer_graph,
                             source_vertex,
                             destination_vertex,
-                            LightGraphs.weights(filtered_simple_kmer_graph),
+                            Graphs.weights(filtered_simple_kmer_graph),
                             10).paths
 
                         if isempty(shortest_paths)
@@ -3235,7 +3235,7 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
                                 candidate_path_probabilities[i] *= transition_probabilities[source_orientation][source_vertex, dest_vertex]
                                 candidate_path_probabilities[i] *= state_likelihoods[dest_vertex]
                                 if candidate_path_probabilities[i] > 0
-                                    edge = LightGraphs.Edge(source_vertex, dest_vertex)
+                                    edge = Graphs.Edge(source_vertex, dest_vertex)
                                     destination_orientation = 
                                     first(
                                         filter(o -> o.source_orientation == source_orientation,
@@ -3314,13 +3314,13 @@ function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
 end
 
 function graph_to_kmers(g)
-    kmers = [g.vprops[v][:kmer] for v in LightGraphs.vertices(g)]
+    kmers = [g.vprops[v][:kmer] for v in Graphs.vertices(g)]
     return kmers
 end
 
 function graph_to_edge_sequences(g)
     edges = Set{BioSequences.BigDNAMer{g.gprops[:k]+1}}()
-    for edge in LightGraphs.edges(g)
+    for edge in Graphs.edges(g)
         src_kmer = g.vprops[edge.src][:kmer]
         dst_kmer = g.vprops[edge.dst][:kmer]
         for orientation in g.eprops[edge][:orientations]

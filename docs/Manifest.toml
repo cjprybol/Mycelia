@@ -847,7 +847,7 @@ git-tree-sha1 = "7f3efec06033682db852f8b3bc3c1d2b0a0ab066"
 uuid = "38a345b3-de98-5d2b-a5d3-14cd9215e700"
 version = "2.36.0+0"
 
-[[LightGraphs]]
+[[Graphs]]
 deps = ["ArnoldiMethod", "DataStructures", "Distributed", "Inflate", "LinearAlgebra", "Random", "SharedArrays", "SimpleTraits", "SparseArrays", "Statistics"]
 git-tree-sha1 = "432428df5f360964040ed60418dd5601ecd240b6"
 uuid = "093fc24a-ae57-5d10-9952-331d41423f4d"
@@ -946,7 +946,7 @@ uuid = "a975b10e-0019-58db-a62f-e48ff68538c9"
 version = "0.7.6"
 
 [[Mycelia]]
-deps = ["BenchmarkTools", "BioAlignments", "BioFetch", "BioSequences", "BioSymbols", "Clustering", "CodecBzip2", "CodecZlib", "Colors", "Combinatorics", "DataFrames", "DataStructures", "Dates", "DelimitedFiles", "Distances", "Distributions", "DocStringExtensions", "Documenter", "EzXML", "FASTX", "GFF3", "GLM", "GenomicAnnotations", "GenomicFeatures", "GraphPlot", "GraphRecipes", "HTTP", "Impute", "JSON", "LSHFunctions", "LightGraphs", "LsqFit", "Measures", "MetaGraphs", "Mmap", "MultivariateStats", "NumericIO", "OnlineStats", "OrderedCollections", "PlotlyJS", "Plots", "PrettyTables", "Primes", "Printf", "ProgressMeter", "PyCall", "Random", "Revise", "RollingFunctions", "SHA", "SparseArrays", "StaticArrays", "Statistics", "StatsBase", "StatsPlots", "StringDistances", "Weave", "XLSX", "uCSV"]
+deps = ["BenchmarkTools", "BioAlignments", "BioFetch", "BioSequences", "BioSymbols", "Clustering", "CodecBzip2", "CodecZlib", "Colors", "Combinatorics", "DataFrames", "DataStructures", "Dates", "DelimitedFiles", "Distances", "Distributions", "DocStringExtensions", "Documenter", "EzXML", "FASTX", "GFF3", "GLM", "GenomicAnnotations", "GenomicFeatures", "GraphPlot", "GraphRecipes", "HTTP", "Impute", "JSON", "LSHFunctions", "Graphs", "LsqFit", "Measures", "MetaGraphs", "Mmap", "MultivariateStats", "NumericIO", "OnlineStats", "OrderedCollections", "PlotlyJS", "Plots", "PrettyTables", "Primes", "Printf", "ProgressMeter", "PyCall", "Random", "Revise", "RollingFunctions", "SHA", "SparseArrays", "StaticArrays", "Statistics", "StatsBase", "StatsPlots", "StringDistances", "Weave", "XLSX", "uCSV"]
 path = ".."
 uuid = "453d265d-8292-4a7b-a57c-dce3f9ae6acd"
 version = "0.1.0"
