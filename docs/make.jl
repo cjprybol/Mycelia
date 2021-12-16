@@ -36,11 +36,15 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
-        "Documentation" => [
+        "Tutorial" => [
+        ],
+        "Chapters" => chapters,
+        "Applications" => [
+        ],
+        "Reference" => [
             "docstrings.md",
             "neo4j-notes.md"
         ],
-        "Chapters" => chapters
     ],
 )
 
