@@ -2,9 +2,8 @@
 *.jl.cov
 *.jl.mem
 *Manifest.toml
-/docs/build/
+docs/build/
 *.ipynb_checkpoints*
 *.md_checkpoints
-docs/src/*.ipynb.md
 *.ipynb.md
-docs/src/index.md
+docs/src
