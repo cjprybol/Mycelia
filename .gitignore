@@ -6,3 +6,5 @@
 *.ipynb_checkpoints*
 *.md_checkpoints
 docs/src/*.ipynb.md
+*.ipynb.md
+docs/src/index.md
