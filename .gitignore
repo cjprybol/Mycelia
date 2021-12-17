@@ -5,3 +5,4 @@
 /docs/build/
 *.ipynb_checkpoints*
 *.md_checkpoints
+docs/src/*.ipynb.md

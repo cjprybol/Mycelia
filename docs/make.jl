@@ -19,7 +19,7 @@ for notebook in filter(x -> occursin(r"\.ipynb$", x), readdir("$(PKG_BASE)/docs/
 end
 
 # copy readme from repo to being main index file in documentation
-cp("$(PKG_BASE)/README.md", "$(PKG_BASE)/docs/src/index.md", force=true)
+cp("$(PKG_BASE)/README.md", "$(PKG_BASE)/docs/src/README.md", force=true)
 for svg in filter(x -> occursin(r"\.svg$", x), readdir(PKG_BASE, join=true))
     cp(svg, "$(PKG_BASE)/docs/src/$(basename(svg))", force=true)
 end
@@ -33,9 +33,10 @@ makedocs(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://cjprybol.github.io/Mycelia.jl",
         assets=String[],
+        collapselevel=1,
     ),
     pages=[
-        "Home" => "index.md",
+        "Home" => "README.md",
         "Tutorial" => [
         ],
         "Chapters" => chapters,
@@ -45,6 +46,9 @@ makedocs(;
             "docstrings.md",
             "neo4j-notes.md"
         ],
+        "Nesting" => [
+            "nested" => []
+        ]
     ],
 )
 
