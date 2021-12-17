@@ -17,16 +17,16 @@ pages = DataStructures.SortedDict()
 
 for documentation_group in filter(x -> isdir(x) && !occursin(r"^\.", basename(x)), readdir("$(PKG_BASE)/docs/src", join=true))
     
-    @show documentation_group
+#     @show documentation_group
     # cleanup all current .ipynb exports
     for converted_notebook_file in filter(x -> occursin(r"\.ipynb\.md$", x), readdir(documentation_group, join=true))
-        @show converted_notebook_file
+#         @show converted_notebook_file
         rm(converted_notebook_file)
     end
     
     # convert all current .ipynb notebooks to markdown files
     for notebook in filter(x -> occursin(r".ipynb$", x), readdir(documentation_group, join=true))
-        @show notebook
+#         @show notebook
         out_path = notebook * ".md" 
         Weave.weave(notebook, out_path=out_path, doctype="github")
 #         Weave.weave(notebook, doctype="github")
@@ -35,7 +35,7 @@ for documentation_group in filter(x -> isdir(x) && !occursin(r"^\.", basename(x)
     md_pages = filter(x -> occursin(r"\.md", x), readdir(documentation_group))
     md_pages = map(page -> "$(basename(documentation_group))/$(page)", md_pages)
     
-    @show md_pages
+#     @show md_pages
     
     pages[basename(documentation_group)] = md_pages
 end
@@ -48,7 +48,7 @@ pages=[
 makedocs(;
     modules=[Mycelia],
     authors="Cameron Prybol <cameron.prybol@gmail.com> and contributors",
-    repo="https://github.com/cjprybol/Mycelia.jl/blob/{commit}{path}#L{line}",
+    repo="https://github.com/cjprybol/Mycelia/blob/{commit}{path}#L{line}",
     sitename="Mycelia.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
