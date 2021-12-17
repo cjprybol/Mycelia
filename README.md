@@ -3,12 +3,9 @@
 Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). The goal of the project is to enable performing pan-genomic optimizations by finding traversals through genome graphs with weighted metadata features.
 
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
-
-<!-- [![Build Status](https://github.com/cjprybol/Mycelia.jl/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines) -->
-
-<!-- [![Coverage](https://github.com/cjprybol/Mycelia.jl/badges/master/coverage.svg)](https://github.com/cjprybol/Mycelia.jl/commits/master) -->
-
-<!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
+[![Build Status](https://github.com/cjprybol/Mycelia/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines)
+[![Coverage](https://github.com/cjprybol/Mycelia/badges/master/coverage.svg)](https://github.com/cjprybol/Mycelia.jl/commits/master)
+[![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac)
 
 ## Install
 ```julia
