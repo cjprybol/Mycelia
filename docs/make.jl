@@ -39,10 +39,10 @@ makedocs(;
     modules=[Mycelia],
     authors="Cameron Prybol <cameron.prybol@gmail.com> and contributors",
     repo="https://github.com/cjprybol/Mycelia/blob/{commit}{path}#L{line}",
-    sitename="Mycelia.jl",
+    sitename="Mycelia",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://cjprybol.github.io/Mycelia.jl",
+        canonical="https://cjprybol.github.io/Mycelia",
         assets=String[],
         collapselevel=1,
     ),
