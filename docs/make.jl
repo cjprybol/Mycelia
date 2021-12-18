@@ -42,7 +42,6 @@ makedocs(;
     sitename="Mycelia.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        prettyurls=false,
         canonical="https://cjprybol.github.io/Mycelia.jl",
         assets=String[],
         collapselevel=1,
