@@ -12,7 +12,7 @@ Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.
 pkg> add git@github.com:cjprybol/Mycelia.git
 ```
 
-## Related Software:
+## Related Software
 - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
 - [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
 - [Pangenome Graphs Review](https://doi.org/10.1146/annurev-genom-120219-080406)
