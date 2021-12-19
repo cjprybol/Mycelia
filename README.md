@@ -1,5 +1,7 @@
 # Mycelia
 
+
+
 Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). The goal of the project is to enable performing pan-genomic optimizations by finding traversals through genome graphs with weighted metadata features.
 
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
