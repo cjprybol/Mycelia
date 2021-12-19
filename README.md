@@ -1,5 +1,7 @@
 # Mycelia
 
+:warning: **pre-alpha!** This software is in the process of being brought to production-readiness
+
 Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). The goal of the project is to enable performing pan-genomic optimizations by finding traversals through genome graphs with weighted metadata features.
 
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
@@ -12,6 +14,12 @@ Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.
 pkg> add git@github.com:cjprybol/Mycelia.git
 ```
 
+## Ordered Design Priority
+1. Correctness
+1. Usability
+1. Modularity
+1. Efficiency
+
 ## Related Software
 - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
 - [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
@@ -19,4 +27,3 @@ pkg> add git@github.com:cjprybol/Mycelia.git
 - [Roary](https://github.com/sanger-pathogens/Roary)
 - [vg](https://github.com/vgteam/vg)
 - [PPanGGOLiN](https://github.com/labgem/PPanGGOLiN)
-
