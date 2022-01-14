@@ -65,6 +65,7 @@ XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 
 [compat]
+GraphPlot = "0.5"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
