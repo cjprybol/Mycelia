@@ -4,6 +4,7 @@ authors = ["Cameron Prybol <cameron.prybol@gmail.com> and contributors"]
 version = "0.1.0"
 
 [deps]
+ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 BioAlignments = "00701ae9-d1dc-5365-b64a-a3a3ebf5695e"
 BioFetch = "f8217676-c24a-4825-a874-ba6ce2a4fe08"
@@ -63,8 +64,6 @@ StringDistances = "88034a9c-02f8-509d-84a9-84ec65e18404"
 Weave = "44d3d7a6-8a23-5bf8-98c5-b353f8df5ec9"
 XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
-
-[compat]
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

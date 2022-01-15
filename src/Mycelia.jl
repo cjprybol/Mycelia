@@ -32,6 +32,7 @@ import LSHFunctions
 # if things fall out of date but look correct, update them automatically
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Fixing-Outdated-Doctests
 
+const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
 # const AA_ALPHABET = filter(
