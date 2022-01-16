@@ -17,26 +17,46 @@ function parse_commandline()
        "assemble"
            help = "assemble a sequence graph"
            action = :command
+        "convert"
+            help = "convert between graph formats"
+            action = :command
        "test"
            help = "run tests"
            action = :command
     end
     
-   settings["construct"].description = ""
+   settings["construct"].description = "Construct a reference kmer graph from observations"
    @add_arg_table settings["construct"] begin
         "--k"
             help = "kmer size that will be used. Must be prime and < 64"
             arg_type = Int
+            required = true
+        "--out"
+            help = "outpath for the genome graph that will be constructed"
+            arg_type = String
             required = true
         "--fastx"
             help = "one or more fasta or fastq file(s). Can be gzipped as long as files end in .gz"
             arg_type = String
             required = true
             nargs = '*'
-        "--out"
-            help = "outpath for the genome graph that will be constructed"
+    end
+    
+   settings["convert"].description = "Interconvert between different graph formats (.jld2, .gfa, .neo4j)"
+   @add_arg_table settings["convert"] begin
+        "--in"
+            help = "input graph"
             arg_type = String
             required = true
+        "--out"
+            help = "outpath of the reformatted genome graph"
+            arg_type = String
+            required = true
+        "--username"
+            help = "neo4j username (required if outformat is neo4j)"
+            arg_type = String
+        "--password"
+            help = "neo4j password (required if outformat is neo4j)"
     end
     
 
@@ -77,7 +97,7 @@ function parse_commandline()
 #             required = true
 #     end
 
-   settings["assemble"].description = ""
+   settings["assemble"].description = "Assemble graph genomes from observations"
    @add_arg_table settings["assemble"] begin
        "--kmers"
            help = "sorted file of trusted kmers"
@@ -110,24 +130,12 @@ end
 
 function main()
     parsed_args = parse_commandline()
-    if parsed_args["%COMMAND%"] == "construct"
-        println("command construct chosen!")
-    elseif parsed_args["%COMMAND%"] == "assemble"
-        Mycelia.assemble(parsed_args["assemble"])
-    elseif parsed_args["%COMMAND%"] == "test"
-        runtests_file = joinpath(@__DIR__, "..", "test", "runtests.jl")
-        run(`julia --color yes $runtests_file`)
-    else
-        println("command")
-    end
-#     if parsed_args["%COMMAND%"] == "plot"
-#         if parsed_args["plot"]["%COMMAND%"] == "gfa"
-#             Eisenia.plot_gfa(parsed_args["plot"]["gfa"])
-#         elseif parsed_args["plot"]["%COMMAND%"] == "histogram"
-#             Eisenia.plot_histogram(parsed_args["plot"]["histogram"])
-#         elseif parsed_args["plot"]["%COMMAND%"] == "rank-frequency"
-#             Eisenia.plot_rank_frequency(parsed_args["plot"]["rank-frequency"])
-#         end
+    command = parsed_args["%COMMAND%"]
+    f_string = "Mycelia.$(command)"
+    f = eval(Meta.parse(f_string))
+    f(parsed_args[command])
+    @show parsed_args
+    @show f
 end
 
 main()
