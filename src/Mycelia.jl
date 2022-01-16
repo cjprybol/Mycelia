@@ -10,9 +10,11 @@ import DocStringExtensions
 import GFF3
 import GraphRecipes
 import Graphs
+import LsqFit
 import MetaGraphs
 import Plots
 import PrettyTables
+import Primes
 import Random
 import SparseArrays
 import Statistics
@@ -22,7 +24,7 @@ import FASTX
 import CodecZlib
 import HTTP
 import ProgressMeter
-import LSHFunctions
+# import LSHFunctions
 import FileIO
 
 # preserve definitions between code jldoctest code blocks
@@ -70,7 +72,7 @@ for f in [
         "sequence-interactions.jl",
 #         "viterbi.jl"
     ]
-    import(f)
+    include(f)
 end
 
 end # module

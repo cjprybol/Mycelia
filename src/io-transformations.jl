@@ -17,7 +17,8 @@ function graph_to_gfa(graph, outfile)
             else
                 sequence = graph.vprops[vertex][:sequence]
             end
-            depth = graph.vprops[vertex][:weight]
+#             depth = graph.vprops[vertex][:weight]
+            depth = graph.vprops[vertex][:count]
             fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
             line = join(fields, '\t')
             println(io, line)
@@ -109,7 +110,7 @@ julia> 1 + 1
 2
 ```
 """
-function plot_kmer_frequency_spectra(counts; log_scale = log, kwargs...)
+function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     kmer_counts_hist = StatsBase.countmap(c for c in counts)
     xs = collect(keys(kmer_counts_hist))
     ys = collect(values(kmer_counts_hist))
@@ -118,7 +119,7 @@ function plot_kmer_frequency_spectra(counts; log_scale = log, kwargs...)
         ys = log_scale.(ys)
     end
     
-    StatsPlots.plot(
+    p = StatsPlots.plot(
         xs,
         ys,
         xlims = (0, maximum(xs) + max(1, ceil(0.1 * maximum(xs)))),
@@ -129,6 +130,7 @@ function plot_kmer_frequency_spectra(counts; log_scale = log, kwargs...)
         ylabel = isa(log_scale, Function) ? "$(log_scale)(# of kmers)" : "observed frequency",
         ;kwargs...
     )
+    return p
 end
 
 # """

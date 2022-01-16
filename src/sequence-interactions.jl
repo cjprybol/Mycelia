@@ -320,7 +320,7 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
     for k in ks
         kmer_type = BioSequences.BigDNAMer{k}
         kmers_to_assess = 10_000_000
-        sampling_points, kmer_counts = assess_kmer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess, power=power)
+        sampling_points, kmer_counts = assess_kmer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))
         observed_midpoint = sampling_points[observed_midpoint_index]
         initial_parameters = Float64[maximum(kmer_counts), observed_midpoint]
@@ -338,7 +338,8 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
             xlabel="# kmers assessed",
             title = "sequencing saturation @ k = $k",
             legend=:outertopright,
-            size=(800, 400)
+            size=(800, 400),
+            margins=3Plots.PlotMeasures.mm
             )
         StatsPlots.hline!(p, [max_canonical_kmers(kmer_type)], label="absolute maximum")
         StatsPlots.hline!(p, [inferred_kmer_count], label="inferred maximum")
@@ -352,6 +353,8 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
             ys,
             label="fit trendline")
         display(p)
+        StatsPlots.savefig(p, joinpath(outdir, "$k.png"))
+        StatsPlots.savefig(p, joinpath(outdir, "$k.svg"))
 
         if predicted_saturation < minimum_saturation
             minimum_saturation = predicted_saturation
@@ -481,7 +484,7 @@ function edge_path_to_sequence(kmer_graph, edge_path)
 end
 
 """
-    sort_fastq(input_fastq, output_fastq)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 This turns a 4-line FASTQ entry into a single tab separated line,
 adds a column with the length of each read, passes it to Unix sort,
@@ -490,6 +493,10 @@ removes the length column, and converts it back into a FASTQ file.
 sorts longest to shortest!!
 
 http://thegenomefactory.blogspot.com/2012/11/sorting-fastq-files-by-sequence-length.html
+```jldoctest
+julia> 1 + 1
+2
+```
 """
 function sort_fastq(input_fastq, output_fastq="")
     
@@ -518,24 +525,21 @@ function sort_fastq(input_fastq, output_fastq="")
 end
 
 """
-    sort_fastq(input_fastq, output_fastq)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-This turns a 4-line FASTQ entry into a single tab separated line,
-adds a column with the length of each read, passes it to Unix sort,
-removes the length column, and converts it back into a FASTQ file.
+A short description of the function
 
-sorts longest to shortest!!
-
-http://thegenomefactory.blogspot.com/2012/11/sorting-fastq-files-by-sequence-length.html
+```jldoctest
+julia> 1 + 1
+2
+```
 """
-function count_reads(fastq_file)
-    @info "determing # of reads in fastq file"
-    n_reads = 0
-    for record in Mycelia.open_fastx(fastq_file)
-        n_reads += 1
+function count_records(fastx)
+    n_records = 0
+    for record in Mycelia.open_fastx(fastx)
+        n_records += 1
     end
-    @show n_reads
-    return n_reads
+    return n_records
 end
 
 
