@@ -184,25 +184,30 @@ function convert(args)
     end
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# A short description of the function
+A short description of the function
 
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function plot_graph(graph)
-
-#     n = length(graph.kmers)
-#     p = GraphRecipes.graphplot(
-#         graph.graph,
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function plot_graph(graph)
+    
+    kmer_counts = MetaGraphs.get_prop(graph, :kmer_counts)
+    scale = 150
+    
+    n = length(kmer_counts)
+    p = GraphRecipes.graphplot(
+        graph,
 #         markersize = 1/log2(n),
-#         size = (100 * log(n), 66 * log(n)),
-#         node_weights = graph.counts)
-# end
+        markersize = 1/2^2,
+        size = (2 * scale * log(n), scale * log(n)),
+        node_weights = collect(values(kmer_counts)),
+        names = collect(keys(kmer_counts)))
+end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)

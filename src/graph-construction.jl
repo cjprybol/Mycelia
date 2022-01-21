@@ -73,7 +73,7 @@ julia> 1 + 1
 2
 ```
 """
-function fastx_to_kmer_graph(KMER_TYPE, fastxs)
+function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
     
     @info "counting kmers"
     @time kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
@@ -112,7 +112,13 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs)
             ProgressMeter.next!(p)
         end
     end
+    # allow graph[kmer, :kmer] to dict-lookup the index of a kmer
+    MetaGraphs.set_indexing_prop!(graph, :kmer)
     return graph
+end
+
+function fastx_to_kmer_graph(KMER_TYPE, fastx::AbstractString)
+    fastx_to_kmer_graph(KMER_TYPE, [fastx])
 end
 
 
@@ -161,9 +167,10 @@ end
         (source_orientation = !oriented_destination_vertex.orientation,
          destination_orientation = !oriented_source_vertex.orientation)
     
+    # TODO: THIS IS WRONG, IT'S 2X-ING THE WEIGHTS!!
     for (edge, edge_orientations) in ((forward_edge, forward_edge_orientations), (reverse_edge, reverse_edge_orientations))
         if Graphs.has_edge(simple_kmer_graph, edge)
-            edge_weight = simple_kmer_graph.eprops[edge][:weight] + 1
+            edge_weight = MetaGraphs.get_prop(simple_kmer_graph, edge, :weight) + 1
             MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, edge_weight)
         else
             Graphs.add_edge!(simple_kmer_graph, edge)

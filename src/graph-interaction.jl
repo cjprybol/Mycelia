@@ -96,7 +96,9 @@ end
 
 function set_metadata!(kmer_graph, edge::E, key, value) where E <: Graphs.Edge
     if MetaGraphs.has_prop(kmer_graph, edge, key)
-        push!(kmer_graph.eprops[edge][key], value)
+        current_value = MetaGraphs.get_prop(kmer_graph, edge, key)
+        updated_value = push!(current_value, value)
+        MetaGraphs.set_prop!(kmer_graph, edge, key, updated_value)
     else
         MetaGraphs.set_prop!(kmer_graph, edge, key, Set([value]))
     end
