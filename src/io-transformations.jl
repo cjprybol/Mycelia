@@ -196,17 +196,19 @@ julia> 1 + 1
 """
 function plot_graph(graph)
     
-    kmer_counts = MetaGraphs.get_prop(graph, :kmer_counts)
+#     kmer_counts = MetaGraphs.get_prop(graph, :kmer_counts)
+    kmers = [MetaGraphs.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)]
+    counts = [MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
     scale = 150
     
-    n = length(kmer_counts)
+    n = Graphs.nv(graph)
     p = GraphRecipes.graphplot(
         graph,
 #         markersize = 1/log2(n),
         markersize = 1/2^2,
         size = (2 * scale * log(n), scale * log(n)),
-        node_weights = collect(values(kmer_counts)),
-        names = collect(keys(kmer_counts)))
+        node_weights = counts,
+        names = kmers)
 end
 
 # """
