@@ -8,6 +8,85 @@ julia> 1 + 1
 2
 ```
 """
+function kmer_path_to_sequence(kmer_path)
+    sequence = BioSequences.LongDNASeq(first(kmer_path))
+    for kmer in kmer_path[2:end]
+        @assert kmer[1] == sequence[end-1]
+        @assert kmer[2] == sequence[end]
+        push!(sequence, kmer[end])
+    end
+    return sequence
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function random_fasta_record(;seed=rand(Int), L = rand(0:Int(typemax(UInt16))))
+    id = Random.randstring(Int(ceil(log(L + 1))))
+    seq = BioSequences.randdnaseq(Random.seed!(seed), L)
+    return FASTX.FASTA.Record(id, seq)
+end
+    
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function observe(records::AbstractVector{R}; outfile = "", error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+#     if isempty(outfile)
+#         error("no file name supplied")
+#     end
+#     io = open(outfile, 'w')
+#     fastx_io = FASTX.FASTQ.Writer(io)
+#     for record in records
+#         new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
+#         new_seq_id = string(hash(new_seq)) * "-" * Random.randstring(32)
+#     new_seq_description = FASTX.identifier(record)
+#     quality = fill(UInt8(60), length(new_seq))
+#     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    
+    new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
+    new_seq_id = string(hash(new_seq)) * "-" * Random.randstring(32)
+    new_seq_description = FASTX.identifier(record)
+    quality = fill(UInt8(60), length(new_seq))
+    return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     
     new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
@@ -287,25 +366,27 @@ function assess_kmer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=10
     for fastx in fastxs
         for record in Mycelia.open_fastx(fastx)
             for kmer in BioSequences.each(kmer_type, FASTX.sequence(record))
-                unique_kmers_count = length(canonical_kmers)
-                if (kmers_assessed == kmers_to_assess) || (unique_kmers_count == max_possible_kmers)
-                    sampling_points = vcat(filter(s -> s < kmers_assessed, sampling_points), [kmers_assessed])
-                    unique_kmer_counts = vcat(unique_kmer_counts[1:length(sampling_points)-1], [unique_kmers_count])
-                    return (;sampling_points, unique_kmer_counts)
-                elseif rem(log(power, kmers_assessed), 1) == 0.0
-                    i = findfirst(sampling_points .== kmers_assessed)
-                    unique_kmer_counts[i] = unique_kmers_count
-                    percent_saturation = round(unique_kmers_count/max_possible_kmers, sigdigits=5) * 100
-    #                 @show kmers_assessed, percent_saturation
-                end
                 canonical_kmer = kmer.fw < kmer.bw ? kmer.fw : kmer.bw
                 push!(canonical_kmers, canonical_kmer)
                 kmers_assessed += 1
+                if (length(canonical_kmers) == max_possible_kmers)                 
+                    sampling_points = vcat(filter(s -> s < kmers_assessed, sampling_points), [kmers_assessed])
+                    unique_kmer_counts = vcat(unique_kmer_counts[1:length(sampling_points)-1], length(canonical_kmers))
+                    return (;sampling_points, unique_kmer_counts, eof = false)
+                elseif kmers_assessed in sampling_points
+                    i = findfirst(sampling_points .== kmers_assessed)
+                    unique_kmer_counts[i] = length(canonical_kmers)
+                    if i == length(sampling_points)
+                        return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = false)
+                    end
+                end
                 ProgressMeter.next!(p)
             end
         end
     end
-    return (;sampling_points, unique_kmer_counts)
+    sampling_points = vcat(filter(s -> s < kmers_assessed, sampling_points), [kmers_assessed])
+    unique_kmer_counts = vcat(unique_kmer_counts[1:length(sampling_points)-1], [length(canonical_kmers)])    
+    return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
 function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
@@ -313,6 +394,7 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
     if isempty(outdir)
         outdir = joinpath(pwd(), "kmer-saturation")
     end
+    mkpath(outdir)
     
     ks = Primes.primes(min_k, max_k)
     minimum_saturation = Inf
@@ -320,14 +402,20 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
     for k in ks
         kmer_type = BioSequences.BigDNAMer{k}
         kmers_to_assess = 10_000_000
-        sampling_points, kmer_counts = assess_kmer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
+        sampling_points, kmer_counts, hit_eof = assess_kmer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
+        @show sampling_points, kmer_counts, hit_eof
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))
         observed_midpoint = sampling_points[observed_midpoint_index]
         initial_parameters = Float64[maximum(kmer_counts), observed_midpoint]
         @time fit = LsqFit.curve_fit(calculate_v, sampling_points, kmer_counts, initial_parameters)
-        inferred_kmer_count = max(Int(ceil(fit.param[1])), last(kmer_counts))
+        if hit_eof
+            inferred_maximum = last(kmer_counts)
+        else
+            inferred_maximum = max(Int(ceil(fit.param[1])), last(kmer_counts))
+        end
+
         inferred_midpoint = Int(ceil(fit.param[2]))
-        predicted_saturation = inferred_kmer_count / max_canonical_kmers(kmer_type)
+        predicted_saturation = inferred_maximum / max_canonical_kmers(kmer_type)
         @show k, predicted_saturation
 
         p = StatsPlots.scatter(
@@ -342,7 +430,7 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
             margins=3Plots.PlotMeasures.mm
             )
         StatsPlots.hline!(p, [max_canonical_kmers(kmer_type)], label="absolute maximum")
-        StatsPlots.hline!(p, [inferred_kmer_count], label="inferred maximum")
+        StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum")
         StatsPlots.vline!(p, [inferred_midpoint], label="inferred midpoint")
         # xs = vcat(sampling_points, [last(sampling_points) * 2^i for i in 1:2])
         xs = sort([sampling_points..., inferred_midpoint])
@@ -362,13 +450,12 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
             midpoint = inferred_midpoint 
         end
         if predicted_saturation < 0.1
-            mkpath(outdir)
             chosen_k_file = joinpath(outdir, "chosen_k.txt")
             println("chosen k = $k")
             open(chosen_k_file, "w") do io
                 println(io, k)
             end
-            return
+            return k
         end
     end
 end

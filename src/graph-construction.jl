@@ -167,17 +167,16 @@ end
         (source_orientation = !oriented_destination_vertex.orientation,
          destination_orientation = !oriented_source_vertex.orientation)
     
-    # TODO: THIS IS WRONG, IT'S 2X-ING THE WEIGHTS!!
-    for (edge, edge_orientations) in ((forward_edge, forward_edge_orientations), (reverse_edge, reverse_edge_orientations))
-        if Graphs.has_edge(simple_kmer_graph, edge)
-            edge_weight = MetaGraphs.get_prop(simple_kmer_graph, edge, :weight) + 1
-            MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, edge_weight)
-        else
-            Graphs.add_edge!(simple_kmer_graph, edge)
-            MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, 1)
-        end
-        Mycelia.set_metadata!(simple_kmer_graph, edge, :orientations, edge_orientations)
+    orientations = Set([forward_edge_orientations, reverse_edge_orientations])
+    if Graphs.has_edge(simple_kmer_graph, forward_edge)
+        edge_weight = MetaGraphs.get_prop(simple_kmer_graph, forward_edge, :weight) + 1
+        orientations = union(MetaGraphs.get_prop(simple_kmer_graph, forward_edge, :orientations), orientations)
+    else
+        Graphs.add_edge!(simple_kmer_graph, forward_edge)
+        edge_weight = 1
     end
+    MetaGraphs.set_prop!(simple_kmer_graph, forward_edge, :weight, edge_weight)
+    MetaGraphs.set_prop!(simple_kmer_graph, forward_edge, :orientations, orientations)
 end
 
 # function fastx_to_simple_kmer_graph(KMER_TYPE, fastx::AbstractString; minimum_coverage::Int=1)
