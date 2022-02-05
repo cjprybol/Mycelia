@@ -82,6 +82,60 @@ julia> 1 + 1
 2
 ```
 """
+function list_databases(;address, username, password)
+    cmd = "show databases"
+    database = "system"
+    cmd = cypher(;address, username, password, database, cmd)
+    return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, quotes='"', encodings=Dict("FALSE" => false, "TRUE" => true))...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function create_database(;database, address, username, password)
+    current_databases = list_databases(;address, username, password)
+    if database in current_databases[!, "name"]
+        return
+    else
+        f = run
+        cmd = "create database $(database)"
+        # switch database to system, so that we can create the user-specific database in the system
+        database = "system"
+        run(cypher(;address, username, password, database, cmd, f))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function cypher(;address, username, password, database, cmd)
+    return `cypher-shell --address $address --username $username --password $password --database $(database) --format auto $(cmd)`
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function open_gff(path::String)
     if isfile(path)
         io = open(path)
