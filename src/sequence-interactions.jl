@@ -31,6 +31,21 @@ julia> 1 + 1
 2
 ```
 """
+function generate_all_possible_kmers(k)
+    product_iterator = Iterators.product([Mycelia.DNA_ALPHABET for i in 1:k]...)
+    return sort(vec(BioSequences.BigDNAMer.(product_iterator)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function random_fasta_record(;seed=rand(Int), L = rand(0:Int(typemax(UInt16))))
     id = Random.randstring(Int(ceil(log(L + 1))))
     seq = BioSequences.randdnaseq(Random.seed!(seed), L)
