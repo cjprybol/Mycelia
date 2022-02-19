@@ -26,6 +26,7 @@ function graph_to_gfa(graph, outfile)
         for edge in Graphs.edges(graph)
             overlap = graph.gprops[:k] - 1
             for o in graph.eprops[edge][:orientations]
+#                 if !(!o.source_orientation && !o.destination_orientation)
                 link = ["L",
                             edge.src,
                             o.source_orientation ? '+' : '-',
@@ -34,6 +35,7 @@ function graph_to_gfa(graph, outfile)
                             "$(overlap)M"]
                 line = join(link, '\t')
                 println(io, line)
+#                 end
             end
         end
     end

@@ -316,12 +316,28 @@ function dijkstra_step!(graph, distances, arrival_paths, queue; default_cost = 1
     current_canonical_kmer = BioSequences.canonical(current_kmer)
     current_index = graph[current_canonical_kmer, :kmer]
 
-    all_possible_neighbors = collect(BioSequences.neighbors(current_kmer))
-    present_neighbors = 
-        filter(neighbor -> 
-            BioSequences.canonical(neighbor) in keys(MetaGraphs.get_prop(graph, :kmer_counts)), 
-        all_possible_neighbors)
-
+#     all_possible_neighbors = collect(BioSequences.neighbors(current_kmer))
+    
+#     present_neighbors = 
+#         filter(neighbor -> 
+#             BioSequences.canonical(neighbor) in keys(MetaGraphs.get_prop(graph, :kmer_counts)), 
+#         all_possible_neighbors)
+    
+#     all_possible_kmers = Set([MetaGraphs.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)])
+    present_neighbors = Vector{typeof(current_kmer)}()
+#     @show present_neighbors
+    for neighbor in BioSequences.neighbors(current_kmer)
+        try
+            graph[BioSequences.canonical(neighbor), :kmer]
+#             @show "graph has neighbor $(BioSequences.canonical(neighbor))"
+            push!(present_neighbors, neighbor)
+        catch
+            continue
+        end
+    end
+#     present_neighbors = filter(neighbor -> BioSequences.canonical(neighbor) in all_possible_kmers, all_possible_neighbors)
+#     @show present_neighbors
+    
     true_neighbors =
         filter(neighbor -> 
             Graphs.has_edge(
