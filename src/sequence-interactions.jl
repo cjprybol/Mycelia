@@ -11,8 +11,11 @@ julia> 1 + 1
 function kmer_path_to_sequence(kmer_path)
     sequence = BioSequences.LongDNASeq(first(kmer_path))
     for kmer in kmer_path[2:end]
-        @assert kmer[1] == sequence[end-1]
-        @assert kmer[2] == sequence[end]
+        for i in 1:length(kmer)-1
+            a = kmer[i]
+            b = sequence[end-(length(kmer)-1)+i]
+            @assert a == b
+        end
         push!(sequence, kmer[end])
     end
     return sequence
