@@ -488,3 +488,91 @@ function dijkstra(graph, a::T, targets::Set{T}; search_strategy::Union{Symbol, M
         return longest_path, distance
     end
 end
+
+function update_remaining_targets(current_walk::AbstractVector{T}, remaining_targets::AbstractSet{T}) where T <: BioSequences.AbstractMer
+    # assess whether targets have been hit in the canonical space
+    remaining_targets = setdiff(BioSequences.canonical.(remaining_targets), BioSequences.canonical.(current_walk))
+    # blow back out into forward and reverse_complement space
+    remaining_targets = Set{T}(vcat(remaining_targets, BioSequences.reverse_complement.(remaining_targets)))
+    return remaining_targets
+end
+
+function assess_downstream_weight(graph, kmer)
+    # here we look to see if walking forward or backward from the initial node gets us to heavier weight options
+    score = 0
+    for neighbor in BioSequences.neighbors(kmer)
+        try
+            score += MetaGraphs.get_prop(graph, graph[BioSequences.canonical(neighbor), :kmer], :count)
+        catch
+            continue
+        end
+    end
+    return score
+end
+
+# vertices should either be entire graph (by default) or a connected component
+# if people want to work on just the connected component, let them induce a subgraph
+function find_graph_core(graph; seed=rand(Int))
+    
+    Random.seed!(seed)
+    
+    T = typeof(MetaGraphs.get_prop(graph, 1, :kmer))
+    
+    # targets = [MetaGraphs.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)]
+    # sortperm
+    
+    # targets = [
+    #         MetaGraphs.get_prop(graph, v_index, :count) for v_index in 
+    #         sortperm([MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)], rev=true)[1:Int(ceil(Graphs.nv(graph)/10))]]
+    
+    targets = [MetaGraphs.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph) if MetaGraphs.get_prop(graph, v, :count) > 1]
+            # sortperm([MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)], rev=true)[1:Int(ceil(Graphs.nv(graph)/10))]]
+    
+    @show length(targets)
+    starting_kmer = first(targets)
+    max_degree = 0
+    for node in targets
+        node_degree = Graphs.degree(graph, graph[node, :kmer])
+        if node_degree > max_degree
+            max_degree = node_degree
+            starting_kmer = node
+        end
+    end
+        
+    current_walk = [starting_kmer]
+    prior_walk_length = length(current_walk)
+    remaining_targets = update_remaining_targets(current_walk, Set(targets))
+    done = isempty(remaining_targets)
+    
+    while !done
+        # here we look to see if walking forward or backward from the current ends gets us to heavier weight options
+        # we want to prioritize walks toward higher coverage nodes
+        forward_score = assess_downstream_weight(graph, last(current_walk))
+        reverse_score = assess_downstream_weight(graph, BioSequences.reverse_complement(first(current_walk)))
+        if reverse_score > forward_score
+            current_walk = reverse(BioSequences.reverse_complement.(current_walk))
+        end
+        
+        forward_source = last(current_walk)
+        forward_walk, forward_distance = Mycelia.dijkstra(graph, forward_source, remaining_targets, search_strategy=:DFS)
+        current_walk = vcat(current_walk, forward_walk[2:end])
+        remaining_targets = update_remaining_targets(current_walk, remaining_targets)
+        if isempty(remaining_targets)
+            done = true
+        else
+            reverse_source = BioSequences.reverse_complement(first(current_walk))
+            reverse_walk, reverse_distance = Mycelia.dijkstra(graph, reverse_source, remaining_targets, search_strategy=:DFS)
+            current_walk = vcat(reverse(BioSequences.reverse_complement.(reverse_walk))[1:end-1], current_walk)
+            remaining_targets = update_remaining_targets(current_walk, remaining_targets)
+        end
+        @show length(current_walk)
+        failed_this_expansion = length(current_walk) == prior_walk_length
+        prior_walk_length = length(current_walk)
+        if isempty(remaining_targets)
+            done = true
+        elseif failed_this_expansion
+            done = true
+        end
+    end
+    return current_walk
+end

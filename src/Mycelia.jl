@@ -3,6 +3,7 @@ module Mycelia
 import BioAlignments
 import BioSequences
 import BioSymbols
+import Clustering
 import Dates
 import DataStructures
 import Distributions

@@ -160,15 +160,16 @@ end
     observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(sequence_edge.fw)
     canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
     canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
+    source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
+    desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
     
-    if canonical_source_kmer > canonical_destination_kmer
+    if source_kmer_index > desination_kmer_index
         observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(sequence_edge.bw)
         canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
         canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
+        source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
+        desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
     end
-    
-    source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
-    desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
     
     @assert source_kmer_index <= desination_kmer_index
 

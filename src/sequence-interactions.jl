@@ -154,6 +154,29 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
     return new_seq
 end
 
+function observe(records::AbstractVector{R};
+                weights=ones(length(records)),
+                N = length(records),
+                outfile = "",
+                error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    if isempty(outfile)
+        error("no file name supplied")
+    end
+    io = open(outfile, "w")
+    fastx_io = FASTX.FASTA.Writer(io)
+    for i in 1:N
+        record = StatsBase.sample(records, StatsBase.weights(weights))
+        new_seq = Mycelia.observe(FASTX.sequence(record), error_rate=error_rate)
+        new_seq_id = Random.randstring(Int(ceil(log(length(new_seq) + 1))))
+        new_seq_description = FASTX.identifier(record)
+        observed_record = FASTX.FASTA.Record(new_seq_id, new_seq_description, new_seq)
+        write(fastx_io, observed_record)
+    end
+    close(fastx_io)
+    close(io)
+    return outfile
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -637,7 +660,16 @@ function count_records(fastx)
     return n_records
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function determine_read_lengths(fastq_file; total_reads = Inf)
     if total_reads == Inf
         total_reads = count_reads(fastq_file)
@@ -653,6 +685,16 @@ function determine_read_lengths(fastq_file; total_reads = Inf)
     return read_lengths
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function max_canonical_kmers(kmer_type)
     k_size = last(kmer_type.parameters)
     # we only consider canonical kmers so cut in 1/2
@@ -660,6 +702,16 @@ function max_canonical_kmers(kmer_type)
     return max_canonical_kmers
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 # Michaelis–Menten
 function calculate_v(s,p)
     vmax = p[1]
@@ -667,3 +719,27 @@ function calculate_v(s,p)
     v = (vmax .* s) ./ (km .+ s)
     return v
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""

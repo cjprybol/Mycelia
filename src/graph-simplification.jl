@@ -379,3 +379,62 @@ function resolve_untigs(kmer_graph)
     end
     return untigs
 end
+
+function apply_kmedoids_treshold(graph)
+    kmer_counts = [MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
+
+    kmer_counts_histogram = sort(collect(StatsBase.countmap(values(kmer_counts))), by=x->x[1])
+
+#     scale = 250
+#     p = Mycelia.plot_kmer_frequency_spectra(values(kmer_counts), size=(2scale,scale), log_scale=log2, title="kmer frequencies")
+#     display(p)
+
+#     p = StatsPlots.scatter(log2.(first.(kmer_counts_histogram)))
+#     display(p)
+
+    kmer_depth_of_coverage_bins = log2.(first.(kmer_counts_histogram))
+
+    distance_matrix = zeros((length(kmer_depth_of_coverage_bins), length(kmer_depth_of_coverage_bins)))
+    for (row, depth_of_coverage_bin_1) in enumerate(kmer_depth_of_coverage_bins)
+        for (col, depth_of_coverage_bin_2) in enumerate(kmer_depth_of_coverage_bins)
+            distance = abs(depth_of_coverage_bin_1 - depth_of_coverage_bin_2)
+            distance_matrix[row, col] = distance
+        end
+    end
+    distance_matrix
+
+    # max out k at the same max k we use for DNAMers
+    max_k = min(length(kmer_depth_of_coverage_bins), 63)
+    ks = Primes.primes(2, max_k)
+    ys = map(k ->
+                Statistics.mean(Statistics.mean(Clustering.silhouettes(Clustering.kmedoids(distance_matrix, k), distance_matrix)) for i in 1:100),
+                ks)
+
+    p = StatsPlots.plot(ks, ys, label="silhouette score", ylabel = "silhouette score", xlabel = "number of clusters")
+    display(p)
+
+    ymax, ymax_index = findmax(ys)
+    optimal_k = ks[ymax_index]
+    clusterings = [Clustering.kmedoids(distance_matrix, optimal_k) for i in 1:10]
+    max_value, max_value_index = findmax(clustering -> Statistics.mean(Clustering.silhouettes(clustering, distance_matrix)), clusterings)
+    optimal_clustering = clusterings[max_value_index]
+    # optimal_clustering.assignments
+    min_medoid_value, min_medoid_index = findmin(optimal_clustering.medoids)
+    indices_to_include = map(assignment -> assignment .!= min_medoid_index, optimal_clustering.assignments)
+    # kmer_depth_of_coverage_bins
+    threshold = Int(ceil(2^maximum(kmer_depth_of_coverage_bins[.!indices_to_include]))) + 1
+
+    scale = 250
+    p = Mycelia.plot_kmer_frequency_spectra(values(kmer_counts), log_scale = log2, size=(2scale,scale), title="kmer frequencies")
+    StatsPlots.vline!(p, log2.([threshold]))
+    display(p)
+
+    # find all vertices with count > threshold
+    vertices_to_keep = [v for v in Graphs.vertices(graph) if (MetaGraphs.get_prop(graph, v, :count) > threshold)]
+    # induce subgraph
+    induced_subgraph, vertex_map = Graphs.induced_subgraph(graph, vertices_to_keep)
+
+    # set kmer as indexing prop
+    MetaGraphs.set_indexing_prop!(induced_subgraph, :kmer)
+    return induced_subgraph
+end
