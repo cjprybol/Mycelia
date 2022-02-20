@@ -114,16 +114,6 @@ function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Reco
     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where T
     
     if T <: BioSequences.DNAAlphabet
