@@ -5,6 +5,7 @@ import BioSequences
 import BioSymbols
 import Clustering
 import Dates
+import DataFrames
 import DataStructures
 import Distributions
 import DocStringExtensions
