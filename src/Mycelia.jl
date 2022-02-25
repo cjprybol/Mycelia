@@ -8,6 +8,7 @@ import Dates
 import DataFrames
 import DataStructures
 import Distributions
+import Distances
 import DocStringExtensions
 import GFF3
 import GraphRecipes

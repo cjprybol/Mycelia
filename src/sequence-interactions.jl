@@ -153,6 +153,28 @@ function distance_matrix_to_newick(distance_matrix, labels, outfile)
     return outfile
 end
 
+function counts_matrix_to_distance_matrix(counts_table)
+    distance_matrix = zeros(size(counts_table, 2), size(counts_table, 2))
+    for i1 in 1:size(counts_table, 2)
+        for i2 in i1+1:size(counts_table, 2)
+            a = counts_table[:, i1]
+            b = counts_table[:, i2]
+            sa = sum(a)
+            sb = sum(b)
+            size_dist = 1-(min(sa, sb)/max(sa, sb))
+            cosine_dist = Distances.cosine_dist(a, b)
+            distances = filter(x -> x > 0, (size_dist, cosine_dist))
+            if isempty(distances)
+                dist = 0.0
+            else
+                dist = reduce(*, distances)
+            end
+            distance_matrix[i1, i2] = distance_matrix[i2, i1] = dist
+        end
+    end
+    return distance_matrix
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
