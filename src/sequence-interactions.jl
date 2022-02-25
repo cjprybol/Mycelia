@@ -1,3 +1,158 @@
+function generate_all_possible_kmers(k, alphabet)
+    kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
+    kmer_vectors = collect.(vec(collect(kmer_iterator)))
+    if eltype(alphabet) == BioSymbols.AminoAcid
+        kmers = BioSequences.LongAminoAcidSeq.(kmer_vectors)
+    elseif eltype(alphabet) == BioSymbols.DNA
+        kmers = BioSequences.LongDNASeq.(kmer_vectors)
+    else
+        error()
+    end
+    return sort!(kmers)
+end
+
+function generate_all_possible_canonical_kmers(k, alphabet)
+    kmers = generate_all_possible_kmers(k, alphabet)
+    if eltype(alphabet) == BioSymbols.AminoAcid
+        return kmers
+    elseif eltype(alphabet) == BioSymbols.DNA
+        return BioSequences.DNAMer.(unique!(BioSequences.canonical.(kmers)))
+    else
+        error()
+    end
+end
+
+function count_aamers_by_file(k, fastx_file)
+    kmer_counts = StatsBase.countmap(FASTX.sequence(record)[i:i+k-1] for record in Mycelia.open_fastx(fastx_file) for i in 1:length(FASTX.sequence(record))-k+1)
+    kmer_counts = sort(kmer_counts)
+    kmer_counts_table = 
+    DataFrames.DataFrame(
+        kmer = collect(keys(kmer_counts)),
+        count = collect(values(kmer_counts))
+    )
+    return kmer_counts_table
+end
+
+function count_aamers_by_record(k, fastx_file)
+    kmer_counts_table = 
+    DataFrames.DataFrame(
+        record_identifier = String[],
+        kmer = BioSequences.LongAminoAcidSeq[],
+        count = Int[]
+        )
+    for record in Mycelia.open_fastx(fastx_file)
+        kmer_counts = StatsBase.countmap(FASTX.sequence(record)[i:i+k-1] for i in 1:length(FASTX.sequence(record))-k+1)
+        kmer_counts = sort(kmer_counts)
+        for (kmer, count) in sort(kmer_counts)
+            row = (
+                record_identifier = FASTX.identifier(record),
+                kmer = kmer,
+                count = count
+                )
+            push!(kmer_counts_table, row)
+        end
+    end
+    return kmer_counts_table
+end
+
+function count_aamers(k, fasta_proteins)
+    aamer_counts = OrderedCollections.OrderedDict{BioSequences.LongAminoAcidSeq, Int64}()
+    for protein in fasta_proteins
+        s = FASTX.sequence(protein)
+        these_counts = sort(StatsBase.countmap([s[i:i+k-1] for i in 1:length(s)-k-1]))
+        merge!(+, aamer_counts, these_counts)
+    end
+    return sort(aamer_counts)
+end
+
+function update_counts_matrix!(matrix, sample_index, countmap, sorted_kmers)
+    for (i, kmer) in enumerate(sorted_kmers)
+        matrix[i, sample_index] = get(countmap, kmer, 0)
+    end
+    return matrix
+end
+
+function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
+    if alphabet == :AA
+        canonical_mers = generate_all_possible_canonical_kmers(k, Mycelia.AA_ALPHABET)
+    elseif alphabet == :DNA
+        canonical_mers = generate_all_possible_canonical_kmers(k, Mycelia.DNA_ALPHABET)
+    else
+        error("invalid alphabet")
+    end
+    if isempty(outfile)
+        outfile = joinpath(pwd(), "$(hash(fasta_list)).$(alphabet).k$(k).bin")
+    end
+    if isfile(outfile)
+        println("$outfile found, loading into memory")
+        mer_counts_matrix = Mmap.mmap(outfile, Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
+    else
+        println("creating new counts matrix $outfile")
+        mer_counts_matrix = Mmap.mmap(outfile, Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
+        mer_counts_matrix .= 0
+        ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
+            if alphabet == :DNA
+                entity_mer_counts = Mycelia.count_canonical_kmers(BioSequences.DNAMer{dna_k}, fasta_file)
+            elseif alphabet == :AA
+                # faa_file = "$(accession).fna.faa"
+                # if !isfile(faa_file)
+                #     run(pipeline(`prodigal -i $(fna_file) -o $(fna_file).genes -a $(faa_file) -p meta`, stderr="$(fna_file).prodigal.stderr"))
+                # end
+                entity_mer_counts = count_aamers(aa_k, Mycelia.open_fastx(fasta_file))
+            end
+            update_counts_matrix!(mer_counts_matrix, entity_index, entity_mer_counts, canonical_mers)            
+        end
+    end
+    return mer_counts_matrix, outfile
+end
+
+function normalize_distance_matrix(distance_matrix)
+    max_non_nan_value = maximum(filter(x -> !isnan(x) && !isnothing(x) && !ismissing(x), vec(distance_matrix)))
+    return distance_matrix ./ max_non_nan_value
+end
+
+function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
+    probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
+    already_there = isfile(probability_matrix_file)
+    probability_matrix = Mmap.mmap(probability_matrix_file, Array{Float64, 2}, size(counts_matrix))
+    if !already_there
+        println("creating new probability matrix $probability_matrix_file")
+        for (i, col) in enumerate(eachcol(counts_matrix))
+            probability_matrix[:, i] .= col ./ sum(col)
+        end
+    else
+        println("probability matrix found $probability_matrix_file")
+    end
+    return probability_matrix, probability_matrix_file
+end
+
+function distance_matrix_to_newick(distance_matrix, labels, outfile)
+    # phage_names = phage_host_table[indices, :name]
+    # this is equivalent to UPGMA
+    tree = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
+    # reference_phage_indices = findall(x -> x in reference_phages, phage_names)
+    newick = Dict()
+    for row in 1:size(tree.merges, 1)
+        left, right = tree.merges[row, :]
+        if left < 0
+            l = string(labels[abs(left)])
+        else
+            l = newick[left]
+        end
+        if right < 0
+            r = string(labels[abs(right)])
+        else
+            r = newick[right]
+        end
+        height = tree.heights[row]
+        newick[row] = "($l:$height, $r:$height)"
+    end
+    open(outfile, "w") do io
+        println(io, newick[size(tree.merges, 1)] * ";")
+    end
+    return outfile
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
