@@ -66,10 +66,13 @@ function open_fastx(path::String)
         io = CodecZlib.GzipDecompressorStream(io)
         path_base = replace(path_base, ".gz" => "")
     end
-    if occursin(r"\.(fasta|fna|fa)$", path_base)
+    if occursin(r"\.(fasta|fna|faa|fa)$", path_base)
         fastx_io = FASTX.FASTA.Reader(io)
     elseif occursin(r"\.(fastq|fq)$", path_base)
         fastx_io = FASTX.FASTQ.Reader(io)
+    else
+        @show path_base
+        error()
     end
     return fastx_io
 end
