@@ -28,6 +28,7 @@ import HTTP
 import ProgressMeter
 # import LSHFunctions
 import FileIO
+import uCSV
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
