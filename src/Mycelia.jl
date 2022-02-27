@@ -31,6 +31,7 @@ import ProgressMeter
 import FileIO
 import uCSV
 import Mmap
+import OrderedCollections
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks

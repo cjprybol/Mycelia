@@ -59,6 +59,10 @@ function count_aamers(k, fasta_proteins)
     aamer_counts = OrderedCollections.OrderedDict{BioSequences.LongAminoAcidSeq, Int64}()
     for protein in fasta_proteins
         s = FASTX.sequence(protein)
+        if !(s isa BioSequences.LongAminoAcidSeq)
+            # @warn "record $(protein) is not encoded as a protein sequence, skipping..."
+            continue
+        end
         these_counts = sort(StatsBase.countmap([s[i:i+k-1] for i in 1:length(s)-k-1]))
         merge!(+, aamer_counts, these_counts)
     end
@@ -98,7 +102,13 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
                 # if !isfile(faa_file)
                 #     run(pipeline(`prodigal -i $(fna_file) -o $(fna_file).genes -a $(faa_file) -p meta`, stderr="$(fna_file).prodigal.stderr"))
                 # end
-                entity_mer_counts = count_aamers(k, Mycelia.open_fastx(fasta_file))
+                try
+                    entity_mer_counts = count_aamers(k, Mycelia.open_fastx(fasta_file))
+                catch e
+                    @warn "investigate possible malformed fasta file $(fasta_file)"
+                    println(e.msg)
+                    continue
+                end
             end
             update_counts_matrix!(mer_counts_matrix, entity_index, entity_mer_counts, canonical_mers)            
         end
@@ -153,6 +163,17 @@ function distance_matrix_to_newick(distance_matrix, labels, outfile)
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function counts_matrix_to_distance_matrix(counts_table)
     distance_matrix = zeros(size(counts_table, 2), size(counts_table, 2))
     for i1 in 1:size(counts_table, 2)
