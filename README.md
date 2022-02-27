@@ -9,7 +9,7 @@ Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.
 [![Coverage](https://github.com/cjprybol/Mycelia/badges/master/coverage.svg)](https://github.com/cjprybol/Mycelia.jl/commits/master)
 [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac)
 
-## Install
+## Install for local development
 
 1. clone into `/your/path/to/Mycelia` 
 
