@@ -98,7 +98,7 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
                 # if !isfile(faa_file)
                 #     run(pipeline(`prodigal -i $(fna_file) -o $(fna_file).genes -a $(faa_file) -p meta`, stderr="$(fna_file).prodigal.stderr"))
                 # end
-                entity_mer_counts = count_aamers(aa_k, Mycelia.open_fastx(fasta_file))
+                entity_mer_counts = count_aamers(k, Mycelia.open_fastx(fasta_file))
             end
             update_counts_matrix!(mer_counts_matrix, entity_index, entity_mer_counts, canonical_mers)            
         end
