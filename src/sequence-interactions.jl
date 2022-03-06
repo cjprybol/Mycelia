@@ -1,3 +1,14 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
     kmer_vectors = collect.(vec(collect(kmer_iterator)))
@@ -11,6 +22,17 @@ function generate_all_possible_kmers(k, alphabet)
     return sort!(kmers)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function generate_all_possible_canonical_kmers(k, alphabet)
     kmers = generate_all_possible_kmers(k, alphabet)
     if eltype(alphabet) == BioSymbols.AminoAcid
@@ -22,6 +44,17 @@ function generate_all_possible_canonical_kmers(k, alphabet)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function count_aamers_by_file(k, fastx_file)
     kmer_counts = StatsBase.countmap(FASTX.sequence(record)[i:i+k-1] for record in Mycelia.open_fastx(fastx_file) for i in 1:length(FASTX.sequence(record))-k+1)
     kmer_counts = sort(kmer_counts)
@@ -33,6 +66,17 @@ function count_aamers_by_file(k, fastx_file)
     return kmer_counts_table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function count_aamers_by_record(k, fastx_file)
     kmer_counts_table = 
     DataFrames.DataFrame(
@@ -55,20 +99,58 @@ function count_aamers_by_record(k, fastx_file)
     return kmer_counts_table
 end
 
-function count_aamers(k, fasta_proteins)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function count_aamers(k, fasta_proteins::AbstractVector{FASTX.FASTA.Record})
     aamer_counts = OrderedCollections.OrderedDict{BioSequences.LongAminoAcidSeq, Int64}()
     for protein in fasta_proteins
-        s = FASTX.sequence(protein)
-        if !(s isa BioSequences.LongAminoAcidSeq)
+        if !(FASTX.sequence(protein) isa BioSequences.LongAminoAcidSeq)
             # @warn "record $(protein) is not encoded as a protein sequence, skipping..."
             continue
         end
-        these_counts = sort(StatsBase.countmap([s[i:i+k-1] for i in 1:length(s)-k-1]))
+        these_counts = count_aamers(k, protein)
         merge!(+, aamer_counts, these_counts)
     end
     return sort(aamer_counts)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function count_aamers(k, fasta_protein::FASTX.FASTA.Record)
+    s = FASTX.sequence(fasta_protein)
+    these_counts = sort(StatsBase.countmap([s[i:i+k-1] for i in 1:length(s)-k-1]))
+    return these_counts    
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function update_counts_matrix!(matrix, sample_index, countmap, sorted_kmers)
     for (i, kmer) in enumerate(sorted_kmers)
         matrix[i, sample_index] = get(countmap, kmer, 0)
@@ -76,6 +158,17 @@ function update_counts_matrix!(matrix, sample_index, countmap, sorted_kmers)
     return matrix
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
     if alphabet == :AA
         canonical_mers = generate_all_possible_canonical_kmers(k, Mycelia.AA_ALPHABET)
@@ -89,10 +182,10 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
     end
     if isfile(outfile)
         println("$outfile found, loading into memory")
-        mer_counts_matrix = Mmap.mmap(outfile, Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
+        mer_counts_matrix = Mmap.mmap(open(outfile), Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
     else
         println("creating new counts matrix $outfile")
-        mer_counts_matrix = Mmap.mmap(outfile, Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
+        mer_counts_matrix = Mmap.mmap(open(outfile, "w+"), Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
         mer_counts_matrix .= 0
         ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
             if alphabet == :DNA
@@ -116,11 +209,33 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
     return mer_counts_matrix, outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function normalize_distance_matrix(distance_matrix)
     max_non_nan_value = maximum(filter(x -> !isnan(x) && !isnothing(x) && !ismissing(x), vec(distance_matrix)))
     return distance_matrix ./ max_non_nan_value
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
     probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
     already_there = isfile(probability_matrix_file)
@@ -136,6 +251,17 @@ function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
     return probability_matrix, probability_matrix_file
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function distance_matrix_to_newick(distance_matrix, labels, outfile)
     # phage_names = phage_host_table[indices, :name]
     # this is equivalent to UPGMA
@@ -175,6 +301,7 @@ julia> 1 + 1
 ```
 """
 function counts_matrix_to_distance_matrix(counts_table)
+    # TODO, if a file path is provided, make this a mmap table and return that
     distance_matrix = zeros(size(counts_table, 2), size(counts_table, 2))
     for i1 in 1:size(counts_table, 2)
         for i2 in i1+1:size(counts_table, 2)

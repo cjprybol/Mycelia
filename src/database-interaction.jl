@@ -197,3 +197,28 @@ function get_gff(;db=""::String, accession=""::String, ftp=""::String)
         @error "invalid call"
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
+or get fasta directly from FTP site
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
+    if !isempty(db) && !isempty(accession)
+        # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
+        sleep(0.5)
+        url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=genbank&id=$(accession)"
+        return GenomicAnnotations.readgbk(IOBuffer(HTTP.get(url).body))
+    elseif !isempty(ftp)
+        
+        return GenomicAnnotations.readgbk(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
+    else
+        @error "invalid call"
+    end
+end
