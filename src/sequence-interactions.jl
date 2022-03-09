@@ -110,7 +110,7 @@ julia> 1 + 1
 2
 ```
 """
-function count_aamers(k, fasta_proteins::AbstractVector{FASTX.FASTA.Record})
+function count_aamers(k, fasta_proteins::FP) where {FP <: Union{AbstractVector{FASTX.FASTA.Record}, FASTX.FASTA.Reader}}
     aamer_counts = OrderedCollections.OrderedDict{BioSequences.LongAminoAcidSeq, Int64}()
     for protein in fasta_proteins
         if !(FASTX.sequence(protein) isa BioSequences.LongAminoAcidSeq)
@@ -199,7 +199,8 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
                     entity_mer_counts = count_aamers(k, Mycelia.open_fastx(fasta_file))
                 catch e
                     @warn "investigate possible malformed fasta file $(fasta_file)"
-                    println(e.msg)
+                    # println(e.msg)
+                    showerror(stdout, e)
                     continue
                 end
             end
