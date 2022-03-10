@@ -288,3 +288,35 @@ end
 #     display(p)
 #     display("text/markdown", "![]($filename)")
 # end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function save_graph(graph::Graphs.AbstractGraph, outfile::String)
+    if !occursin(r"\.jld2$", outfile)
+        outfile *= ".jld2"
+    end
+    FileIO.save(outfile, Dict("graph" => graph))
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function load_graph(file::String)
+    return FileIO.load(file)["graph"]
+end

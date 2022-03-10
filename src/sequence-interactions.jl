@@ -694,7 +694,7 @@ julia> 1 + 1
 2
 ```
 """
-function assess_kmer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=10)
+function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=10)
     canonical_kmers = Set{kmer_type}()
     
     max_possible_kmers = max_canonical_kmers(kmer_type)
@@ -746,7 +746,7 @@ function assess_kmer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=10
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
+function assess_dnamer_saturation(fastxs; outdir="", min_k=3, max_k=31, threshold=0.1)
     
     if isempty(outdir)
         outdir = joinpath(pwd(), "kmer-saturation")
@@ -759,7 +759,7 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
     for k in ks
         kmer_type = BioSequences.BigDNAMer{k}
         kmers_to_assess = 10_000_000
-        sampling_points, kmer_counts, hit_eof = assess_kmer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
+        sampling_points, kmer_counts, hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
         @show sampling_points, kmer_counts, hit_eof
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))
         observed_midpoint = sampling_points[observed_midpoint_index]
@@ -806,7 +806,7 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
             min_k = k
             midpoint = inferred_midpoint 
         end
-        if predicted_saturation < 0.1
+        if predicted_saturation < threshold
             chosen_k_file = joinpath(outdir, "chosen_k.txt")
             println("chosen k = $k")
             open(chosen_k_file, "w") do io
@@ -816,6 +816,11 @@ function assess_kmer_saturation(fastxs; outdir="", min_k=3, max_k=61)
         end
     end
 end
+
+
+
+
+
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

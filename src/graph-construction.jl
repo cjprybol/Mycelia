@@ -98,7 +98,9 @@ julia> 1 + 1
 2
 ```
 """
-function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
+
+# note: indexing will break if we mix BigDNAMer and normal DNAMer types, so just force requirement of BigDNAMer
+function fastx_to_kmer_graph(KMER_TYPE::KT, fastxs::AbstractVector{<:AbstractString}) where {KT <: BioSequences.BigDNAMer}
     
     @info "counting kmers"
     @time kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
