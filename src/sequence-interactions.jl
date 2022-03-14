@@ -14,6 +14,9 @@ function generate_all_possible_kmers(k, alphabet)
     kmer_vectors = collect.(vec(collect(kmer_iterator)))
     if eltype(alphabet) == BioSymbols.AminoAcid
         kmers = BioSequences.LongAminoAcidSeq.(kmer_vectors)
+        if k > 1
+            filter!(kmer -> kmer[1] != BioSequences.AA_Term, kmers)
+        end
     elseif eltype(alphabet) == BioSymbols.DNA
         kmers = BioSequences.LongDNASeq.(kmer_vectors)
     else
