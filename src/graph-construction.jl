@@ -100,7 +100,12 @@ julia> 1 + 1
 """
 
 # note: indexing will break if we mix BigDNAMer and normal DNAMer types, so just force requirement of BigDNAMer
-function fastx_to_kmer_graph(KMER_TYPE::KT, fastxs::AbstractVector{<:AbstractString}) where {KT <: BioSequences.BigDNAMer}
+# can't do the restriction because the type here is `DataType` rather than the actual kmer type
+function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
+    
+    if !(KMER_TYPE <: BioSequences.BigDNAMer)
+        error()
+    end
     
     @info "counting kmers"
     @time kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
