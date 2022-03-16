@@ -3,7 +3,7 @@
 :warning: **pre-alpha!** This software is in the process of being brought to production-readiness
 
 Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). Goals of the project include:
-- dyanmic creation of arbitrary pangenomes from NCBI and other sources
+- dynamic creation of arbitrary pangenomes with metadata from NCBI and other sources
 - characterization of pangenomes
 - using pangenome graphs to inform bioengineering of organisms and biological communities (bioremediation and clinical microbiome therapies)
 
