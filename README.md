@@ -2,7 +2,10 @@
 
 :warning: **pre-alpha!** This software is in the process of being brought to production-readiness
 
-Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). The goal of the project is to enable characterizing populations with pangenomes and performing optimizations by finding traversals through pangenome graphs with weighted metadata features.
+Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). Goals of the project include:
+- dynamic creation of arbitrary pangenomes with metadata from NCBI and other sources
+- characterization of pangenomes
+- using pangenome graphs to inform bioengineering of organisms and biological communities (bioremediation and clinical microbiome therapies)
 
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 [![Build Status](https://github.com/cjprybol/Mycelia/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines)
