@@ -32,7 +32,7 @@
 				"julialang.language-julia",
 				"ms-toolsai.jupyter-keymap",
 				"ms-toolsai.jupyter",
-				"ms-toolsai.jupyter-renderers"
+				"ms-toolsai.jupyter-renderers",
 				"vscodevim.vim"
 			]
 		}
