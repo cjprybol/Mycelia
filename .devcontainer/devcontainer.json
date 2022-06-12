@@ -1,7 +1,7 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the README at:
 // https://github.com/microsoft/vscode-dev-containers/tree/v0.236.0/containers/codespaces-linux
 {
-	"name": "GitHub Codespaces (Default)",
+	"name": "Customized GitHub Codespaces (Default)",
 
 	"build": {
 		"dockerfile": "Dockerfile"
@@ -31,7 +31,8 @@
 				"lldb.executable": "/usr/bin/lldb",
 				"files.watcherExclude": {
 					"**/target/**": true
-				}
+				},
+				"julia.executablePath": "/installations/julia-1.6.6/bin/julia"
 			},
 			
 			// Add the IDs of extensions you want installed when the container is created.
@@ -68,6 +69,7 @@
 	// "oryx build" will automatically install your dependencies and attempt to build your project
 	"postCreateCommand": [
 		"oryx build -p virtualenv_name=.venv --log-file /tmp/oryx-build.log --manifest-dir /tmp || echo 'Could not auto-build. Skipping.'",
-		"python -m bash_kernel.install"
+		"python -m bash_kernel.install",
+		"rvm rvmrc warning ignore all.rvmrcs"
 	]
 }
