@@ -43,7 +43,7 @@
 				// "ms-toolsai.jupyter",
 				// "ms-toolsai.jupyter-renderers",
 				"ms-azuretools.vscode-docker",
-				"vscodevim.vim",
+				"vscodevim.vim"
 			]
 		}
 	},
