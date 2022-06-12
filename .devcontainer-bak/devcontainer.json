@@ -1,0 +1,10 @@
+// {
+// 	// "build": {
+// 	// 	"dockerfile": "Dockerfile"
+// 	// },
+// 	"extensions": [
+// 		"ms-toolsai.jupyter-keymap",
+// 		"ms-toolsai.jupyter",
+// 		"ms-toolsai.jupyter-renderers"
+// 	]
+// }
