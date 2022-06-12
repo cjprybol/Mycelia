@@ -42,7 +42,8 @@
 				"ms-toolsai.jupyter-keymap",
 				"ms-toolsai.jupyter",
 				"ms-toolsai.jupyter-renderers",
-				"vscodevim.vim"
+				"vscodevim.vim",
+				"ms-azuretools.vscode-docker"
 			]
 		}
 	},

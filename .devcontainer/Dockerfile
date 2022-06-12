@@ -18,9 +18,17 @@ RUN wget https://julialang-s3.julialang.org/bin/linux/x64/1.6/julia-1.6.6-linux-
     rm julia-1.6.6-linux-x86_64.tar.gz
 ENV PATH=/installations/julia-1.6.6/bin:$PATH
 
+RUN conda install -y r-base r-essentials r-irkernel
+
 # # COPY Project.toml $HOME/.julia/environments/v1.6/
 # # COPY Manifest.toml $HOME/.julia/environments/v1.6/
 # # RUN julia -e 'import Pkg; Pkg.instantiate()'
 
 WORKDIR $CODESPACE_VSCODE_FOLDER
 USER codespace
+
+RUN julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
+
+RUN pip install bash_kernel
+RUN python -m bash_kernel.install
+
