@@ -36,13 +36,13 @@
 			},
 			
 			// Add the IDs of extensions you want installed when the container is created.
+			// "ms-toolsai.jupyter-keymap",
+			// "ms-toolsai.jupyter",
+			// "ms-toolsai.jupyter-renderers",
 			"extensions": [
 				"GitHub.vscode-pull-request-github",
 				"ms-python.python",
 				"julialang.language-julia",
-				// "ms-toolsai.jupyter-keymap",
-				// "ms-toolsai.jupyter",
-				// "ms-toolsai.jupyter-renderers",
 				"ms-azuretools.vscode-docker",
 				"vscodevim.vim"
 			]
