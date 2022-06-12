@@ -37,5 +37,3 @@ RUN pip install bash_kernel
 
 WORKDIR $CODESPACE_VSCODE_FOLDER
 USER codespace
-
-RUN python -m bash_kernel.install
