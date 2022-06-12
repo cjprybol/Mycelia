@@ -39,11 +39,11 @@
 				"GitHub.vscode-pull-request-github",
 				"ms-python.python",
 				"julialang.language-julia",
-				"ms-toolsai.jupyter-keymap",
-				"ms-toolsai.jupyter",
-				"ms-toolsai.jupyter-renderers",
+				// "ms-toolsai.jupyter-keymap",
+				// "ms-toolsai.jupyter",
+				// "ms-toolsai.jupyter-renderers",
+				"ms-azuretools.vscode-docker",
 				"vscodevim.vim",
-				"ms-azuretools.vscode-docker"
 			]
 		}
 	},
