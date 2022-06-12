@@ -10,7 +10,7 @@ USER root
 # RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 #     && apt-get -y install --no-install-recommends <your-package-list-here>
 
-# Install R & R kernel
+# install R & R kernel
 RUN conda install -y -c conda-forge r-base
 RUN conda install -y -c r r-essentials
 ENV PATH=/opt/conda/bin:$PATH
@@ -19,12 +19,17 @@ RUN Rscript -e 'install.packages("IRkernel",repos = "http://cran.us.r-project.or
 # install precompiled binaries
 WORKDIR /installations
 
-# Install Julia
+# install Julia
 RUN wget https://julialang-s3.julialang.org/bin/linux/x64/1.6/julia-1.6.6-linux-x86_64.tar.gz && \
     tar -xzf julia-1.6.6-linux-x86_64.tar.gz && \
     rm julia-1.6.6-linux-x86_64.tar.gz
 ENV PATH=/installations/julia-1.6.6/bin:$PATH
 
+# install julia kernel
+RUN julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
+
+# install bash kernel
+RUN pip install bash_kernel
 
 # # COPY Project.toml $HOME/.julia/environments/v1.6/
 # # COPY Manifest.toml $HOME/.julia/environments/v1.6/
@@ -33,6 +38,4 @@ ENV PATH=/installations/julia-1.6.6/bin:$PATH
 WORKDIR $CODESPACE_VSCODE_FOLDER
 USER codespace
 
-RUN julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
-RUN pip install bash_kernel
 RUN python -m bash_kernel.install
