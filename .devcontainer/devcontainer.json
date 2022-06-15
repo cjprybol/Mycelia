@@ -1,10 +1,20 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the README at:
-// https://github.com/microsoft/vscode-dev-containers/tree/v0.236.0/containers/codespaces-linux
+// https://github.com/microsoft/vscode-dev-containers/tree/v0.236.0/containers/jupyter-datascience-notebooks
 {
-	"name": "Customized GitHub Codespaces (Default)",
-
+	"name": "Jupyter Data Science Notebooks (Community)",
 	"build": {
 		"dockerfile": "Dockerfile"
+	},
+	"overrideCommand": false,
+	
+	// Forward Jupyter port locally, mark required
+	"forwardPorts": [8888],
+	"portsAttributes": {
+		"8888": {
+			"label": "Jupyter",
+			"requireLocalPort": true,
+			"onAutoForward": "ignore"
+		}
 	},
 
 	// Configure tool-specific properties.
@@ -13,63 +23,19 @@
 		"vscode": {
 			// Set *default* container specific settings.json values on container create.
 			"settings": { 
-				"go.toolsManagement.checkForUpdates": "local",
-				"go.useLanguageServer": true,
-				"go.gopath": "/go",
-				"python.defaultInterpreterPath": "/opt/python/latest/bin/python",
-				"python.linting.enabled": true,
-				"python.linting.pylintEnabled": true,
-				"python.formatting.autopep8Path": "/usr/local/py-utils/bin/autopep8",
-				"python.formatting.blackPath": "/usr/local/py-utils/bin/black",
-				"python.formatting.yapfPath": "/usr/local/py-utils/bin/yapf",
-				"python.linting.banditPath": "/usr/local/py-utils/bin/bandit",
-				"python.linting.flake8Path": "/usr/local/py-utils/bin/flake8",
-				"python.linting.mypyPath": "/usr/local/py-utils/bin/mypy",
-				"python.linting.pycodestylePath": "/usr/local/py-utils/bin/pycodestyle",
-				"python.linting.pydocstylePath": "/usr/local/py-utils/bin/pydocstyle",
-				"python.linting.pylintPath": "/usr/local/py-utils/bin/pylint",
-				"lldb.executable": "/usr/bin/lldb",
-				"files.watcherExclude": {
-					"**/target/**": true
-				},
-				"julia.executablePath": "/installations/julia-1.6.6/bin/julia"
+				"python.defaultInterpreterPath": "/opt/conda/bin/python"
 			},
 			
 			// Add the IDs of extensions you want installed when the container is created.
-			// "ms-toolsai.jupyter-keymap",
-			// "ms-toolsai.jupyter",
-			// "ms-toolsai.jupyter-renderers",
 			"extensions": [
-				"GitHub.vscode-pull-request-github",
-				"ms-python.python",
-				"julialang.language-julia",
-				"ms-azuretools.vscode-docker",
-				"vscodevim.vim"
+				"ms-python.python"
 			]
 		}
 	},
 
-	"remoteUser": "codespace",
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "pip3 install --user -r requirements.txt",
 
-	"overrideCommand": false,
-
-	"mounts": ["source=codespaces-linux-var-lib-docker,target=/var/lib/docker,type=volume"],
-
-	"runArgs": [
-		"--cap-add=SYS_PTRACE",
-		"--security-opt",
-		"seccomp=unconfined",
-		"--privileged",
-		"--init"
-	],
-	
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
-
-	// "oryx build" will automatically install your dependencies and attempt to build your project
-	"postCreateCommand": [
-		"oryx build -p virtualenv_name=.venv --log-file /tmp/oryx-build.log --manifest-dir /tmp || echo 'Could not auto-build. Skipping.'",
-		"python -m bash_kernel.install",
-		"rvm rvmrc warning ignore all.rvmrcs"
-	]
+	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
+	"remoteUser": "jovyan"
 }
