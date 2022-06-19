@@ -10,11 +10,27 @@ USER root
 # RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 #     && apt-get -y install --no-install-recommends <your-package-list-here>
 
+# python
+# pip freeze > requirements.txt
+# COPY requirements.txt .
+# pip install requirements.txt
+
+# conda
+# write out current installations
+# conda list --explicit > spec-file.txt
+# COPY conda-environment.txt .
+# create new environment
+# RUN conda create --name myenv --file conda-environment.txt
+# install environment into default environment
+# RUN conda install --file spec-file.txt
+
 # install R & R kernel
 RUN conda install -y -c conda-forge r-base
 RUN conda install -y -c r r-essentials
 ENV PATH=/opt/conda/bin:$PATH
 RUN Rscript -e 'install.packages("IRkernel",repos = "http://cran.us.r-project.org");IRkernel::installspec()'
+# install additional R packages here
+# COPY R-requirements.R .
 
 # install precompiled binaries
 WORKDIR /installations
@@ -28,12 +44,13 @@ ENV PATH=/installations/julia-1.6.6/bin:$PATH
 # install julia kernel
 RUN julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
 
-# install bash kernel
-RUN pip install bash_kernel
+# COPY Project.toml $HOME/.julia/environments/v1.6/
+# COPY Manifest.toml $HOME/.julia/environments/v1.6/
+RUN COPY Project.toml .
+RUN julia -e 'import Pkg; Pkg.instantiate()'
 
-# # COPY Project.toml $HOME/.julia/environments/v1.6/
-# # COPY Manifest.toml $HOME/.julia/environments/v1.6/
-# # RUN julia -e 'import Pkg; Pkg.instantiate()'
+# install bash kernel
+# RUN pip install bash_kernel
 
 WORKDIR $CODESPACE_VSCODE_FOLDER
 USER codespace
