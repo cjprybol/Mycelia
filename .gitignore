@@ -7,3 +7,5 @@ docs/build/
 *.md_checkpoints
 *.ipynb.md
 docs/src
+data
+.snakemake

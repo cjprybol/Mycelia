@@ -1,11 +1,23 @@
-rule bwa_map:
-    input:
-        "data/genome.fa",
-        "data/samples/{sample}.fastq"
+# https://papermill.readthedocs.io/en/latest/usage-cli.html
+# run `snakemake some_target --delete-all-output` to clean outputs from target
+# run `snakemake --delete-all-output --cores all` to clean all outputs
+# run `snakemake --cores all` to run whole workflow
+# run `snakemake some_target --cores all` to run up to and through target
+
+rule hello_world:
     output:
-        "mapped_reads/{sample}.bam"
+        "data/test.txt"
     shell:
-        "bwa mem {input} | samtools view -Sb - > {output}"
+        "mkdir -p data && echo 'this is a test' > data/test.txt"
+
+# rule bwa_map:
+#     input:
+#         "data/genome.fa",
+#         "data/samples/{sample}.fastq"
+#     output:
+#         "mapped_reads/{sample}.bam"
+#     shell:
+#         "bwa mem {input} | samtools view -Sb - > {output}"
 
 # rule samtools_sort:
 #     input:

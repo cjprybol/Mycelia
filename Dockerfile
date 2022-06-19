@@ -15,6 +15,9 @@ USER root
 # COPY requirements.txt .
 # pip install requirements.txt
 
+RUN conda install -c conda-forge mamba
+RUN mamba install -c conda-forge -c bioconda snakemake
+
 # conda
 # write out current installations
 # conda list --explicit > spec-file.txt
@@ -25,8 +28,8 @@ USER root
 # RUN conda install --file spec-file.txt
 
 # install R & R kernel
-RUN conda install -y -c conda-forge r-base
-RUN conda install -y -c r r-essentials
+RUN mamba install -y -c conda-forge r-base
+# RUN conda install -y -c r r-essentials
 ENV PATH=/opt/conda/bin:$PATH
 RUN Rscript -e 'install.packages("IRkernel",repos = "http://cran.us.r-project.org");IRkernel::installspec()'
 # install additional R packages here
@@ -51,6 +54,21 @@ RUN julia -e 'import Pkg; Pkg.instantiate()'
 
 # install bash kernel
 # RUN pip install bash_kernel
+
+# Install jupyter templates
+RUN pip install jupyter_contrib_nbextensions
+RUN jupyter contrib nbextension install
+RUN pip install jupyterlab_templates
+RUN jupyter labextension install jupyterlab_templates
+RUN jupyter serverextension enable --py jupyterlab_templates
+
+# copy templates into this directory for them to automatically pop up
+# /usr/local/share/jupyter/labextensions/jupyterlab_templates
+
+# adding templates
+#  https://github.com/jpmorganchase/jupyterlab_templates#adding-templates
+
+# install papermill, which will be our script driver
 
 WORKDIR $CODESPACE_VSCODE_FOLDER
 USER codespace

@@ -44,7 +44,8 @@
 				"ms-python.python",
 				"julialang.language-julia",
 				"ms-azuretools.vscode-docker",
-				"vscodevim.vim"
+				"vscodevim.vim",
+				"DavidAnson.vscode-markdownlint"
 			]
 		}
 	},
@@ -71,5 +72,6 @@
 		// "oryx build -p virtualenv_name=.venv --log-file /tmp/oryx-build.log --manifest-dir /tmp || echo 'Could not auto-build. Skipping.'",
 		// "python -m bash_kernel.install",
 		// "rvm rvmrc warning ignore all.rvmrcs"
+		"sudo jupyter lab --allow-root"
 	]
 }
