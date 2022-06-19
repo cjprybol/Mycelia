@@ -52,18 +52,9 @@ julia> 1 + 1
 2
 ```
 """
-function taxonomic_id_to_children(tax_id)
-    # NEO4J_BIN_DIR = "/home/jupyter-cjprybol/software/neo4j-community-4.4.3/bin"
-    # if !occursin(NEO4J_BIN_DIR, ENV["PATH"])
-    #     ENV["PATH"] = "$(NEO4J_BIN_DIR):" * ENV["PATH"]
-    # end 
-    DOMAIN = "ncbi-taxonomy.cjp.garden"
-    # DOMAIN="34.138.169.173"
-    USERNAME="neo4j"
-    PASSWORD=readline(joinpath(homedir(), ".config", "neo4j", "ncbi-taxonomy.password.txt"));
+function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME, PASSWORD)
     DATABASE = "neo4j"
-    # ADDRESS="neo4j://$(DOMAIN):7687"
-    ADDRESS="bolt://$(DOMAIN):7687"
+    ADDRESS="neo4j+s://$(database_id).databases.neo4j.io:7687"
     
     # NOTE! *, or 0 distance (e.g. [*0..2]) step range will include source node!!!!
     cmd = "MATCH (n)<-[*]-(n2) WHERE n.tax_id IS NOT NULL AND n.tax_id = \"$(tax_id)\" RETURN DISTINCT n2.tax_id AS tax_id"
