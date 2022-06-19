@@ -46,7 +46,7 @@ RUN julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
 
 # COPY Project.toml $HOME/.julia/environments/v1.6/
 # COPY Manifest.toml $HOME/.julia/environments/v1.6/
-RUN COPY Project.toml .
+COPY Project.toml .
 RUN julia -e 'import Pkg; Pkg.instantiate()'
 
 # install bash kernel
