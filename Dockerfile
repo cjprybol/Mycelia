@@ -2,7 +2,12 @@
 
 FROM mcr.microsoft.com/vscode/devcontainers/universal:2-focal
 
-ENV HOME /home/codespace/
+# originally I had been using this variable to get back to the right working directory
+# WORKDIR $CODESPACE_VSCODE_FOLDER
+# I've lost this variable somehow, but not sure what happened
+# recording the $PWD as a variable also isn't working so just record the repo that we're working in
+ENV REPO="Mycelia"
+ENV REPO_DIR=/workspaces/$REPO
 
 # ** [Optional] Uncomment this section to install additional packages. **
 USER root
@@ -35,19 +40,35 @@ RUN mamba install -c conda-forge -c bioconda snakemake
 
 # with linux package manager
 # update indices
-RUN apt update -qq
+RUN apt update -qq -y
 # install two helper packages we need
-RUN apt install --no-install-recommends software-properties-common dirmngr
+RUN apt install -y --no-install-recommends software-properties-common dirmngr
 # add the signing key (by Michael Rutter) for these repos
 # To verify key, run gpg --show-keys /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc 
 # Fingerprint: E298A3A825C0D65DFD57CBB651716619E084DAB9
 RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc
 # add the R 4.0 repo from CRAN -- adjust 'focal' to 'groovy' or 'bionic' as needed
 RUN add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/"
-RUN apt install --no-install-recommends r-base
+RUN apt install -y --no-install-recommends r-base
 RUN Rscript -e 'install.packages("IRkernel",repos = "http://cran.us.r-project.org");IRkernel::installspec()'
 # install additional R packages here
 # COPY R-requirements.R .
+
+# install docker https://docs.docker.com/engine/install/ubuntu/
+RUN apt update -qq -y
+RUN apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
+RUN mkdir -p /etc/apt/keyrings
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+RUN echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+RUN apt-get update -qq -y
+RUN apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
 
 # install precompiled binaries
 WORKDIR /installations
@@ -86,6 +107,7 @@ RUN jupyter serverextension enable --py jupyterlab_templates
 # https://github.com/jpmorganchase/jupyterlab_templates#adding-templates
 
 # install papermill, which will be our script driver
+RUN python3 -m pip install papermill
 
-WORKDIR $CODESPACE_VSCODE_FOLDER
+WORKDIR $REPO_DIR
 USER codespace
