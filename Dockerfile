@@ -28,9 +28,23 @@ RUN mamba install -c conda-forge -c bioconda snakemake
 # RUN conda install --file spec-file.txt
 
 # install R & R kernel
-RUN mamba install -y -c conda-forge r-base
+# with conda
+# RUN mamba install -y -c conda-forge r-base
 # RUN conda install -y -c r r-essentials
-ENV PATH=/opt/conda/bin:$PATH
+# ENV PATH=/opt/conda/bin:$PATH
+
+# with linux package manager
+# update indices
+RUN apt update -qq
+# install two helper packages we need
+RUN apt install --no-install-recommends software-properties-common dirmngr
+# add the signing key (by Michael Rutter) for these repos
+# To verify key, run gpg --show-keys /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc 
+# Fingerprint: E298A3A825C0D65DFD57CBB651716619E084DAB9
+RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc
+# add the R 4.0 repo from CRAN -- adjust 'focal' to 'groovy' or 'bionic' as needed
+RUN add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/"
+RUN apt install --no-install-recommends r-base
 RUN Rscript -e 'install.packages("IRkernel",repos = "http://cran.us.r-project.org");IRkernel::installspec()'
 # install additional R packages here
 # COPY R-requirements.R .
@@ -38,11 +52,14 @@ RUN Rscript -e 'install.packages("IRkernel",repos = "http://cran.us.r-project.or
 # install precompiled binaries
 WORKDIR /installations
 
+ENV JULIA_VERSION_FULL=1.7.3
+ENV JULIA_VERSION=1.7
+
 # install Julia
-RUN wget https://julialang-s3.julialang.org/bin/linux/x64/1.6/julia-1.6.6-linux-x86_64.tar.gz && \
-    tar -xzf julia-1.6.6-linux-x86_64.tar.gz && \
-    rm julia-1.6.6-linux-x86_64.tar.gz
-ENV PATH=/installations/julia-1.6.6/bin:$PATH
+RUN wget https://julialang-s3.julialang.org/bin/linux/x64/$JULIA_VERSION/julia-$JULIA_VERSION_FULL-linux-x86_64.tar.gz && \
+    tar -xzf julia-$JULIA_VERSION_FULL-linux-x86_64.tar.gz && \
+    rm julia-$JULIA_VERSION_FULL-linux-x86_64.tar.gz
+ENV PATH=/installations/julia-$JULIA_VERSION_FULL/bin:$PATH
 
 # install julia kernel
 RUN julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
@@ -66,7 +83,7 @@ RUN jupyter serverextension enable --py jupyterlab_templates
 # /usr/local/share/jupyter/labextensions/jupyterlab_templates
 
 # adding templates
-#  https://github.com/jpmorganchase/jupyterlab_templates#adding-templates
+# https://github.com/jpmorganchase/jupyterlab_templates#adding-templates
 
 # install papermill, which will be our script driver
 
