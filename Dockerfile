@@ -1,6 +1,8 @@
 # See here for image contents: https://github.com/microsoft/vscode-dev-containers/tree/v0.236.0/containers/codespaces-linux/.devcontainer/base.Dockerfile
 
-FROM mcr.microsoft.com/vscode/devcontainers/universal:2-focal
+# FROM mcr.microsoft.com/vscode/devcontainers/universal:2-focal
+# FROM mcr.microsoft.com/vscode/devcontainers/universal:2
+FROM mcr.microsoft.com/vscode/devcontainers/universal:2.0.2
 
 # originally I had been using this variable to get back to the right working directory
 # WORKDIR $CODESPACE_VSCODE_FOLDER
