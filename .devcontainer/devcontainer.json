@@ -36,9 +36,6 @@
 			},
 			
 			// Add the IDs of extensions you want installed when the container is created.
-			// "ms-toolsai.jupyter-keymap",
-			// "ms-toolsai.jupyter",
-			// "ms-toolsai.jupyter-renderers",
 			"extensions": [
 				"GitHub.vscode-pull-request-github",
 				"ms-python.python",
@@ -69,10 +66,10 @@
 
 	// "oryx build" will automatically install your dependencies and attempt to build your project
 	"postCreateCommand": [
-	// 	// "oryx build -p virtualenv_name=.venv --log-file /tmp/oryx-build.log --manifest-dir /tmp || echo 'Could not auto-build. Skipping.'",
+		"oryx build -p virtualenv_name=.venv --log-file /tmp/oryx-build.log --manifest-dir /tmp || echo 'Could not auto-build. Skipping.'"
 	// 	// "python -m bash_kernel.install",
 	// 	// "rvm rvmrc warning ignore all.rvmrcs"
 	// 	// "sudo jupyter lab --allow-root"
-		"echo 'hello'"
+		// "echo 'hello'"
 	]
 }
