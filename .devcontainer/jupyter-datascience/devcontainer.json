@@ -3,19 +3,19 @@
 {
 	"name": "Jupyter Data Science Notebooks (Community)",
 	"build": {
-		"dockerfile": "Dockerfile"
+		"dockerfile": "../../Jupyter-Dockerfile"
 	},
 	"overrideCommand": false,
 	
-	// Forward Jupyter port locally, mark required
-	"forwardPorts": [8888],
-	"portsAttributes": {
-		"8888": {
-			"label": "Jupyter",
-			"requireLocalPort": true,
-			"onAutoForward": "ignore"
-		}
-	},
+	// // Forward Jupyter port locally, mark required
+	// "forwardPorts": [8888],
+	// "portsAttributes": {
+	// 	"8888": {
+	// 		"label": "Jupyter",
+	// 		"requireLocalPort": true,
+	// 		"onAutoForward": "ignore"
+	// 	}
+	// },
 
 	// Configure tool-specific properties.
 	"customizations": {

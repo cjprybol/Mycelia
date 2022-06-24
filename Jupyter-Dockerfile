@@ -19,8 +19,27 @@ RUN apt-get update \
 # RUN pip3 --disable-pip-version-check --no-cache-dir install -r /tmp/pip-tmp/requirements.txt \
 #    && rm -rf /tmp/pip-tmp
 
+# install papermill, which will be our script driver
+RUN pip3 --disable-pip-version-check --no-cache-dir install papermill \
+    && rm -rf /tmp/pip-tmp
+
+RUN pip3 --disable-pip-version-check --no-cache-dir install jupyter_contrib_nbextensions && \
+    jupyter contrib nbextension install && \
+    pip3 --disable-pip-version-check --no-cache-dir install jupyterlab_templates && \
+    jupyter labextension install jupyterlab_templates && \
+    jupyter serverextension enable --py jupyterlab_templates && \
+    rm -rf /tmp/pip-tmp
+
 # [Optional] Uncomment this section to install additional OS packages.
 # RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 #     && apt-get -y install --no-install-recommends <your-package-list-here>
+
+# RUN conda install -c conda-forge mamba
+# ENV CONDA_CHOICE=mamba
+ENV CONDA_CHOICE=conda
+RUN $CONDA_CHOICE install -c conda-forge -c bioconda snakemake
+
+COPY Project.toml .
+RUN julia -e 'import Pkg; Pkg.instantiate()'
 
 USER jovyan
