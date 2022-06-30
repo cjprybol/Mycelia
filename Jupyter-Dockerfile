@@ -32,9 +32,14 @@ RUN pip3 --disable-pip-version-check --no-cache-dir install jupyter_contrib_nbex
     rm -rf /tmp/pip-tmp
 
 # get python system site packages folder
-# python -c "import site; print(site.getsitepackages()[1])"
+# python -c "import site; print(site.getsitepackages()[0])"
 # delete original sample here
 # copy in good sample
+RUN export JUPYTER_TEMPLATE_DIR=$(python -c "import site; print(site.getsitepackages()[0])")/jupyterlab_templates/templates/jupyterlab_templates && \
+    echo $JUPYTER_TEMPLATE_DIR && \
+    rm $JUPYTER_TEMPLATE_DIR/Sample.ipynb && \
+    wget https://raw.githubusercontent.com/cjprybol/structured-science/master/template.ipynb && \
+    mv template.ipynb $JUPYTER_TEMPLATE_DIR/template.ipynb
 
 # [Optional] Uncomment this section to install additional OS packages.
 # RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
