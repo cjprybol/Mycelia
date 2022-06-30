@@ -38,7 +38,7 @@ RUN pip3 --disable-pip-version-check --no-cache-dir install jupyter_contrib_nbex
 RUN export JUPYTER_TEMPLATE_DIR=$(python -c "import site; print(site.getsitepackages()[0])")/jupyterlab_templates/templates/jupyterlab_templates && \
     echo $JUPYTER_TEMPLATE_DIR && \
     rm $JUPYTER_TEMPLATE_DIR/Sample.ipynb && \
-    wget https://raw.githubusercontent.com/cjprybol/structured-science/master/template.ipynb && \
+    wget https://raw.githubusercontent.com/cjprybol/structured-science/master/YYYY-MM-DD-descriptive-title.ipynb && \
     mv template.ipynb $JUPYTER_TEMPLATE_DIR/template.ipynb
 
 # [Optional] Uncomment this section to install additional OS packages.
@@ -48,7 +48,20 @@ RUN export JUPYTER_TEMPLATE_DIR=$(python -c "import site; print(site.getsitepack
 # RUN conda install -c conda-forge mamba
 # ENV CONDA_CHOICE=mamba
 ENV CONDA_CHOICE=conda
-RUN $CONDA_CHOICE install -c conda-forge -c bioconda snakemake
+RUN $CONDA_CHOICE install \
+    -c conda-forge \
+    -c bioconda \
+    snakemake \
+    taxonkit
+
+RUN wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz && \
+    tar -zxvf taxdump.tar.gz && \
+    mkdir -p $HOME/.taxonkit && \
+    cp names.dmp nodes.dmp delnodes.dmp merged.dmp $HOME/.taxonkit && \
+    rm *.dmp taxdump.tar.gz
+
+# install Rclone
+RUN curl https://rclone.org/install.sh | sudo bash
 
 COPY Project.toml .
 RUN julia -e 'import Pkg; Pkg.instantiate()'

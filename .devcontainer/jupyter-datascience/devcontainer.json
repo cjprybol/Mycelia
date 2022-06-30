@@ -28,8 +28,8 @@
 			
 			// Add the IDs of extensions you want installed when the container is created.
 			"extensions": [
-				"ms-python.python",
-				"vscodevim.vim"
+				"ms-python.python"
+				// "vscodevim.vim"
 			]
 		}
 	},
