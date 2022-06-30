@@ -4,11 +4,18 @@
 # run `snakemake --cores all` to run whole workflow
 # run `snakemake some_target --cores all` to run up to and through target
 
-rule hello_world:
+# rule hello_world:
+#     output:
+#         "data/test.txt"
+#     shell:
+#         "mkdir -p data && echo 'this is a test' > data/test.txt"
+
+rule download_ncbi_reference_genomes:
     output:
-        "data/test.txt"
+        "data/genomes/done.txt"
     shell:
-        "mkdir -p data && echo 'this is a test' > data/test.txt"
+        ""
+
 
 # rule bwa_map:
 #     input:
