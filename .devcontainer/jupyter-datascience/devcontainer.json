@@ -6,11 +6,13 @@
 		"dockerfile": "../../Jupyter-Dockerfile"
 	},
 	"overrideCommand": false,
-	# https://github.com/docker/for-linux/issues/321
-	# https://forum.rclone.org/t/fusermount-error-on-running-rclone-mount/8455
-	# https://stackoverflow.com/questions/48402218/fuse-inside-docker
-
-	"runArgs": [ "--device=/dev/fuse", "--cap-add=SYS_ADMIN" ],
+	// https://github.com/docker/for-linux/issues/321
+	// https://forum.rclone.org/t/fusermount-error-on-running-rclone-mount/8455
+	// https://stackoverflow.com/questions/48402218/fuse-inside-docker
+	"runArgs": [
+		"--device=/dev/fuse",
+		"--cap-add=SYS_ADMIN"
+	],
 	// // Forward Jupyter port locally, mark required
 	// "forwardPorts": [8888],
 	// "portsAttributes": {
