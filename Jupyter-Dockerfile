@@ -63,6 +63,9 @@ RUN wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz && \
 # install Rclone
 RUN curl https://rclone.org/install.sh | sudo bash
 
+RUN mkdir -p /home/jovyan/.config/rclone/
+COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
+
 COPY Project.toml .
 RUN julia -e 'import Pkg; Pkg.instantiate()'
 
