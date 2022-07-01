@@ -8,6 +8,13 @@ FROM jupyter/datascience-notebook
 # is in a group with the same name (in this case jovyan).  So we must first make that so.
 COPY .devcontainer/jupyter-datascience/library-scripts/common-debian.sh /tmp/library-scripts/
 USER root
+
+# [Optional] Uncomment this section to install additional OS packages.
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get -y install --no-install-recommends libfuse2 fuse
+
+RUN modprobe fuse
+
 RUN apt-get update \
  && groupadd jovyan \
  && usermod -g jovyan -a -G users jovyan \
@@ -39,11 +46,7 @@ RUN export JUPYTER_TEMPLATE_DIR=$(python -c "import site; print(site.getsitepack
     echo $JUPYTER_TEMPLATE_DIR && \
     rm $JUPYTER_TEMPLATE_DIR/Sample.ipynb && \
     wget https://raw.githubusercontent.com/cjprybol/structured-science/master/YYYY-MM-DD-descriptive-title.ipynb && \
-    mv template.ipynb $JUPYTER_TEMPLATE_DIR/template.ipynb
-
-# [Optional] Uncomment this section to install additional OS packages.
-# RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-#     && apt-get -y install --no-install-recommends <your-package-list-here>
+    mv YYYY-MM-DD-descriptive-title.ipynb $JUPYTER_TEMPLATE_DIR/YYYY-MM-DD-descriptive-title.ipynb
 
 # RUN conda install -c conda-forge mamba
 # ENV CONDA_CHOICE=mamba
@@ -63,10 +66,10 @@ RUN wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz && \
 # install Rclone
 RUN curl https://rclone.org/install.sh | sudo bash
 
-RUN mkdir -p /home/jovyan/.config/rclone/
-COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
-
 COPY Project.toml .
 RUN julia -e 'import Pkg; Pkg.instantiate()'
 
 USER jovyan
+
+RUN mkdir -p /home/jovyan/.config/rclone/
+COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
