@@ -43,11 +43,7 @@
 	},
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": [
-		// "pip3 install --user -r requirements.txt",
-		"mkdir -p $HOME/rclone-mounts/google-drive",
-		"rclone mount google-drive: $HOME/rclone-mounts/google-drive &"
-	],
+	"postCreateCommand": "mkdir -p /home/jovyan/rclone-mounts/drive && rclone mount drive: /home/jovyan/rclone-mounts/drive &",
 
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
 	"remoteUser": "jovyan"
