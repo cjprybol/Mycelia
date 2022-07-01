@@ -73,3 +73,4 @@ USER jovyan
 
 RUN mkdir -p /home/jovyan/.config/rclone/
 COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
+RUN mkdir -p /home/jovyan/rclone-mounts

@@ -11,7 +11,9 @@
 	// https://stackoverflow.com/questions/48402218/fuse-inside-docker
 	"runArgs": [
 		"--device=/dev/fuse",
-		"--cap-add=SYS_ADMIN"
+		"--cap-add=SYS_ADMIN",
+		"--security-opt=apparmor:unconfined"
+		// "--privileged=true"
 	],
 	// // Forward Jupyter port locally, mark required
 	// "forwardPorts": [8888],
@@ -41,7 +43,11 @@
 	},
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "pip3 install --user -r requirements.txt",
+	"postCreateCommand": [
+		// "pip3 install --user -r requirements.txt",
+		"mkdir -p $HOME/rclone-mounts/google-drive",
+		"rclone mount google-drive: $HOME/rclone-mounts/google-drive &"
+	],
 
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
 	"remoteUser": "jovyan"
