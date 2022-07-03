@@ -10,6 +10,15 @@
 #     shell:
 #         "mkdir -p data && echo 'this is a test' > data/test.txt"
 
+# https://snakemake.readthedocs.io/en/v6.0.3/executing/cli.html#visualization
+rule document:
+    output:
+        "dag.pdf"
+    shell:
+        """
+        snakemake --forceall --dag | dot -Tpdf > dag.pdf
+        """
+
 # snakemake initialize --cores 1
 rule initialize:
     output:
