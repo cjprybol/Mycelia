@@ -10,7 +10,21 @@
 #     shell:
 #         "mkdir -p data && echo 'this is a test' > data/test.txt"
 
+# https://papermill.readthedocs.io/en/latest/usage-cli.html
+# snakemake download_ncbi_reference_genomes --cores 1
+rule download_ncbi_reference_genomes:
+    input:
+        "/home/jovyan/rclone-mounts/drive.mounted"
+    output:
+        "data/genomes/done.txt"
+    shell:
+        # 10239
+        # https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10239
+        # have the report title include a timestamp and parameters.yaml hash
+        "papermill notebooks/scripts/01.download-ncbi-phage-genomes.ipynb reports/01.download-ncbi-phage-genomes.ipynb -p taxon_id 10239 -p data_dir $PWD/data/genomes"
+
 # https://snakemake.readthedocs.io/en/v6.0.3/executing/cli.html#visualization
+# snakemake document --cores 1
 rule document:
     output:
         "dag.pdf"
@@ -75,16 +89,3 @@ rule unlink_data_directory:
         rm /workspace/Mycelia/data
         mv /home/jovyan/rclone-mounts/drive.linked /home/jovyan/rclone-mounts/drive.unlinked
         """
-
-# https://papermill.readthedocs.io/en/latest/usage-cli.html
-# snakemake download_ncbi_reference_genomes --cores 1
-rule download_ncbi_reference_genomes:
-    input:
-        "/home/jovyan/rclone-mounts/drive.mounted"
-    output:
-        "data/genomes/done.txt"
-    shell:
-        # 10239
-        # https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10239
-        # have the report title include a timestamp and parameters.yaml hash
-        "papermill notebooks/scripts/01.download-ncbi-phage-genomes.ipynb reports/01.download-ncbi-phage-genomes.ipynb -p taxon_id 10239 -p data_dir $PWD/data/genomes"
