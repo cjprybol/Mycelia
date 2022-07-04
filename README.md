@@ -16,15 +16,15 @@ Think [DALL-E](https://openai.com/dall-e-2/), but for genomes
 1. clone into `/your/path/to/Mycelia` and load the julia package into your Julia Project.toml
   - `pkg> dev /your/path/to/Mycelia`
 
-## Related Software
+Related Software
 - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
 - [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
 - [JCVI PanGenomePipeline](https://github.com/JCVenterInstitute/PanGenomePipeline)
-- [Pangenome Graphs Review](https://doi.org/10.1146/annurev-genom-120219-080406)
 - [Roary](https://github.com/sanger-pathogens/Roary) - deprecated :(
 - [vg](https://github.com/vgteam/vg)
 - [PPanGGOLiN](https://github.com/labgem/PPanGGOLiN)
 - [optimized dynamic genome graph implementation](https://github.com/pangenome/odgi)
+- [Other softwae mentioned within this pangenome graphs review](https://doi.org/10.1146/annurev-genom-120219-080406)
 
 Related platforms:
 - [TeselaGen](https://teselagen.com/)
@@ -35,3 +35,8 @@ Semantic models & ontologies:
 - [Synthetic Biology Markup Language](https://sbml.org/)
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
 - [Systems Biology Graphical Notation](https://sbgn.github.io/)
+
+Model repositories:
+- [BioModels](https://www.ebi.ac.uk/biomodels/)
+
+
