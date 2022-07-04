@@ -30,3 +30,7 @@ Related platforms:
 - [TeselaGen](https://teselagen.com/)
 - [CELLO](https://github.com/CIDARLAB/cello)
 - [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
+
+Semantic models & ontologies:
+- [Synthetic Biology Markup Language](https://sbml.org/)
+- [Synthetic Biology Open Language](https://sbolstandard.org/)
