@@ -34,3 +34,4 @@ Related platforms:
 Semantic models & ontologies:
 - [Synthetic Biology Markup Language](https://sbml.org/)
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
+- [Systems Biology Graphical Notation](https://sbgn.github.io/)
