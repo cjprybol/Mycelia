@@ -41,4 +41,5 @@ Model repositories:
 - [BioModels](https://www.ebi.ac.uk/biomodels/)
 - [GLAMM](https://glamm.lbl.gov/)
 
-
+communities
+- [AI 4 SynBio](https://www.ai4synbio.org/)
