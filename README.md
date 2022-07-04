@@ -30,13 +30,15 @@ Related platforms:
 - [TeselaGen](https://teselagen.com/)
 - [CELLO](https://github.com/CIDARLAB/cello)
 - [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
+- [Lattice Automation](https://www.latticeautomation.com/)
 
 Semantic models & ontologies:
-- [Synthetic Biology Markup Language](https://sbml.org/)
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
+- [Systems Biology Markup Language](https://sbml.org/)
 - [Systems Biology Graphical Notation](https://sbgn.github.io/)
 
 Model repositories:
 - [BioModels](https://www.ebi.ac.uk/biomodels/)
+- [GLAMM](https://glamm.lbl.gov/)
 
 
