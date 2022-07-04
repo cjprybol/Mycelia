@@ -39,6 +39,7 @@ Semantic models & ontologies:
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
 - [Systems Biology Markup Language](https://sbml.org/)
 - [Systems Biology Graphical Notation](https://sbgn.github.io/)
+- [BioOntologies](https://bioportal.bioontology.org/ontologies)
 
 Model repositories:
 - [BioModels](https://www.ebi.ac.uk/biomodels/)
