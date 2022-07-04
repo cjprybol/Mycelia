@@ -33,6 +33,7 @@ Related platforms:
 - [Asimov](https://www.asimov.com/)
 - [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
 - [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
+- [TinkerCell](http://www.tinkercell.com/)
 
 Semantic models & ontologies:
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
