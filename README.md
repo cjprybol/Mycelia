@@ -2,7 +2,7 @@
 
 Multiomics knowledge graphs for [characterization](), [discovery](), and [biological design]()
 
-Think [DALL-E](https://openai.com/dall-e-2/), but for genomes
+The goal is to enable designer genome creation from specification criteria. like [DALL-E](https://openai.com/dall-e-2/)
 
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 [![Build Status](https://github.com/cjprybol/Mycelia/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines)
