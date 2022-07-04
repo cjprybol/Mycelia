@@ -1,11 +1,6 @@
 # Mycelia
 
-:warning: **pre-alpha!** This software is in the process of being brought to production-readiness
-
-Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.com/JuliaGraphs), [BioJulia](https://github.com/BioJulia), and [Neo4J](https://neo4j.com/). Goals of the project include:
-- dynamic creation of arbitrary pangenomes with metadata from NCBI and other sources
-- characterization of pangenomes
-- using pangenome graphs to inform bioengineering of organisms and biological communities (bioremediation and clinical microbiome therapies)
+multiomics knowledge graphs for discovery, characterization, and biological design
 
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 [![Build Status](https://github.com/cjprybol/Mycelia/badges/master/pipeline.svg)](https://github.com/cjprybol/Mycelia.jl/pipelines)
@@ -14,11 +9,10 @@ Biological knowledge graphs for "omics" powered by [JuliaGraphs](https://github.
 
 ## Install for local development
 
-1. clone into `/your/path/to/Mycelia` 
-
-```julia
-pkg> dev /your/path/to/Mycelia
-```
+1. branch/fork this repository and develop in github codespaces.
+  - I like to work in the [jupyter-datascience](https://github.com/cjprybol/Mycelia/tree/master/.devcontainer/jupyter-datascience) devcontainer
+1. clone into `/your/path/to/Mycelia` and load the julia package into your Julia Project.toml
+  - `pkg> dev /your/path/to/Mycelia`
 
 ## Related Software
 - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
