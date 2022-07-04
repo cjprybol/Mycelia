@@ -9,7 +9,7 @@ The goal is to enable passing a description of a genome's fiction and then have 
 [![Coverage](https://github.com/cjprybol/Mycelia/badges/master/coverage.svg)](https://github.com/cjprybol/Mycelia.jl/commits/master)
 [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac)
 
-## Install for local development
+## Development and contributing
 
 1. branch/fork this repository and develop in github codespaces
   - I like to work in the [jupyter-datascience](https://github.com/cjprybol/Mycelia/tree/master/.devcontainer/jupyter-datascience) devcontainer
