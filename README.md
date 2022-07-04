@@ -30,6 +30,7 @@ Related platforms:
 - [TeselaGen](https://teselagen.com/)
 - [CELLO](https://github.com/CIDARLAB/cello)
 - [Lattice Automation](https://www.latticeautomation.com/)
+- [Asimov](https://www.asimov.com/)
 - [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
 - [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
 
