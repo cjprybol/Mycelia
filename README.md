@@ -16,7 +16,8 @@ The goal is to enable passing a description of a genome's fiction and then have 
 1. clone into `/your/path/to/Mycelia` and load the julia package into your Julia Project.toml
   - `pkg> dev /your/path/to/Mycelia`
 
-Related Software
+## Related & Relevant Projects
+
 - pangenomes
   - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
   - [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
