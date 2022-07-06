@@ -17,14 +17,21 @@ The goal is to enable passing a description of a genome's fiction and then have 
   - `pkg> dev /your/path/to/Mycelia`
 
 Related Software
-- [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
-- [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
-- [JCVI PanGenomePipeline](https://github.com/JCVenterInstitute/PanGenomePipeline)
-- [Roary](https://github.com/sanger-pathogens/Roary) - deprecated :(
-- [vg](https://github.com/vgteam/vg)
-- [PPanGGOLiN](https://github.com/labgem/PPanGGOLiN)
-- [optimized dynamic genome graph implementation](https://github.com/pangenome/odgi)
-- [Other softwae mentioned within this pangenome graphs review](https://doi.org/10.1146/annurev-genom-120219-080406)
+- pangenomes
+  - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
+  - [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
+  - [JCVI PanGenomePipeline](https://github.com/JCVenterInstitute/PanGenomePipeline)
+  - [Roary](https://github.com/sanger-pathogens/Roary) - deprecated :(
+  - [vg](https://github.com/vgteam/vg)
+  - [PPanGGOLiN](https://github.com/labgem/PPanGGOLiN)
+  - [optimized dynamic genome graph implementation](https://github.com/pangenome/odgi)
+  - [Other softwae mentioned within this pangenome graphs review](https://doi.org/10.1146/annurev-genom-120219-080406)
+- genome machine learning
+  - https://genoml.com/
+  - https://github.com/davek44/Basset
+  - https://github.com/calico/basenji
+  - https://github.com/kundajelab/dragonn
+  - https://github.com/kundajelab/deeplift
 
 Related platforms:
 - [TeselaGen](https://teselagen.com/)
