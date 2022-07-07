@@ -50,6 +50,7 @@ Related platforms:
   - [OpenFold](https://openfold.io/)
   - [Rosetta](https://www.rosettacommons.org/software)
   - [Arzeda](https://www.arzeda.com/)
+  - [DeepChain](https://deepchain.bio/)
 
 Semantic models & ontologies:
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
