@@ -26,6 +26,7 @@ The goal is to enable passing a description of a genome's fiction and then have 
   - [vg](https://github.com/vgteam/vg)
   - [PPanGGOLiN](https://github.com/labgem/PPanGGOLiN)
   - [optimized dynamic genome graph implementation](https://github.com/pangenome/odgi)
+  - [metagraph](https://github.com/ratschlab/metagraph)
   - [Other softwae mentioned within this pangenome graphs review](https://doi.org/10.1146/annurev-genom-120219-080406)
 - genome machine learning
   - https://genoml.com/
