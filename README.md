@@ -36,13 +36,20 @@ The goal is to enable passing a description of a genome's fiction and then have 
   - https://github.com/kundajelab/deeplift
 
 Related platforms:
-- [TeselaGen](https://teselagen.com/)
-- [CELLO](https://github.com/CIDARLAB/cello)
-- [Lattice Automation](https://www.latticeautomation.com/)
-- [Asimov](https://www.asimov.com/)
-- [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
-- [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
-- [TinkerCell](http://www.tinkercell.com/)
+- genomes and organisms:
+  - [TeselaGen](https://teselagen.com/)
+  - [CELLO](https://github.com/CIDARLAB/cello)
+  - [Lattice Automation](https://www.latticeautomation.com/)
+  - [Asimov](https://www.asimov.com/)
+  - [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
+  - [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
+  - [TinkerCell](http://www.tinkercell.com/)
+  - [Cyrus Bio](https://cyrusbio.com/)
+- Proteins:
+  - [Big Hat Biosciences](https://www.bighatbio.com/)
+  - [OpenFold](https://openfold.io/)
+  - [Rosetta](https://www.rosettacommons.org/software)
+  - [Arzeda](https://www.arzeda.com/)
 
 Semantic models & ontologies:
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
