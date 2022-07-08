@@ -16,7 +16,7 @@ The goal is to enable passing a description of a genome's fiction and then have 
 1. clone into `/your/path/to/Mycelia` and load the julia package into your Julia Project.toml
   - `pkg> dev /your/path/to/Mycelia`
 
-## Related & Relevant Projects
+## Related & Relevant Projects & Companies
 
 - pangenomes
   - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
@@ -36,13 +36,22 @@ The goal is to enable passing a description of a genome's fiction and then have 
   - https://github.com/kundajelab/deeplift
 
 Related platforms:
-- [TeselaGen](https://teselagen.com/)
-- [CELLO](https://github.com/CIDARLAB/cello)
-- [Lattice Automation](https://www.latticeautomation.com/)
-- [Asimov](https://www.asimov.com/)
-- [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
-- [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
-- [TinkerCell](http://www.tinkercell.com/)
+- genomes and organisms:
+  - [TeselaGen](https://teselagen.com/)
+  - [CELLO](https://github.com/CIDARLAB/cello)
+  - [Lattice Automation](https://www.latticeautomation.com/)
+  - [Asimov](https://www.asimov.com/)
+  - [Infobiotics Workbench](https://github.com/Infobiotics/ibw)
+  - [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
+  - [TinkerCell](http://www.tinkercell.com/)
+  - [Cyrus Bio](https://cyrusbio.com/)
+  - [Gingko](https://www.ginkgobioworks.com/)
+- Proteins:
+  - [Big Hat Biosciences](https://www.bighatbio.com/)
+  - [OpenFold](https://openfold.io/)
+  - [Rosetta](https://www.rosettacommons.org/software)
+  - [Arzeda](https://www.arzeda.com/)
+  - [DeepChain](https://deepchain.bio/)
 
 Semantic models & ontologies:
 - [Synthetic Biology Open Language](https://sbolstandard.org/)
