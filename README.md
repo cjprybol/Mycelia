@@ -45,6 +45,7 @@ Related platforms:
   - [iBioSim](https://async.ece.utah.edu/tools/ibiosim/)
   - [TinkerCell](http://www.tinkercell.com/)
   - [Cyrus Bio](https://cyrusbio.com/)
+  - [Gingko](https://www.ginkgobioworks.com/)
 - Proteins:
   - [Big Hat Biosciences](https://www.bighatbio.com/)
   - [OpenFold](https://openfold.io/)
