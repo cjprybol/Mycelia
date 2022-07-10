@@ -72,10 +72,12 @@ RUN curl https://rclone.org/install.sh | sudo bash
 
 # COPY Project.toml .
 # RUN julia -e 'import Pkg; Pkg.instantiate()'
-RUN julia -e 'import Pkg; Pkg.develop(path="/workspaces/Mycelia"); import Mycelia'
+# RUN julia -e 'import Pkg; Pkg.develop(path="/workspaces/Mycelia"); import Mycelia'
+
+RUN mkdir -p /datasets
+RUN chmod 777 /datasets
 
 USER jovyan
 
 RUN mkdir -p /home/jovyan/.config/rclone/
 COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
-RUN mkdir -p /home/jovyan/rclone-mounts
