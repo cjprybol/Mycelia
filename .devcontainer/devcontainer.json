@@ -3,7 +3,7 @@
 {
 	"name": "Jupyter Data Science Notebooks (Community)",
 	"build": {
-		"dockerfile": "../../Jupyter-Dockerfile"
+		"dockerfile": "../Dockerfile"
 	},
 	"overrideCommand": false,
 	// https://github.com/docker/for-linux/issues/321
