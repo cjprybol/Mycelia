@@ -6,7 +6,7 @@ FROM jupyter/datascience-notebook
 # https://github.com/microsoft/vscode-dev-containers/tree/main/script-library#development-container-scripts
 # But that script assumes that the main non-root user (in this case jovyan)
 # is in a group with the same name (in this case jovyan).  So we must first make that so.
-COPY .devcontainer/jupyter-datascience/library-scripts/common-debian.sh /tmp/library-scripts/
+COPY .devcontainer/library-scripts/common-debian.sh /tmp/library-scripts/
 USER root
 
 # [Optional] Uncomment this section to install additional OS packages.
