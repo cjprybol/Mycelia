@@ -6,7 +6,7 @@ FROM jupyter/datascience-notebook
 # https://github.com/microsoft/vscode-dev-containers/tree/main/script-library#development-container-scripts
 # But that script assumes that the main non-root user (in this case jovyan)
 # is in a group with the same name (in this case jovyan).  So we must first make that so.
-COPY .devcontainer/library-scripts/common-debian.sh /tmp/library-scripts/
+# COPY .devcontainer/library-scripts/common-debian.sh /tmp/library-scripts/
 USER root
 
 # [Optional] Uncomment this section to install additional OS packages.
@@ -18,6 +18,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 
 # RUN modprobe fuse
 
+RUN wget https://raw.githubusercontent.com/cjprybol/Mycelia/master/.devcontainer/library-scripts/common-debian.sh
+RUN mkdir -p /tmp/library-scripts && mv common-debian.sh /tmp/library-scripts
 RUN apt-get update \
  && groupadd jovyan \
  && usermod -g jovyan -a -G users jovyan \
@@ -81,3 +83,5 @@ USER jovyan
 
 RUN mkdir -p /home/jovyan/.config/rclone/
 COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
+
+ENV DEFAULT_KERNEL_NAME "julia-1.7"
