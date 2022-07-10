@@ -12,7 +12,6 @@ See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://res
 ## Development and contributing
 
 1. branch/fork this repository and develop in github codespaces
-  - I like to work in the [jupyter-datascience](https://github.com/cjprybol/Mycelia/tree/master/.devcontainer/jupyter-datascience) devcontainer
 1. clone into `/your/path/to/Mycelia` and load the julia package into your Julia Project.toml
   - `pkg> dev /your/path/to/Mycelia`
 
