@@ -8,24 +8,50 @@
 
 import os
 
-FASTA_IDs=[file.name.replace(".fna", "") for file in os.scandir("data/genomes") if file.is_file() and file.name.endswith(".fna")]
-
-rule all:
+rule download_hmp_samples:
     input:
-        expand("data/genomes/{fasta_id}.fna.fai", fasta_id=FASTA_IDs)
-
-# snakemake index_genomes --cores all
-rule index_genomes:
-    input:
-        "data/genomes/{fasta_id}.fna"
+        "metadata/hmp_wgs_fastq/hmp_manifest_5555e11088.tsv"
+        "metadata/hmp_wgs_fastq/hmp_manifest_metadata_5c2e51f49b.tsv"
+        "/home/jovyan/rclone-mounts/drive.linked"
     output:
-        "data/genomes/{fasta_id}.fna.fai"
-    params:
-        fasta_id="{fasta_id}"
+        "data/fastqs/donwloaded.done"
     shell:
         """
-        samtools faidx {params.fasta_id}
+
         """
+
+rule download_kraken_indices:
+    input:
+        "/home/jovyan/rclone-mounts/drive.linked"
+    output:
+        "data/indices/"
+    shell:
+        """
+        mkdir -p data/indices
+        wget --directory-prefix data/kraken-indices https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_08gb_20220607.tar.gz
+        wget --directory-prefix data/kraken-indices https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_16gb_20220607.tar.gz
+        wget --directory-prefix data/kraken-indices https://genome-idx.s3.amazonaws.com/kraken/k2_viral_20220607.tar.gz
+        wget --directory-prefix data/kraken-indices https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_20220607.tar.gz
+        """
+
+# FASTA_IDs=[file.name.replace(".fna", "") for file in os.scandir("data/genomes") if file.is_file() and file.name.endswith(".fna")]
+
+# rule all:
+#     input:
+#         expand("data/genomes/{fasta_id}.fna.fai", fasta_id=FASTA_IDs)
+
+# # snakemake index_genomes --cores all
+# rule index_genomes:
+#     input:
+#         "data/genomes/{fasta_id}.fna"
+#     output:
+#         "data/genomes/{fasta_id}.fna.fai"
+#     params:
+#         fasta_id="{fasta_id}"
+#     shell:
+#         """
+#         samtools faidx {params.fasta_id}
+#         """
 
 # # snakemake decompress_genomes --cores 1
 # rule recompress_genomes:
@@ -39,18 +65,48 @@ rule index_genomes:
 #         """
 
 # https://papermill.readthedocs.io/en/latest/usage-cli.html
-# snakemake download_ncbi_reference_genomes --cores 1
-rule download_ncbi_reference_genomes:
+# snakemake download_all_ncbi_reference_genomes --cores 1
+rule download_all_ncbi_genomes:
     input:
         "/home/jovyan/rclone-mounts/drive.linked"
     output:
-        "data/genomes/downloaded.done"
-    shell:
-        # 10239
+        "data/genomes/{params.taxon_id}/downloaded.done"
+    params:
         # https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10239
-        # have the report title include a timestamp and parameters.yaml hash
+        taxonid=1,
+        db="refseq"
+    shell:
         """
-        papermill --log-output notebooks/scripts/01.download-ncbi-phage-genomes.ipynb reports/01.download-ncbi-phage-genomes.ipynb -p taxon_id 10239 -p data_dir $PWD/data/genomes -p ncbi_database refseq
+        papermill \
+            --log-output \
+            notebooks/scripts/download-ncbi-genomes.ipynb \
+            reports/download-ncbi-genomes.ipynb \
+            -p {params.taxonid} \
+            -p data_dir $PWD/data \
+            -p ncbi_database {params.db}
+        touch {output}
+        """
+
+# https://papermill.readthedocs.io/en/latest/usage-cli.html
+# snakemake download_all_ncbi_reference_genomes --cores 1
+rule download_viral_ncbi_genomes:
+    input:
+        "/home/jovyan/rclone-mounts/drive.linked"
+    output:
+        "data/genomes/{params.taxon_id}/downloaded.done"
+    params:
+        # https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10239
+        taxon_id=10239,
+        db="refseq"
+    shell:
+        """
+        papermill \
+            --log-output \
+            notebooks/scripts/download-ncbi-genomes.ipynb \
+            reports/download-ncbi-genomes.ipynb \
+            -p {params.taxon_id} \
+            -p data_dir $PWD/data \
+            -p ncbi_database {params.db}
         touch {output}
         """
 
@@ -72,35 +128,34 @@ rule mount_google_drive:
         """
         mkdir -p /home/jovyan/rclone-mounts/drive
         rclone mount drive: /home/jovyan/rclone-mounts/drive &
-        touch /home/jovyan/rclone-mounts/drive.mounted
-        """
-# snakemake unmount_google_drive --cores 1
-rule unmount_google_drive:
-    shell:
-        """
-        fusermount -u /home/jovyan/rclone-mounts/drive
-        rm -f /home/jovyan/rclone-mounts/drive.mounted
+        sleep 10
+        touch {output}
         """
 
-# snakemake link_data_directory --cores 1
-rule link_data_directory:
+# snakemake unmount_and_unlink_google_drive --cores 1 && snakemake link_google_drive --cores 1
+
+# snakemake link_google_drive --cores 1
+rule link_google_drive:
     input:
         "/home/jovyan/rclone-mounts/drive.mounted"
     output:
-        "/home/jovyan/rclone-mounts/drive.linked"
+        "/home/jovyan/rclone-mounts/drive.mounted.linked"
     shell:
         """
+        [ -d "/workspaces/$RepositoryName/data" ] && rm /workspaces/$RepositoryName/data
         mkdir -p /home/jovyan/rclone-mounts/drive/Projects/$RepositoryName
         ln -s /home/jovyan/rclone-mounts/drive/Projects/$RepositoryName /workspaces/$RepositoryName/data
-        touch /home/jovyan/rclone-mounts/drive.linked
-        """        
+        touch {output}
+        """
 
-# snakemake unlink_data_directory --cores 1
-rule unlink_data_directory:
+# snakemake unmount_and_unlink_google_drive --cores 1
+rule unmount_and_unlink_google_drive:
     input:
-        "/home/jovyan/rclone-mounts/drive.linked"
+        mounted="/home/jovyan/rclone-mounts/drive.mounted",
+        linked="/home/jovyan/rclone-mounts/drive.mounted.linked"
     shell:
         """
-        rm /workspaces/$RepositoryName/data
-        rm -f /home/jovyan/rclone-mounts/drive.linked
+        fusermount -u /home/jovyan/rclone-mounts/drive || echo "drive not mounted"
+        rm -f {input.mounted}
+        rm -f {input.linked}
         """
