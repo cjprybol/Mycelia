@@ -85,4 +85,4 @@ USER jovyan
 RUN mkdir -p /home/jovyan/.config/rclone/
 COPY rclone.conf /home/jovyan/.config/rclone/rclone.conf
 
-ENV DEFAULT_KERNEL_NAME "julia-1.7"
+# ENV DEFAULT_KERNEL_NAME "julia-1.7"

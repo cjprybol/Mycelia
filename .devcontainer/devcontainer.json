@@ -45,7 +45,7 @@
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "mkdir -p /home/jovyan/rclone-mounts/drive && rclone mount drive: /home/jovyan/rclone-mounts/drive &",
-	"postCreateCommand": "julia -e 'import Pkg; Pkg.develop(path=\"/workspaces/Mycelia\"); import Mycelia' && snakemake unmount_and_unlink_google_drive --cores 1 && snakemake link_google_drive --cores 1",
+	"postCreateCommand": "julia -e 'import Pkg; Pkg.develop(path=\"/workspaces/Mycelia\"); Pkg.build(\"Mycelia\"); import Mycelia' && snakemake unmount_and_unlink_google_drive --cores 1 && snakemake link_google_drive --cores 1",
 
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
 	"remoteUser": "jovyan"

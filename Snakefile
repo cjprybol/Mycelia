@@ -78,7 +78,7 @@ rule download_all_ncbi_genomes:
         papermill \
             --log-output \
             notebooks/scripts/download-ncbi-genomes.ipynb \
-            reports/%(date "+%Y%m%d%H%M%S").download-ncbi-genomes.ipynb \
+            reports/$(date "+%Y%m%d%H%M%S").download-ncbi-genomes.ipynb \
             -p ncbi_database {root_taxon_id} \
             -p data_dir $PWD/data \
             -p ncbi_database {ncbi_db}
@@ -100,7 +100,7 @@ rule download_viral_ncbi_genomes:
         papermill \
             --log-output \
             notebooks/scripts/download-ncbi-genomes.ipynb \
-            reports/%(date "+%Y%m%d%H%M%S").download-ncbi-genomes.ipynb \
+            reports/$(date "+%Y%m%d%H%M%S").download-ncbi-genomes.ipynb \
             -p ncbi_database {viral_taxon_id} \
             -p data_dir $PWD/data \
             -p ncbi_database {ncbi_db}
@@ -117,42 +117,42 @@ rule document:
         snakemake --forceall --dag | dot -Tpdf > dag.pdf
         """
 
-# snakemake mount_google_drive --cores 1
-rule mount_google_drive:
+# snakemake mount_storage --cores 1
+rule mount_storage:
     output:
-        "/home/jovyan/rclone-mounts/drive.mounted"
+        "/home/jovyan/rclone-mounts/storage.mounted"
     shell:
         """
-        mkdir -p /home/jovyan/rclone-mounts/drive
-        rclone mount drive: /home/jovyan/rclone-mounts/drive &
-        sleep 10
+        mkdir -p /home/jovyan/rclone-mounts/storage
+        rclone mount mycelia: /home/jovyan/rclone-mounts/storage &
+        sleep 5
         touch {output}
         """
 
-# snakemake unmount_and_unlink_google_drive --cores 1 && snakemake link_google_drive --cores 1
+# snakemake unmount_and_unlink_storage --cores 1 && snakemake link_storage --cores 1
 
-# snakemake link_google_drive --cores 1
-rule link_google_drive:
+# snakemake link_storage --cores 1
+rule link_storage:
     input:
-        "/home/jovyan/rclone-mounts/drive.mounted"
+        "/home/jovyan/rclone-mounts/storage.mounted"
     output:
-        "/home/jovyan/rclone-mounts/drive.mounted.linked"
+        "/home/jovyan/rclone-mounts/storage.mounted.linked"
     shell:
         """
         [ -d "/workspaces/$RepositoryName/data" ] && rm /workspaces/$RepositoryName/data
-        mkdir -p /home/jovyan/rclone-mounts/drive/Projects/$RepositoryName
-        ln -s /home/jovyan/rclone-mounts/drive/Projects/$RepositoryName /workspaces/$RepositoryName/data
+        mkdir -p /home/jovyan/rclone-mounts/storage
+        ln -s /home/jovyan/rclone-mounts/storage/mycelia-storage /workspaces/$RepositoryName/data
         touch {output}
         """
 
-# snakemake unmount_and_unlink_google_drive --cores 1
-rule unmount_and_unlink_google_drive:
+# snakemake unmount_and_unlink_storage --cores 1
+rule unmount_and_unlink_storage:
     input:
-        mounted="/home/jovyan/rclone-mounts/drive.mounted",
-        linked="/home/jovyan/rclone-mounts/drive.mounted.linked"
+        mounted="/home/jovyan/rclone-mounts/storage.mounted",
+        linked="/home/jovyan/rclone-mounts/storage.mounted.linked"
     shell:
         """
-        fusermount -u /home/jovyan/rclone-mounts/drive || echo "drive not mounted"
+        fusermount -u /home/jovyan/rclone-mounts/storage || echo "storage not mounted"
         rm -f {input.mounted}
         rm -f {input.linked}
         """
