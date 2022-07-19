@@ -88,25 +88,24 @@ rule download_all_ncbi_genomes:
         """
 
 # https://papermill.readthedocs.io/en/latest/usage-cli.html
-# snakemake download_all_ncbi_reference_genomes --cores 1
+# snakemake download_viral_ncbi_genomes --cores 1
+# https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10239
+viral_taxon_id=10239
+ncbi_db = "refseq"
 rule download_viral_ncbi_genomes:
     input:
-        "/home/jovyan/rclone-mounts/drive.linked"
+        "/home/jovyan/rclone-mounts/drive.mounted.linked"
     output:
-        "data/genomes/{params.taxon_id}/downloaded.done"
-    params:
-        # https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=10239
-        taxon_id=10239,
-        db="refseq"
+        f"data/genomes/{viral_taxon_id}/downloaded.done"
     shell:
         """
         papermill \
             --log-output \
             notebooks/scripts/download-ncbi-genomes.ipynb \
             reports/download-ncbi-genomes.ipynb \
-            -p {params.taxon_id} \
+            -p ncbi_database {viral_taxon_id} \
             -p data_dir $PWD/data \
-            -p ncbi_database {params.db}
+            -p ncbi_database {ncbi_db}
         touch {output}
         """
 
