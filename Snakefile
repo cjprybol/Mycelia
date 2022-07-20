@@ -122,9 +122,10 @@ rule mount_storage:
     output:
         "/home/jovyan/rclone-mounts/storage.mounted"
     shell:
+        # https://forum.rclone.org/t/bad-file-descriptor-when-moving-files-to-rclone-mount-point/13936/2
         """
         mkdir -p /home/jovyan/rclone-mounts/storage
-        rclone mount mycelia: /home/jovyan/rclone-mounts/storage &
+        rclone mount --vfs-cache-mode writes mycelia: /home/jovyan/rclone-mounts/storage &
         sleep 5
         touch {output}
         """
