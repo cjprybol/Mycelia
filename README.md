@@ -1,6 +1,8 @@
 # Mycelia
 
-Multiomics knowledge graphs for [characterization](), [discovery](), and [biological design](). 
+! In development !
+
+Multiomics knowledge graphs for [characterization](), [discovery](), and [biological design]().
 
 See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 
