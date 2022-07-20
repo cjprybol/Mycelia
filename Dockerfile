@@ -62,7 +62,8 @@ RUN $CONDA_CHOICE install \
     -c bioconda \
     snakemake \
     taxonkit \
-    samtools
+    samtools \
+    htslib
 
 RUN wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz && \
     tar -zxvf taxdump.tar.gz && \
