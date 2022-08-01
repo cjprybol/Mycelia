@@ -383,7 +383,7 @@ function evaluate_hits(hits, forward_distances, reverse_distances, forward_arriv
     return lowest_cost, optimal_path
 end
 
-function bidirectional_dijkstra(graph, a::T, b::T) where T <: BioSequences.AbstractMer
+function bidirectional_dijkstra(graph, a::T, b::T) where T <: Kmers.Kmer
     forward_distances = DataStructures.DefaultDict{T, Float64}(Inf)
     forward_distances[a] = 0
 
@@ -417,7 +417,7 @@ function bidirectional_dijkstra(graph, a::T, b::T) where T <: BioSequences.Abstr
 end
 
 # # simple point to point
-# function dijkstra(graph, a::T, b::T) where {T <: BioSequences.AbstractMer}
+# function dijkstra(graph, a::T, b::T) where {T <: Kmers.Kmer}
 #     distances = DataStructures.DefaultDict{T, Float64}(Inf)
 #     distances[a] = 0
 
@@ -435,7 +435,7 @@ end
 #     return shortest_path, distances[b]    
 # end
 
-function dijkstra(graph, a::T, targets::Set{T}; search_strategy::Union{Symbol, Missing}=missing) where {T <: BioSequences.AbstractMer}
+function dijkstra(graph, a::T, targets::Set{T}; search_strategy::Union{Symbol, Missing}=missing) where {T <: Kmers.Kmer}
     if ismissing(search_strategy)
         # local breadth first search to find the single target
         # a-b shortest path
@@ -489,7 +489,7 @@ function dijkstra(graph, a::T, targets::Set{T}; search_strategy::Union{Symbol, M
     end
 end
 
-function update_remaining_targets(current_walk::AbstractVector{T}, remaining_targets::AbstractSet{T}) where T <: BioSequences.AbstractMer
+function update_remaining_targets(current_walk::AbstractVector{T}, remaining_targets::AbstractSet{T}) where T <: Kmers.Kmer
     # assess whether targets have been hit in the canonical space
     remaining_targets = setdiff(BioSequences.canonical.(remaining_targets), BioSequences.canonical.(current_walk))
     # blow back out into forward and reverse_complement space

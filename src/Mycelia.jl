@@ -11,7 +11,8 @@ import Distributions
 import Distances
 import DocStringExtensions
 # import GFF3
-import GenomicAnnoations
+import GenomicAnnotations
+import Kmers
 import GraphRecipes
 import Graphs
 import LsqFit
