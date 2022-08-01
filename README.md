@@ -19,6 +19,15 @@ See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://res
 
 ## Related & Relevant Projects & Companies
 
+- https://github.com/SciGraph/SciGraph
+- https://github.com/geneontology/obographs
+- https://github.com/biolink/ontobio
+- https://github.com/biolink/kgx
+- https://github.com/monarch-initiative/biolink-api
+- https://github.com/monarch-initiative/embiggen
+- https://github.com/AnacletoLAB/grape
+- https://github.com/linkml/linkml
+
 - pangenomes
   - [PanTools](https://www.bioinformatics.nl/pangenomics/manual/) ([paper](https://pubmed.ncbi.nlm.nih.gov/27587666/))
   - [BioJulia/GenomeGraphs.jl](https://github.com/BioJulia/GenomeGraphs.jl)
