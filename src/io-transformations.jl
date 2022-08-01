@@ -131,33 +131,35 @@ function cypher(;address, username, password, database, cmd)
     return `cypher-shell --address $address --username $username --password $password --database $(database) --format auto $(cmd)`
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# TODO: uncomment if PR gets merged or switch to GenomicAnnotations
+# https://github.com/BioJulia/GFF3.jl/pull/12
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# A short description of the function
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function open_gff(path::String)
-    if isfile(path)
-        io = open(path)
-    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
-        path = replace(path, r"^ftp:" => "http:")
-        io = IOBuffer(HTTP.get(path).body)
-    else
-        error("unable to locate file $path")
-    end
-    path_base = basename(path)
-    if occursin(r"\.gz$", path_base)
-        io = CodecZlib.GzipDecompressorStream(io)
-#         path_base = replace(path_base, ".gz" => "")
-    end
-    gff_io = GFF3.Reader(io)
-    return gff_io
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function open_gff(path::String)
+#     if isfile(path)
+#         io = open(path)
+#     elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+#         path = replace(path, r"^ftp:" => "http:")
+#         io = IOBuffer(HTTP.get(path).body)
+#     else
+#         error("unable to locate file $path")
+#     end
+#     path_base = basename(path)
+#     if occursin(r"\.gz$", path_base)
+#         io = CodecZlib.GzipDecompressorStream(io)
+# #         path_base = replace(path_base, ".gz" => "")
+#     end
+#     gff_io = GFF3.Reader(io)
+#     return gff_io
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

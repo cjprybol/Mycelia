@@ -10,7 +10,8 @@ import DataStructures
 import Distributions
 import Distances
 import DocStringExtensions
-import GFF3
+# import GFF3
+import GenomicAnnoations
 import GraphRecipes
 import Graphs
 import LsqFit

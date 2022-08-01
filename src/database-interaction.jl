@@ -165,29 +165,31 @@ function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
     end
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# TODO: switch to using GenomicAnnotations if GFF3 package isn't updated
+# PR -> https://github.com/BioJulia/GFF3.jl/pull/12
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
-or get fasta directly from FTP site
+# Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
+# or get fasta directly from FTP site
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function get_gff(;db=""::String, accession=""::String, ftp=""::String)
-    if !isempty(db) && !isempty(accession)
-        # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
-        sleep(0.5)
-        url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=gff3&id=$(accession)"
-        return GFF3.Reader(IOBuffer(HTTP.get(url).body))
-    elseif !isempty(ftp)
-        return GFF3.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
-    else
-        @error "invalid call"
-    end
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function get_gff(;db=""::String, accession=""::String, ftp=""::String)
+#     if !isempty(db) && !isempty(accession)
+#         # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
+#         sleep(0.5)
+#         url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=gff3&id=$(accession)"
+#         return GFF3.Reader(IOBuffer(HTTP.get(url).body))
+#     elseif !isempty(ftp)
+#         return GFF3.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
+#     else
+#         @error "invalid call"
+#     end
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
