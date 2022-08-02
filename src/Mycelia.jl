@@ -71,6 +71,7 @@ end
 
 for f in [
         "database-interaction.jl",
+        "genome-annotations.jl",
         "graph-construction.jl",
         "graph-interaction.jl",
         "graph-polishing.jl",
@@ -78,7 +79,7 @@ for f in [
         "graph-traversal.jl",
         "io-transformations.jl",
         "sequence-interactions.jl",
-#         "viterbi.jl"
+        # "viterbi.jl"
     ]
     include(f)
 end
