@@ -1096,7 +1096,7 @@ end
 
 function fasta_table_to_fasta(fasta_df)
     records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
-    for (i, row) in DataFrames.eachrow(fasta_df)
+    for (i, row) in enumerate(DataFrames.eachrow(fasta_df))
         record = FASTX.FASTA.Record(row["identifier"], row["description"], row["sequence"])
         records[i] = record
     end

@@ -78,6 +78,7 @@ for f in [
         "graph-simplification.jl",
         "graph-traversal.jl",
         "io-transformations.jl",
+        "proteome-analysis.jl",
         "sequence-interactions.jl",
         # "viterbi.jl"
     ]
