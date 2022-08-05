@@ -41,7 +41,7 @@ function generate_all_possible_canonical_kmers(k, alphabet)
     if eltype(alphabet) == BioSymbols.AminoAcid
         return kmers
     elseif eltype(alphabet) == BioSymbols.DNA
-        return BioSequences.DNAMer.(unique!(BioSequences.canonical.(kmers)))
+        return Kmers.Kmer.(unique!(BioSequences.canonical.(kmers)))
     else
         error()
     end
@@ -1064,16 +1064,56 @@ julia> 1 + 1
 2
 ```
 """
+function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_file)
+    open(fasta_amino_acid_file, "w") do io
+        writer = FASTX.FASTA.Writer(io)
+        for record in FASTX.FASTA.Reader(open(fasta_nucleic_acid_file))
+            try
+                raw_seq = FASTX.sequence(record)
+                pruned_seq_length = Int(floor(length(raw_seq)/3)) * 3
+                truncated_seq = raw_seq[1:pruned_seq_length]
+                amino_acid_seq = BioSequences.translate(truncated_seq)
+                amino_acid_record = FASTX.FASTA.Record(FASTX.identifier(record), FASTX.description(record), amino_acid_seq)
+                write(writer, amino_acid_record)
+            catch
+                @warn "unable to translate record", record
+            end
+        end
+        close(writer)
+    end
+    return fasta_amino_acid_file
+end
 
+function fasta_to_table(fasta)
+    collected_fasta = collect(fasta)
+    fasta_df = DataFrames.DataFrame(
+        identifier = FASTX.identifier.(collected_fasta),
+        description = FASTX.description.(collected_fasta),
+        sequence = FASTX.sequence.(collected_fasta)
+    )
+    return fasta_df
+end
 
+function fasta_table_to_fasta(fasta_df)
+    records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
+    for (i, row) in DataFrames.eachrow(fasta_df)
+        record = FASTX.FASTA.Record(row["identifier"], row["description"], row["sequence"])
+        records[i] = record
+    end
+    return records
+end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
+function deduplicate_fasta_file(in_fasta, out_fasta)
+    fasta_df = fasta_to_table(collect(Mycelia.open_fastx(in_fasta)))
+    sort!(fasta_df, "identifier")
+    unique_sequences = DataFrames.combine(DataFrames.groupby(fasta_df, "sequence"), first)
+    fasta = fasta_table_to_fasta(unique_sequences)
+    open(out_fasta, "w") do io
+        writer = FASTX.FASTA.Writer(io)
+        for record in fasta
+            write(writer, record)
+        end
+        close(writer)
+    end
+    return out_fasta
+end
