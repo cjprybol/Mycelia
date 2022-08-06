@@ -46,43 +46,33 @@ import OrderedCollections
 const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
+# const AA_ALPHABET = filter(
+#     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+#     BioSymbols.alphabet(BioSymbols.AminoAcid))
 const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function get_kmer_index(kmers, kmer)
-    index = searchsortedfirst(kmers, kmer)
-    @assert kmers[index] == kmer "$kmer not found in kmer list"
-    return index
-end
-
 # dynamic import of files??
-# @show filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
-
-for f in [
-        "database-interaction.jl",
-        "genome-annotations.jl",
-        "graph-construction.jl",
-        "graph-interaction.jl",
-        "graph-polishing.jl",
-        "graph-simplification.jl",
-        "graph-traversal.jl",
-        "io-transformations.jl",
-        "proteome-analysis.jl",
-        "sequence-interactions.jl",
-        # "viterbi.jl"
-    ]
+all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
+for f in all_julia_files
     include(f)
 end
+
+# for f in [
+#         "database-interaction.jl",
+#         "genome-annotations.jl",
+#         "graph-construction.jl",
+#         "graph-interaction.jl",
+#         "graph-polishing.jl",
+#         "graph-simplification.jl",
+#         "graph-traversal.jl",
+#         "io-transformations.jl",
+#         "proteome-analysis.jl",
+#         "sequence-interactions.jl",
+#         # "viterbi.jl"
+#     ]
+#     include(f)
+# end
 
 end # module
