@@ -55,6 +55,8 @@ const AA_ALPHABET = filter(
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
+# don't import yourself :)
+all_julia_files = filter(x -> x != "Mycelia.jl", all_julia_files)
 for f in all_julia_files
     include(f)
 end

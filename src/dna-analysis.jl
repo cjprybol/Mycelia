@@ -36,7 +36,7 @@ function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=
     
     kmers_assessed = 0
     for fastx in fastxs
-        for record in Mycelia.open_fastx(fastx)
+        for record in open_fastx(fastx)
             for kmer in BioSequences.each(kmer_type, FASTX.sequence(record))
                 canonical_kmer = kmer.fw < kmer.bw ? kmer.fw : kmer.bw
                 push!(canonical_kmers, canonical_kmer)

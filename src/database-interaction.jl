@@ -60,7 +60,7 @@ function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME, PASSWORD)
     cmd = "MATCH (n)<-[*]-(n2) WHERE n.tax_id IS NOT NULL AND n.tax_id = \"$(tax_id)\" RETURN DISTINCT n2.tax_id AS tax_id"
     println(cmd)
     
-    cypher = Mycelia.cypher(cmd, address=ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE)
+    cypher = cypher(cmd, address=ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE)
     tax_ids = readlines(open(cypher))[2:end]
     tax_ids = strip.(tax_ids, '"')
     tax_ids = parse.(Int, tax_ids)

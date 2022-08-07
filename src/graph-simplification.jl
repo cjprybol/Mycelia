@@ -139,10 +139,10 @@
 # function simplify_kmer_graph(kmer_graph)
 #     @info "simplifying kmer graph"
 #     @info "resolving untigs..."
-#     @time untigs = Mycelia.resolve_untigs(kmer_graph)
+#     @time untigs = resolve_untigs(kmer_graph)
 
 #     @info "determining untig orientations..."
-#     @time oriented_untigs = Mycelia.determine_oriented_untigs(kmer_graph, untigs)
+#     @time oriented_untigs = determine_oriented_untigs(kmer_graph, untigs)
 
 #     simplified_graph = MetaGraphs.MetaDiGraph(length(oriented_untigs))
 #     MetaGraphs.set_prop!(simplified_graph, :k, kmer_graph.gprops[:k])
@@ -192,7 +192,7 @@
 #     #             o = true => true
 #                 o = (source_orientation = true, destination_orientation = true)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
@@ -201,7 +201,7 @@
 #     #             o = false => true
 #                 o = (source_orientation = false, destination_orientation = true)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 
@@ -220,7 +220,7 @@
 #     #             o = true => true
 #                 o = (source_orientation = true, destination_orientation = true)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
@@ -229,7 +229,7 @@
 #     #             o = true => false
 #                 o = (source_orientation = true, destination_orientation = false)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 
@@ -249,7 +249,7 @@
 #     #             o = true => false
 #                 o = (source_orientation = true, destination_orientation = false)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_out_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[end-simplified_graph.gprops[:k]+2:end]
@@ -258,7 +258,7 @@
 #     #             o = false => false
 #                 o = (source_orientation = false, destination_orientation = false)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 
@@ -279,7 +279,7 @@
 #     #             o = false => true
 #                 o = (source_orientation = false, destination_orientation = true)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 
 #             neighbor_false_in_overlap = BioSequences.reverse_complement(neighboring_untig.sequence)[1:simplified_graph.gprops[:k]-1]
@@ -288,7 +288,7 @@
 #     #             o = false => false
 #                 o = (source_orientation = false, destination_orientation = false)
 #                 Graphs.add_edge!(simplified_graph, e)
-#                 Mycelia.set_metadata!(simplified_graph, e, :orientations, o)    
+#                 set_metadata!(simplified_graph, e, :orientations, o)    
 #             end
 #         end
 #     end
@@ -386,7 +386,7 @@ function apply_kmedoids_treshold(graph)
     kmer_counts_histogram = sort(collect(StatsBase.countmap(values(kmer_counts))), by=x->x[1])
 
 #     scale = 250
-#     p = Mycelia.plot_kmer_frequency_spectra(values(kmer_counts), size=(2scale,scale), log_scale=log2, title="kmer frequencies")
+#     p = plot_kmer_frequency_spectra(values(kmer_counts), size=(2scale,scale), log_scale=log2, title="kmer frequencies")
 #     display(p)
 
 #     p = StatsPlots.scatter(log2.(first.(kmer_counts_histogram)))
@@ -425,7 +425,7 @@ function apply_kmedoids_treshold(graph)
     threshold = Int(ceil(2^maximum(kmer_depth_of_coverage_bins[.!indices_to_include]))) + 1
 
     scale = 250
-    p = Mycelia.plot_kmer_frequency_spectra(values(kmer_counts), log_scale = log2, size=(2scale,scale), title="kmer frequencies")
+    p = plot_kmer_frequency_spectra(values(kmer_counts), log_scale = log2, size=(2scale,scale), title="kmer frequencies")
     StatsPlots.vline!(p, log2.([threshold]))
     display(p)
 

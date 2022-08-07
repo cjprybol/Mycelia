@@ -166,7 +166,7 @@ end
 # function reverse_oriented_path(oriented_path)
 #     reversed_path = copy(oriented_path)
 #     for (index, state) in enumerate(oriented_path)
-#         reversed_path[index] = Mycelia.OrientedKmer(index = state.index, orientation = !state.orientation)
+#         reversed_path[index] = OrientedKmer(index = state.index, orientation = !state.orientation)
 #     end
 #     return reverse!(reversed_path)
 # end
@@ -186,12 +186,12 @@ end
 #     max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
 #     initial_node_index = rand(max_count_indices)
 #     initial_node = connected_component[initial_node_index]
-#     outgoing_edge_probabilities, incoming_edge_probabilities = Mycelia.determine_edge_probabilities(graph)
-#     forward_walk = maximum_likelihood_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
-#     reverse_walk = maximum_likelihood_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
+#     outgoing_edge_probabilities, incoming_edge_probabilities = determine_edge_probabilities(graph)
+#     forward_walk = maximum_likelihood_walk(graph, [OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
+#     reverse_walk = maximum_likelihood_walk(graph, [OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
 #     reversed_reverse_walk = reverse!(
 #         [
-#             Mycelia.OrientedKmer(index = oriented_kmer.index, orientation = oriented_kmer.orientation)
+#             OrientedKmer(index = oriented_kmer.index, orientation = oriented_kmer.orientation)
 #             for oriented_kmer in reverse_walk[2:end]
 #         ]
 #         )
@@ -208,15 +208,15 @@ end
 # 2
 # ```
 # """
-# function maximum_likelihood_walk(graph, path::Vector{Mycelia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
+# function maximum_likelihood_walk(graph, path::Vector{OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
 #     done = false
 #     while !done
 #         maximum_path_likelihood = 0.0
-#         maximum_likelihood_path = Vector{Mycelia.OrientedKmer}()
+#         maximum_likelihood_path = Vector{OrientedKmer}()
 #         for neighbor in Graphs.neighbors(graph.graph, last(path).index)
 #             this_path = [last(path).index, neighbor]
 #             this_oriented_path, this_path_likelihood = 
-#                 Mycelia.assess_path(this_path,
+#                 assess_path(this_path,
 #                     graph.kmers,
 #                     graph.counts,
 #                     last(path).orientation,
@@ -251,13 +251,13 @@ end
 #     max_count_indices = findall(count -> count == max_count, graph.counts[connected_component])
 #     initial_node_index = rand(max_count_indices)
 #     initial_node = connected_component[initial_node_index]
-#     outgoing_edge_probabilities, incoming_edge_probabilities = Mycelia.determine_edge_probabilities(graph)
+#     outgoing_edge_probabilities, incoming_edge_probabilities = determine_edge_probabilities(graph)
     
 #     # walk forwards from the initial starting node
-#     forward_walk = take_a_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
+#     forward_walk = take_a_walk(graph, [OrientedKmer(index = initial_node, orientation = true)], outgoing_edge_probabilities, incoming_edge_probabilities)
     
 #     # walk backwards from the initial starting node
-#     reverse_walk = take_a_walk(graph, [Mycelia.OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
+#     reverse_walk = take_a_walk(graph, [OrientedKmer(index = initial_node, orientation = false)], outgoing_edge_probabilities, incoming_edge_probabilities)
     
 #     # we need to reverse everything to re-orient against the forward walk
 #     reverse_walk = reverse_oriented_path(reverse_walk)
@@ -279,15 +279,15 @@ end
 # 2
 # ```
 # """
-# function take_a_walk(graph, path::Vector{Mycelia.OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
+# function take_a_walk(graph, path::Vector{OrientedKmer}, outgoing_edge_probabilities, incoming_edge_probabilities)
 #     done = false
 #     while !done
 #         maximum_path_likelihood = 0.0
-#         maximum_likelihood_path = Vector{Mycelia.OrientedKmer}()
+#         maximum_likelihood_path = Vector{OrientedKmer}()
 #         for neighbor in Graphs.neighbors(graph.graph, last(path).index)
 #             this_path = [last(path).index, neighbor]
 #             this_oriented_path, this_path_likelihood = 
-#                 Mycelia.assess_path(this_path,
+#                 assess_path(this_path,
 #                     graph.kmers,
 #                     graph.counts,
 #                     last(path).orientation,
@@ -466,7 +466,7 @@ function dijkstra(graph, a::T, targets::Set{T}; search_strategy::Union{Symbol, M
     
     while !isempty(queue) && !(first(DataStructures.peek(queue)) in targets)
         distances, arrival_paths, queue = 
-            Mycelia.dijkstra_step!(graph, distances, arrival_paths, queue, default_cost = default_cost)
+            dijkstra_step!(graph, distances, arrival_paths, queue, default_cost = default_cost)
     end
     if !isempty(queue)
         discovered_destination = DataStructures.dequeue!(queue)
@@ -554,14 +554,14 @@ function find_graph_core(graph; seed=rand(Int))
         end
         
         forward_source = last(current_walk)
-        forward_walk, forward_distance = Mycelia.dijkstra(graph, forward_source, remaining_targets, search_strategy=:DFS)
+        forward_walk, forward_distance = dijkstra(graph, forward_source, remaining_targets, search_strategy=:DFS)
         current_walk = vcat(current_walk, forward_walk[2:end])
         remaining_targets = update_remaining_targets(current_walk, remaining_targets)
         if isempty(remaining_targets)
             done = true
         else
             reverse_source = BioSequences.reverse_complement(first(current_walk))
-            reverse_walk, reverse_distance = Mycelia.dijkstra(graph, reverse_source, remaining_targets, search_strategy=:DFS)
+            reverse_walk, reverse_distance = dijkstra(graph, reverse_source, remaining_targets, search_strategy=:DFS)
             current_walk = vcat(reverse(BioSequences.reverse_complement.(reverse_walk))[1:end-1], current_walk)
             remaining_targets = update_remaining_targets(current_walk, remaining_targets)
         end

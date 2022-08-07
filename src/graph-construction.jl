@@ -108,7 +108,7 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}
     end
     
     @info "counting kmers"
-    @time kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
+    @time kmer_counts = count_canonical_kmers(KMER_TYPE, fastxs)
     
     @info "initializing graph"
     K = length(keys(kmer_counts))
@@ -140,7 +140,7 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}
 #         @show i, fastx
 #         n_records = count_records(fastx)
 #         p = ProgressMeter.Progress(n_records, 1)
-        for record in Mycelia.open_fastx(fastx)
+        for record in open_fastx(fastx)
             for edge_mer in BioSequences.each(BioSequences.BigDNAMer{k+1}, FASTX.sequence(record))
 #                 add_edge_to_graph(graph, edge_mer, kmers)
                 add_edge_to_simple_kmer_graph!(graph, edge_mer)
@@ -164,14 +164,14 @@ end
 
 # @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, kmers, sequence_edge)
 @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, sequence_edge)
-    observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(sequence_edge.fw)
+    observed_source_kmer, observed_destination_kmer = edgemer_to_vertex_kmers(sequence_edge.fw)
     canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
     canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
     source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
     desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
     
     if source_kmer_index > desination_kmer_index
-        observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(sequence_edge.bw)
+        observed_source_kmer, observed_destination_kmer = edgemer_to_vertex_kmers(sequence_edge.bw)
         canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
         canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
         source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
@@ -234,7 +234,7 @@ end
 
 # function fastx_to_simple_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}; minimum_coverage::Int=1)
 #     @info "counting kmers"
-#     canonical_kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
+#     canonical_kmer_counts = count_canonical_kmers(KMER_TYPE, fastxs)
 #     # hard filter any nodes that are less frequent than minimum coverage threshold
 #     canonical_kmer_counts = filter(canonical_kmer_count -> last(canonical_kmer_count) >= minimum_coverage, canonical_kmer_counts)
 #     simple_kmer_graph = MetaGraphs.MetaDiGraph(length(canonical_kmer_counts))
@@ -255,11 +255,11 @@ end
 #     @info "loading fastx files into graph"
 #     ProgressMeter.@showprogress for fastx in fastxs
 #         n_records = 0
-#         for record in (Mycelia.open_fastx(fastx))
+#         for record in (open_fastx(fastx))
 #             n_records += 1
 #         end
 #         p = ProgressMeter.Progress(n_records, 1)   # minimum update interval: 1 second
-#         for record in (Mycelia.open_fastx(fastx))
+#         for record in (open_fastx(fastx))
 #             sequence = FASTX.sequence(record)
 #             edge_iterator = BioSequences.each(EDGE_MER, sequence)
 #             for sequence_edge in edge_iterator
@@ -359,10 +359,10 @@ end
 
 # function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
 #     @info "assessing kmers"
-#     kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastxs)
+#     kmer_counts = count_canonical_kmers(KMER_TYPE, fastxs)
 # #     kmer_set = Set{KMER_TYPE}()
 # #     for fastxs in fastxs
-# #         kmer_set = union!(kmer_set, collect(keys(Mycelia.count_canonical_kmers(KMER_TYPE, fastxs))))
+# #         kmer_set = union!(kmer_set, collect(keys(count_canonical_kmers(KMER_TYPE, fastxs))))
 # #     end
 # #     kmers = unique(sort(collect(kmer_set)))
     

@@ -282,10 +282,10 @@ end
 # 2
 # ```
 # """
-# function my_plot(graph::Mycelia.KmerGraph)
+# function my_plot(graph::KmerGraph)
 #     graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
 #     filename = "/assets/images/$(graph_hash).svg"
-#     p = Mycelia.plot_graph(graph)
+#     p = plot_graph(graph)
 #     Plots.savefig(p, dirname(pwd()) * filename)
 #     display(p)
 #     display("text/markdown", "![]($filename)")

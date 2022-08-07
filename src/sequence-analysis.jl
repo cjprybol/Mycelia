@@ -94,11 +94,11 @@ julia> 1 + 1
 """
 function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
     if alphabet == :AA
-        canonical_mers = generate_all_possible_canonical_kmers(k, Mycelia.AA_ALPHABET)
+        canonical_mers = generate_all_possible_canonical_kmers(k, AA_ALPHABET)
     elseif alphabet == :DNA
-        canonical_mers = generate_all_possible_canonical_kmers(k, Mycelia.DNA_ALPHABET)
+        canonical_mers = generate_all_possible_canonical_kmers(k, DNA_ALPHABET)
     elseif alphabet == :RNA
-        canonical_mers = generate_all_possible_canonical_kmers(k, Mycelia.RNA_ALPHABET)
+        canonical_mers = generate_all_possible_canonical_kmers(k, RNA_ALPHABET)
     else
         error("invalid alphabet")
     end
@@ -114,16 +114,16 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
         mer_counts_matrix .= 0
         ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
             if alphabet == :DNA
-                entity_mer_counts = Mycelia.count_canonical_kmers(BioSequences.DNAMer{k}, fasta_file)
+                entity_mer_counts = count_canonical_kmers(BioSequences.DNAMer{k}, fasta_file)
             elseif alphabet == :RNA
-                entity_mer_counts = Mycelia.count_canonical_kmers(BioSequences.RNAMer{k}, fasta_file)
+                entity_mer_counts = count_canonical_kmers(BioSequences.RNAMer{k}, fasta_file)
             elseif alphabet == :AA
                 # faa_file = "$(accession).fna.faa"
                 # if !isfile(faa_file)
                 #     run(pipeline(`prodigal -i $(fna_file) -o $(fna_file).genes -a $(faa_file) -p meta`, stderr="$(fna_file).prodigal.stderr"))
                 # end
                 try
-                    entity_mer_counts = count_aamers(k, Mycelia.open_fastx(fasta_file))
+                    entity_mer_counts = count_aamers(k, open_fastx(fasta_file))
                 catch e
                     @warn "investigate possible malformed fasta file $(fasta_file)"
                     # println(e.msg)
@@ -404,7 +404,7 @@ function observe(records::AbstractVector{R};
     fastx_io = FASTX.FASTA.Writer(io)
     for i in 1:N
         record = StatsBase.sample(records, StatsBase.weights(weights))
-        new_seq = Mycelia.observe(FASTX.sequence(record), error_rate=error_rate)
+        new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
         new_seq_id = Random.randstring(Int(ceil(log(length(new_seq) + 1))))
         new_seq_description = FASTX.identifier(record)
         observed_record = FASTX.FASTA.Record(new_seq_id, new_seq_description, new_seq)
@@ -533,7 +533,7 @@ end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, fastx_file::S) where {KMER_TYPE, S <: AbstractString}
     fastx_io = open_fastx(fastx_file)
-    kmer_counts = Mycelia.count_canonical_kmers(KMER_TYPE, fastx_io)
+    kmer_counts = count_canonical_kmers(KMER_TYPE, fastx_io)
     close(fastx_io)
     return kmer_counts
 end
@@ -590,7 +590,7 @@ end
 
 function count_kmers(KMER_TYPE, fastx_file::AbstractString)
     fastx_io = open_fastx(fastx_file)
-    kmer_counts = Mycelia.count_kmers(KMER_TYPE, fastx_io)
+    kmer_counts = count_kmers(KMER_TYPE, fastx_io)
     close(fastx_io)
     return kmer_counts
 end
@@ -758,7 +758,7 @@ julia> 1 + 1
 """
 function count_records(fastx)
     n_records = 0
-    for record in Mycelia.open_fastx(fastx)
+    for record in open_fastx(fastx)
         n_records += 1
     end
     return n_records
@@ -781,7 +781,7 @@ function determine_read_lengths(fastq_file; total_reads = Inf)
     read_lengths = zeros(Int, total_reads)
     @info "determining read lengths"
     p = ProgressMeter.Progress(total_reads, 1)
-    for (i, record) in enumerate(Mycelia.open_fastx(fastq_file))
+    for (i, record) in enumerate(open_fastx(fastq_file))
 #         push!(read_lengths, length(FASTX.sequence(record)))
         read_lengths[i] = length(FASTX.sequence(record))
         ProgressMeter.next!(p)
@@ -801,7 +801,7 @@ julia> 1 + 1
 """
 function determine_max_canonical_kmers(k, APLPHABET)
     max_possible_kmers = determine_max_possible_kmers(k, APLPHABET)
-    if ALPHABET == Mycelia.AA_ALPHABET
+    if ALPHABET == AA_ALPHABET
         return max_possible_kmers
     else
         @assert isodd(k) "this calculation is not valid for even length kmers"
@@ -891,7 +891,7 @@ function fasta_table_to_fasta(fasta_df)
 end
 
 function deduplicate_fasta_file(in_fasta, out_fasta)
-    fasta_df = fasta_to_table(collect(Mycelia.open_fastx(in_fasta)))
+    fasta_df = fasta_to_table(collect(open_fastx(in_fasta)))
     sort!(fasta_df, "identifier")
     unique_sequences = DataFrames.combine(DataFrames.groupby(fasta_df, "sequence"), first)
     fasta = fasta_table_to_fasta(unique_sequences)

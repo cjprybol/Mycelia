@@ -6,9 +6,9 @@ end
 # just drop the parameters id, min-score, max-target-seqs
 function pairwise_diamond(joint_fasta_file)
     if !isfile("$(joint_fasta_file).dmnd")
-        Mycelia.make_diamond_db(joint_fasta_file)
+        make_diamond_db(joint_fasta_file)
     end
-    n_records = Mycelia.count_records(joint_fasta_file)
+    n_records = count_records(joint_fasta_file)
     # max_target_seqs = Int(ceil(sqrt(n_records)))
     @show "here!"
     sensitivity = "--iterate"
@@ -23,6 +23,109 @@ function pairwise_diamond(joint_fasta_file)
     # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
 end
 
+function diamond_line_to_named_tuple(diamond_line)
+    sline = split(line)
+    values_named_tuple = (
+        qseqid = sline[1],
+        sseqid = sline[2],
+        pident = parse(Float64, sline[3]),
+        length = parse(Int, sline[4]),
+        mismatch = parse(Int, sline[5]),
+        gapopen = parse(Int, sline[6]),
+        qlen = parse(Int, sline[7]),
+        qstart = parse(Int, sline[8]),
+        qend = parse(Int, sline[9]),
+        slen = parse(Int, sline[10]),
+        sstart = parse(Int, sline[11]),
+        send = parse(Int, sline[12]),
+        evalue = parse(Float64, sline[13]),
+        bitscore = parse(Float64, sline[14])
+        )
+    return values_named_tuple
+end
+
+function read_diamond_alignments_file(diamond_file)
+    column_names_to_types = [
+        "qseqid" => String,
+        "sseqid" => String,
+        "pident" => Float64,
+        "length" => Int,
+        "mismatch" => Int,
+        "gapopen" => Int,
+        "qlen" => Int,
+        "qstart" => Int,
+        "qend" => Int,
+        "slen" => Int,
+        "sstart" => Int,
+        "send" => Int,
+        "evalue" => Float64,
+        "bitscore" => Float64,
+    ]
+    types = Dict(i => t for (i, t) in enumerate(last.(column_names_to_types)))
+    data, header = uCSV.read(diamond_file, header=1, delim='\t', types = types)
+    # header = first.(column_names_to_types)
+    @assert header == first.(column_names_to_types)
+    table = DataFrames.DataFrame(data, header)
+    return table
+end
+
+# function diamond_alignments_file_to_distance_matrix(diamond_file)
+#     column_names_to_types = [
+#         "qseqid" => String,
+#         "sseqid" => String,
+#         "pident" => Float64,
+#         "length" => Int,
+#         "mismatch" => Int,
+#         "gapopen" => Int,
+#         "qlen" => Int,
+#         "qstart" => Int,
+#         "qend" => Int,
+#         "slen" => Int,
+#         "sstart" => Int,
+#         "send" => Int,
+#         "evalue" => Float64,
+#         "bitscore" => Float64,
+#     ]
+#     types = Dict(i => t for (i, t) in enumerate(last.(column_names_to_types)))
+#     data, header = uCSV.read(diamond_file, header=1, delim='\t', types = types)
+#     # header = first.(column_names_to_types)
+#     @assert header == first.(column_names_to_types)
+#     table = DataFrames.DataFrame(data, header)
+#     return table
+# end
+
+function add_header_to_diamond_file(infile, outfile=replace(infile, ".tsv" => ".with-header.tsv"))
+    column_names = [
+        "qseqid",
+        "sseqid",
+        "pident",
+        "length",
+        "mismatch",
+        "gapopen",
+        "qlen",
+        "qstart",
+        "qend",
+        "slen",
+        "sstart",
+        "send",
+        "evalue",
+        "bitscore"
+    ]
+    # dangerous but fast
+    # try
+    #     inserted_text = join(columns_names, '\t') * '\n'
+    #     sed_cmd = "1s/^/$(inserted_text)/"
+    #     full_cmd = `sed -i $sed_cmd $infile`
+    # catch
+    open(outfile, "w") do io
+        println(io, join(column_names, "\t"))
+        for line in eachline(infile)
+            println(io, line)
+        end
+    end
+    return outfile
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -33,11 +136,11 @@ julia> 1 + 1
 2
 ```
 """
-function each_aamer(k, sequence::{<:BioSequences.LongSeq})
+function each_aamer(k, sequence::T) where T <: BioSequences.BioSequence
     return (sequence[i:i+k-1] for i in 1:length(sequence)-k+1)
 end
 
-function each_aamer(k, record::{FASTX.FASTA.Record})
+function each_aamer(k, record::FASTX.FASTA.Record)
     return each_aamer(k, FASTX.sequence(record))
 end
 
@@ -98,7 +201,7 @@ julia> 1 + 1
 ```
 """
 function count_aamers_by_record(k, fastx_file)
-    return Dict(FASTX.identifier(record) => count_aamers(k, record) for record in Mycelia.open_fastx(fastx_file))
+    return Dict(FASTX.identifier(record) => count_aamers(k, record) for record in open_fastx(fastx_file))
 end
 
 # """
@@ -112,7 +215,7 @@ end
 # ```
 # """
 # function count_aamers_by_file(k, fastx_file)
-#     kmer_counts = StatsBase.countmap(each_aamer(k, record) for record in Mycelia.open_fastx(fastx_file))
+#     kmer_counts = StatsBase.countmap(each_aamer(k, record) for record in open_fastx(fastx_file))
 #     kmer_counts = sort(kmer_counts)
 #     kmer_counts_table = 
 #     DataFrames.DataFrame(
@@ -139,7 +242,7 @@ end
 #         kmer = BioSequences.LongAminoAcidSeq[],
 #         count = Int[]
 #         )
-#     for record in Mycelia.open_fastx(fastx_file)
+#     for record in open_fastx(fastx_file)
 #         kmer_counts = StatsBase.countmap(each_aamer(k, record))
 #         kmer_counts = sort(kmer_counts)
 #         for (kmer, count) in sort(kmer_counts)
@@ -168,7 +271,7 @@ julia> 1 + 1
 function assess_aamer_saturation(fastxs, k; kmers_to_assess=Inf, power=10)
     kmers = Set{BioSequences.LongAASeq}()
     
-    max_possible_kmers = determine_max_possible_kmers(k, Mycelia.AA_ALPHABET)
+    max_possible_kmers = determine_max_possible_kmers(k, AA_ALPHABET)
     
     if kmers_to_assess == Inf
         kmers_to_assess = max_possible_kmers
@@ -192,7 +295,7 @@ function assess_aamer_saturation(fastxs, k; kmers_to_assess=Inf, power=10)
     
     kmers_assessed = 0
     for fastx in fastxs
-        for record in Mycelia.open_fastx(fastx)
+        for record in open_fastx(fastx)
             
             for kmer in each_aamer(k, FASTX.sequence(record))
                 push!(kmers, canonical_kmer)
@@ -229,7 +332,7 @@ function assess_aamer_saturation(fastxs; outdir="", min_k=1, max_k=15, threshold
     midpoint = Inf
     for k in ks
         kmers_to_assess = 10_000_000
-        max_possible_kmers = determine_max_possible_kmers(k, Mycelia.AA_ALPHABET)
+        max_possible_kmers = determine_max_possible_kmers(k, AA_ALPHABET)
         sampling_points, kmer_counts, hit_eof = assess_aamer_saturation(fastxs, k, kmers_to_assess=kmers_to_assess)
         @show sampling_points, kmer_counts, hit_eof
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))

@@ -21,7 +21,7 @@
     
 #     polished_fastq_file = replace(fastq_file, ".fastq" => ".k$k.d$(min_depth).fastq")
 
-#     transition_probabilities = Mycelia.initialize_transition_probabilities(filtered_simple_kmer_graph)
+#     transition_probabilities = initialize_transition_probabilities(filtered_simple_kmer_graph)
 #     state_likelihoods = [Float64(filtered_simple_kmer_graph.vprops[v][:weight]) for v in Graphs.vertices(filtered_simple_kmer_graph)]
 #     state_likelihoods ./= sum(state_likelihoods)
     
@@ -141,7 +141,7 @@
 #                         offset = 0
 #                         observed_sequence = FASTX.sequence(fastx_record)[bubble_start+k-1-offset:i-1+offset]                    
 #                         for (i, oriented_candidate_path) in enumerate(oriented_candidate_paths)
-#                             candidate_sequence = Mycelia.oriented_path_to_sequence(
+#                             candidate_sequence = oriented_path_to_sequence(
 #                                 filtered_simple_kmer_graph, 
 #                                 oriented_candidate_path)
 #                             candidate_sequence = candidate_sequence[k+1-offset:end-k+offset]
@@ -151,7 +151,7 @@
 #                                 observed_sequence)
 # #                             @show alignment_result
 #     #                         @show alignment_result
-#                             average_error_rate = Statistics.mean(Mycelia.q_value_to_error_rate.(FASTX.quality(fastx_record)))
+#                             average_error_rate = Statistics.mean(q_value_to_error_rate.(FASTX.quality(fastx_record)))
 #                             for error in 1:alignment_result.value
 #                                 candidate_path_probabilities[i] *= average_error_rate
 #                             end
@@ -172,7 +172,7 @@
 #             end
 #         end
 #     #     @show updated_path
-#         sequence = Mycelia.oriented_path_to_sequence(filtered_simple_kmer_graph, updated_path)
+#         sequence = oriented_path_to_sequence(filtered_simple_kmer_graph, updated_path)
 #         alignment_result = BioAlignments.pairalign(
 #             BioAlignments.LevenshteinDistance(),
 #             sequence,
@@ -203,7 +203,7 @@
 # 2
 # ```
 # """
-# function assess_observations(graph::Mycelia.KmerGraph{KMER_TYPE}, observations, error_rate; verbose = isinteractive()) where {KMER_TYPE}
+# function assess_observations(graph::KmerGraph{KMER_TYPE}, observations, error_rate; verbose = isinteractive()) where {KMER_TYPE}
 #     k = last(KMER_TYPE.parameters)
 #     total_edits_accepted = 0
 #     total_bases_evaluated = 0
@@ -211,8 +211,8 @@
 #     maximum_likelihood_observations = Vector{BioSequences.LongDNASeq}(undef, length(observations))
 #     for (observation_index, observation) in enumerate(observations)
 #         if length(observation) >= k
-#             optimal_path, edit_distance, relative_likelihood = Mycelia.viterbi_maximum_likelihood_path(graph, observation, error_rate)
-#             maximum_likelihood_observation = Mycelia.oriented_path_to_sequence(optimal_path, graph.kmers)
+#             optimal_path, edit_distance, relative_likelihood = viterbi_maximum_likelihood_path(graph, observation, error_rate)
+#             maximum_likelihood_observation = oriented_path_to_sequence(optimal_path, graph.kmers)
 #             maximum_likelihood_observations[observation_index] = maximum_likelihood_observation
 #             reads_processed += 1
 #             total_bases_evaluated += length(observation)
@@ -248,7 +248,7 @@
 # function iterate_until_convergence(ks, observations, error_rate)
 #     graph = nothing
 #     for k in ks
-#         graph = Mycelia.KmerGraph(BioSequences.DNAMer{k}, observations)
+#         graph = KmerGraph(BioSequences.DNAMer{k}, observations)
 #         observations, has_converged = assess_observations(graph, observations, error_rate; verbose = verbose)
 #     end
 #     return graph, observations
@@ -290,7 +290,7 @@
 #     end
     
 #     KmerType = first(typeof(graph).parameters)
-#     pruned_graph = Mycelia.KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
+#     pruned_graph = KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
     
 #     return pruned_graph
 # end
