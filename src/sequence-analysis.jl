@@ -333,16 +333,6 @@ function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Reco
     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     
     new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
