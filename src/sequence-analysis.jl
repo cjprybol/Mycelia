@@ -799,8 +799,8 @@ julia> 1 + 1
 2
 ```
 """
-function determine_max_canonical_kmers(k, APLPHABET)
-    max_possible_kmers = determine_max_possible_kmers(k, APLPHABET)
+function determine_max_canonical_kmers(k, ALPHABET)
+    max_possible_kmers = determine_max_possible_kmers(k, ALPHABET)
     if ALPHABET == AA_ALPHABET
         return max_possible_kmers
     else
@@ -819,7 +819,7 @@ julia> 1 + 1
 2
 ```
 """
-function determine_max_possible_kmers(k, APLPHABET)
+function determine_max_possible_kmers(k, ALPHABET)
     return length(ALPHABET)^k
 end
 
