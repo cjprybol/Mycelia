@@ -333,15 +333,6 @@ function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Reco
     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
 end
 
-function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    
-    new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
-    new_seq_id = string(hash(new_seq)) * "-" * Random.randstring(32)
-    new_seq_description = FASTX.identifier(record)
-    quality = fill(UInt8(60), length(new_seq))
-    return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
-end
-
 function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where T
     
     if T <: BioSequences.DNAAlphabet

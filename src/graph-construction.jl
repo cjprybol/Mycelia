@@ -8,6 +8,76 @@ julia> 1 + 1
 2
 ```
 """
+function add_fastx_to_graph!(graph, fastx_files::AbstractVector{<:AbstractString})
+    for fastx_file in fastx_files
+        add_fastx_to_graph!(graph, fastx_file)
+    end
+    return graph
+end
+
+function add_fastx_to_graph!(graph, fastx_file::AbstractString)
+    for record in Mycelia.open_fastx(fastx_file)
+        add_fastx_record_to_graph!(graph, record)
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_fastx_record_to_graph!(graph, record::FASTX.FASTA.Record)
+    
+    Graphs.add_vertex!(graph)
+    vertex_id = Graphs.nv(graph)
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
+    
+    sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+    MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
+    
+    return graph
+end
+    
+function add_fastx_record_to_graph!(graph, record::FASTX.FASTQ.Record)
+    Graphs.add_vertex!(graph)
+    vertex_id = Graphs.nv(graph)
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
+    
+    sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+    MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
+    
+    MetaGraphs.set_prop!(graph, vertex_id, :quality, FASTX.quality_scores(record))
+    
+    return graph
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function construct(KMER_TYPE, fastx, out)
     mkpath(dirname(out))
     if !occursin(r"\.jld2$", out)
