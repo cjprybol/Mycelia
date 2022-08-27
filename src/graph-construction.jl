@@ -8,6 +8,80 @@ julia> 1 + 1
 2
 ```
 """
+function add_key_value_pair_to_node!(graph, identifier, key, value)
+    node_id = graph[identifier, :identifier]
+    MetaGraphs.set_prop!(graph, node_id, Symbol(key), value)
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_metadata_to_node!(graph, identifier, metadata::AbstractVector{<:Pair})
+    for (key, value) in metadata
+        add_key_value_pair_to_node!(graph, identifier, key, value)
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_metadata_to_graph!(graph, metadata_dict::AbstractDict)
+    for (identifier, metadata) in metadata_dict
+        add_metadata_to_node!(graph, identifier, collect(metadata))
+    end
+    return graph
+end
+
+# need to get identifier column and then all non-identifier columns and then pass that to above
+# function add_metadata_to_graph!(graph, metadata_table::DataFrames.AbstractDataFrame)
+#     for (identifier, metadata) in metadata_dict
+#         add_metadata_to_node!(graph, identifier, collect(metadata))
+#     end
+#     return graph
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function initialize_graph()
+    graph = MetaGraphs.MetaDiGraph()
+    MetaGraphs.set_indexing_prop!(graph, :identifier)
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function add_fastx_to_graph!(graph, fastx_files::AbstractVector{<:AbstractString})
     for fastx_file in fastx_files
         add_fastx_to_graph!(graph, fastx_file)
@@ -34,18 +108,22 @@ julia> 1 + 1
 """
 function add_fastx_record_to_graph!(graph, record::FASTX.FASTA.Record)
     
-    Graphs.add_vertex!(graph)
-    vertex_id = Graphs.nv(graph)
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
-    
-    sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
-    MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
-    
+    try
+        graph[FASTX.identifier(record), :identifier]
+        @info "node $(FASTX.identifier(record)) already present"
+    catch
+        Graphs.add_vertex!(graph)
+        vertex_id = Graphs.nv(graph)
+
+        MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
+
+        MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
+
+        MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
+
+        sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+        MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
+    end
     return graph
 end
     
