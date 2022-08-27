@@ -9,7 +9,7 @@ julia> 1 + 1
 2
 ```
 """
-function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=10, min_count = 1)
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer_type; kmers_to_assess=Inf, power=10, min_count = 1)
     # canonical_kmers = Set{kmer_type}()
     canonical_kmer_counts = Dict{kmer_type, Int}()
     
@@ -74,8 +74,7 @@ function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs; outdir="", min_k=3, max_k=31, threshold=0.1)
-    
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; outdir="", min_k=3, max_k=31, threshold=0.1)
     if isempty(outdir)
         outdir = joinpath(pwd(), "kmer-saturation")
     end
@@ -145,4 +144,8 @@ function assess_dnamer_saturation(fastxs; outdir="", min_k=3, max_k=31, threshol
             return k
         end
     end
+end
+
+function assess_dnamer_saturation(fastx::AbstractString; outdir="", min_k=3, max_k=31, threshold=0.1)
+    assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold)
 end
