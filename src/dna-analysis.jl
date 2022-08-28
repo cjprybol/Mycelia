@@ -9,11 +9,13 @@ julia> 1 + 1
 2
 ```
 """
-function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=10, min_count = 1)
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer_type; kmers_to_assess=Inf, power=10, min_count = 1)
     # canonical_kmers = Set{kmer_type}()
     canonical_kmer_counts = Dict{kmer_type, Int}()
     
+    @show kmer_type
     k = Kmers.ksize(Kmers.kmertype(kmer_type))
+    # kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{2},31})
     
     max_possible_kmers = determine_max_canonical_kmers(k, DNA_ALPHABET)
     
@@ -42,8 +44,10 @@ function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=
     
     kmers_assessed = 0
     for fastx in fastxs
-        for record in open_fastx(fastx)
-            for (index, canonical_kmer) in Kmers.EveryCanonicalKmer{Kmers.DNAKmer{k}}(FASTX.sequence(record))
+        for record in open_fastx(fastx)      
+            record_sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+            for (index, kmer) in Kmers.EveryKmer{kmer_type}(record_sequence)
+                canonical_kmer = BioSequences.canonical(kmer)
                 if haskey(canonical_kmer_counts, canonical_kmer)
                     canonical_kmer_counts[canonical_kmer] += 1
                 else
@@ -70,8 +74,7 @@ function assess_dnamer_saturation(fastxs, kmer_type; kmers_to_assess=Inf, power=
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs; outdir="", min_k=3, max_k=31, threshold=0.1)
-    
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; outdir="", min_k=3, max_k=31, threshold=0.1)
     if isempty(outdir)
         outdir = joinpath(pwd(), "kmer-saturation")
     end
@@ -81,7 +84,8 @@ function assess_dnamer_saturation(fastxs; outdir="", min_k=3, max_k=31, threshol
     minimum_saturation = Inf
     midpoint = Inf
     for k in ks
-        kmer_type = Kmers.DNAKmer{k}
+        # kmer_type = Kmers.Kmers.DNAKmer{k}
+        kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{2},k})
         kmers_to_assess = 10_000_000
         sampling_points, kmer_counts, hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
         @show sampling_points, kmer_counts, hit_eof
@@ -140,4 +144,8 @@ function assess_dnamer_saturation(fastxs; outdir="", min_k=3, max_k=31, threshol
             return k
         end
     end
+end
+
+function assess_dnamer_saturation(fastx::AbstractString; outdir="", min_k=3, max_k=31, threshold=0.1)
+    assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold)
 end

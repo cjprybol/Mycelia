@@ -154,8 +154,8 @@ julia> 1 + 1
 """
 function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
-        # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
-        sleep(0.5)
+        # API will block if we request more than 3 times per second, so set a 1/3 second sleep to set max of 3 requests per second when looping
+        sleep(0.34)
         url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=fasta&id=$(accession)"
         return FASTX.FASTA.Reader(IOBuffer(HTTP.get(url).body))
     elseif !isempty(ftp)
