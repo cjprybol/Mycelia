@@ -10,7 +10,7 @@ import DataStructures
 import Distributions
 import Distances
 import DocStringExtensions
-# import GFF3
+import GFF3
 import GenomicAnnotations
 import Kmers
 import GraphRecipes
@@ -18,10 +18,10 @@ import Graphs
 import LsqFit
 import MetaGraphs
 import Plots
-import PrettyTables
+# import PrettyTables
 import Primes
 import Random
-import SparseArrays
+# import SparseArrays
 import Statistics
 import StatsBase
 import StatsPlots

@@ -483,7 +483,7 @@ julia> 1 + 1
 """
 function count_canonical_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
     canonical_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    canonical_kmer_iterator = (BioSequences.canonical(kmer.fw) for kmer in BioSequences.each(KMER_TYPE, sequence))
+    canonical_kmer_iterator = Kmers.EveryCanonicalKmer{KMER_TYPE}(sequence)
     for canonical_kmer in canonical_kmer_iterator
         canonical_kmer_counts[canonical_kmer] = get(canonical_kmer_counts, canonical_kmer, 0) + 1
     end
