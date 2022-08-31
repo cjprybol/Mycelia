@@ -164,3 +164,5 @@ function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
         @error "invalid call"
     end
 end
+
+# function ncbi_datasets_download_by_taxon_id

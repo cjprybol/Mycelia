@@ -13,12 +13,12 @@ function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
     kmer_vectors = collect.(vec(collect(kmer_iterator)))
     if eltype(alphabet) == BioSymbols.AminoAcid
-        kmers = BioSequences.LongAminoAcidSeq.(kmer_vectors)
+        kmers = BioSequences.LongAA.(kmer_vectors)
         # filter out any kmers where the stop codon is not the last codon
         # may want to add a similar filter step for if the start codon is not the first codon
         # filter!(kmer -> any(BioSymbols.isterm.(kmer[1:end-1])), kmers)     
     elseif eltype(alphabet) == BioSymbols.DNA
-        kmers = BioSequences.LongDNASeq.(kmer_vectors)
+        kmers = Kmers.DNAKmer.(BioSequences.LongDNA{2}.(kmer_vectors))
     else
         error()
     end
@@ -41,7 +41,7 @@ function generate_all_possible_canonical_kmers(k, alphabet)
     if eltype(alphabet) == BioSymbols.AminoAcid
         return kmers
     elseif eltype(alphabet) in (BioSymbols.DNA, BioSymbols.RNA)
-        return Kmers.Kmer.(unique!(BioSequences.canonical.(kmers)))
+        return Kmers.DNAKmer.(unique!(BioSequences.canonical.(kmers)))
     else
         error()
     end
