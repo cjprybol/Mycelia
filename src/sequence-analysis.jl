@@ -239,12 +239,12 @@ julia> 1 + 1
 ```
 """
 function counts_matrix_to_cosine_distance_matrix(counts_table)
-    # TODO, if a file path is provided, make this a mmap table and return that
-    distance_matrix = zeros(size(counts_table, 2), size(counts_table, 2))
-    for i1 in 1:size(counts_table, 2)
-        for i2 in i1+1:size(counts_table, 2)
-            a = counts_table[:, i1]
-            b = counts_table[:, i2]
+    n_entities = size(counts_table, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = counts_table[:, entity_1_index]
+            b = counts_table[:, entity_2_index]
             sa = sum(a)
             sb = sum(b)
             size_dist = 1-(min(sa, sb)/max(sa, sb))
@@ -262,23 +262,30 @@ function counts_matrix_to_cosine_distance_matrix(counts_table)
 end
 
 function counts_matrix_to_euclidean_distance_matrix(counts_table)
-    # TODO, if a file path is provided, make this a mmap table and return that
-    distance_matrix = zeros(size(counts_table, 2), size(counts_table, 2))
-    for i1 in 1:size(counts_table, 2)
-        for i2 in i1+1:size(counts_table, 2)
-            a = counts_table[:, i1]
-            b = counts_table[:, i2]
-            sa = sum(a)
-            sb = sum(b)
-            size_dist = 1-(min(sa, sb)/max(sa, sb))
-            cosine_dist = Distances.cosine_dist(a, b)
-            distances = filter(x -> x > 0, (size_dist, cosine_dist))
-            if isempty(distances)
-                dist = 0.0
-            else
-                dist = reduce(*, distances)
-            end
-            distance_matrix[i1, i2] = distance_matrix[i2, i1] = dist
+    n_entities = size(counts_table, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = counts_table[:, entity_1_index]
+            b = counts_table[:, entity_2_index]
+            distance_matrix[i1, i2] = 
+                distance_matrix[i2, i1] = 
+                Distances.eucliean(a, b)
+        end
+    end
+    return distance_matrix
+end
+
+function probability_matrix_to_cosine_distance_matrix(probability_matrix)
+    n_entities = size(probability_matrix, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = probability_matrix[:, entity_1_index]
+            b = probability_matrix[:, entity_2_index]
+            distance_matrix[i1, i2] = 
+                distance_matrix[i2, i1] = 
+                Distances.cosine_dist(a, b)
         end
     end
     return distance_matrix
