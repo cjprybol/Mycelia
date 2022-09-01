@@ -164,12 +164,14 @@ julia> 1 + 1
 2
 ```
 """
-function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
-    probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
-    already_there = isfile(probability_matrix_file)
+function count_matrix_to_probability_matrix(
+        counts_matrix,
+        probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
+    )
     probability_matrix = Mmap.mmap(probability_matrix_file, Array{Float64, 2}, size(counts_matrix))
-    if !already_there
+    if !isfile(probability_matrix_file)
         println("creating new probability matrix $probability_matrix_file")
+        # probability_matrix .= count_matrix_to_probability_matrix(counts_matrix)
         for (i, col) in enumerate(eachcol(counts_matrix))
             probability_matrix[:, i] .= col ./ sum(col)
         end
@@ -177,6 +179,14 @@ function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
         println("probability matrix found $probability_matrix_file")
     end
     return probability_matrix, probability_matrix_file
+end
+
+function count_matrix_to_probability_matrix(counts_matrix)
+    probability_matrix = zeros(size(counts_matrix))
+    for (i, col) in enumerate(eachcol(counts_matrix))
+        probability_matrix[:, i] .= col ./ sum(col)
+    end
+    return probability_matrix
 end
 
 """
@@ -478,7 +488,7 @@ function count_canonical_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSeq
     for (index, canonical_kmer) in canonical_kmer_iterator
         canonical_kmer_counts[canonical_kmer] = get(canonical_kmer_counts, canonical_kmer, 0) + 1
     end
-    return canonical_kmer_counts
+    return sort!(canonical_kmer_counts)
 end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
@@ -491,7 +501,7 @@ function count_canonical_kmers(::Type{KMER_TYPE}, sequences::AbstractVector{T}) 
         sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
         merge!(+, joint_kmer_counts, sequence_kmer_counts)
     end
-    sort!(joint_kmer_counts)
+    return sort!(joint_kmer_counts)
 end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
@@ -500,7 +510,7 @@ function count_canonical_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE
         sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
         merge!(+, joint_kmer_counts, sequence_kmer_counts)
     end
-    sort!(joint_kmer_counts)
+    return sort!(joint_kmer_counts)
 end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{S}) where {KMER_TYPE, S <: AbstractString}
