@@ -270,7 +270,7 @@ function counts_matrix_to_euclidean_distance_matrix(counts_table)
             b = counts_table[:, entity_2_index]
             distance_matrix[i1, i2] = 
                 distance_matrix[i2, i1] = 
-                Distances.eucliean(a, b)
+                Distances.euclidean(a, b)
         end
     end
     return distance_matrix
