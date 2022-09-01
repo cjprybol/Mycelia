@@ -1,3 +1,12 @@
+function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
+    kmer_counts_vector = zeros(length(kmer_to_index_map))
+    for (kmer, count) in kmer_counts
+        kmer_index = kmer_to_index_map[kmer]
+        kmer_counts_vector[kmer_index] = count
+    end
+    return kmer_counts_vector
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -255,7 +264,8 @@ function counts_matrix_to_cosine_distance_matrix(counts_table)
             else
                 dist = reduce(*, distances)
             end
-            distance_matrix[i1, i2] = distance_matrix[i2, i1] = dist
+            distance_matrix[entity_1_index, entity_2_index] = 
+                distance_matrix[entity_2_index, entity_1_index] = dist
         end
     end
     return distance_matrix
@@ -268,8 +278,8 @@ function counts_matrix_to_euclidean_distance_matrix(counts_table)
         for entity_2_index in entity_1_index+1:n_entities
             a = counts_table[:, entity_1_index]
             b = counts_table[:, entity_2_index]
-            distance_matrix[i1, i2] = 
-                distance_matrix[i2, i1] = 
+            distance_matrix[entity_1_index, entity_2_index] = 
+                distance_matrix[entity_2_index, entity_1_index] = 
                 Distances.euclidean(a, b)
         end
     end
@@ -283,8 +293,8 @@ function probability_matrix_to_cosine_distance_matrix(probability_matrix)
         for entity_2_index in entity_1_index+1:n_entities
             a = probability_matrix[:, entity_1_index]
             b = probability_matrix[:, entity_2_index]
-            distance_matrix[i1, i2] = 
-                distance_matrix[i2, i1] = 
+            distance_matrix[entity_1_index, entity_2_index] = 
+                distance_matrix[entity_2_index, entity_1_index] = 
                 Distances.cosine_dist(a, b)
         end
     end
