@@ -247,7 +247,7 @@ julia> 1 + 1
 2
 ```
 """
-function counts_matrix_to_cosine_distance_matrix(counts_table)
+function counts_matrix_to_size_normalized_cosine_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
     distance_matrix = zeros(n_entities, n_entities)
     for entity_1_index in 1:n_entities
@@ -271,7 +271,7 @@ function counts_matrix_to_cosine_distance_matrix(counts_table)
     return distance_matrix
 end
 
-function counts_matrix_to_euclidean_distance_matrix(counts_table)
+function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
     distance_matrix = zeros(n_entities, n_entities)
     for entity_1_index in 1:n_entities
@@ -286,7 +286,7 @@ function counts_matrix_to_euclidean_distance_matrix(counts_table)
     return distance_matrix
 end
 
-function probability_matrix_to_cosine_distance_matrix(probability_matrix)
+function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
     n_entities = size(probability_matrix, 2)
     distance_matrix = zeros(n_entities, n_entities)
     for entity_1_index in 1:n_entities
