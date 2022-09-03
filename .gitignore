@@ -9,3 +9,4 @@ docs/build/
 docs/src
 data
 .snakemake
+notebooks/scripts/kmer-saturation*
