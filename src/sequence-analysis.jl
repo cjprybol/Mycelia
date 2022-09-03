@@ -1,3 +1,12 @@
+function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
+    kmer_counts_vector = zeros(length(kmer_to_index_map))
+    for (kmer, count) in kmer_counts
+        kmer_index = kmer_to_index_map[kmer]
+        kmer_counts_vector[kmer_index] = count
+    end
+    return kmer_counts_vector
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -13,12 +22,12 @@ function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
     kmer_vectors = collect.(vec(collect(kmer_iterator)))
     if eltype(alphabet) == BioSymbols.AminoAcid
-        kmers = BioSequences.LongAminoAcidSeq.(kmer_vectors)
+        kmers = BioSequences.LongAA.(kmer_vectors)
         # filter out any kmers where the stop codon is not the last codon
         # may want to add a similar filter step for if the start codon is not the first codon
         # filter!(kmer -> any(BioSymbols.isterm.(kmer[1:end-1])), kmers)     
     elseif eltype(alphabet) == BioSymbols.DNA
-        kmers = BioSequences.LongDNASeq.(kmer_vectors)
+        kmers = Kmers.DNAKmer.(BioSequences.LongDNA{2}.(kmer_vectors))
     else
         error()
     end
@@ -41,7 +50,7 @@ function generate_all_possible_canonical_kmers(k, alphabet)
     if eltype(alphabet) == BioSymbols.AminoAcid
         return kmers
     elseif eltype(alphabet) in (BioSymbols.DNA, BioSymbols.RNA)
-        return Kmers.Kmer.(unique!(BioSequences.canonical.(kmers)))
+        return Kmers.DNAKmer.(unique!(BioSequences.canonical.(kmers)))
     else
         error()
     end
@@ -164,12 +173,14 @@ julia> 1 + 1
 2
 ```
 """
-function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
-    probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
-    already_there = isfile(probability_matrix_file)
+function count_matrix_to_probability_matrix(
+        counts_matrix,
+        probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
+    )
     probability_matrix = Mmap.mmap(probability_matrix_file, Array{Float64, 2}, size(counts_matrix))
-    if !already_there
+    if !isfile(probability_matrix_file)
         println("creating new probability matrix $probability_matrix_file")
+        # probability_matrix .= count_matrix_to_probability_matrix(counts_matrix)
         for (i, col) in enumerate(eachcol(counts_matrix))
             probability_matrix[:, i] .= col ./ sum(col)
         end
@@ -177,6 +188,14 @@ function count_matrix_to_probability_matrix(counts_matrix, counts_matrix_file)
         println("probability matrix found $probability_matrix_file")
     end
     return probability_matrix, probability_matrix_file
+end
+
+function count_matrix_to_probability_matrix(counts_matrix)
+    probability_matrix = zeros(size(counts_matrix))
+    for (i, col) in enumerate(eachcol(counts_matrix))
+        probability_matrix[:, i] .= col ./ sum(col)
+    end
+    return probability_matrix
 end
 
 """
@@ -228,13 +247,13 @@ julia> 1 + 1
 2
 ```
 """
-function counts_matrix_to_distance_matrix(counts_table)
-    # TODO, if a file path is provided, make this a mmap table and return that
-    distance_matrix = zeros(size(counts_table, 2), size(counts_table, 2))
-    for i1 in 1:size(counts_table, 2)
-        for i2 in i1+1:size(counts_table, 2)
-            a = counts_table[:, i1]
-            b = counts_table[:, i2]
+function counts_matrix_to_size_normalized_cosine_distance_matrix(counts_table)
+    n_entities = size(counts_table, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = counts_table[:, entity_1_index]
+            b = counts_table[:, entity_2_index]
             sa = sum(a)
             sb = sum(b)
             size_dist = 1-(min(sa, sb)/max(sa, sb))
@@ -245,7 +264,38 @@ function counts_matrix_to_distance_matrix(counts_table)
             else
                 dist = reduce(*, distances)
             end
-            distance_matrix[i1, i2] = distance_matrix[i2, i1] = dist
+            distance_matrix[entity_1_index, entity_2_index] = 
+                distance_matrix[entity_2_index, entity_1_index] = dist
+        end
+    end
+    return distance_matrix
+end
+
+function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+    n_entities = size(counts_table, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = counts_table[:, entity_1_index]
+            b = counts_table[:, entity_2_index]
+            distance_matrix[entity_1_index, entity_2_index] = 
+                distance_matrix[entity_2_index, entity_1_index] = 
+                Distances.euclidean(a, b)
+        end
+    end
+    return distance_matrix
+end
+
+function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
+    n_entities = size(probability_matrix, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = probability_matrix[:, entity_1_index]
+            b = probability_matrix[:, entity_2_index]
+            distance_matrix[entity_1_index, entity_2_index] = 
+                distance_matrix[entity_2_index, entity_1_index] = 
+                Distances.cosine_dist(a, b)
         end
     end
     return distance_matrix
@@ -475,10 +525,10 @@ julia> 1 + 1
 function count_canonical_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
     canonical_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
     canonical_kmer_iterator = Kmers.EveryCanonicalKmer{KMER_TYPE}(sequence)
-    for canonical_kmer in canonical_kmer_iterator
+    for (index, canonical_kmer) in canonical_kmer_iterator
         canonical_kmer_counts[canonical_kmer] = get(canonical_kmer_counts, canonical_kmer, 0) + 1
     end
-    return canonical_kmer_counts
+    return sort!(canonical_kmer_counts)
 end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
@@ -491,7 +541,7 @@ function count_canonical_kmers(::Type{KMER_TYPE}, sequences::AbstractVector{T}) 
         sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
         merge!(+, joint_kmer_counts, sequence_kmer_counts)
     end
-    sort!(joint_kmer_counts)
+    return sort!(joint_kmer_counts)
 end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
@@ -500,7 +550,7 @@ function count_canonical_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE
         sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
         merge!(+, joint_kmer_counts, sequence_kmer_counts)
     end
-    sort!(joint_kmer_counts)
+    return sort!(joint_kmer_counts)
 end
 
 function count_canonical_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{S}) where {KMER_TYPE, S <: AbstractString}
