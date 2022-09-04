@@ -74,7 +74,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; outdir="", min_k=3, max_k=31, threshold=0.1)
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir="", min_k=3, max_k=31, threshold=0.1)
     if isempty(outdir)
         outdir = joinpath(pwd(), "kmer-saturation")
     end
@@ -87,7 +87,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; outd
         # kmer_type = Kmers.Kmers.DNAKmer{k}
         kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{2},k})
         kmers_to_assess = 10_000_000
-        sampling_points, kmer_counts, hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess)
+        sampling_points, kmer_counts, hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess, power=power)
         @show sampling_points, kmer_counts, hit_eof
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))
         observed_midpoint = sampling_points[observed_midpoint_index]
@@ -146,6 +146,6 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; outd
     end
 end
 
-function assess_dnamer_saturation(fastx::AbstractString; outdir="", min_k=3, max_k=31, threshold=0.1)
-    assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold)
+function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=31, threshold=0.1)
+    assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power)
 end
