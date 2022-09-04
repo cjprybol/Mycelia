@@ -74,7 +74,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir="", min_k=3, max_k=31, threshold=0.1)
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir="", min_k=3, max_k=31, threshold=0.1, kmers_to_assess=10_000_000)
     if isempty(outdir)
         outdir = joinpath(pwd(), "kmer-saturation")
     end
@@ -84,23 +84,26 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
     minimum_saturation = Inf
     midpoint = Inf
     for k in ks
-        # kmer_type = Kmers.Kmers.DNAKmer{k}
+        # kmer_type = Kmers.DNAKmer{k}
         kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{2},k})
-        kmers_to_assess = 10_000_000
         sampling_points, kmer_counts, hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess, power=power)
         @show sampling_points, kmer_counts, hit_eof
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))
         observed_midpoint = sampling_points[observed_midpoint_index]
         initial_parameters = Float64[maximum(kmer_counts), observed_midpoint]
         @time fit = LsqFit.curve_fit(calculate_v, sampling_points, kmer_counts, initial_parameters)
+        max_canonical_kmers = determine_max_canonical_kmers(k, DNA_ALPHABET)
         if hit_eof
             inferred_maximum = last(kmer_counts)
         else
             inferred_maximum = max(Int(ceil(fit.param[1])), last(kmer_counts))
+            if inferred_maximum > max_canonical_kmers
+                inferred_maximum = max_canonical_kmers
+            end
         end
 
         inferred_midpoint = Int(ceil(fit.param[2]))
-        predicted_saturation = inferred_maximum / determine_max_canonical_kmers(k, DNA_ALPHABET)
+        predicted_saturation = inferred_maximum / max_canonical_kmers
         @show k, predicted_saturation
 
         scale = 300
@@ -115,7 +118,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
             size=(2*scale, 1*scale),
             margins=3Plots.PlotMeasures.mm
             )
-        StatsPlots.hline!(p, [determine_max_canonical_kmers(k, DNA_ALPHABET)], label="absolute maximum")
+        StatsPlots.hline!(p, [max_canonical_kmers], label="absolute maximum")
         StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum")
         StatsPlots.vline!(p, [inferred_midpoint], label="inferred midpoint")
         # xs = vcat(sampling_points, [last(sampling_points) * 2^i for i in 1:2])
@@ -146,6 +149,6 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
     end
 end
 
-function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=31, threshold=0.1)
-    assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power)
+function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=31, threshold=0.1, kmers_to_assess=10_000_000)
+    assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power, kmers_to_assess=kmers_to_assess)
 end
