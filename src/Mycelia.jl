@@ -4,36 +4,33 @@ import BioAlignments
 import BioSequences
 import BioSymbols
 import Clustering
-import Dates
+import CodecZlib
 import DataFrames
 import DataStructures
-import Distributions
+import Dates
 import Distances
+import Distributions
 import DocStringExtensions
-import GFF3
+import FASTX
+import FileIO
 import GenomicAnnotations
-import Kmers
+import GFF3
 import GraphRecipes
 import Graphs
+import HTTP
+import Kmers
 import LsqFit
 import MetaGraphs
+import Mmap
+import OrderedCollections
 import Plots
-# import PrettyTables
 import Primes
+import ProgressMeter
 import Random
-# import SparseArrays
 import Statistics
 import StatsBase
 import StatsPlots
-import FASTX
-import CodecZlib
-import HTTP
-import ProgressMeter
-# import LSHFunctions
-import FileIO
 import uCSV
-import Mmap
-import OrderedCollections
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
