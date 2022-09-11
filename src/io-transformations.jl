@@ -1,48 +1,90 @@
-
-
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Description
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-function graph_to_gfa(graph, outfile)
+function graph_to_gfa(graph, kmer_size, outfile="$(kmer_size).gfa")
+    kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
+    # add fastq here too???
+    record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
+    edgemer_edges = collect(MetaGraphs.filter_edges(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size+1})))
     open(outfile, "w") do io
         println(io, "H\tVN:Z:1.0")
-        for vertex in Graphs.vertices(graph)
+        for vertex in kmer_vertices
             if haskey(graph.vprops[vertex], :kmer)
                 sequence = graph.vprops[vertex][:kmer]
             else
                 sequence = graph.vprops[vertex][:sequence]
             end
-#             depth = graph.vprops[vertex][:weight]
-            depth = graph.vprops[vertex][:count]
-            fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
+            # depth = graph.vprops[vertex][:count]
+            # depth = length(graph.vprops[vertex][:evidence])
+            total_count = 0
+            vertex_outneighbors = Graphs.outneighbors(graph, vertex)
+            for connected_record in intersect(vertex_outneighbors, record_vertices)
+                edge = Graphs.Edge(vertex, connected_record)
+                total_count += MetaGraphs.get_prop(graph, edge, :count)
+            end
+
+            fields = ["S", "$vertex", sequence, "DP:f:$(total_count)"]
             line = join(fields, '\t')
             println(io, line)
         end
-        for edge in Graphs.edges(graph)
-            overlap = graph.gprops[:k] - 1
-            for o in graph.eprops[edge][:orientations]
-#                 if !(!o.source_orientation && !o.destination_orientation)
-                link = ["L",
-                            edge.src,
-                            o.source_orientation ? '+' : '-',
-                            edge.dst,
-                            o.destination_orientation ? '+' : '-',
-                            "$(overlap)M"]
-                line = join(link, '\t')
-                println(io, line)
-#                 end
-            end
+        overlap = kmer_size - 1
+        for edgemer_edge in edgemer_edges
+            source_kmer, dest_kmer = Mycelia.edgemer_to_vertex_kmers(MetaGraphs.get_prop(graph, edgemer_edge, :sequence))
+            link = ["L",
+                        edgemer_edge.src,
+                        BioSequences.iscanonical(source_kmer) ? '+' : '-',
+                        edgemer_edge.dst,
+                        BioSequences.iscanonical(dest_kmer) ? '+' : '-',
+                        "$(overlap)M"]
+            line = join(link, '\t')
+            println(io, line)
         end
     end
-    return outfile
+    return
 end
+
+
+# OLD FOR SIMPLE KMER GRAPHS
+# # """
+# # $(DocStringExtensions.TYPEDSIGNATURES)
+
+# # Description
+
+# # ```jldoctest
+# # julia> 1 + 1
+# # 2
+# # ```
+# # """
+# function graph_to_gfa(graph, outfile)
+#     open(outfile, "w") do io
+#         println(io, "H\tVN:Z:1.0")
+#         for vertex in Graphs.vertices(graph)
+#             if haskey(graph.vprops[vertex], :kmer)
+#                 sequence = graph.vprops[vertex][:kmer]
+#             else
+#                 sequence = graph.vprops[vertex][:sequence]
+#             end
+# #             depth = graph.vprops[vertex][:weight]
+#             depth = graph.vprops[vertex][:count]
+#             fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
+#             line = join(fields, '\t')
+#             println(io, line)
+#         end
+#         for edge in Graphs.edges(graph)
+#             overlap = graph.gprops[:k] - 1
+#             for o in graph.eprops[edge][:orientations]
+# #                 if !(!o.source_orientation && !o.destination_orientation)
+#                 link = ["L",
+#                             edge.src,
+#                             o.source_orientation ? '+' : '-',
+#                             edge.dst,
+#                             o.destination_orientation ? '+' : '-',
+#                             "$(overlap)M"]
+#                 line = join(link, '\t')
+#                 println(io, line)
+# #                 end
+#             end
+#         end
+#     end
+#     return outfile
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

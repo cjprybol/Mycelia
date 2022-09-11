@@ -8,6 +8,30 @@ julia> 1 + 1
 2
 ```
 """
+# for kmer_size in kmer_sizes
+function add_fasta_record_kmers_to_graph!(graph, kmer_size)
+    record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
+    for vertex in record_vertices
+        record_identifier = graph.vprops[vertex][:identifier]
+        record_sequence = graph.vprops[vertex][:sequence]
+        kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{kmer_size}, record_sequence)
+        Mycelia.add_kmers_to_graph!(graph, keys(kmer_counts))
+        Mycelia.add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
+        Mycelia.add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
     observed_orientation = BioSequences.iscanonical(observed_edgemer)
     canonical_edgemer = BioSequences.canonical(observed_edgemer)
@@ -690,3 +714,39 @@ end
 #     graph_edge = Graphs.Edge(src_index, dst_index)
 #     Graphs.add_edge!(graph, graph_edge)
 # end
+
+
+
+################################################################################
+# defunct bcalm usage
+# run(`conda install -c bioconda bcalm`)
+
+# fasta_file_list = joinpath(working_directory, repr(hash(fastx_files)) * ".fasta_list.txt")
+# open(fasta_file_list, "w") do io
+#     for f in fastx_files
+#         @show f
+#         println(io, f)
+#     end
+# end
+
+# k = 3
+# outfile = fasta_file_list * ".bcalm.$(k).fna"
+# cmd = `bcalm -in $(fastx_files[1]) -abundance-min 1 -kmer-size 11 -all-abundance-counts -out $(outfile)`
+# run(cmd)
+
+# cmds = [
+#     `bcalm`,
+#     `-in $(fasta_list_file)`,
+#     `-abundance-min 1`,
+#     `-kmer-size 3`,
+#     `-all-abundance-counts`,
+#     `-abundance-max $(typemax(UInt64))`
+# ]
+# run(cmds)
+
+# ls -1 *.fastq > list_reads
+# ./bcalm -in list_reads [..]
+# ./bcalm -in [reads.fa] -kmer-size [kmer_size] -abundance-min [abundance_threshold]
+
+# scripts/convertToGFA.py
+##################################################################################
