@@ -522,51 +522,48 @@ julia> 1 + 1
 2
 ```
 """
-function count_canonical_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
-    canonical_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    canonical_kmer_iterator = Kmers.EveryCanonicalKmer{KMER_TYPE}(sequence)
-    for (index, canonical_kmer) in canonical_kmer_iterator
-        canonical_kmer_counts[canonical_kmer] = get(canonical_kmer_counts, canonical_kmer, 0) + 1
+function canonicalize_kmer_counts!(kmer_counts)
+    for (kmer, count) in kmer_counts
+        if !BioSequences.iscanonical(kmer)
+            canonical_kmer = BioSequences.canonical(kmer)
+            if haskey(kmer_counts, canonical_kmer)
+                kmer_counts[canonical_kmer] += count
+            else
+                kmer_counts[canonical_kmer] = count
+            end
+            delete!(kmer_counts, kmer)
+        end
     end
-    return sort!(canonical_kmer_counts)
+    return sort!(kmer_counts)
 end
 
-function count_canonical_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    return count_canonical_kmers(KMER_TYPE, FASTX.sequence(record))    
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function canonicalize_kmer_counts(kmer_counts)
+    return canonicalize_kmer_counts!(copy(kmer_counts))
 end
 
-function count_canonical_kmers(::Type{KMER_TYPE}, sequences::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    for sequence in sequences
-        sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
-        merge!(+, joint_kmer_counts, sequence_kmer_counts)
-    end
-    return sort!(joint_kmer_counts)
-end
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-function count_canonical_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
-    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    for sequence in sequences
-        sequence_kmer_counts = count_canonical_kmers(KMER_TYPE, sequence)
-        merge!(+, joint_kmer_counts, sequence_kmer_counts)
-    end
-    return sort!(joint_kmer_counts)
-end
+A short description of the function
 
-function count_canonical_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{S}) where {KMER_TYPE, S <: AbstractString}
-    kmer_counts = count_canonical_kmers(KMER_TYPE, first(fastx_files))
-    for fastx_file in fastx_files[2:end]
-        _kmer_counts = count_canonical_kmers(KMER_TYPE, fastx_file)
-        kmer_counts = merge!(+, kmer_counts, _kmer_counts)
-    end
-    return kmer_counts
-end
-
-function count_canonical_kmers(::Type{KMER_TYPE}, fastx_file::S) where {KMER_TYPE, S <: AbstractString}
-    fastx_io = open_fastx(fastx_file)
-    kmer_counts = count_canonical_kmers(KMER_TYPE, fastx_io)
-    close(fastx_io)
-    return kmer_counts
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
+    kmer_counts = count_kmers(KMER_TYPE, sequences)
+    return canonicalize_kmer_counts!(kmer_counts)
 end
 
 """
@@ -580,34 +577,24 @@ julia> 1 + 1
 ```
 """
 function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
-    kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    kmer_iterator = (kmer.fw for kmer in BioSequences.each(KMER_TYPE, sequence))
-    for kmer in kmer_iterator
-        kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
-    end
-    return kmer_counts
+    return sort(StatsBase.countmap([kmer for (index, kmer) in Kmers.EveryKmer{KMER_TYPE}(sequence)]))
 end
 
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     return count_kmers(KMER_TYPE, FASTX.sequence(record))    
 end
 
-function count_kmers(::Type{KMER_TYPE}, sequences::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    for sequence in sequences
-        sequence_kmer_counts = count_kmers(KMER_TYPE, sequence)
-        merge!(+, joint_kmer_counts, sequence_kmer_counts)
+function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    kmer_counts = count_kmers(KMER_TYPE, first(records))
+    for record in records[2:end]
+        _kmer_counts = count_kmers(KMER_TYPE, record)
+        merge!(+, kmer_counts, _kmer_counts)
     end
-    sort!(joint_kmer_counts)
+    sort!(kmer_counts)
 end
 
 function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
-    joint_kmer_counts = DataStructures.OrderedDict{KMER_TYPE, Int}()
-    for sequence in sequences
-        sequence_kmer_counts = count_kmers(KMER_TYPE, sequence)
-        merge!(+, joint_kmer_counts, sequence_kmer_counts)
-    end
-    sort!(joint_kmer_counts)
+    return count_kmers(KMER_TYPE, collect(sequences))
 end
 
 function count_kmers(KMER_TYPE, fastx_files::AbstractVector{AbstractString})
@@ -655,43 +642,6 @@ function error_rate_to_q_value(error_rate)
     q_value = -10 * log10(error_rate)
     return q_value
 end
-
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# A short description of the function
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function path_to_sequence(kmer_graph, path)
-#     sequence = BioSequences.LongDNASeq(oriented_kmer_to_sequence(kmer_graph, first(path)))
-#     for oriented_kmer in path[2:end]
-#         nucleotide = last(oriented_kmer_to_sequence(kmer_graph, oriented_kmer))
-#         push!(sequence, nucleotide)
-#     end
-#     return sequence
-# end
-
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# A short description of the function
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function oriented_kmer_to_sequence(kmer_graph, oriented_kmer)
-#     kmer_sequence = kmer_graph.kmers[oriented_kmer.index]
-#     if !oriented_kmer.orientation
-#         kmer_sequence = BioSequences.reverse_complement(kmer_sequence)
-#     end
-#     return kmer_sequence
-# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -944,3 +894,40 @@ function merge_fasta_files(list_of_fasta_files, joint_fasta_file)
     end
     return joint_fasta_file
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function path_to_sequence(kmer_graph, path)
+#     sequence = BioSequences.LongDNASeq(oriented_kmer_to_sequence(kmer_graph, first(path)))
+#     for oriented_kmer in path[2:end]
+#         nucleotide = last(oriented_kmer_to_sequence(kmer_graph, oriented_kmer))
+#         push!(sequence, nucleotide)
+#     end
+#     return sequence
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function oriented_kmer_to_sequence(kmer_graph, oriented_kmer)
+#     kmer_sequence = kmer_graph.kmers[oriented_kmer.index]
+#     if !oriented_kmer.orientation
+#         kmer_sequence = BioSequences.reverse_complement(kmer_sequence)
+#     end
+#     return kmer_sequence
+# end

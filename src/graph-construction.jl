@@ -8,6 +8,156 @@ julia> 1 + 1
 2
 ```
 """
+function add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
+    observed_orientation = BioSequences.iscanonical(observed_edgemer)
+    canonical_edgemer = BioSequences.canonical(observed_edgemer)
+    observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(observed_edgemer)
+    canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
+    canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
+    source_kmer_index = graph[canonical_source_kmer, :identifier]
+    destination_kmer_index = graph[canonical_destination_kmer, :identifier]
+    edgemer = Graphs.Edge(source_kmer_index, destination_kmer_index)
+    if !Graphs.has_edge(graph, edgemer)
+        Graphs.add_edge!(graph, edgemer)
+        MetaGraphs.set_prop!(graph, edgemer, :evidence, Dict(record_identifier => Set([(index, observed_orientation)])))
+        MetaGraphs.set_prop!(graph, edgemer, :identifier, canonical_edgemer)
+        MetaGraphs.set_prop!(graph, edgemer, :sequence, canonical_edgemer)
+        MetaGraphs.set_prop!(graph, edgemer, :TYPE, typeof(observed_edgemer))
+    else
+        evidence = MetaGraphs.get_prop(graph, edgemer, :evidence)
+        if haskey(evidence, record_identifier)
+            record_evidence = evidence[record_identifier]
+            record_evidence = push!(record_evidence, (index, observed_orientation))
+        else
+            record_evidence = Set([(index, observed_orientation)])
+        end
+        evidence[record_identifier] = record_evidence
+        MetaGraphs.set_prop!(graph, edgemer, :evidence, evidence)
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
+    vertex_id = graph[record_identifier, :identifier]
+    record_sequence = MetaGraphs.get_prop(graph, vertex_id, :sequence)
+    edgemer_size = kmer_size + 1
+    for (index, observed_edgemer) in Kmers.EveryKmer{Kmers.DNAKmer{edgemer_size}}(record_sequence)
+        add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
+    for (kmer, count) in kmer_counts
+        kmer_vertex = graph[kmer, :identifier]
+        record_vertex = graph[record_identifier, :identifier]
+        edge = Graphs.Edge(kmer_vertex, record_vertex)
+        if !Graphs.has_edge(graph, edge)
+            Graphs.add_edge!(graph, edge)
+            MetaGraphs.set_prop!(graph, edge, :count, count)
+        else
+            graph_count = MetaGraphs.get_prop(graph, edge, :count)
+            if graph_count != count
+                @warn "edge found but this count $(count) != current count $(graph_count)"
+            # else
+                # @info "edge exists and matches current data"
+            end
+        end
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_kmers_to_graph!(graph, kmers)
+    for kmer in kmers
+        if !haskey(graph.metaindex[:identifier], kmer)
+            Graphs.add_vertex!(graph)
+            v = Graphs.nv(graph)
+            MetaGraphs.set_prop!(graph, v, :identifier, kmer)
+            MetaGraphs.set_prop!(graph, v, :sequence, kmer)
+            MetaGraphs.set_prop!(graph, v, :TYPE, typeof(kmer))
+        end
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_metadata_from_table!(
+        graph::MetaGraphs.AbstractMetaGraph,
+        table::DataFrames.AbstractDataFrame;
+        identifier_column::Union{Symbol, AbstractString} = :identifier)
+    for row in DataFrames.eachrow(table)
+        add_metadata_from_table_row!(graph, row, identifier_column)
+    end
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function add_metadata_from_table_row!(graph, row, identifier_column)
+    other_columns = filter(n -> n != :identifier, Symbol.(names(row)))
+    row_metadata_dict = Dict(column => row[column] for column in other_columns)
+    metadata_dict = Dict(row[identifier_column] => row_metadata_dict)
+    Mycelia.add_metadata_to_graph!(graph, metadata_dict::AbstractDict)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function add_key_value_pair_to_node!(graph, identifier, key, value)
     node_id = graph[identifier, :identifier]
     MetaGraphs.set_prop!(graph, node_id, Symbol(key), value)
@@ -193,44 +343,6 @@ function load_graph(file)
     return FileIO.load(file)["graph"]
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# A short description of the function
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function add_edge_to_graph(graph, edge_mer, kmers)
-#     edge = BioSequences.LongDNASeq(edge_mer.fw)
-#     k = length(first(kmers))
-# #     canonical_src = BioSequences.DNAMer{k}(BioSequences.canonical!(edge[1:end-1]))
-# #     canonical_dst = BioSequences.DNAMer{k}(BioSequences.canonical!(edge[2:end]))
-
-#     canonical_src = BioSequences.canonical(BioSequences.DNAMer{k}(edge[1:end-1]))
-    
-#     src_index_range = searchsorted(kmers, canonical_src)
-#     if isempty(src_index_range)
-#         return
-#     else
-#         @assert length(src_index_range) == 1
-#     end
-#     src_index = first(src_index_range)
-
-#     canonical_dst = BioSequences.canonical(BioSequences.DNAMer{k}(edge[2:end]))
-#     dst_index_range = searchsorted(kmers, canonical_dst)
-#     if isempty(dst_index_range)
-#         return
-#     else
-#         @assert length(dst_index_range) == 1
-#     end
-#     dst_index = first(dst_index_range)
-#     graph_edge = Graphs.Edge(src_index, dst_index)
-#     Graphs.add_edge!(graph, graph_edge)
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -305,76 +417,76 @@ end
 
 
 function edgemer_to_vertex_kmers(edgemer)
-    a = BioSequences.BigDNAMer(edgemer[i] for i in 1:length(edgemer)-1)
-    b = BioSequences.BigDNAMer(edgemer[i] for i in 2:length(edgemer))
+    a = Kmers.DNAKmer(collect(edgemer[i] for i in 1:length(edgemer)-1))
+    b = Kmers.DNAKmer(collect(edgemer[i] for i in 2:length(edgemer)))
     return a, b
 end
 
-# @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, kmers, sequence_edge)
-@inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, sequence_edge)
-    observed_source_kmer, observed_destination_kmer = edgemer_to_vertex_kmers(sequence_edge.fw)
-    canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
-    canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
-    source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
-    desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
+# # @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, kmers, sequence_edge)
+# @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, sequence_edge)
+#     observed_source_kmer, observed_destination_kmer = edgemer_to_vertex_kmers(sequence_edge.fw)
+#     canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
+#     canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
+#     source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
+#     desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
     
-    if source_kmer_index > desination_kmer_index
-        observed_source_kmer, observed_destination_kmer = edgemer_to_vertex_kmers(sequence_edge.bw)
-        canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
-        canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
-        source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
-        desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
-    end
+#     if source_kmer_index > desination_kmer_index
+#         observed_source_kmer, observed_destination_kmer = edgemer_to_vertex_kmers(sequence_edge.bw)
+#         canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
+#         canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
+#         source_kmer_index = simple_kmer_graph[canonical_source_kmer, :kmer]
+#         desination_kmer_index = simple_kmer_graph[canonical_destination_kmer, :kmer]
+#     end
     
-    @assert source_kmer_index <= desination_kmer_index
+#     @assert source_kmer_index <= desination_kmer_index
 
-    oriented_source_kmer = 
-        (canonical_kmer = canonical_source_kmer,
-         orientation = BioSequences.iscanonical(observed_source_kmer))
+#     oriented_source_kmer = 
+#         (canonical_kmer = canonical_source_kmer,
+#          orientation = BioSequences.iscanonical(observed_source_kmer))
 
-    oriented_destination_kmer = 
-        (canonical_kmer = canonical_destination_kmer,
-         orientation = BioSequences.iscanonical(observed_destination_kmer))
+#     oriented_destination_kmer = 
+#         (canonical_kmer = canonical_destination_kmer,
+#          orientation = BioSequences.iscanonical(observed_destination_kmer))
 
-    oriented_source_vertex = 
-#         (vertex = searchsortedfirst(kmers, oriented_source_kmer.canonical_kmer),
-        (vertex = simple_kmer_graph[oriented_source_kmer.canonical_kmer, :kmer],
-         orientation = oriented_source_kmer.orientation)
+#     oriented_source_vertex = 
+# #         (vertex = searchsortedfirst(kmers, oriented_source_kmer.canonical_kmer),
+#         (vertex = simple_kmer_graph[oriented_source_kmer.canonical_kmer, :kmer],
+#          orientation = oriented_source_kmer.orientation)
 
-    oriented_destination_vertex = 
-#         (vertex = searchsortedfirst(kmers, oriented_destination_kmer.canonical_kmer),
-        (vertex = simple_kmer_graph[oriented_destination_kmer.canonical_kmer, :kmer],
-         orientation = oriented_destination_kmer.orientation)
+#     oriented_destination_vertex = 
+# #         (vertex = searchsortedfirst(kmers, oriented_destination_kmer.canonical_kmer),
+#         (vertex = simple_kmer_graph[oriented_destination_kmer.canonical_kmer, :kmer],
+#          orientation = oriented_destination_kmer.orientation)
 
-#     forward_edge = Graphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
-#     forward_edge_orientations = 
+# #     forward_edge = Graphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
+# #     forward_edge_orientations = 
+# #         (source_orientation = oriented_source_vertex.orientation,
+# #          destination_orientation = oriented_destination_vertex.orientation)
+    
+# #     reverse_edge = Graphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
+# #     reverse_edge_orientations = 
+# #         (source_orientation = !oriented_destination_vertex.orientation,
+# #          destination_orientation = !oriented_source_vertex.orientation)
+    
+#     edge = Graphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
+#     edge_orientations = 
 #         (source_orientation = oriented_source_vertex.orientation,
 #          destination_orientation = oriented_destination_vertex.orientation)
     
-#     reverse_edge = Graphs.Edge(oriented_destination_vertex.vertex, oriented_source_vertex.vertex)
-#     reverse_edge_orientations = 
-#         (source_orientation = !oriented_destination_vertex.orientation,
-#          destination_orientation = !oriented_source_vertex.orientation)
-    
-    edge = Graphs.Edge(oriented_source_vertex.vertex, oriented_destination_vertex.vertex)
-    edge_orientations = 
-        (source_orientation = oriented_source_vertex.orientation,
-         destination_orientation = oriented_destination_vertex.orientation)
-    
-#     orientations = Set([forward_edge_orientations, reverse_edge_orientations])
-    orientations = Set([edge_orientations])
-    if Graphs.has_edge(simple_kmer_graph, edge)
-        edge_weight = MetaGraphs.get_prop(simple_kmer_graph, edge, :weight) + 1
-        orientations = union(MetaGraphs.get_prop(simple_kmer_graph, edge, :orientations), orientations)
-    else
-        Graphs.add_edge!(simple_kmer_graph, edge)
-        edge_weight = 1
-#         @show Graphs.ne(simple_kmer_graph)
-#         @show forward_edge
-    end
-    MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, edge_weight)
-    MetaGraphs.set_prop!(simple_kmer_graph, edge, :orientations, orientations)
-end
+# #     orientations = Set([forward_edge_orientations, reverse_edge_orientations])
+#     orientations = Set([edge_orientations])
+#     if Graphs.has_edge(simple_kmer_graph, edge)
+#         edge_weight = MetaGraphs.get_prop(simple_kmer_graph, edge, :weight) + 1
+#         orientations = union(MetaGraphs.get_prop(simple_kmer_graph, edge, :orientations), orientations)
+#     else
+#         Graphs.add_edge!(simple_kmer_graph, edge)
+#         edge_weight = 1
+# #         @show Graphs.ne(simple_kmer_graph)
+# #         @show forward_edge
+#     end
+#     MetaGraphs.set_prop!(simple_kmer_graph, edge, :weight, edge_weight)
+#     MetaGraphs.set_prop!(simple_kmer_graph, edge, :orientations, orientations)
+# end
 
 # function fastx_to_simple_kmer_graph(KMER_TYPE, fastx::AbstractString; minimum_coverage::Int=1)
 #     fastx_to_simple_kmer_graph(KMER_TYPE, [fastx], minimum_coverage=minimum_coverage)
@@ -539,4 +651,42 @@ end
 #         close(fastx_io)
 #     end
 #     return kmer_graph
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_edge_to_graph(graph, edge_mer, kmers)
+#     edge = BioSequences.LongDNASeq(edge_mer.fw)
+#     k = length(first(kmers))
+# #     canonical_src = BioSequences.DNAMer{k}(BioSequences.canonical!(edge[1:end-1]))
+# #     canonical_dst = BioSequences.DNAMer{k}(BioSequences.canonical!(edge[2:end]))
+
+#     canonical_src = BioSequences.canonical(BioSequences.DNAMer{k}(edge[1:end-1]))
+    
+#     src_index_range = searchsorted(kmers, canonical_src)
+#     if isempty(src_index_range)
+#         return
+#     else
+#         @assert length(src_index_range) == 1
+#     end
+#     src_index = first(src_index_range)
+
+#     canonical_dst = BioSequences.canonical(BioSequences.DNAMer{k}(edge[2:end]))
+#     dst_index_range = searchsorted(kmers, canonical_dst)
+#     if isempty(dst_index_range)
+#         return
+#     else
+#         @assert length(dst_index_range) == 1
+#     end
+#     dst_index = first(dst_index_range)
+#     graph_edge = Graphs.Edge(src_index, dst_index)
+#     Graphs.add_edge!(graph, graph_edge)
 # end
