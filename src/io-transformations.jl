@@ -40,52 +40,6 @@ function graph_to_gfa(graph, kmer_size, outfile="$(kmer_size).gfa")
     return
 end
 
-
-# OLD FOR SIMPLE KMER GRAPHS
-# # """
-# # $(DocStringExtensions.TYPEDSIGNATURES)
-
-# # Description
-
-# # ```jldoctest
-# # julia> 1 + 1
-# # 2
-# # ```
-# # """
-# function graph_to_gfa(graph, outfile)
-#     open(outfile, "w") do io
-#         println(io, "H\tVN:Z:1.0")
-#         for vertex in Graphs.vertices(graph)
-#             if haskey(graph.vprops[vertex], :kmer)
-#                 sequence = graph.vprops[vertex][:kmer]
-#             else
-#                 sequence = graph.vprops[vertex][:sequence]
-#             end
-# #             depth = graph.vprops[vertex][:weight]
-#             depth = graph.vprops[vertex][:count]
-#             fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
-#             line = join(fields, '\t')
-#             println(io, line)
-#         end
-#         for edge in Graphs.edges(graph)
-#             overlap = graph.gprops[:k] - 1
-#             for o in graph.eprops[edge][:orientations]
-# #                 if !(!o.source_orientation && !o.destination_orientation)
-#                 link = ["L",
-#                             edge.src,
-#                             o.source_orientation ? '+' : '-',
-#                             edge.dst,
-#                             o.destination_orientation ? '+' : '-',
-#                             "$(overlap)M"]
-#                 line = join(link, '\t')
-#                 println(io, line)
-# #                 end
-#             end
-#         end
-#     end
-#     return outfile
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -175,35 +129,32 @@ function cypher(;address, username, password, database, cmd)
     return `cypher-shell --address $address --username $username --password $password --database $(database) --format auto $(cmd)`
 end
 
-# TODO: uncomment if PR gets merged or switch to GenomicAnnotations
-# https://github.com/BioJulia/GFF3.jl/pull/12
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# A short description of the function
+A short description of the function
 
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function open_gff(path::String)
-#     if isfile(path)
-#         io = open(path)
-#     elseif occursin(r"^ftp", path) || occursin(r"^http", path)
-#         path = replace(path, r"^ftp:" => "http:")
-#         io = IOBuffer(HTTP.get(path).body)
-#     else
-#         error("unable to locate file $path")
-#     end
-#     path_base = basename(path)
-#     if occursin(r"\.gz$", path_base)
-#         io = CodecZlib.GzipDecompressorStream(io)
-# #         path_base = replace(path_base, ".gz" => "")
-#     end
-#     gff_io = GFF3.Reader(io)
-#     return gff_io
-# end
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function open_gff(path::String)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
+    end
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+    end
+    gff_io = GFF3.Reader(io)
+    return gff_io
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -316,25 +267,6 @@ function plot_graph(graph)
         names = kmers)
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# A short description of the function
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
-# function my_plot(graph::KmerGraph)
-#     graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
-#     filename = "/assets/images/$(graph_hash).svg"
-#     p = plot_graph(graph)
-#     Plots.savefig(p, dirname(pwd()) * filename)
-#     display(p)
-#     display("text/markdown", "![]($filename)")
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -366,3 +298,67 @@ julia> 1 + 1
 function load_graph(file::String)
     return FileIO.load(file)["graph"]
 end
+
+# OLD FOR SIMPLE KMER GRAPHS
+# # """
+# # $(DocStringExtensions.TYPEDSIGNATURES)
+
+# # Description
+
+# # ```jldoctest
+# # julia> 1 + 1
+# # 2
+# # ```
+# # """
+# function graph_to_gfa(graph, outfile)
+#     open(outfile, "w") do io
+#         println(io, "H\tVN:Z:1.0")
+#         for vertex in Graphs.vertices(graph)
+#             if haskey(graph.vprops[vertex], :kmer)
+#                 sequence = graph.vprops[vertex][:kmer]
+#             else
+#                 sequence = graph.vprops[vertex][:sequence]
+#             end
+# #             depth = graph.vprops[vertex][:weight]
+#             depth = graph.vprops[vertex][:count]
+#             fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
+#             line = join(fields, '\t')
+#             println(io, line)
+#         end
+#         for edge in Graphs.edges(graph)
+#             overlap = graph.gprops[:k] - 1
+#             for o in graph.eprops[edge][:orientations]
+# #                 if !(!o.source_orientation && !o.destination_orientation)
+#                 link = ["L",
+#                             edge.src,
+#                             o.source_orientation ? '+' : '-',
+#                             edge.dst,
+#                             o.destination_orientation ? '+' : '-',
+#                             "$(overlap)M"]
+#                 line = join(link, '\t')
+#                 println(io, line)
+# #                 end
+#             end
+#         end
+#     end
+#     return outfile
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function my_plot(graph::KmerGraph)
+#     graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
+#     filename = "/assets/images/$(graph_hash).svg"
+#     p = plot_graph(graph)
+#     Plots.savefig(p, dirname(pwd()) * filename)
+#     display(p)
+#     display("text/markdown", "![]($filename)")
+# end
