@@ -1,5 +1,192 @@
 # neo_import_dir = "/Users/cameronprybol/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-8ab8baac-5dea-4137-bb24-e0b426447940/import"
 
+
+# uploading over API is slow for remote and local connections
+# Progress:   0%|▏                                        |  ETA: 8:13:39
+# upload_nodes_over_api(graph, ADDRESS=local_neo4j_bolt_address, PASSWORD=local_neo4j_password)
+# Progress:   0%|         
+
+# # push to Neo4J Aura
+# # run(`sudo touch /etc/neo4j/neo4j.conf`)
+# run(`sudo neo4j stop`)
+# # remote database needs to be running
+# # needs to be big enough
+# # leave off port from address
+# # run(`neo4j-admin push-to-cloud --overwrite --verbose --bolt-uri=$(ADDRESS) --username=$(USERNAME) --password=$(PASSWORD)`)
+# # run(`sudo neo4j-admin push-to-cloud --overwrite --verbose --dump-to "$(DIR)/test.db.dump" --bolt-uri=$(a) --username=$(USERNAME) --password=$(PASSWORD)`)
+# run(`sudo neo4j-admin push-to-cloud --overwrite --verbose --bolt-uri=$(a) --username=$(USERNAME) --password=$(PASSWORD)`)
+
+
+# cmd = "CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.tax_id IS UNIQUE"
+# @time run(cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd))
+
+# cmd = "CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.`scientific name` IS UNIQUE"
+# @time run(cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd))
+
+# cmd = "CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.identifier IS UNIQUE"
+# @time run(cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd))
+
+# parameters = ["$(n): row.$(n)" for n in filter(x -> x != "TYPE", names(node_table))]
+# parameters = "{" * join(parameters, ", ") * "}"
+
+# window_size = 10000
+# V = DataFrames.nrow(node_table)
+# windows = [i:min(i+window_size-1,V) for i in 1:window_size:V]
+# ProgressMeter.@showprogress for (i, w) in enumerate(windows)
+#     df_sub = node_table[w, :]
+#     f = "node$i.tsv"
+#     local_f_path = "$(temp_upload_dir)/$(f)"
+#     uCSV.write(local_f_path, df_sub, delim='\t')
+#     run(`chmod 777 $(local_f_path)`)
+#     f_url = "file:///$(local_f_path)"
+#     cmd =
+#     """
+#     LOAD CSV WITH HEADERS FROM '$(f_url)' AS row FIELDTERMINATOR '\t'
+#     CREATE (node:$(NODE_TYPE) $(parameters))
+#     """
+#     cmd = rstrip(replace(cmd, '\n' => ' '))
+#     cypher_cmd = Mycelia.cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd)
+#     run(cypher_cmd) 
+# end
+
+
+# ProgressMeter.@showprogress for (i, w) in enumerate(windows)
+#     df_sub = edge_table[w, :]
+#     f = "edge$i.tsv"
+#     local_f_path = "$(temp_upload_dir)/$(f)"
+#     uCSV.write(local_f_path, df_sub, delim='\t')
+#     run(`chmod 777 $(local_f_path)`)
+#     f_url = "file:///$(local_f_path)"
+#     cmd = 
+#     """
+#     LOAD CSV WITH HEADERS FROM '$(f_url)' AS row FIELDTERMINATOR '\t'
+#     MATCH (src:$(src_type) {identifier: row.src})
+#     MATCH (dst:$(dst_type) {identifier: row.dst})
+#     MERGE (src)-[p:$(edge_type)]->(dst)
+#     """
+#     cmd = rstrip(replace(cmd, '\n' => ' '))
+#     cypher_cmd = Mycelia.cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd)
+#     run(cypher_cmd) 
+# end
+
+
+function upload_nodes_to_neo4j(;graph, address, username="neo4j", password, format="auto", database="neo4j", neo4j_import_directory)
+    
+    node_types = unique(MetaGraphs.props(graph, v)[:TYPE] for v in Graphs.vertices(graph))
+    # node_type_strings = Mycelia.type_to_string.(node_types)
+    
+    for node_type in node_types
+        @info "uploading node_type => $(Mycelia.type_to_string(node_type))..."
+        node_type_table = node_type_to_dataframe(node_type=node_type, graph=graph)
+        try
+            upload_node_table(table=node_type_table, address=address, password=password, neo4j_import_dir=neo4j_import_directory)
+        catch e
+            showerror(stdout, e)
+        end
+    end
+    
+    @info "done!"
+end
+
+function node_type_to_dataframe(;node_type, graph)
+    node_type_indices = filter(v -> MetaGraphs.props(graph, v)[:TYPE] == node_type, Graphs.vertices(graph))
+    node_type_parameters = unique(reduce(vcat, map(v -> collect(keys(MetaGraphs.props(graph, v))), node_type_indices)))
+    node_type_table = DataFrames.DataFrame(Dict(p => [] for p in node_type_parameters))
+    for node_index in node_type_indices
+        push!(node_type_table, MetaGraphs.props(graph, node_index))
+    end
+    return node_type_table
+end
+
+function upload_node_table(;table, window_size=1000, address, password, username="neo4j", database="neo4j", neo4j_import_dir)
+    nrows = DataFrames.nrow(table)
+    windows = (i:min(i+window_size-1,nrows) for i in 1:window_size:nrows)
+    
+    node_types = unique(table[!, "TYPE"])
+    @assert length(node_types) == 1
+    NODE_TYPE = Mycelia.type_to_string(first(node_types))
+    parameters = ["$(n): row.$(n)" for n in filter(x -> !(x in ["TYPE"]), names(table))]
+    parameters = "{" * join(parameters, ", ") * "}"
+
+    ProgressMeter.@showprogress for (i, window) in enumerate(windows)
+        df_sub = table[window, :]
+        f = "node$i.tsv"
+        local_f_path = "$(neo4j_import_dir)/$(f)"
+        uCSV.write(local_f_path, df_sub, delim='\t')
+        run(`chmod 777 $(local_f_path)`)
+        f_url = "file:///$(f)"
+        cmd =
+        """
+        LOAD CSV WITH HEADERS FROM '$(f_url)' AS row FIELDTERMINATOR '\t'
+        CREATE (:`$(NODE_TYPE)` $(parameters))
+        """
+        cmd = rstrip(replace(cmd, '\n' => ' '))
+        cypher_cmd = Mycelia.cypher(cmd, address = address, username = username, password = password, database = database)
+        run(cypher_cmd) 
+    end
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Description
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function upload_node_over_api(graph, v; ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j")
+    node_type = MetaGraphs.props(graph, v)[:TYPE]
+    node_identifier = MetaGraphs.props(graph, v)[:identifier]
+    node_parameters = filter(x -> 
+            !(x[1] in (:TYPE, :identifier)) && 
+            !(ismissing(x[2]) || isempty(x[2])), 
+        MetaGraphs.props(graph, v))
+    params_string = join(["$(string(key)): \"$(string(value))\"" for (key, value) in node_parameters], ", ")
+    node_type_string = Mycelia.type_to_string(node_type)
+    node_identifier_string = string(node_identifier)
+    cmd = 
+    """
+    MERGE (`$(node_identifier_string)`:`$(node_type_string)` {$(params_string)})
+    """
+    cmd = strip(cmd)
+    cypher_cmd = Mycelia.cypher(cmd, address = ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE)
+    run(cypher_cmd)
+end
+
+function upload_nodes_over_api(graph; ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j")
+    ProgressMeter.@showprogress for v in Graphs.vertices(graph)
+        upload_node_over_api(graph, v, ADDRESS=ADDRESS, USERNAME=USERNAME, PASSWORD=PASSWORD, DATABASE=DATABASE)
+    end    
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Description
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function create_node_constraints(graph; address, username="neo4j", password, database="neo4j")
+    node_types = unique(MetaGraphs.props(graph, v)[:TYPE] for v in Graphs.vertices(graph))
+    node_type_strings = map(t -> Mycelia.type_to_string(t), node_types)
+    for t in node_type_strings
+        cmd = "CREATE CONSTRAINT ON (t:`$(t)`) ASSERT t.identifier IS UNIQUE"
+        try
+            cypher = Mycelia.cypher(cmd, address = address, username = username, password = password, database = database)
+            @show cypher
+            @time run(cypher)
+        catch
+            continue
+        end
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -23,50 +210,78 @@ function type_to_string(T)
     end
 end
 
-function batch_upload_edge_type_over_url_from_graph(src_type, dst_type, edge_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE; window_size=100)    
-    src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
-    dst_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == dst_type, Graphs.vertices(graph))
-    edges_to_upload = []
-    for src_node in src_nodes
-        outneighbors = Graphs.outneighbors(graph, src_node)
-        outneighbors = filter(outneighbor -> outneighbor in dst_nodes, outneighbors)
-        for outneighbor in outneighbors
-            this_edge = Graphs.Edge(src_node, outneighbor)
-            @assert MetaGraphs.get_prop(graph, this_edge, :TYPE) == edge_type
-            push!(edges_to_upload, this_edge)
-        end
-    end
-    
-    N = length(edges_to_upload)
-    windows = [i:min(i+window_size-1,N) for i in 1:window_size:N]
-    
-    ProgressMeter.@showprogress for window in windows
-        cmds = []
-        for (i, e) in enumerate(edges_to_upload[window])
-            edge_params = filter(p -> p != :TYPE, keys(MetaGraphs.props(graph, e)))
-            params = ["$(string(param)):'$(MetaGraphs.get_prop(graph, e, param))'" for param in edge_params]
-            joint_params = join(params, ", ")
-            node_cmds = 
-            """
-            MERGE (src$(i):$(MetaGraphs.props(graph, e.src)[:TYPE]) {identifier: '$(MetaGraphs.props(graph, e.src)[:identifier])'})
-            MERGE (dst$(i):$(MetaGraphs.props(graph, e.dst)[:TYPE]) {identifier: '$(MetaGraphs.props(graph, e.dst)[:identifier])'})
-            """
-            if !isempty(joint_params)
-                relationship_cmd = "MERGE (src$(i))-[r$(i):$(MetaGraphs.props(graph, e)[:TYPE]) {$(joint_params)}]->(dst$(i))"
-            else
-                relationship_cmd = "MERGE (src$(i))-[r$(i):$(MetaGraphs.props(graph, e)[:TYPE])]->(dst$(i))"
-            end
-            cmd = node_cmds * relationship_cmd
-            cmd = replace(cmd, '\n' => ' ')
-            push!(cmds, cmd)
-        end
-        cmd = join(cmds, ' ')
-        cypher_cmd = Mycelia.cypher(address = ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE, cmd = cmd)
-        run(cypher_cmd)
-    end    
+function type_to_string(T::AbstractString)
+    return string(T)
 end
 
-function batch_upload_node_type_over_url_from_graph(node_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE, window_size=100)
+
+# function batch_upload_edge_type_over_url_from_graph(src_type, dst_type, edge_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE; window_size=100)    
+#     src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
+#     dst_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == dst_type, Graphs.vertices(graph))
+#     edges_to_upload = []
+#     for src_node in src_nodes
+#         outneighbors = Graphs.outneighbors(graph, src_node)
+#         outneighbors = filter(outneighbor -> outneighbor in dst_nodes, outneighbors)
+#         for outneighbor in outneighbors
+#             this_edge = Graphs.Edge(src_node, outneighbor)
+#             @assert MetaGraphs.get_prop(graph, this_edge, :TYPE) == edge_type
+#             push!(edges_to_upload, this_edge)
+#         end
+#     end
+    
+#     N = length(edges_to_upload)
+#     windows = [i:min(i+window_size-1,N) for i in 1:window_size:N]
+    
+#     ProgressMeter.@showprogress for window in windows
+#         cmds = []
+#         for (i, e) in enumerate(edges_to_upload[window])
+#             edge_params = filter(p -> p != :TYPE, keys(MetaGraphs.props(graph, e)))
+#             params = ["$(string(param)):'$(MetaGraphs.get_prop(graph, e, param))'" for param in edge_params]
+#             joint_params = join(params, ", ")
+#             node_cmds = 
+#             """
+#             MERGE (src$(i):$(MetaGraphs.props(graph, e.src)[:TYPE]) {identifier: '$(MetaGraphs.props(graph, e.src)[:identifier])'})
+#             MERGE (dst$(i):$(MetaGraphs.props(graph, e.dst)[:TYPE]) {identifier: '$(MetaGraphs.props(graph, e.dst)[:identifier])'})
+#             """
+#             if !isempty(joint_params)
+#                 relationship_cmd = "MERGE (src$(i))-[r$(i):$(MetaGraphs.props(graph, e)[:TYPE]) {$(joint_params)}]->(dst$(i))"
+#             else
+#                 relationship_cmd = "MERGE (src$(i))-[r$(i):$(MetaGraphs.props(graph, e)[:TYPE])]->(dst$(i))"
+#             end
+#             cmd = node_cmds * relationship_cmd
+#             cmd = replace(cmd, '\n' => ' ')
+#             push!(cmds, cmd)
+#         end
+#         cmd = join(cmds, ' ')
+#         cypher_cmd = Mycelia.cypher(address = ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE, cmd = cmd)
+#         run(cypher_cmd)
+#     end    
+# end
+
+# function batch_upload_node_type_over_url_from_graph(node_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE, window_size=100)
+#     node_type_params = Set{Symbol}()
+#     vertices_of_type = [v for v in Graphs.vertices(graph) if (graph.vprops[v][:TYPE] == node_type)]
+    
+#     V = length(vertices_of_type)
+#     windows = [i:min(i+window_size-1,V) for i in 1:window_size:V]
+    
+#     ProgressMeter.@showprogress for window in windows
+#         cmds = []
+#         for (i, v) in enumerate(vertices_of_type[window])
+#             node_params = filter(p -> p != :TYPE, keys(MetaGraphs.props(graph, v)))
+#             params = ["$(string(param)):'$(MetaGraphs.get_prop(graph, v, param))'" for param in node_params]
+#             # params = ["$(string(param)):'$(escape_string(MetaGraphs.get_prop(graph, v, param)))'" for param in node_params]
+#             joint_params = join(params, ", ")
+#             cmd = "MERGE (node$(i):$(node_type) {$(joint_params)})"
+#             push!(cmds, cmd)
+#         end
+#         cmd = join(cmds, ' ')
+#         cypher_cmd = Mycelia.cypher(address = ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE, cmd = cmd)
+#         run(cypher_cmd)
+#     end    
+# end
+
+function upload_node_type_over_url_from_graph(;node_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)
     node_type_params = Set{Symbol}()
     vertices_of_type = [v for v in Graphs.vertices(graph) if (graph.vprops[v][:TYPE] == node_type)]
     
@@ -89,50 +304,7 @@ function batch_upload_node_type_over_url_from_graph(node_type, graph, ADDRESS, U
     end    
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function upload_node_type_over_url_from_graph(node_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE, window_size=100)
-    node_type_params = Set{Symbol}()
-    vertices_of_type = [v for v in Graphs.vertices(graph) if (graph.vprops[v][:TYPE] == node_type)]
-    
-    V = length(vertices_of_type)
-    windows = [i:min(i+window_size-1,V) for i in 1:window_size:V]
-    
-    ProgressMeter.@showprogress for window in windows
-        cmds = []
-        for (i, v) in enumerate(vertices_of_type[window])
-            node_params = filter(p -> p != :TYPE, keys(MetaGraphs.props(graph, v)))
-            params = ["$(string(param)):'$(MetaGraphs.get_prop(graph, v, param))'" for param in node_params]
-            # params = ["$(string(param)):'$(escape_string(MetaGraphs.get_prop(graph, v, param)))'" for param in node_params]
-            joint_params = join(params, ", ")
-            cmd = "MERGE (node$(i):$(node_type) {$(joint_params)})"
-            push!(cmds, cmd)
-        end
-        cmd = join(cmds, ' ')
-        cypher_cmd = Mycelia.cypher(address = ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE, cmd = cmd)
-        run(cypher_cmd)
-    end    
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function upload_edge_type_over_url_from_graph(src_type, dst_type, edge_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE; window_size=100)    
+function upload_edge_type_over_url_from_graph(;src_type, dst_type, edge_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)    
     src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
     dst_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == dst_type, Graphs.vertices(graph))
     edges_to_upload = []
@@ -147,7 +319,7 @@ function upload_edge_type_over_url_from_graph(src_type, dst_type, edge_type, gra
     end
     
     N = length(edges_to_upload)
-    windows = [i:min(i+window_size-1,N) for i in 1:window_size:N]
+    windows = (i:min(i+window_size-1,N) for i in 1:window_size:N)
     
     ProgressMeter.@showprogress for window in windows
         cmds = []
@@ -208,7 +380,7 @@ julia> 1 + 1
 2
 ```
 """
-function list_databases(;address, username, password)
+function list_databases(;address, username="neo4j", password)
     cmd = "show databases"
     database = "system"
     cmd = cypher(cmd, address=address, username=username, password=password, database=database)
@@ -225,7 +397,7 @@ julia> 1 + 1
 2
 ```
 """
-function create_database(;database, address, username, password)
+function create_database(;database, address, username="neo4j", password)
     current_databases = list_databases(;address, username, password)
     if database in current_databases[!, "name"]
         return
@@ -282,7 +454,7 @@ julia> 1 + 1
 2
 ```
 """
-function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME, PASSWORD)
+function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME="neo4j", PASSWORD)
     DATABASE = "neo4j"
     ADDRESS="neo4j+s://$(database_id).databases.neo4j.io:7687"
     

@@ -98,6 +98,7 @@ function add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
         edge = Graphs.Edge(kmer_vertex, record_vertex)
         if !Graphs.has_edge(graph, edge)
             Graphs.add_edge!(graph, edge)
+            MetaGraphs.set_prop!(graph, edge, :TYPE, "RECORD_KMER_COUNT")
             MetaGraphs.set_prop!(graph, edge, :count, count)
         else
             graph_count = MetaGraphs.get_prop(graph, edge, :count)
