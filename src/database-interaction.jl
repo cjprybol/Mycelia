@@ -92,9 +92,19 @@ function node_type_to_dataframe(;node_type, graph)
     node_type_indices = filter(v -> MetaGraphs.props(graph, v)[:TYPE] == node_type, Graphs.vertices(graph))
     node_type_parameters = unique(reduce(vcat, map(v -> collect(keys(MetaGraphs.props(graph, v))), node_type_indices)))
     node_type_table = DataFrames.DataFrame(Dict(p => [] for p in node_type_parameters))
-    for node_index in node_type_indices
+    for node_index in node_type_indices      
         push!(node_type_table, MetaGraphs.props(graph, node_index))
     end
+    # normalize
+    node_type_table[!, "TYPE"] = Mycelia.type_to_string.(node_type_table[!, "TYPE"])
+    for column in names(node_type_table)
+        T = Union{unique(typeof.(node_type_table[!, column]))...}
+        if T <: AbstractDict
+            node_type_table[!, column] = map(d -> JSON.json(string(JSON.json(d))), node_type_table[!, column])
+        else
+            node_type_table[!, column] = JSON.json.(string.(node_type_table[!, column]))
+        end
+    end  
     return node_type_table
 end
 
