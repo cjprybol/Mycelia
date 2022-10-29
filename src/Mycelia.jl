@@ -18,6 +18,7 @@ import GFF3
 import GraphRecipes
 import Graphs
 import HTTP
+import JSON
 import Kmers
 import LsqFit
 import MetaGraphs
