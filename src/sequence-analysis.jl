@@ -597,16 +597,16 @@ function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Uni
     return count_kmers(KMER_TYPE, collect(sequences))
 end
 
-function count_kmers(KMER_TYPE, fastx_files::AbstractVector{AbstractString})
-    kmer_counts = count_kmers(KMER_TYPE, first(files))
-    for file in files[2:end]
+function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {KMER_TYPE, T <: AbstractString}
+    kmer_counts = count_kmers(KMER_TYPE, first(fastx_files))
+    for file in fastx_files[2:end]
         _kmer_counts = count_kmers(KMER_TYPE, file)
         kmer_counts = merge!(+, kmer_counts, _kmer_counts)
     end
     return kmer_counts
 end
 
-function count_kmers(KMER_TYPE, fastx_file::AbstractString)
+function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_TYPE}
     fastx_io = open_fastx(fastx_file)
     kmer_counts = count_kmers(KMER_TYPE, fastx_io)
     close(fastx_io)

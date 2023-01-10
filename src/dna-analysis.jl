@@ -3,27 +3,17 @@
 # TODO, replace jellyfish functions with internal code
 function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
     @info "counting $k-mers"
-    jf_file = "$kmer_directory/$k.downsampled.jf"
-    p = pipeline(
-        `gzip -dc $forward_reads $reverse_reads`,
-        `jellyfish count -m $k -s 100M -t $(Sys.CPU_THREADS) -C --output $jf_file /dev/fd/0`
-    )
-    run(p)
+    canonical_kmer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, [forward_reads, reverse_reads])
 
     @info "determining max count"
-    p = pipeline(
-        `jellyfish dump -ct $jf_file`,
-        `awk '{print $2}'`,
-        `sort --numeric-sort --reverse`,
-        `head -n1`)
-    max_count = parse(Int, read(p, String))
+    max_count = maximum(values(canonical_kmer_counts))
     @info "max count = $max_count"
 
     @info "generating histogram"
-    histogram_matrix = Int.(DelimitedFiles.readdlm(open(`jellyfish histo --high $max_count $jf_file`)))
+    kmer_counts_histogram = sort(collect(StatsBase.countmap(values(canonical_kmer_counts))), by=x->x[1])
 
-    X = log2.(histogram_matrix[:, 1])
-    Y = log2.(histogram_matrix[:, 2])
+    X = log2.(first.(kmer_counts_histogram))
+    Y = log2.(last.(kmer_counts_histogram))
     
     @info "plotting kmer spectra"
     p = StatsPlots.scatter(
@@ -80,8 +70,8 @@ function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=1
     if isinteractive()
         display(p)
     end
-    StatsPlots.savefig(p, "$jf_file.peak-detected.png")
-    StatsPlots.savefig(p, "$jf_file.peak-detected.svg")
+    StatsPlots.savefig(p, "$kmer_directory/peak-detected.png")
+    StatsPlots.savefig(p, "$kmer_directory/peak-detected.svg")
     
     if target_coverage != 0
         detected_coverage = 2^(X[peak_index])
