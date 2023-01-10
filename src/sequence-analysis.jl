@@ -757,7 +757,7 @@ julia> 1 + 1
 """
 function determine_read_lengths(fastq_file; total_reads = Inf)
     if total_reads == Inf
-        total_reads = count_reads(fastq_file)
+        total_reads = count_records(fastq_file)
     end
     read_lengths = zeros(Int, total_reads)
     @info "determining read lengths"

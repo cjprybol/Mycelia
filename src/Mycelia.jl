@@ -17,6 +17,7 @@ import GenomicAnnotations
 import GFF3
 import GraphRecipes
 import Graphs
+import GLM
 import HTTP
 import JSON
 import Kmers

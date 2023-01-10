@@ -1,3 +1,103 @@
+# https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
+
+# TODO, replace jellyfish functions with internal code
+function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
+    @info "counting $k-mers"
+    jf_file = "$kmer_directory/$k.downsampled.jf"
+    p = pipeline(
+        `gzip -dc $forward_reads $reverse_reads`,
+        `jellyfish count -m $k -s 100M -t $(Sys.CPU_THREADS) -C --output $jf_file /dev/fd/0`
+    )
+    run(p)
+
+    @info "determining max count"
+    p = pipeline(
+        `jellyfish dump -ct $jf_file`,
+        `awk '{print $2}'`,
+        `sort --numeric-sort --reverse`,
+        `head -n1`)
+    max_count = parse(Int, read(p, String))
+    @info "max count = $max_count"
+
+    @info "generating histogram"
+    histogram_matrix = Int.(DelimitedFiles.readdlm(open(`jellyfish histo --high $max_count $jf_file`)))
+
+    X = log2.(histogram_matrix[:, 1])
+    Y = log2.(histogram_matrix[:, 2])
+    
+    @info "plotting kmer spectra"
+    p = StatsPlots.scatter(
+        X,
+        Y,
+        xlabel="log2(kmer_frequency)",
+        ylabel="log2(# of kmers @ frequency)",
+        label=""
+    )
+
+    earliest_y_min_index = last(findmin(Y))
+    lower_boundary = X[earliest_y_min_index]
+    lower_boundary_source = "first minimum"
+
+    try
+        # take the first 1/denominator datapoints in the set
+        # to capture the error line on the left side of the graph
+        @info "fitting error curve"
+        denominators = [2^i for i in 1:5]
+        coeficient_matrix = zeros(length(denominators), 2)
+        for (i, denominator) in enumerate(denominators)
+            prefix_index = Int(floor(length(X)/denominator))
+            _x = X[1:prefix_index]
+            _y = Y[1:prefix_index]
+            model = GLM.lm(GLM.@formula(Y ~ X), DataFrames.DataFrame(X = _x, Y = _y))
+            coeficient_matrix[i, :] = GLM.coef(model)
+        end
+        median_intercept = Statistics.median(coeficient_matrix[:, 1])
+        median_slope = Statistics.median(coeficient_matrix[:, 2])
+
+        X_intercept = (0 - median_intercept) / median_slope
+
+        # some libraries detect the x_intercept being AFTER the end of the data
+        # in these instances detect the earliest x-minimum
+        if X_intercept < lower_boundary
+            lower_boundary = X_intercept
+            lower_boundary_source = "detected x-intercept"
+        end
+    catch
+        @info "unable to fit regression"
+    end
+
+    p = StatsPlots.vline!(p,
+        [lower_boundary],
+        label="lower boundary ($(lower_boundary_source))"
+    );
+    
+    is_above_lower_bounds = X .>= lower_boundary
+    max_Y_post_error_intercept = first(findmax(Y[is_above_lower_bounds]))
+    peak_indices = findall(is_above_lower_bounds .& (Y .== max_Y_post_error_intercept))
+    peak_index = Int(round(Statistics.median(peak_indices)))
+
+    p = StatsPlots.vline!([X[peak_index]], label="inferred sample coverage)")
+    if isinteractive()
+        display(p)
+    end
+    StatsPlots.savefig(p, "$jf_file.peak-detected.png")
+    StatsPlots.savefig(p, "$jf_file.peak-detected.svg")
+    
+    if target_coverage != 0
+        detected_coverage = 2^(X[peak_index])
+        downsampling_rate = round(target_coverage/detected_coverage, sigdigits=3)
+        downsampling_rate = min(downsampling_rate, 1)
+        @info "downsampling rate = $downsampling_rate"
+
+        outfile = "$kmer_directory/downsampling-rate.txt"
+        open(outfile, "w") do io
+            @info "writing downsampling rate to $outfile"
+            println(io, downsampling_rate)
+        end
+        return downsampling_rate
+    end
+end
+
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
