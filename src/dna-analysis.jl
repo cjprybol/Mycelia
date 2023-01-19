@@ -147,7 +147,7 @@ function determine_percent_identity(reference_fasta, query_fasta)
 end
 
 # TODO, replace jellyfish functions with internal code
-function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
+function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
     @info "counting $k-mers"
     canonical_kmer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, [forward_reads, reverse_reads])
 
@@ -216,8 +216,8 @@ function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=1
     if isinteractive()
         display(p)
     end
-    StatsPlots.savefig(p, "$kmer_directory/peak-detected.png")
-    StatsPlots.savefig(p, "$kmer_directory/peak-detected.svg")
+    StatsPlots.savefig(p, "$out_directory/peak-detected.png")
+    StatsPlots.savefig(p, "$out_directory/peak-detected.svg")
     
     if target_coverage != 0
         detected_coverage = 2^(X[peak_index])
@@ -225,7 +225,7 @@ function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=1
         downsampling_rate = min(downsampling_rate, 1)
         @info "downsampling rate = $downsampling_rate"
 
-        outfile = "$kmer_directory/downsampling-rate.txt"
+        outfile = "$out_directory/downsampling-rate.txt"
         open(outfile, "w") do io
             @info "writing downsampling rate to $outfile"
             println(io, downsampling_rate)

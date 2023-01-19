@@ -581,7 +581,8 @@ function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) whe
 end
 
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    return count_kmers(KMER_TYPE, FASTX.sequence(record))    
+    # TODO: we may want to do some sniffing here since I don't want this to be hardcoded for DNA
+    return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
 end
 
 function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}

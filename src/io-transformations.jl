@@ -50,7 +50,7 @@ julia> 1 + 1
 2
 ```
 """
-function open_fastx(path::String)
+function open_fastx(path::AbstractString)
     if isfile(path)
         io = open(path)
     elseif occursin(r"^ftp", path) || occursin(r"^http", path)
