@@ -1,5 +1,151 @@
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
 
+"""
+Returns bool indicating whether the contig is a circle
+
+graph_file = path to assembly graph.gfa file
+contig_name = name of the contig (will be fuzzy matched from the gfa file in case of slight variation in naming)
+"""
+function contig_is_circular(graph_file::String, contig_name::String)
+    
+    segments = Vector{String}()
+    links = Vector{Pair{String, String}}()
+    paths = Dict{String, Vector{String}}()
+    
+    for l in eachline(open(graph_file))
+        s = split(l, '\t')
+        if first(s) == "S"
+            # segment
+            push!(segments, string(s[2]))
+        elseif first(s) == "L"
+            # link
+            push!(links, string(s[2]) => string(s[4]))
+        elseif first(s) == "P"
+            # path
+            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
+        else
+            error("unexpected line encountered while parsing GFA")
+        end
+    end
+    
+    g = Graphs.SimpleGraph(length(segments))
+    
+    for link in links
+        (u, v) = link
+        ui = findfirst(segments .== u)
+        vi = findfirst(segments .== v)
+        Graphs.add_edge!(g, ui => vi)
+    end
+    
+    primary_scaffold_name = first(filter(k -> occursin(Regex("^$primary_contig_name"), k), keys(paths)))
+    primary_scaffold_segment_ids = paths[primary_scaffold_name]
+    circular = false
+    
+    if length(primary_scaffold_segment_ids) == 1
+        node_id = findfirst(segments .== first(primary_scaffold_segment_ids))
+        component_of_interest = first(filter(cc -> node_id in cc, Graphs.connected_components(g)))
+        subgraph, vertex_map = Graphs.induced_subgraph(g, component_of_interest)
+        if component_of_interest == [node_id] && Graphs.is_cyclic(subgraph)
+            circular = true
+        end
+    end
+    return circular
+end
+
+# uses minimap
+function determine_percent_identity(reference_fasta, query_fasta)
+    header = [
+        "Query",
+        "Query length",
+        "Query start",
+        "Query end",
+        "Query strand",
+        "Target",
+        "Target length",
+        "Target start",
+        "Target end",
+        "Matches",
+        "Alignment length",
+        "Mapping quality",
+        "Cigar",
+        "CS tag"]
+    
+#     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
+    results5 = read(`minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
+    if !isempty(results5)
+        results = results5
+    else
+        @warn "no hit with asm5, trying asm10"
+        results10 = read(`minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
+        if !isempty(results10)
+            results = results10
+        else
+            @warn "no hits with asm5 or asm10, trying asm20"
+            results20 = read(`minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
+            if !isempty(results20)
+                results = results20
+            end
+        end
+    end
+    if !isempty(results)
+        data =  DelimitedFiles.readdlm(IOBuffer(results), '\t')
+        data_columns_of_interest = [collect(1:length(header)-2)..., collect(size(data, 2)-1:size(data, 2))...]
+        minimap_results = DataFrames.DataFrame(data[:, data_columns_of_interest], header)
+
+        equivalent_matches = reduce(vcat, map(x -> collect(eachmatch(r":([0-9]+)", replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_equivalent_bases = sum(map(match -> parse(Int, first(match.captures)), equivalent_matches))
+
+        insertion_matches = reduce(vcat, map(x -> collect(eachmatch(r"\+([a-z]+)"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_inserted_bases = sum(map(match -> length(first(match.captures)), insertion_matches))
+        deletion_matches = reduce(vcat, map(x -> collect(eachmatch(r"\-([a-z]+)"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_deleted_bases = sum(map(match -> length(first(match.captures)), deletion_matches))
+        substitution_matches = reduce(vcat, map(x -> collect(eachmatch(r"\*([a-z]{2})"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_substituted_bases = length(substitution_matches)
+        total_variants = length(insertion_matches) + length(deletion_matches) + length(substitution_matches)
+        total_variable_bases = total_inserted_bases + total_deleted_bases + total_substituted_bases
+
+        total_alignment_length = sum(minimap_results[!, "Alignment length"])
+        total_matches = sum(minimap_results[!, "Matches"])
+        
+        alignment_percent_identity = round(total_matches / total_alignment_length * 100, digits=2)
+        size_equivalence_to_reference = round(minimap_results[1, "Query length"]/minimap_results[1, "Target length"] * 100, digits=2)
+        alignment_coverage_query = round(total_alignment_length / minimap_results[1, "Query length"] * 100, digits=2)
+        alignment_coverage_reference = round(total_alignment_length / minimap_results[1, "Target length"] * 100, digits=2)
+
+        results = DataFrames.DataFrame(
+            alignment_percent_identity = alignment_percent_identity,
+            total_equivalent_bases = total_equivalent_bases,
+            total_alignment_length = total_alignment_length,
+            query_length = minimap_results[1, "Query length"],
+            total_variants = total_variants,
+            total_snps = total_substituted_bases,
+            total_indels = length(insertion_matches) + length(deletion_matches),
+            alignment_coverage_query = alignment_coverage_query,
+            alignment_coverage_reference = alignment_coverage_reference,
+            size_equivalence_to_reference = size_equivalence_to_reference,
+        )
+    else
+        query_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(query_fasta)))))
+        target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
+        size_equivalence_to_reference = round(query_length/target_length * 100, digits=2)
+
+        # unable to find any matches
+        results = DataFrames.DataFrame(
+            alignment_percent_identity = "",
+            total_equivalent_bases = "",
+            total_alignment_length = "",
+            query_length = query_length,
+            total_variants = "",
+            total_snps = "",
+            total_indels = "",
+            alignment_coverage_query = 0,
+            alignment_coverage_reference = 0,
+            size_equivalence_to_reference = size_equivalence_to_reference
+        )
+    end
+    return results
+end
+
 # TODO, replace jellyfish functions with internal code
 function analyze_kmer_spectra(;kmer_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
     @info "counting $k-mers"
