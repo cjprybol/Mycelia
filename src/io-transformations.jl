@@ -7,6 +7,60 @@ function parse_blast_report(blast_report)
     return DataFrames.DataFrame(data, header)
 end
 
+"""
+Parse a GFA file into a genome graph - need to finish implementation and assert contig normalization (i.e. is canonical) before using with my code
+"""
+function parse_gfa(gfa)
+    
+    gfa_record_types = Dict(
+        '#' => "Comment",
+        'H' => "Header",
+        'S' => "Segment",
+        'L' => "Link",
+        'J' => "Jump",
+        'C' => "Containment",
+        'P' => "Path",
+        'W' => "Walk"
+    )
+
+    gfa_graph = MetaGraphs.MetaDiGraph()
+    MetaGraphs.set_prop!(gfa_graph, :paths, Dict{String, Any}())
+    for line in eachline(gfa)
+        record_type = gfa_record_types[line[1]]
+        if record_type == "Header"
+            # metadata
+            sline = split(line)
+            # add me later
+        elseif record_type == "Comment"
+            # metadata
+            # add me later
+        elseif record_type == "Segment"
+            # node
+            record_type, record_name, sequence = split(line, '\t')
+            Graphs.add_vertex!(gfa_graph)
+            node_index = Graphs.nv(gfa_graph)
+            MetaGraphs.set_prop!(gfa_graph, node_index, :identifier, record_name)
+            MetaGraphs.set_indexing_prop!(gfa_graph, :identifier)
+            MetaGraphs.set_prop!(gfa_graph, node_index, :sequence, sequence)
+        elseif record_type == "Link"
+            record_type, source, source_orientation, destination, destination_orientation, overlap_CIGAR = split(line, '\t')
+            source_index = gfa_graph[source, :identifier]
+            destination_index = gfa_graph[source, :identifier]
+            edge = Graphs.Edge(source_index, destination_index)
+            Graphs.add_edge!(gfa_graph, edge)
+            MetaGraphs.set_prop!(gfa_graph, edge, :source_orientation, source_orientation)
+            MetaGraphs.set_prop!(gfa_graph, edge, :destination_orientation, destination_orientation)
+        elseif record_type == "Path"
+            record_type, path_name, segment_names, overlaps = split(line, '\t')
+            # @warn "finish adding path code"
+            gfa_graph.gprops[:paths][path_name] = Dict("segment_names" => segment_names, "overlaps" => overlaps)
+        else
+            @warn "GFA line type $(record_type) not currently handled by the import - please add"
+        end
+    end
+    return gfa_graph
+end
+
 function graph_to_gfa(graph, kmer_size, outfile="$(kmer_size).gfa")
     kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
     # add fastq here too???

@@ -23,6 +23,12 @@ function parse_qualimap_contig_coverage(qualimap_report_txt)
     return qualimap_results
 end
 
+function determine_primary_contig(qualimap_results)
+    primary_contig_index = last(findmax(qualimap_results[!, "Mapped bases"]))
+    primary_contig = qualimap_results[primary_contig_index, "Contig"]
+    return primary_contig
+end
+
 """
 Primary contig is defined as the contig with the most bases mapped to it
 
@@ -34,25 +40,7 @@ Taking the contig that has the most bases mapped to it as a product of length * 
 function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, qualimap_report_txt, identifier, k; primary_contig_fasta = "$(identifier).primary_contig.fna")
     
     qualimap_results = parse_qualimap_contig_coverage(qualimap_report_txt)
-
-    primary_contig_index = last(findmax(qualimap_results[!, "Mapped bases"]))
-    primary_contig = qualimap_results[primary_contig_index, "Contig"]
-    primary_contig_size = qualimap_results[primary_contig_index, "Length"]
-    total_contigs = DataFrames.nrow(qualimap_results)
-    total_size = reduce(+, qualimap_results[!, "Length"])
-    percent_reads_mapped = parse(Float64, replace(last(split(first(filter(x -> occursin(r"number of mapped reads =", x), readlines("$(qualimap_report_txt)"))))), r"[()%]" => ""))
-
-    percent_mapped_bases_mapped_to_primary_contig = round(qualimap_results[primary_contig_index, "Mapped bases"] / sum(qualimap_results[!, "Mapped bases"]) * 100, digits=2)
-
-    gfa_lines = readlines(assembled_gfa)
-    hits = filter(x -> occursin(primary_contig, x), gfa_lines)
-    untigs_associated_with_primary_contig = reduce(vcat, map(x -> split(replace(split(x, '\t')[3], r"[+-]" => ""), ','), hits))
-
-    r = Regex("\t" * join(untigs_associated_with_primary_contig, "\t|\t") * "\t")
-    links_associated_with_primary_contig = filter(x -> occursin(r, x), filter(x -> occursin(r"^L", x), gfa_lines))
-
-    n_links = length(links_associated_with_primary_contig)
-    n_untigs = length(untigs_associated_with_primary_contig)
+    primary_contig = determine_primary_contig(qualimap_results)
 
     # Find primary contig from scaffolds, then export as primary_contig.fasta
     for record in FASTX.FASTA.Reader(open(assembled_fasta))
@@ -84,34 +72,7 @@ contig_name = name of the contig (will be fuzzy matched from the gfa file in cas
 """
 function contig_is_circular(graph_file::String, contig_name::String)
     
-    segments = Vector{String}()
-    links = Vector{Pair{String, String}}()
-    paths = Dict{String, Vector{String}}()
-    
-    for l in eachline(open(graph_file))
-        s = split(l, '\t')
-        if first(s) == "S"
-            # segment
-            push!(segments, string(s[2]))
-        elseif first(s) == "L"
-            # link
-            push!(links, string(s[2]) => string(s[4]))
-        elseif first(s) == "P"
-            # path
-            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
-        else
-            error("unexpected line encountered while parsing GFA")
-        end
-    end
-    
-    g = Graphs.SimpleGraph(length(segments))
-    
-    for link in links
-        (u, v) = link
-        ui = findfirst(segments .== u)
-        vi = findfirst(segments .== v)
-        Graphs.add_edge!(g, ui => vi)
-    end
+    gfa_graph = parse_gfa(graph_file)
     
     scaffold_name = first(filter(k -> occursin(Regex("^$contig_name"), k), keys(paths)))
     scaffold_segment_ids = paths[scaffold_name]
