@@ -1,3 +1,12 @@
+function parse_blast_report(blast_report)
+    # example header line 
+    # "# Fields: query id, subject id, subject acc., subject acc.ver, subject title, query length, subject length, q. start, q. end, s. start, s. end, evalue, bit score, score, alignment length, % identity, identical, mismatches, subject tax id"
+    header_line = first(Iterators.filter(x -> occursin(r"# Fields:", x), eachline(blast_report)))
+    header = split(last(split(header_line, ": ")), ", ")
+    data, _ = uCSV.read(blast_report, delim='\t', comment='#', typedetectrows=100)
+    return DataFrames.DataFrame(data, header)
+end
+
 function graph_to_gfa(graph, kmer_size, outfile="$(kmer_size).gfa")
     kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
     # add fastq here too???

@@ -1,4 +1,80 @@
-# https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
+"""
+Parse the contig coverage information from qualimap bamqc text report, which looks like the following:
+
+```
+>>>>>>> Coverage per contig
+
+	NODE_1_length_107478_cov_9.051896	107478	21606903	201.0355886786133	60.39424208607496
+	NODE_2_length_5444_cov_1.351945	5444	153263	28.152645113886848	5.954250612823136
+	NODE_3_length_1062_cov_0.154390	1062	4294	4.043314500941619	1.6655384692688975
+	NODE_4_length_776_cov_0.191489	776	3210	4.13659793814433	2.252009588980858
+```
+
+Note I don't expect this to work with other assemblers by default since it's a spades-specific
+pattern to name all contigs with "NODE" as the prefix. Would need to read in the names of the contigs
+from the assembled fasta or build a better parser to make this generalized and more robust
+"""
+function parse_qualimap_contig_coverage(qualimap_report_txt)
+    lines = filter(x -> occursin(r"^\tNODE", x), readlines("$(qualimap_report_txt)"))
+    io = IOBuffer(join(map(x -> join(split(x, '\t')[2:end], '\t'), lines), '\n'))
+    data, header = uCSV.read(io, delim='\t')
+    header = ["Contig", "Length", "Mapped bases", "Mean coverage", "Standard Deviation"]
+    qualimap_results = DataFrames.DataFrame(data, header)
+    return qualimap_results
+end
+
+"""
+Primary contig is defined as the contig with the most bases mapped to it
+
+In the context of picking out phage from metagenomic assemblies
+the longest contig is often bacteria whereas the highest coverage contigs are often primer-dimers or other PCR amplification artifacts.
+
+Taking the contig that has the most bases mapped to it as a product of length * depth is cherry picked as our phage
+"""
+function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, qualimap_report_txt, identifier, k; primary_contig_fasta = "$(identifier).primary_contig.fna")
+    
+    qualimap_results = parse_qualimap_contig_coverage(qualimap_report_txt)
+
+    primary_contig_index = last(findmax(qualimap_results[!, "Mapped bases"]))
+    primary_contig = qualimap_results[primary_contig_index, "Contig"]
+    primary_contig_size = qualimap_results[primary_contig_index, "Length"]
+    total_contigs = DataFrames.nrow(qualimap_results)
+    total_size = reduce(+, qualimap_results[!, "Length"])
+    percent_reads_mapped = parse(Float64, replace(last(split(first(filter(x -> occursin(r"number of mapped reads =", x), readlines("$(qualimap_report_txt)"))))), r"[()%]" => ""))
+
+    percent_mapped_bases_mapped_to_primary_contig = round(qualimap_results[primary_contig_index, "Mapped bases"] / sum(qualimap_results[!, "Mapped bases"]) * 100, digits=2)
+
+    gfa_lines = readlines(assembled_gfa)
+    hits = filter(x -> occursin(primary_contig, x), gfa_lines)
+    untigs_associated_with_primary_contig = reduce(vcat, map(x -> split(replace(split(x, '\t')[3], r"[+-]" => ""), ','), hits))
+
+    r = Regex("\t" * join(untigs_associated_with_primary_contig, "\t|\t") * "\t")
+    links_associated_with_primary_contig = filter(x -> occursin(r, x), filter(x -> occursin(r"^L", x), gfa_lines))
+
+    n_links = length(links_associated_with_primary_contig)
+    n_untigs = length(untigs_associated_with_primary_contig)
+
+    # Find primary contig from scaffolds, then export as primary_contig.fasta
+    for record in FASTX.FASTA.Reader(open(assembled_fasta))
+        record_id = FASTX.identifier(record)
+        if record_id == primary_contig
+            primary_contig_sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+
+            # If the primary contig is circular, need to trim to remove closure scar
+            if Mycelia.contig_is_circular(assembled_gfa, primary_contig)
+                # trim k-length from end before writing if it matches the first k of the contig
+                if primary_contig_sequence[1:k] == primary_contig_sequence[end-k+1:end]
+                    for i in 1:k pop!(primary_contig_sequence) end
+                end
+            end
+
+        w = FASTX.FASTA.Writer(open(primary_contig_fasta, "w")) 
+            write(w, FASTX.FASTA.Record(identifier, primary_contig_sequence))
+            close(w)
+        end
+    end
+    return primary_contig_fasta
+end
 
 """
 Returns bool indicating whether the contig is a circle
@@ -37,12 +113,12 @@ function contig_is_circular(graph_file::String, contig_name::String)
         Graphs.add_edge!(g, ui => vi)
     end
     
-    primary_scaffold_name = first(filter(k -> occursin(Regex("^$primary_contig_name"), k), keys(paths)))
-    primary_scaffold_segment_ids = paths[primary_scaffold_name]
+    scaffold_name = first(filter(k -> occursin(Regex("^$contig_name"), k), keys(paths)))
+    scaffold_segment_ids = paths[scaffold_name]
     circular = false
     
-    if length(primary_scaffold_segment_ids) == 1
-        node_id = findfirst(segments .== first(primary_scaffold_segment_ids))
+    if length(scaffold_segment_ids) == 1
+        node_id = findfirst(segments .== first(scaffold_segment_ids))
         component_of_interest = first(filter(cc -> node_id in cc, Graphs.connected_components(g)))
         subgraph, vertex_map = Graphs.induced_subgraph(g, component_of_interest)
         if component_of_interest == [node_id] && Graphs.is_cyclic(subgraph)
@@ -146,7 +222,7 @@ function determine_percent_identity(reference_fasta, query_fasta)
     return results
 end
 
-# TODO, replace jellyfish functions with internal code
+# https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
 function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
     @info "counting $k-mers"
     canonical_kmer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, [forward_reads, reverse_reads])
