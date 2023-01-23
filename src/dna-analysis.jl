@@ -65,28 +65,47 @@ function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, quali
 end
 
 """
+Returns bool indicating whether the contig is cleanly assembled
+
+graph_file = path to assembly graph.gfa file
+contig_name = name of the contig
+"""
+function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
+    gfa_graph = Mycelia.parse_gfa(graph_file)
+    # gfa segment identifiers have _1 appended to fasta sequence identifiers - not sure why
+    segment_identifier = contig_name * "_1"
+    segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segment_names"]
+    nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
+    node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
+    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), Graphs.connected_components(gfa_graph)))
+    subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
+    if (1 <= length(component_of_interest) <= 2)
+        return true
+    else
+        return false
+    end
+end
+
+"""
 Returns bool indicating whether the contig is a circle
 
 graph_file = path to assembly graph.gfa file
-contig_name = name of the contig (will be fuzzy matched from the gfa file in case of slight variation in naming)
+contig_name = name of the contig
 """
 function contig_is_circular(graph_file::String, contig_name::String)
-    
-    gfa_graph = parse_gfa(graph_file)
-    
-    scaffold_name = first(filter(k -> occursin(Regex("^$contig_name"), k), keys(paths)))
-    scaffold_segment_ids = paths[scaffold_name]
-    circular = false
-    
-    if length(scaffold_segment_ids) == 1
-        node_id = findfirst(segments .== first(scaffold_segment_ids))
-        component_of_interest = first(filter(cc -> node_id in cc, Graphs.connected_components(g)))
-        subgraph, vertex_map = Graphs.induced_subgraph(g, component_of_interest)
-        if component_of_interest == [node_id] && Graphs.is_cyclic(subgraph)
-            circular = true
-        end
+    gfa_graph = Mycelia.parse_gfa(graph_file)
+    # gfa segment identifiers have _1 appended to fasta sequence identifiers - not sure why
+    segment_identifier = contig_name * "_1"
+    segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segment_names"]
+    nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
+    node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
+    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), Graphs.connected_components(gfa_graph)))
+    subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
+    if (length(component_of_interest) == 1) && Graphs.is_cyclic(subgraph)
+        return true
+    else
+        return false
     end
-    return circular
 end
 
 # uses minimap
