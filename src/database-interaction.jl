@@ -1,12 +1,17 @@
 """
 Smart downloading of blast dbs depending on interactive, non interactive context
 """
-function download_blast_db(;db, outdir="$(homedir())/blastdb", source="ncbi")
-    @assert source in ["aws", "gcp", "ncbi"]
+function download_blast_db(;db, outdir="$(homedir())/blastdb", source="")
+    @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(outdir)
     current_directory = pwd()
     cd(outdir)
-    @time run(`update_blastdb.pl $(db) --source $(source) --decompress`)
+    if isempty(source)
+        @info "source not provided, letting blast auto-detect fastest download option"
+    else
+        @info "downloading from source $(source)"
+        @time run(`update_blastdb.pl $(db) --source $(source) --decompress`)
+    end
     # if isinteractive() ||
     #     # 2023-01-23 11:00:52
     #     # ~ 1-2 hours
