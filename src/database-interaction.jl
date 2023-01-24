@@ -8,6 +8,7 @@ function download_blast_db(;db, outdir="$(homedir())/blastdb", source="")
     cd(outdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
+        @time run(`update_blastdb.pl $(db) --decompress`)
     else
         @info "downloading from source $(source)"
         @time run(`update_blastdb.pl $(db) --source $(source) --decompress`)
