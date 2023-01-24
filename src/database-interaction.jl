@@ -1,22 +1,24 @@
 """
 Smart downloading of blast dbs depending on interactive, non interactive context
 """
-function download_blast_db(;db, outdir="$(homedir())/blastdb")
+function download_blast_db(;db, outdir="$(homedir())/blastdb", source="ncbi")
+    @assert source in ["aws", "gcp", "ncbi"]
     mkpath(outdir)
     current_directory = pwd()
     cd(outdir)
-    if isinteractive()
-        # 2023-01-23 11:00:52
-        # ~ 1-2 hours
-        # 260 gb
-        # will only download if different from current
-        @time run(`update_blastdb.pl $(db) --source ncbi --decompress`)
-    else
-        # aws and gcp downloads are MUCH faster, but they will re-download each time
-        # this makes them better for single-use, non-interactive cloud builds, but terrible for local development
-        # ~ 20 minutes
-        @time run(`update_blastdb.pl $(db) --decompress`)
-    end
+    @time run(`update_blastdb.pl $(db) --source $(source) --decompress`)
+    # if isinteractive() ||
+    #     # 2023-01-23 11:00:52
+    #     # ~ 1-2 hours
+    #     # 260 gb
+    #     # will only download if different from current
+    #     @time run(`update_blastdb.pl $(db) --source ncbi --decompress`)
+    # else
+    #     # aws and gcp downloads are MUCH faster, but they will re-download each time
+    #     # this makes them better for single-use, non-interactive cloud builds, but terrible for local development
+    #     # ~ 20 minutes
+    #     @time run(`update_blastdb.pl $(db) --decompress`)
+    # end
     cd(current_directory)
 end
 

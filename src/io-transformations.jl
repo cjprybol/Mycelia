@@ -43,17 +43,19 @@ function parse_gfa(gfa)
             MetaGraphs.set_indexing_prop!(gfa_graph, :identifier)
             MetaGraphs.set_prop!(gfa_graph, node_index, :sequence, sequence)
         elseif record_type == "Link"
-            record_type, source, source_orientation, destination, destination_orientation, overlap_CIGAR = split(line, '\t')
-            source_index = gfa_graph[source, :identifier]
-            destination_index = gfa_graph[source, :identifier]
+            record_type, source_identifier, source_orientation, destination_identifier, destination_orientation, overlap_CIGAR = split(line, '\t')
+            source_index = gfa_graph[source_identifier, :identifier]
+            destination_index = gfa_graph[destination_identifier, :identifier]
             edge = Graphs.Edge(source_index, destination_index)
             Graphs.add_edge!(gfa_graph, edge)
+            MetaGraphs.set_prop!(gfa_graph, edge, :source_identifier, source_identifier)
             MetaGraphs.set_prop!(gfa_graph, edge, :source_orientation, source_orientation)
+            MetaGraphs.set_prop!(gfa_graph, edge, :destination_identifier, destination_identifier)
             MetaGraphs.set_prop!(gfa_graph, edge, :destination_orientation, destination_orientation)
+            MetaGraphs.set_prop!(gfa_graph, edge, :overlap_CIGAR, overlap_CIGAR)
         elseif record_type == "Path"
-            record_type, path_name, segment_names, overlaps = split(line, '\t')
-            # @warn "finish adding path code"
-            gfa_graph.gprops[:paths][path_name] = Dict("segment_names" => segment_names, "overlaps" => overlaps)
+            record_type, path_identifier, segments, overlaps = split(line, '\t')
+            gfa_graph.gprops[:paths][path_identifier] = Dict("segments" => segments, "overlaps" => overlaps)
         else
             @warn "GFA line type $(record_type) not currently handled by the import - please add"
         end

@@ -74,10 +74,11 @@ function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
     gfa_graph = Mycelia.parse_gfa(graph_file)
     # gfa segment identifiers have _1 appended to fasta sequence identifiers - not sure why
     segment_identifier = contig_name * "_1"
-    segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segment_names"]
+    segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
     nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
     node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
-    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), Graphs.connected_components(gfa_graph)))
+    connected_components = Graphs.connected_components(gfa_graph)
+    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
     subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
     if (1 <= length(component_of_interest) <= 2)
         return true
@@ -96,12 +97,13 @@ function contig_is_circular(graph_file::String, contig_name::String)
     gfa_graph = Mycelia.parse_gfa(graph_file)
     # gfa segment identifiers have _1 appended to fasta sequence identifiers - not sure why
     segment_identifier = contig_name * "_1"
-    segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segment_names"]
+    segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
     nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
     node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
-    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), Graphs.connected_components(gfa_graph)))
+    connected_components = Graphs.connected_components(gfa_graph)
+    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
     subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
-    if (length(component_of_interest) == 1) && Graphs.is_cyclic(subgraph)
+    if Graphs.is_cyclic(subgraph)
         return true
     else
         return false
