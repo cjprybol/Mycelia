@@ -205,7 +205,7 @@ function determine_percent_identity(reference_fasta, query_fasta)
 end
 
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
-function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0)
+function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0, plot_size=(600,400))
     @info "counting $k-mers"
     canonical_kmer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, [forward_reads, reverse_reads])
 
@@ -225,7 +225,8 @@ function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17
         Y,
         xlabel="log2(kmer_frequency)",
         ylabel="log2(# of kmers @ frequency)",
-        label=""
+        label="",
+        size=plot_size
     )
 
     earliest_y_min_index = last(findmin(Y))
