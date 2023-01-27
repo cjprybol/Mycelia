@@ -3,7 +3,7 @@ function parse_blast_report(blast_report)
     # "# Fields: query id, subject id, subject acc., subject acc.ver, subject title, query length, subject length, q. start, q. end, s. start, s. end, evalue, bit score, score, alignment length, % identity, identical, mismatches, subject tax id"
     header_line = first(Iterators.filter(x -> occursin(r"# Fields:", x), eachline(blast_report)))
     header = split(last(split(header_line, ": ")), ", ")
-    data, _ = uCSV.read(blast_report, delim='\t', comment='#', typedetectrows=100)
+    data, _ = uCSV.read(blast_report, delim='\t', comment='#', typedetectrows=1000)
     return DataFrames.DataFrame(data, header)
 end
 
