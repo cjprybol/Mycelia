@@ -1,3 +1,6 @@
+"""
+Expects output type 7 from BLAST, default output type 6 doesn't have the header comments and won't auto-parse
+"""
 function parse_blast_report(blast_report)
     # example header line 
     # "# Fields: query id, subject id, subject acc., subject acc.ver, subject title, query length, subject length, q. start, q. end, s. start, s. end, evalue, bit score, score, alignment length, % identity, identical, mismatches, subject tax id"
