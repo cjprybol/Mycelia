@@ -27,8 +27,9 @@ function parse_qualimap_contig_coverage(qualimap_report_txt)
     coverage_line_regex = r"\t.*?\t\d+\t\d+\t[\d\.]+\t[\d\.]+$"
     lines = filter(x -> occursin(coverage_line_regex, x), readlines("$(qualimap_report_txt)"))
     io = IOBuffer(join(map(x -> join(split(x, '\t')[2:end], '\t'), lines), '\n'))
-    data, header = uCSV.read(io, delim='\t')
     header = ["Contig", "Length", "Mapped bases", "Mean coverage", "Standard Deviation"]
+    types = ["String", "Int", "Int", "Float64", "Float64"]
+    data, _ = uCSV.read(io, delim='\t', types=types)
     qualimap_results = DataFrames.DataFrame(data, header)
     return qualimap_results
 end
