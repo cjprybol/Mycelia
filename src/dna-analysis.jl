@@ -48,7 +48,7 @@ the longest contig is often bacteria whereas the highest coverage contigs are of
 
 Taking the contig that has the most bases mapped to it as a product of length * depth is cherry picked as our phage
 """
-function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, qualimap_report_txt, identifier, k; primary_contig_fasta = "$(identifier).primary_contig.fna")
+function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, qualimap_report_txt, identifier, k::Int; primary_contig_fasta = "$(identifier).primary_contig.fna")
     
     qualimap_results = parse_qualimap_contig_coverage(qualimap_report_txt)
     primary_contig = determine_primary_contig(qualimap_results)
