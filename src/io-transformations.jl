@@ -9,6 +9,7 @@ function parse_blast_report(blast_report)
     blast_col_types = Dict(
         "query id" => String,
         "subject id" => String,
+        "subject gi" => String,
         "subject acc." => String,
         "subject acc.ver" => String,
         "subject title" => String,
@@ -25,7 +26,18 @@ function parse_blast_report(blast_report)
         "% identity" => Float64,
         "identical" => Int,
         "mismatches" => Int,
-        "subject tax id" => Int
+        "subject tax id" => Int,
+        "subject sci name" => String,
+        "subject com names" => String,
+        "subject blast name" => String,
+        "subject super kingdom" => String,
+        "subject tax ids" => String,
+        "subject sci names" => String,
+        "subject com names" => String,
+        "subject blast names" => String,
+        "subject super kingdoms" => String,
+        "subject title" => String,
+        "subject titles" => String
     )
     data, _ = uCSV.read(
         blast_report,
