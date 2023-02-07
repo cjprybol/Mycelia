@@ -4,7 +4,7 @@ Expects output type 7 from BLAST, default output type 6 doesn't have the header 
 function parse_blast_report(blast_report)
     # example header line 
     # "# Fields: query id, subject id, subject acc., subject acc.ver, subject title, query length, subject length, q. start, q. end, s. start, s. end, evalue, bit score, score, alignment length, % identity, identical, mismatches, subject tax id"
-    header_lines = Iterators.filter(x -> occursin(r"# Fields:", x), eachline(blast_report))
+    header_lines = collect(Iterators.filter(x -> occursin(r"# Fields:", x), eachline(blast_report)))
     if isempty(header_lines)
         @info "not hits found, returning empty table"
         return DataFrames.DataFrame()
