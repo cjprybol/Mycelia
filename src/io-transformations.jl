@@ -1,4 +1,27 @@
 """
+Imports results of Diamond (or blast) in outfmt 6 as a DataFrame
+"""
+function read_diamond(path::String)
+  diamond_colnames = [ "qseqid", "sseqid", "pident", "length", "mismatch", "gapopen", "qstart", "qend", "sstart", "send", "evalue", "bitscore" ]
+  
+  diamond_coltypes = Dict(
+     1 => String, 
+     2 => String, 
+     3 => Float64,
+     4 => Int,
+     5 => Int,
+     6 => Int,
+     7 => Int,
+     8 => Int,
+     9 => Int,
+     10 => Int,
+     11 => String,
+     12 => String
+  )
+    return DataFrames.DataFrame(uCSV.read(open(path), delim = '\t', header = diamond_colnames, types = diamond_coltypes)...)
+end
+
+"""
 Expects output type 7 from BLAST, default output type 6 doesn't have the header comments and won't auto-parse
 """
 function parse_blast_report(blast_report)

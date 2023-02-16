@@ -1,4 +1,43 @@
+# # map reads to the assembly and run qualimap QC
+# bwt_index = "$(assembled_fasta).bwt"
+# if !isfile(bwt_index)
+#     run(`bwa index $(assembled_fasta)`)
+# end
+
+# mapped_reads_bam = "$(assembled_fasta).bwa.bam"
+# if !isfile(mapped_reads_bam)
+#     run(pipeline(
+#         `bwa mem -R "@RG\tID:$(config["sample identifier"])\tSM:bar" -t $(Sys.CPU_THREADS) $(assembled_fasta) $(TRIMMED_FORWARD) $(TRIMMED_REVERSE)`,
+#         `samtools collate -O - -`,
+#         `samtools fixmate -m - -`,
+#         `samtools sort`,
+#         `samtools markdup - -`,
+#         `samtools view -buh`,
+#         mapped_reads_bam))
+# end
+
+# if !isfile("$(mapped_reads_bam).bai")
+#     run(`samtools index $(mapped_reads_bam)`)
+# end
+
+# qualimap_report_pdf = "$(assembly_dir)/qualimap/report.pdf"
+# qualimap_report_txt = "$(assembly_dir)/qualimap/genome_results.txt"
+
+# if !isfile(qualimap_report_pdf) || !isfile(qualimap_report_txt)
+#     run(`
+#         qualimap bamqc
+#         -nt $(Sys.CPU_THREADS)
+#         -bam $(mapped_reads_bam)
+#         -outdir $(assembly_dir)/qualimap
+#         -outformat PDF:HTML
+#         --output-genome-coverage $(mapped_reads_bam).genome_coverage.txt
+#         `)
+# end
+
+
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Parse the contig coverage information from qualimap bamqc text report, which looks like the following:
 
 ```
@@ -41,6 +80,8 @@ function determine_primary_contig(qualimap_results)
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Primary contig is defined as the contig with the most bases mapped to it
 
 In the context of picking out phage from metagenomic assemblies
@@ -76,10 +117,17 @@ function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, quali
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Returns bool indicating whether the contig is cleanly assembled
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
+
+```jldoctest
+julia> 1 + 1
+2
+```
 """
 function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
     gfa_graph = Mycelia.parse_gfa(graph_file)
@@ -104,10 +152,17 @@ function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Returns bool indicating whether the contig is a circle
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
+
+```jldoctest
+julia> 1 + 1
+2
+```
 """
 function contig_is_circular(graph_file::String, contig_name::String)
     gfa_graph = Mycelia.parse_gfa(graph_file)
@@ -132,6 +187,16 @@ function contig_is_circular(graph_file::String, contig_name::String)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 # uses minimap
 function determine_percent_identity(reference_fasta, query_fasta)
     header = [
@@ -226,6 +291,16 @@ function determine_percent_identity(reference_fasta, query_fasta)
     return results
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
 function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0, plot_size=(600,400))
     @info "counting $k-mers"
