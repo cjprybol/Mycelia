@@ -202,83 +202,84 @@
 #     return amrfinderplus_dir
 # end
 
-# function run_diamond(ID, out_dir, protein_fasta, diamond_db)
-#     diamond_dir = "$(out_dir)/diamond"
-#     if !isdir(diamond_dir)
-#         mkdir(diamond_dir)
-#     end
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-#     # http://www.diamondsearch.org/index.php?pages/command_line_options/
-#     # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
-#     #     This is the main pa-rameter for controlling the program’s memory usage.  
-#     #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
-#     #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
-#     #     the memory usage will be about 12 GB
-#     system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
-#     # reference says 6 but let's round upwards towards 8
-#     gb_per_block = 8
-#     block_size = system_memory_in_gigabytes / gb_per_block
+Run diamond search, returns path to diamond results.
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function run_diamond(;
+        identifier,
+        out_dir,
+        protein_fasta,
+        diamond_db,
+        force=false,
+        outfile="$(identifier).prodigal.faa.diamond.txt"
+    )
+    diamond_dir = mkpath("$(out_dir)/diamond")
+
+    # http://www.diamondsearch.org/index.php?pages/command_line_options/
+    # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
+    #     This is the main pa-rameter for controlling the program’s memory usage.  
+    #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
+    #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
+    #     the memory usage will be about 12 GB
+    system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
+    # reference says 6 but let's round upwards towards 8
+    gb_per_block = 8
+    block_size = system_memory_in_gigabytes / gb_per_block
     
-#     if isempty(readdir(diamond_dir))
-#         cmd = 
-#         `diamond blastp
-#         --threads $(Sys.CPU_THREADS)
-#         --block-size $(block_size)
-#         --db $(diamond_db)
-#         --query $(protein_fasta)
-#         --out $(diamond_dir)/$(ID).prodigal.faa.diamond
-#         --evalue 0.001
-#         `
+    outfile = "$(diamond_dir)/$(outfile)"
+    
+    if force || !isfile(outfile)
+        cmd = 
+        `diamond blastp
+        --threads $(Sys.CPU_THREADS)
+        --block-size $(block_size)
+        --db $(diamond_db)
+        --query $(protein_fasta)
+        --out $(outfile)
+        --evalue 0.001
+        --iterate
+        --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids
+        `
+
+        # --un                     file for unaligned queries
+        # --al                     file or aligned queries
+        # --unfmt                  format of unaligned query file (fasta/fastq)
+        # --alfmt                  format of aligned query file (fasta/fastq)
+        # --unal                   report unaligned queries (0=no, 1=yes)
+
+#         Value 6 may be followed by a space-separated list of these keywords:
+
+#         qseqid means Query Seq - id
+#         qtitle means Query title
+#         qlen means Query sequence length
+#         sseqid means Subject Seq - id
+#         sallseqid means All subject Seq - id(s), separated by a ';'
+#         stitle means Subject Title
+#         salltitles means All Subject Title(s), separated by a '<>'
+#         slen means Subject sequence length
+#         qstart means Start of alignment in query
+#         qend means End of alignment in query
+#         sstart means Start of alignment in subject
+#         send means End of alignment in subject
+#         evalue means Expect value
+#         bitscore means Bit score
+#         length means Alignment length
+#         pident means Percentage of identical matches
+#         nident means Number of identical matches
+#         mismatch means Number of mismatches
+#         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
         
-#         p = pipeline(cmd)
-
-# #         p = pipeline(cmd, 
-# #                 stdout="$(diamond_dir)/$(ID).diamond.out",
-# #                 stderr="$(diamond_dir)/$(ID).diamond.err")
-#         @time run(p)
-#     end
-#     return diamond_dir
-# end
-
-# """
-# Run diamond search, returns path to diamond results.
-
-# Output filename is in the format "outdir/ID_database-name.diamond"
-# """
-# function run_diamond_custom(ID, outdir, protein_fasta, diamond_db; top = 25)
-    
-#     # http://www.diamondsearch.org/index.php?pages/command_line_options/
-#     # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
-#     #     This is the main pa-rameter for controlling the program’s memory usage.  
-#     #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
-#     #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
-#     #     the memory usage will be about 12 GB
-#     system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
-#     # reference says 6 but let's round upwards towards 8
-#     gb_per_block = 8
-#     block_size = system_memory_in_gigabytes / gb_per_block
-    
-#     mkpath(outdir)
-#     dbname, = splitext(basename(diamond_db))
-    
-#     output = "$(outdir)/$(ID)_$(dbname).diamond"
-    
-#     cmd = 
-#     `diamond blastp
-#     --threads $(Sys.CPU_THREADS)
-#     --block-size $(block_size)
-#     --db $(diamond_db)
-#     --query $(protein_fasta)
-#     --out $(output)
-#     --evalue 0.001
-#     -k $(top)
-#     `
-
-#     p = pipeline(cmd)
-
-#     @time run(p)
-#     return output
-# end
+        @time run(pipeline(cmd))
+    end
+    return outfile
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -292,12 +293,24 @@ function run_mmseqs_easy_search(;out_dir, query_fasta, target_database, outfile,
     out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_search"))
     outfile = joinpath(out_dir, outfile * ".mmseqs_easy_search." * basename(target_database) * ".txt")
     
-    format_output = "query,qheader,qset,qsetid,target,theader,tset,tsetid,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits"
+    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits"
     
     if basename(target_database) in ["UniRef100", "UniRef90", "UniRef50", "UniProtKB", "TrEMBL", "Swiss-Prot", "NR", "GTDB", "SILVA", "Kalamari"]
         format_output *= ",taxid"
     end
     
+    # note: cut exhaustive-search since it was taking far too long
+    # --exhaustive-search
+    # killed after 11 hours w/ 16 cores on UniRef100
+    # running in base mode with UniRef100 @ 16 cores = 2h12m
+    # could consider the iterative sensitivity search?
+    # iterative was a bit faster and found matches for all of the same proteins
+    #  # Increasing sensitivity search (from 2 to 7 in 3 steps)
+    # mmseqs easy-search examples/QUERY.fasta examples/DB.fasta result.m8 tmp
+    # aim for sensitivities 1, 3, 5, 7
+    # --start-sens 1 -s 7 --sens-steps 3
+    # 1 4 7
+    # --start-sens 1 -s 7 --sens-steps 2
     if force || (!force && !isfile(outfile))
         cmd = 
         `mmseqs
@@ -308,9 +321,11 @@ function run_mmseqs_easy_search(;out_dir, query_fasta, target_database, outfile,
             $(joinpath(out_dir, "tmp"))
             --format-mode 4
             --format-output $(format_output)
-            --exhaustive-search
+            --start-sens 1 -s 7 --sens-steps 3
         `
         @time run(pipeline(cmd))
+    else
+        @info "target outfile $(outfile) already exists, remove it or set force=true to re-generate"
     end
     return outfile
 end
@@ -327,7 +342,8 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false)
     blast_dir = mkpath(joinpath(out_dir, blast_command))
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
 
-    if !force && isempty(readdir(blast_dir))
+    
+    if force || (!force && !isfile(outfile))
         cmd = 
         `
         $(blast_command)

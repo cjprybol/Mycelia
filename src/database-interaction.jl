@@ -28,9 +28,14 @@ Download mmseqs databases
 - Kalamari              Nucleotide           yes        https://github.com/lskatz/Kalamari
 ```
 """
-function download_mmseqs_db(;db, outdir="$(homedir())/mmseqs", wait=true)
+function download_mmseqs_db(;db, outdir="$(homedir())/mmseqs", force=false, wait=true)
     mkpath(outdir)
-    @time run(`mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`, wait=wait)
+    db_path = joinpath(outdir, db)
+    if !isfile(db_path) || force
+        @time run(`mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`, wait=wait)
+    else
+        @info "db $db @ $(db_path) already exists, set force=true to overwrite"
+    end
 end
 
 """
