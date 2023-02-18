@@ -1,0 +1,88 @@
+Krona installed.  You still need to manually update the taxonomy
+databases before Krona can generate taxonomic reports.  The update
+script is ktUpdateTaxonomy.sh.  The default location for storing
+taxonomic databases is /opt/saturncloud/opt/krona/taxonomy
+
+If you would like the taxonomic data stored elsewhere, simply replace
+this directory with a symlink.  For example:
+
+rm -rf /opt/saturncloud/opt/krona/taxonomy
+mkdir /path/on/big/disk/taxonomy
+ln -s /path/on/big/disk/taxonomy /opt/saturncloud/opt/krona/taxonomy
+ktUpdateTaxonomy.sh
+
+
+blast_out="blastn.outfmt6"
+krona_out="krona_megahit_MGM_blastn.html"
+krona_tax_list="krona_tax.lst"
+krona_stderr="krona_stderr.txt" # Krona standard error capture
+krona_stdout="krona_stdout.txt" # Krona standard out capture
+
+# Programs
+krona="/home/sam/programs/KronaTools-2.7/bin/ktImportTaxonomy"
+
+## Extract NCBI taxon IDs from BLAST output
+### Prints a tab-delimited ouptut file containing the query ID and the taxon ID
+
+## Create Krona plot, specifying output filename
+${krona} \
+-o ${krona_out} \
+${krona_tax_list} \
+1> ${krona_stdout} \
+2> ${krona_stderr}
+
+
+ktImportBLAST
+
+
+ktImportTaxonomy \
+   [options] \
+   taxonomy_1[:magnitudes_1][,name_1] \
+   [taxonomy_2[:magnitudes_2][,name_2]] \
+   ...
+
+   taxonomy    Tab-delimited file with taxonomy IDs and (optionally) query IDs, magnitudes and scores. By default, query IDs, taxonomy IDs and scores will be taken from
+               columns 1, 2 and 3, respectively (see -q, -t, -s, and -m). Lines beginning with "#" will be ignored. By default, separate datasets will be created for each
+               input (see [-c]).
+               
+               
+   [-o <string>]    Output file name. [Default: 'taxonomy.krona.html']
+
+   [-q <integer>]   Column of input files to use as query ID. Required if magnitude files are specified. [Default: '1']
+
+   [-t <integer>]   Column of input files to use as taxonomy ID. [Default: '2']
+
+   [-s <integer>]   Column of input files to use as score. [Default: '3']
+
+   [-m <integer>]   Column of input files to use as magnitude. If magnitude files are specified, their magnitudes will override those in this column.
+
+   [-k]             Show the "cellular organisms" taxon (collapsed by default).
+
+   [-K]             Collapse assignments to taxa with ranks labeled "no rank" by moving up to parent.
+   
+
+
+# this works!!!
+wget https://raw.githubusercontent.com/jenniferlu717/KrakenTools/master/kreport2krona.py
+python kreport2krona.py -r SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt -o SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona
+ktImportText SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona -o SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona.html
+
+mmseqs taxonomyreport data/mmseq2/UniRef90 data/SRA/SRR6399459/megahit/final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report data/SRA/SRR6399459/megahit/final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report.html --report-mode 1
+
+python kreport2krona.py -r final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report -o final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report.krona
+ktImportText final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report.krona -o final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report.krona.html
+
+ktImportText SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona -o SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona.html
+
+
+ktImportTaxonomy final.contigs.fa.blastn.nt.txt.krona_info.txt -o final.contigs.fa.blastn.nt.txt.krona_info.txt.krona.html
+
+example raw text format:
+2	Fats	Saturated fat
+3	Fats	Unsaturated fat	Monounsaturated fat
+3	Fats	Unsaturated fat	Polyunsaturated fat
+13	Carbohydrates	Sugars
+4	Carbohydrates	Dietary fiber
+21	Carbohydrates
+5	Protein
+4
