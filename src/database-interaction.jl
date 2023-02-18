@@ -1,17 +1,59 @@
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Download mmseqs databases
+
+```
+  Name                  Type            Taxonomy        Url                                                           
+- UniRef100             Aminoacid            yes        https://www.uniprot.org/help/uniref
+- UniRef90              Aminoacid            yes        https://www.uniprot.org/help/uniref
+- UniRef50              Aminoacid            yes        https://www.uniprot.org/help/uniref
+- UniProtKB             Aminoacid            yes        https://www.uniprot.org/help/uniprotkb
+- UniProtKB/TrEMBL      Aminoacid            yes        https://www.uniprot.org/help/uniprotkb
+- UniProtKB/Swiss-Prot  Aminoacid            yes        https://uniprot.org
+- NR                    Aminoacid            yes        https://ftp.ncbi.nlm.nih.gov/blast/db/FASTA
+- NT                    Nucleotide             -        https://ftp.ncbi.nlm.nih.gov/blast/db/FASTA
+- GTDB                  Aminoacid            yes        https://gtdb.ecogenomic.org
+- PDB                   Aminoacid              -        https://www.rcsb.org
+- PDB70                 Profile                -        https://github.com/soedinglab/hh-suite
+- Pfam-A.full           Profile                -        https://pfam.xfam.org
+- Pfam-A.seed           Profile                -        https://pfam.xfam.org
+- Pfam-B                Profile                -        https://xfam.wordpress.com/2020/06/30/a-new-pfam-b-is-released
+- CDD                   Profile                -        https://www.ncbi.nlm.nih.gov/Structure/cdd/cdd.shtml
+- eggNOG                Profile                -        http://eggnog5.embl.de
+- VOGDB                 Profile                -        https://vogdb.org
+- dbCAN2                Profile                -        http://bcb.unl.edu/dbCAN2
+- SILVA                 Nucleotide           yes        https://www.arb-silva.de
+- Resfinder             Nucleotide             -        https://cge.cbs.dtu.dk/services/ResFinder
+- Kalamari              Nucleotide           yes        https://github.com/lskatz/Kalamari
+```
+"""
+function download_mmseqs_db(;db, outdir="$(homedir())/mmseqs", force=false, wait=true)
+    mkpath(outdir)
+    db_path = joinpath(outdir, db)
+    if !isfile(db_path) || force
+        @time run(`mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`, wait=wait)
+    else
+        @info "db $db @ $(db_path) already exists, set force=true to overwrite"
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Smart downloading of blast dbs depending on interactive, non interactive context
 """
-function download_blast_db(;db, outdir="$(homedir())/blastdb", source="")
+function download_blast_db(;db, outdir="$(homedir())/blastdb", source="", wait=true)
     @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(outdir)
     current_directory = pwd()
     cd(outdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
-        @time run(`update_blastdb.pl $(db) --decompress`)
+        @time run(`update_blastdb.pl $(db) --decompress`, wait=wait)
     else
         @info "downloading from source $(source)"
-        @time run(`update_blastdb.pl $(db) --source $(source) --decompress`)
+        @time run(`update_blastdb.pl $(db) --source $(source) --decompress`, wait=wait)
     end
     # if isinteractive() ||
     #     # 2023-01-23 11:00:52
