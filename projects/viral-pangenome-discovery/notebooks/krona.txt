@@ -64,8 +64,19 @@ ktImportTaxonomy \
 
 # this works!!!
 wget https://raw.githubusercontent.com/jenniferlu717/KrakenTools/master/kreport2krona.py
-python kreport2krona.py -r SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt -o SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona
-ktImportText SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona -o SRR6399459.k2_pluspfp_16gb_20220607.kraken-output.txt.krona.html
+# python kreport2krona.py -r ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-output.tsv -o ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-output.tsv.krona
+python kreport2krona.py -r ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-report.tsv -o ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-report.tsv.krona
+# ktImportText ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-output.txt.krona -o ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-output.txt.krona.html
+ktImportText ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-report.tsv.krona -o ../data/SRA/SRR6399459/kraken/SRR6399459.k2_pluspfp_20221209.kraken-report.tsv.krona.html
+
+
+python kreport2krona.py -r ../data/SRA/SRR6399460/kraken/SRR6399460.k2_pluspfp_20221209.kraken-report.tsv -o ../data/SRA/SRR6399460/kraken/SRR6399460.k2_pluspfp_20221209.kraken-report.tsv.krona
+ktImportText ../data/SRA/SRR6399460/kraken/SRR6399460.k2_pluspfp_20221209.kraken-report.tsv.krona -o ../data/SRA/SRR6399460/kraken/SRR6399460.k2_pluspfp_20221209.kraken-report.tsv.krona.html
+
+python kreport2krona.py -r ../data/SRA/SRR6399461/kraken/SRR6399461.k2_pluspfp_20221209.kraken-report.tsv -o ../data/SRA/SRR6399461/kraken/SRR6399461.k2_pluspfp_20221209.kraken-report.tsv.krona
+ktImportText ../data/SRA/SRR6399461/kraken/SRR6399461.k2_pluspfp_20221209.kraken-report.tsv.krona -o ../data/SRA/SRR6399461/kraken/SRR6399461.k2_pluspfp_20221209.kraken-report.tsv.krona.html
+
+
 
 mmseqs taxonomyreport data/mmseq2/UniRef90 data/SRA/SRR6399459/megahit/final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report data/SRA/SRR6399459/megahit/final.contigs.fa.prodigal.orfs.faa.mmseq2.easy-taxonomy.UniRef90_report.html --report-mode 1
 
