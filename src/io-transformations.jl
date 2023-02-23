@@ -150,7 +150,7 @@ function parse_blast_report(blast_report)
         allowmissing=true,
         encodings=Dict("N/A" => missing),
         types=[blast_col_types[h] for h in header])
-    return DataFrames.DataFrame(data, header)
+    return DataFrames.DataFrame(data, header, makeunique=true)
 end
 
 """

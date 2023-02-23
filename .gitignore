@@ -10,3 +10,15 @@ docs/src
 data
 .snakemake
 notebooks/scripts/kmer-saturation*
+*.ipynb_checkpoints/
+*.zip
+*/kmer-saturation/*
+*.gz
+*.fastq
+*.fq
+*.fna
+*.faa
+*.fasta
+*.fa
+*tmp/*
+*snakemake/logs/*

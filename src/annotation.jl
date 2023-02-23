@@ -343,6 +343,8 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false)
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
 
     
+    # default max target seqs = 500, which seemed like too much
+    # default evalue is 10, which also seems like too much
     if force || (!force && !isfile(outfile))
         cmd = 
         `
@@ -352,6 +354,8 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false)
         -query $(fasta)
         -db $(blast_db)
         -out $(outfile)
+        -max_target_seqs 100
+        -evalue 0.001
         `
 #         p = pipeline(cmd, 
 #                 stdout="$(blastn_dir)/$(ID).blastn.out",
