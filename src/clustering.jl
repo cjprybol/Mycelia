@@ -1,3 +1,13 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function fit_optimal_number_of_clusters(distance_matrix)
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
     N = size(distance_matrix, 1)
@@ -85,6 +95,16 @@ function fit_optimal_number_of_clusters(distance_matrix)
     return (;optimal_number_of_clusters, ks_assessed, within_cluster_sum_of_squares, silhouette_scores)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function plot_optimal_cluster_assessment_results(clustering_results)
     p1 = StatsPlots.plot(
         ks_assessed[1:length(within_cluster_sum_of_squares)],
@@ -110,6 +130,16 @@ function plot_optimal_cluster_assessment_results(clustering_results)
     StatsPlots.savefig(p2, "$DIR/silhouette.svg")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function document_frequency(documents)
     document_tokens = Set(split(strip(first(documents))))
     countmap = StatsBase.countmap(document_tokens)
@@ -121,6 +151,16 @@ function document_frequency(documents)
     return countmap
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function wcss(clustering_result)
     n_clusters = length(clustering_result.counts)
     total_squared_cost = 0.0
@@ -131,6 +171,16 @@ function wcss(clustering_result)
     return total_squared_cost
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function fit_optimal_number_of_clusters_hclust(distance_matrix)
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
     N = size(distance_matrix, 1)

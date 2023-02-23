@@ -123,9 +123,9 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
         mer_counts_matrix .= 0
         ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
             if alphabet == :DNA
-                entity_mer_counts = count_canonical_kmers(BioSequences.DNAMer{k}, fasta_file)
+                entity_mer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, fasta_file)
             elseif alphabet == :RNA
-                entity_mer_counts = count_canonical_kmers(BioSequences.RNAMer{k}, fasta_file)
+                entity_mer_counts = count_canonical_kmers(Kmers.RNAKmer{k}, fasta_file)
             elseif alphabet == :AA
                 # faa_file = "$(accession).fna.faa"
                 # if !isfile(faa_file)

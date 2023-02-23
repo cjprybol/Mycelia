@@ -38,41 +38,36 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Parse the contig coverage information from qualimap bamqc text report, which looks like the following:
+Run fastani with a query and reference list
 
+```jldoctest
+julia> 1 + 1
+2
 ```
-# this is spades
->>>>>>> Coverage per contig
-
-	NODE_1_length_107478_cov_9.051896	107478	21606903	201.0355886786133	60.39424208607496
-	NODE_2_length_5444_cov_1.351945	5444	153263	28.152645113886848	5.954250612823136
-	NODE_3_length_1062_cov_0.154390	1062	4294	4.043314500941619	1.6655384692688975
-	NODE_4_length_776_cov_0.191489	776	3210	4.13659793814433	2.252009588980858
-
-# below is megahit
->>>>>>> Coverage per contig
-
-	k79_175	235	3862	16.43404255319149	8.437436249612457
-	k79_89	303	3803	12.551155115511552	5.709975376279777
-	k79_262	394	6671	16.931472081218274	7.579217802849293
-	k79_90	379	1539	4.060686015831134	1.2929729111266581
-	k79_91	211	3749	17.767772511848342	11.899185693011933
-	k79_0	2042	90867	44.49902056807052	18.356525483516613
-```
-
-To make this more robust, consider reading in the names of the contigs from the assembled fasta
 """
-function parse_qualimap_contig_coverage(qualimap_report_txt)
-    coverage_line_regex = r"\t.*?\t\d+\t\d+\t[\d\.]+\t[\d\.]+$"
-    lines = filter(x -> occursin(coverage_line_regex, x), readlines("$(qualimap_report_txt)"))
-    io = IOBuffer(join(map(x -> join(split(x, '\t')[2:end], '\t'), lines), '\n'))
-    header = ["Contig", "Length", "Mapped bases", "Mean coverage", "Standard Deviation"]
-    types = [String, Int, Int, Float64, Float64]
-    data, _ = uCSV.read(io, delim='\t', types=types)
-    qualimap_results = DataFrames.DataFrame(data, header)
-    return qualimap_results
+function fastani(;query_list="", reference_list="", outfile="", force=false)
+    if !isfile(outfile) && !force
+        # run(`fastANI --ql $(query_list) --rl $(reference_list) -o $(outfile)`)
+        run(
+        pipeline(
+            `fastANI --ql $(query_list) --rl $(reference_list) -o $(outfile)`,
+            stdout=outfile * "fastani.stdout.txt",
+            stderr=outfile * "fastani.stderr.txt"
+            )
+        )
+    end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Determines the contig with the greatest number of total bases mapping to it
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function determine_primary_contig(qualimap_results)
     primary_contig_index = last(findmax(qualimap_results[!, "Mapped bases"]))
     primary_contig = qualimap_results[primary_contig_index, "Contig"]
