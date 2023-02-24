@@ -33,6 +33,7 @@ function parse_qualimap_contig_coverage(qualimap_report_txt)
     types = [String, Int, Int, Float64, Float64]
     data, _ = uCSV.read(io, delim='\t', types=types)
     qualimap_results = DataFrames.DataFrame(data, header)
+    qualimap_results[!, "% Mapped bases"] = qualimap_results[!, "Mapped bases"] ./ sum(qualimap_results[!, "Mapped bases"]) .* 100
     return qualimap_results
 end
 

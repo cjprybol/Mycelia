@@ -48,3 +48,4 @@ dependencies:
   - pigz
   - bzip2
   - xz
+  - qualimap
