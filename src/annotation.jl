@@ -202,6 +202,32 @@
 #     return amrfinderplus_dir
 # end
 
+function make_diamond_db(fasta_file, db_file=fasta_file)
+    @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
+end
+
+# in order to change this to be a standard blast where we don't need all pairwise hits
+# just drop the parameters id, min-score, max-target-seqs
+function pairwise_diamond(joint_fasta_file)
+    if !isfile("$(joint_fasta_file).dmnd")
+        make_diamond_db(joint_fasta_file)
+    end
+    n_records = count_records(joint_fasta_file)
+    # max_target_seqs = Int(ceil(sqrt(n_records)))
+    @show "here!"
+    sensitivity = "--iterate"
+    # --block-size/-b
+    # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
+    # set block size to total memory / 8
+    available_gigabytes = floor(Sys.free_memory() / 1e9)
+    block_size = floor(available_gigabytes / 8)
+    
+    @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
+    # # pairwise output is all of the alignments, super helpful!
+    # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
+end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -277,6 +303,38 @@ function run_diamond(;
 #         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
         
         @time run(pipeline(cmd))
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function run_mmseqs_easy_taxonomy(;out_dir, query_fasta, target_database, outfile, force=false)
+    out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_taxonomy"))
+    outfile = joinpath(out_dir, outfile * ".mmseqs_easy_taxonomy." * basename(target_database) * ".txt")
+    
+    # -s FLOAT                         Sensitivity: 1.0 faster; 4.0 fast; 7.5 sensitive [4.000]
+    # --lca-mode INT                   LCA Mode 1: single search LCA , 2/3: approximate 2bLCA, 4: top hit [3]
+    if force || (!force && !isfile(outfile))
+        cmd = 
+        `mmseqs
+         easy-taxonomy
+         -s 1.0
+         --lca-mode 4
+         $(query_fasta)
+         $(target_database)
+         $(outfile)
+         $(joinpath(out_dir, "tmp"))
+        `
+        @time run(pipeline(cmd))
+    else
+        @info "target outfile $(outfile) already exists, remove it or set force=true to re-generate"
     end
     return outfile
 end

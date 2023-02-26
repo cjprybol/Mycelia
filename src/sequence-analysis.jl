@@ -22,12 +22,11 @@ function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
     kmer_vectors = collect.(vec(collect(kmer_iterator)))
     if eltype(alphabet) == BioSymbols.AminoAcid
-        kmers = BioSequences.LongAA.(kmer_vectors)
-        # filter out any kmers where the stop codon is not the last codon
-        # may want to add a similar filter step for if the start codon is not the first codon
-        # filter!(kmer -> any(BioSymbols.isterm.(kmer[1:end-1])), kmers)     
+        kmers = [Kmers.Kmer{BioSequences.AminoAcidAlphabet}(BioSequences.LongAA(kv)) for kv in kmer_vectors]
     elseif eltype(alphabet) == BioSymbols.DNA
-        kmers = Kmers.DNAKmer.(BioSequences.LongDNA{2}.(kmer_vectors))
+        kmers = [Kmers.Kmer{BioSequences.DNAAlphabet{4}}(BioSequences.LongDNA{4}(kv)) for kv in kmer_vectors]
+    elseif eltype(alphabet) == BioSymbols.RNA
+        kmers = [Kmers.Kmer{BioSequences.RNAAlphabet{4}}(BioSequences.LongRNA{4}(kv)) for kv in kmer_vectors]
     else
         error()
     end
@@ -50,7 +49,7 @@ function generate_all_possible_canonical_kmers(k, alphabet)
     if eltype(alphabet) == BioSymbols.AminoAcid
         return kmers
     elseif eltype(alphabet) in (BioSymbols.DNA, BioSymbols.RNA)
-        return Kmers.DNAKmer.(unique!(BioSequences.canonical.(kmers)))
+        return unique!(BioSequences.canonical.(kmers))
     else
         error()
     end
@@ -123,22 +122,11 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
         mer_counts_matrix .= 0
         ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
             if alphabet == :DNA
-                entity_mer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, fasta_file)
+                entity_mer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4}, k}, fasta_file)
             elseif alphabet == :RNA
-                entity_mer_counts = count_canonical_kmers(Kmers.RNAKmer{k}, fasta_file)
+                entity_mer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.RNAAlphabet{4}, k}, fasta_file)
             elseif alphabet == :AA
-                # faa_file = "$(accession).fna.faa"
-                # if !isfile(faa_file)
-                #     run(pipeline(`prodigal -i $(fna_file) -o $(fna_file).genes -a $(faa_file) -p meta`, stderr="$(fna_file).prodigal.stderr"))
-                # end
-                try
-                    entity_mer_counts = count_aamers(k, open_fastx(fasta_file))
-                catch e
-                    @warn "investigate possible malformed fasta file $(fasta_file)"
-                    # println(e.msg)
-                    showerror(stdout, e)
-                    continue
-                end
+                entity_mer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.AminoAcidAlphabet, k}, fasta_file)
             end
             update_counts_matrix!(mer_counts_matrix, entity_index, entity_mer_counts, canonical_mers)            
         end
@@ -581,7 +569,7 @@ function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) whe
 end
 
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    # TODO: we may want to do some sniffing here since I don't want this to be hardcoded for DNA
+    # TODO: need to figure out how to infer the sequence type
     return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
 end
 

@@ -14,7 +14,7 @@ function add_fasta_record_kmers_to_graph!(graph, kmer_size)
     for vertex in record_vertices
         record_identifier = graph.vprops[vertex][:identifier]
         record_sequence = graph.vprops[vertex][:sequence]
-        kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{kmer_size}, record_sequence)
+        kmer_counts = Mycelia.count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},kmer_size}, record_sequence)
         Mycelia.add_kmers_to_graph!(graph, keys(kmer_counts))
         Mycelia.add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
         Mycelia.add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
@@ -75,7 +75,7 @@ function add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
     vertex_id = graph[record_identifier, :identifier]
     record_sequence = MetaGraphs.get_prop(graph, vertex_id, :sequence)
     edgemer_size = kmer_size + 1
-    for (index, observed_edgemer) in Kmers.EveryKmer{Kmers.DNAKmer{edgemer_size}}(record_sequence)
+    for (index, observed_edgemer) in Kmers.EveryKmer{Kmers.Kmer{BioSequences.DNAAlphabet{4},edgemer_size}}(record_sequence)
         add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
     end
     return graph
@@ -442,8 +442,8 @@ end
 
 
 function edgemer_to_vertex_kmers(edgemer)
-    a = Kmers.DNAKmer(collect(edgemer[i] for i in 1:length(edgemer)-1))
-    b = Kmers.DNAKmer(collect(edgemer[i] for i in 2:length(edgemer)))
+    a = Kmers.Kmer{BioSequences.DNAAlphabet{4}}(collect(edgemer[i] for i in 1:length(edgemer)-1))
+    b = Kmers.Kmer{BioSequences.DNAAlphabet{4}}(collect(edgemer[i] for i in 2:length(edgemer)))
     return a, b
 end
 
