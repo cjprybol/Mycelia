@@ -28,11 +28,16 @@ Download mmseqs databases
 - Kalamari              Nucleotide           yes        https://github.com/lskatz/Kalamari
 ```
 """
-function download_mmseqs_db(;db, outdir="$(homedir())/mmseqs", force=false, wait=true)
+function download_mmseqs_db(;db, outdir="$(homedir())/workspace/mmseqs", force=false, wait=true, conda_env="")
     mkpath(outdir)
     db_path = joinpath(outdir, db)
     if !isfile(db_path) || force
-        @time run(`mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`, wait=wait)
+        if isempty(conda_env)
+            cmd = `mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
+        else
+            cmd = `conda run --live-stream -n $(conda_env) mmseqs databases --compressed 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
+        end
+        @time run(cmd, wait=wait)
     else
         @info "db $db @ $(db_path) already exists, set force=true to overwrite"
     end
@@ -43,18 +48,29 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Smart downloading of blast dbs depending on interactive, non interactive context
 """
-function download_blast_db(;db, outdir="$(homedir())/blastdb", source="", wait=true)
+function download_blast_db(;db, outdir="$(homedir())/workspace/blastdb", source="", wait=true, conda_env="")
     @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(outdir)
     current_directory = pwd()
     cd(outdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
-        @time run(`update_blastdb.pl $(db) --decompress`, wait=wait)
+        if isempty(conda_env)
+            cmd = `update_blastdb.pl $(db) --decompress`
+        else
+            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress`
+        end
     else
         @info "downloading from source $(source)"
-        @time run(`update_blastdb.pl $(db) --source $(source) --decompress`, wait=wait)
+        if isempty(conda_env)
+            cmd = `update_blastdb.pl $(db) --decompress --source $(source)`
+        elseif source == "ncbi"
+            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+        else
+            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source)`
+        end
     end
+    run(cmd, wait=wait)
     # if isinteractive() ||
     #     # 2023-01-23 11:00:52
     #     # ~ 1-2 hours

@@ -22,32 +22,30 @@
 
 # to use:
 # conda activate viral-pangenome-discovery
+# or
+# conda run -n viral-pangenome-discovery {command here}
 name: viral-pangenome-discovery
 # channel_priority: strict
 channels:
   - conda-forge
   - bioconda
+  - anaconda
 dependencies:
   - ncbi-datasets-cli
-  - snakemake
   - sra-tools
   - bwa
-  - bowtie2
   - kraken2
   - spades
   - megahit
   - blast
   - seqtk
-  - minimap2
   - samtools
-  - fastqc
   - trim-galore
-  - seqkit
-  - virsorter=2
   - pyrodigal
   - prodigal
   - diamond
   - mmseqs2
-  
-  
-# -c conda-forge -c bioconda ncbi-datasets-cli fastani snakemake minimap2 samtools blast mash bwa fastqc trim-galore prodigal diamond multiqc megahit qualimap taxonkit seqtk bedtools seqkit sra-tools kraken2 mmseqs2
+  - pigz
+  - bzip2
+  - xz
+  - qualimap
