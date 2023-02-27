@@ -202,6 +202,32 @@
 #     return amrfinderplus_dir
 # end
 
+function make_diamond_db(fasta_file, db_file=fasta_file)
+    @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
+end
+
+# in order to change this to be a standard blast where we don't need all pairwise hits
+# just drop the parameters id, min-score, max-target-seqs
+function pairwise_diamond(joint_fasta_file)
+    if !isfile("$(joint_fasta_file).dmnd")
+        make_diamond_db(joint_fasta_file)
+    end
+    n_records = count_records(joint_fasta_file)
+    # max_target_seqs = Int(ceil(sqrt(n_records)))
+    @show "here!"
+    sensitivity = "--iterate"
+    # --block-size/-b
+    # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
+    # set block size to total memory / 8
+    available_gigabytes = floor(Sys.free_memory() / 1e9)
+    block_size = floor(available_gigabytes / 8)
+    
+    @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
+    # # pairwise output is all of the alignments, super helpful!
+    # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
+end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -277,6 +303,56 @@ function run_diamond(;
 #         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
         
         @time run(pipeline(cmd))
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function run_mmseqs_easy_taxonomy(;out_dir, query_fasta, target_database, outfile, force=false)
+    out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_taxonomy"))
+    outfile = joinpath(out_dir, outfile * ".mmseqs_easy_taxonomy." * basename(target_database) * ".txt")
+    # note I tried adjusting all of the following, and none of them improved overall runtime
+    # in any meaningful way
+    # -s FLOAT                         Sensitivity: 1.0 faster; 4.0 fast; 7.5 sensitive [4.000]
+    # https://github.com/soedinglab/MMseqs2/issues/577#issuecomment-1191584081
+    # apparently orf-filter 1 speeds up by 50%!
+    # --orf-filter INT                 Prefilter query ORFs with non-selective search
+    #                               Only used during nucleotide-vs-protein classification
+    #                               NOTE: Consider disabling when classifying short reads [0]
+    # --lca-mode INT                   LCA Mode 1: single search LCA , 2/3: approximate 2bLCA, 4: top hit [3]
+    # --lca-search BOOL                Efficient search for LCA candidates [0]
+    # ^ this looks like it actually runs @ 1 with s=1.0 & --orf-filter=1
+    
+    # 112 days to process 600 samples at this rate....
+    # 278 minutes or 4.5 hours for a single sample classification!!
+    # 16688.050696 seconds (1.43 M allocations: 80.966 MiB, 0.02% gc time, 0.00% compilation time)
+    # this is for default parameters
+    # lowering sensitivity and taking LCA
+    # 16590.725343 seconds (1.06 M allocations: 53.487 MiB, 0.00% compilation time)
+    # took just as long!
+    # difference was only 10 minutes
+    # 15903.218456 seconds (969.92 k allocations: 48.624 MiB, 0.01% gc time)
+    # use default parameters
+    
+    if force || (!force && !isfile(outfile))
+        cmd = 
+        `mmseqs
+         easy-taxonomy
+         $(query_fasta)
+         $(target_database)
+         $(outfile)
+         $(joinpath(out_dir, "tmp"))
+        `
+        @time run(pipeline(cmd))
+    else
+        @info "target outfile $(outfile) already exists, remove it or set force=true to re-generate"
     end
     return outfile
 end
