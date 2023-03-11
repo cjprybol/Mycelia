@@ -430,7 +430,7 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false)
         -query $(fasta)
         -db $(blast_db)
         -out $(outfile)
-        -max_target_seqs 100
+        -max_target_seqs 10
         -evalue 0.001
         `
 #         p = pipeline(cmd, 
