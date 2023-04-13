@@ -22,3 +22,5 @@ notebooks/scripts/kmer-saturation*
 *.fa
 *tmp/*
 *snakemake/logs/*
+*.bam
+*.sam

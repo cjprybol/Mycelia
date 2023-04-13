@@ -414,29 +414,141 @@ julia> 1 + 1
 2
 ```
 """
-function run_blast(;out_dir, fasta, blast_db, blast_command, force=false)
-    blast_dir = mkpath(joinpath(out_dir, blast_command))
-    outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
-
+function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true)
+    blast_dir = mkpath(joinpath(out_dir, "blastn"))
+    outfile = "$(blast_dir)/$(basename(fasta)).blastn.$(basename(blast_db)).$(task).txt"
+    # if remote
+        # outfile = replace(outfile, ".txt" => ".remote.txt")
+    # end
+    
+    need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
     
     # default max target seqs = 500, which seemed like too much
     # default evalue is 10, which also seems like too much
-    if force || (!force && !isfile(outfile))
+    
+    # I want to speed this up more but don't know how
+    # 
+    # num_alignments
+    # https://www.ncbi.nlm.nih.gov/books/NBK569845/
+    # Windowmasker masks the over-represented sequence data and it can also mask the low complexity sequence data using the built-in dust algorithm (through the -dust option). To mask low-complexity sequences only, we will need to use dustmasker.
+    # http://ftp.ncbi.nlm.nih.gov/pub/agarwala/dustmasker/README.dustmasker
+    # http://ftp.ncbi.nlm.nih.gov/pub/agarwala/windowmasker/README.windowmasker
+    # ./windowmasker -ustat ustat.15 -in chr1.fa -out chr1.wm -dust true
+    
+    # windowmasker -in hs_chr -infmt blastdb -mk_counts -parse_seqids -out hs_chr_mask.counts
+    # windowmasker -in hs_chr -infmt blastdb -ustat hs_chr_mask.count -outfmt maskinfo_asn1_bin -parse_seqids -out hs_chr_mask.asnb
+    
+    # dustmasker -in hs_chr -infmt blastdb -parse_seqids -outfmt maskinfo_asn1_bin -out hs_chr_dust.asnb
+    
+    # makeblastdb -in hs_chr –input_type blastdb -dbtype nucl -parse_seqids -mask_data hs_chr_mask.asnb -out hs_chr -title "Human Chromosome, Ref B37.1"
+    # blastdbcmd -db hs_chr -info
+    
+    # https://www.ncbi.nlm.nih.gov/IEB/ToolBox/CPP_DOC/lxr/source/src/app/winmasker/README
+
+    # windowmasker -mk_counts -checkdup true -infmt blastdb -in nt -out nt.wm.1
+    # windowmasker -ustat nt.wm.1 -dust true -in nt -infmt blastdb -out nt.wm.2
+    # makeblastdb -in nt –input_type blastdb -dbtype nucl -parse_seqids -mask_data nt.wm.2 -out nt_masked_deduped -title "nt masked and deduped"
+    
+    # windowmasker -mk_counts -infmt blastdb -in nt -out nt.wm.no_dup_check.1
+    # windowmasker -ustat nt.wm.no_dup_check.1 -dust true -in nt -infmt blastdb -out nt.wm.no_dup_check.2
+    # makeblastdb -in nt –input_type blastdb -dbtype nucl -parse_seqids -mask_data nt.wm.no_dup_check.2 -out nt_masked -title "nt masked"
+
+    # windowmasker -convert -in input_file_name -out output_file_name [-sformat output_format] [-smem available_memory]
+    
+    if force || need_to_run
+        # if remote
+        #     cmd = 
+        #         `
+        #         blastn
+        #         -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+        #         -query $(fasta)
+        #         -db $(basename(blast_db))
+        #         -out $(outfile)
+        #         -max_target_seqs 10
+        #         -evalue 0.001
+        #         -task $(task)
+        #         -soft_masking true
+        #         -subject_besthit
+        #         -dust
+        #         -remote
+        #         `
+        # else
+        # https://www.ncbi.nlm.nih.gov/books/NBK571452/
+        # cap @ 8 and also use -mt_mode = 1 based on empirical evidence from
+        # above blog post
         cmd = 
         `
-        $(blast_command)
-        -num_threads $(Sys.CPU_THREADS)
+        blastn
+        -num_threads $(min(Sys.CPU_THREADS, 8))
         -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
         -query $(fasta)
         -db $(blast_db)
         -out $(outfile)
         -max_target_seqs 10
+        -subject_besthit
+        -task $(task)
         -evalue 0.001
         `
+        # end
 #         p = pipeline(cmd, 
 #                 stdout="$(blastn_dir)/$(ID).blastn.out",
 #                 stderr="$(blastn_dir)/$(ID).blastn.err")
-        @time run(pipeline(cmd))
+        @info "running cmd $(cmd)"
+        @time run(pipeline(cmd), wait=wait)
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
+    blast_dir = mkpath(joinpath(out_dir, blast_command))
+    outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
+    if remote
+        outfile = replace(outfile, ".txt" => ".remote.txt")
+    end
+    
+    need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
+    
+    # default max target seqs = 500, which seemed like too much
+    # default evalue is 10, which also seems like too much
+    if force || need_to_run
+        if remote
+            cmd = 
+                `
+                $(blast_command)
+                -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+                -query $(fasta)
+                -db $(basename(blast_db))
+                -out $(outfile)
+                -max_target_seqs 10
+                -evalue 0.001
+                -remote
+                `
+        else
+            cmd = 
+            `
+            $(blast_command)
+            -num_threads $(Sys.CPU_THREADS)
+            -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+            -query $(fasta)
+            -db $(blast_db)
+            -out $(outfile)
+            -max_target_seqs 10
+            -evalue 0.001
+            `
+        end
+#         p = pipeline(cmd, 
+#                 stdout="$(blastn_dir)/$(ID).blastn.out",
+#                 stderr="$(blastn_dir)/$(ID).blastn.err")
+        @info "running cmd $(cmd)"
+        @time run(pipeline(cmd), wait=wait)
     end
     return outfile
 end
