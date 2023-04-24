@@ -1,5 +1,10 @@
 # viral-pangenome-discovery
 
+Run me to backup
+```bash
+rclone copy --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
+```
+
 Multiples paths to discovery:
 - classify first
     - classify reads to be of viral origin

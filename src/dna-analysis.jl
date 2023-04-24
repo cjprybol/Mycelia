@@ -299,7 +299,7 @@ julia> 1 + 1
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
 function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0, plot_size=(600,400))
     @info "counting $k-mers"
-    canonical_kmer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, [forward_reads, reverse_reads])
+    canonical_kmer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},k}, [forward_reads, reverse_reads])
 
     @info "determining max count"
     max_count = maximum(values(canonical_kmer_counts))
@@ -402,7 +402,6 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     
     @show kmer_type
     k = Kmers.ksize(Kmers.kmertype(kmer_type))
-    # kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{2},31})
     
     max_possible_kmers = determine_max_canonical_kmers(k, DNA_ALPHABET)
     
@@ -471,8 +470,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
     minimum_saturation = Inf
     midpoint = Inf
     for k in ks
-        # kmer_type = Kmers.DNAKmer{k}
-        kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{2},k})
+        kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{4},k})
         sampling_points, kmer_counts, hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess=kmers_to_assess, power=power)
         @show sampling_points, kmer_counts, hit_eof
         observed_midpoint_index = findfirst(i -> kmer_counts[i] > last(kmer_counts)/2, 1:length(sampling_points))

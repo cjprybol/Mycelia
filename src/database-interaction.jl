@@ -35,7 +35,7 @@ function download_mmseqs_db(;db, outdir="$(homedir())/workspace/mmseqs", force=f
         if isempty(conda_env)
             cmd = `mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
         else
-            cmd = `conda run -n $(conda_env) mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
+            cmd = `conda run --live-stream -n $(conda_env) mmseqs databases --compressed 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
         end
         @time run(cmd, wait=wait)
     else
@@ -58,14 +58,16 @@ function download_blast_db(;db, outdir="$(homedir())/workspace/blastdb", source=
         if isempty(conda_env)
             cmd = `update_blastdb.pl $(db) --decompress`
         else
-            cmd = `conda run -n $(conda_env) update_blastdb.pl $(db) --decompress`
+            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress`
         end
     else
         @info "downloading from source $(source)"
         if isempty(conda_env)
             cmd = `update_blastdb.pl $(db) --decompress --source $(source)`
+        elseif source == "ncbi"
+            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
         else
-            cmd = `conda run -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source)`
+            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source)`
         end
     end
     run(cmd, wait=wait)
@@ -535,8 +537,12 @@ function load_ncbi_metadata(db)
         error()
     end
     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
-    buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
-    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(buffer, comment = "#  ", header=1, delim='\t')...)
+    ncbi_summary_file = basename(ncbi_summary_url)
+    if !isfile(ncbi_summary_file)
+        download(ncbi_summary_url, ncbi_summary_file)
+    end
+    # buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
+    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "#  ", header=1, delim='\t')...)
     return ncbi_summary_table
 end
 
@@ -596,18 +602,29 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Description
+Extensions include:
+- genomic.fna.gz
+- genomic.gff.gz
+- protein.faa.gz
+- assembly_report.txt
+- assembly_stats.txt
+- cds_from_genomic.fna.gz
+- feature_count.txt.gz
+- feature_table.txt.gz
+- genomic.gbff.gz
+- genomic.gtf.gz
+- protein.gpff.gz
+- translated_cds.faa.gz 
 
 ```jldoctest
 julia> 1 + 1
 2
 ```
 """
-function ncbi_ftp_path_to_url(ftp_path, extension)
+function ncbi_ftp_path_to_url(;ftp_path, extension)
     # genomic.fna.gz
     # genomic.gff.gz
     # protein.faa.gz
-    
     # assembly_report.txt
     # assembly_stats.txt
     # cds_from_genomic.fna.gz

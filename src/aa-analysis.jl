@@ -1,187 +1,80 @@
-function make_diamond_db(fasta_file, db_file=fasta_file)
-    @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
-end
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-# in order to change this to be a standard blast where we don't need all pairwise hits
-# just drop the parameters id, min-score, max-target-seqs
-function pairwise_diamond(joint_fasta_file)
-    if !isfile("$(joint_fasta_file).dmnd")
-        make_diamond_db(joint_fasta_file)
-    end
-    n_records = count_records(joint_fasta_file)
-    # max_target_seqs = Int(ceil(sqrt(n_records)))
-    @show "here!"
-    sensitivity = "--iterate"
-    # --block-size/-b
-    # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
-    # set block size to total memory / 8
-    available_gigabytes = floor(Sys.free_memory() / 1e9)
-    block_size = floor(available_gigabytes / 8)
-    
-    @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
-    # # pairwise output is all of the alignments, super helpful!
-    # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
-end
+# Return an iterator of each aamer for a given record and k length
 
-function diamond_line_to_named_tuple(diamond_line)
-    sline = split(line)
-    values_named_tuple = (
-        qseqid = sline[1],
-        sseqid = sline[2],
-        pident = parse(Float64, sline[3]),
-        length = parse(Int, sline[4]),
-        mismatch = parse(Int, sline[5]),
-        gapopen = parse(Int, sline[6]),
-        qlen = parse(Int, sline[7]),
-        qstart = parse(Int, sline[8]),
-        qend = parse(Int, sline[9]),
-        slen = parse(Int, sline[10]),
-        sstart = parse(Int, sline[11]),
-        send = parse(Int, sline[12]),
-        evalue = parse(Float64, sline[13]),
-        bitscore = parse(Float64, sline[14])
-        )
-    return values_named_tuple
-end
-
-function read_diamond_alignments_file(diamond_file)
-    column_names_to_types = [
-        "qseqid" => String,
-        "sseqid" => String,
-        "pident" => Float64,
-        "length" => Int,
-        "mismatch" => Int,
-        "gapopen" => Int,
-        "qlen" => Int,
-        "qstart" => Int,
-        "qend" => Int,
-        "slen" => Int,
-        "sstart" => Int,
-        "send" => Int,
-        "evalue" => Float64,
-        "bitscore" => Float64,
-    ]
-    types = Dict(i => t for (i, t) in enumerate(last.(column_names_to_types)))
-    
-    data, header = uCSV.read(diamond_file, header=0, delim='\t', types = types)
-    header = first.(column_names_to_types)    
-    
-    # data, header = uCSV.read(diamond_file, header=1, delim='\t', types = types)
-    # @assert header == first.(column_names_to_types)
-    
-    table = DataFrames.DataFrame(data, header)
-    return table
-end
-
-function add_header_to_diamond_file(infile, outfile=replace(infile, ".tsv" => ".with-header.tsv"))
-    column_names = [
-        "qseqid",
-        "sseqid",
-        "pident",
-        "length",
-        "mismatch",
-        "gapopen",
-        "qlen",
-        "qstart",
-        "qend",
-        "slen",
-        "sstart",
-        "send",
-        "evalue",
-        "bitscore"
-    ]
-    # dangerous but fast
-    # try
-    #     inserted_text = join(columns_names, '\t') * '\n'
-    #     sed_cmd = "1s/^/$(inserted_text)/"
-    #     full_cmd = `sed -i $sed_cmd $infile`
-    # catch
-    open(outfile, "w") do io
-        println(io, join(column_names, "\t"))
-        for line in eachline(infile)
-            println(io, line)
-        end
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Return an iterator of each aamer for a given record and k length
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function each_aamer(k, sequence::T) where T <: BioSequences.BioSequence
-    return (sequence[i:i+k-1] for i in 1:length(sequence)-k+1)
-end
-
-function each_aamer(k, record::FASTX.FASTA.Record)
-    return each_aamer(k, FASTX.sequence(record))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Count the aamers for a given record
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function count_aamers(k, fasta_protein::FASTX.FASTA.Record)
-    return sort(StatsBase.countmap(each_aamer(k, fasta_protein)))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Count aamers for the entire file
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-# function count_aamers_by_file(k, fasta_proteins::FP) where {FP <: Union{AbstractVector{FASTX.FASTA.Record}, FASTX.FASTA.Reader}}
-#     aamer_counts = OrderedCollections.OrderedDict{BioSequences.LongAminoAcidSeq, Int64}()
-#     for protein in fasta_proteins
-#         if !(FASTX.sequence(protein) isa BioSequences.LongAminoAcidSeq)
-#             # @warn "record $(protein) is not encoded as a protein sequence, skipping..."
-#             continue
-#         end
-#         these_counts = count_aamers(k, protein)
-#         merge!(+, aamer_counts, these_counts)
-#     end
-#     return sort(aamer_counts)
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function each_aamer(k, sequence::T) where T <: BioSequences.BioSequence
+#     return (sequence[i:i+k-1] for i in 1:length(sequence)-k+1)
 # end
 
-function count_aamers_by_file(k, fastx)
-    counts_by_record = collect(values(count_aamers_by_record(k, fastx_file)))
-    counts_by_file = first(counts_by_record)
-    for these_counts in counts_by_record[2:end]
-        merge!(+, counts_by_file, these_counts)
-    end
-    return counts_by_file
-end
+# function each_aamer(k, record::FASTX.FASTA.Record)
+#     return each_aamer(k, FASTX.sequence(record))
+# end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Count aamers by record for a given file
+# Count the aamers for a given record
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function count_aamers_by_record(k, fastx_file)
-    return Dict(FASTX.identifier(record) => count_aamers(k, record) for record in open_fastx(fastx_file))
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function count_aamers(k, fasta_protein::FASTX.FASTA.Record)
+#     return sort(StatsBase.countmap(each_aamer(k, fasta_protein)))
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Count aamers for the entire file
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# # function count_aamers_by_file(k, fasta_proteins::FP) where {FP <: Union{AbstractVector{FASTX.FASTA.Record}, FASTX.FASTA.Reader}}
+# #     aamer_counts = OrderedCollections.OrderedDict{BioSequences.LongAminoAcidSeq, Int64}()
+# #     for protein in fasta_proteins
+# #         if !(FASTX.sequence(protein) isa BioSequences.LongAminoAcidSeq)
+# #             # @warn "record $(protein) is not encoded as a protein sequence, skipping..."
+# #             continue
+# #         end
+# #         these_counts = count_aamers(k, protein)
+# #         merge!(+, aamer_counts, these_counts)
+# #     end
+# #     return sort(aamer_counts)
+# # end
+
+# function count_aamers_by_file(k, fastx)
+#     counts_by_record = collect(values(count_aamers_by_record(k, fastx_file)))
+#     counts_by_file = first(counts_by_record)
+#     for these_counts in counts_by_record[2:end]
+#         merge!(+, counts_by_file, these_counts)
+#     end
+#     return counts_by_file
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Count aamers by record for a given file
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function count_aamers_by_record(k, fastx_file)
+#     return Dict(FASTX.identifier(record) => count_aamers(k, record) for record in open_fastx(fastx_file))
+# end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)

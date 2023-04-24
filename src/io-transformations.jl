@@ -1,3 +1,85 @@
+function diamond_line_to_named_tuple(diamond_line)
+    sline = split(line)
+    values_named_tuple = (
+        qseqid = sline[1],
+        sseqid = sline[2],
+        pident = parse(Float64, sline[3]),
+        length = parse(Int, sline[4]),
+        mismatch = parse(Int, sline[5]),
+        gapopen = parse(Int, sline[6]),
+        qlen = parse(Int, sline[7]),
+        qstart = parse(Int, sline[8]),
+        qend = parse(Int, sline[9]),
+        slen = parse(Int, sline[10]),
+        sstart = parse(Int, sline[11]),
+        send = parse(Int, sline[12]),
+        evalue = parse(Float64, sline[13]),
+        bitscore = parse(Float64, sline[14])
+        )
+    return values_named_tuple
+end
+
+function read_diamond_alignments_file(diamond_file)
+    column_names_to_types = [
+        "qseqid" => String,
+        "sseqid" => String,
+        "pident" => Float64,
+        "length" => Int,
+        "mismatch" => Int,
+        "gapopen" => Int,
+        "qlen" => Int,
+        "qstart" => Int,
+        "qend" => Int,
+        "slen" => Int,
+        "sstart" => Int,
+        "send" => Int,
+        "evalue" => Float64,
+        "bitscore" => Float64,
+    ]
+    types = Dict(i => t for (i, t) in enumerate(last.(column_names_to_types)))
+    
+    data, header = uCSV.read(diamond_file, header=0, delim='\t', types = types)
+    header = first.(column_names_to_types)    
+    
+    # data, header = uCSV.read(diamond_file, header=1, delim='\t', types = types)
+    # @assert header == first.(column_names_to_types)
+    
+    table = DataFrames.DataFrame(data, header)
+    return table
+end
+
+function add_header_to_diamond_file(infile, outfile=replace(infile, ".tsv" => ".with-header.tsv"))
+    column_names = [
+        "qseqid",
+        "sseqid",
+        "pident",
+        "length",
+        "mismatch",
+        "gapopen",
+        "qlen",
+        "qstart",
+        "qend",
+        "slen",
+        "sstart",
+        "send",
+        "evalue",
+        "bitscore"
+    ]
+    # dangerous but fast
+    # try
+    #     inserted_text = join(columns_names, '\t') * '\n'
+    #     sed_cmd = "1s/^/$(inserted_text)/"
+    #     full_cmd = `sed -i $sed_cmd $infile`
+    # catch
+    open(outfile, "w") do io
+        println(io, join(column_names, "\t"))
+        for line in eachline(infile)
+            println(io, line)
+        end
+    end
+    return outfile
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -33,6 +115,7 @@ function parse_qualimap_contig_coverage(qualimap_report_txt)
     types = [String, Int, Int, Float64, Float64]
     data, _ = uCSV.read(io, delim='\t', types=types)
     qualimap_results = DataFrames.DataFrame(data, header)
+    qualimap_results[!, "% Mapped bases"] = qualimap_results[!, "Mapped bases"] ./ sum(qualimap_results[!, "Mapped bases"]) .* 100
     return qualimap_results
 end
 
