@@ -1,8 +1,9 @@
 # viral-pangenome-discovery
 
-Run me to backup
+Run me to backup (run the second version if we hit API throttling limits)
 ```bash
 rclone copy --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
+rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
 ```
 
 Multiples paths to discovery:
