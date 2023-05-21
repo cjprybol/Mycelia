@@ -1,3 +1,18 @@
+function read_kraken_report(kraken_report)
+    kraken_report_header = [
+        "percentage_of_fragments_at_or_below_taxon",
+        "number_of_fragments_at_or_below_taxon",
+        "number_of_fragments_assigned_directly_to_taxon",
+        "rank",
+        "ncbi_taxonid",
+        "scientific_name"
+    ]
+
+    data, header = uCSV.read(kraken_report, delim='\t')
+    kraken_report_table = DataFrames.DataFrame(data, kraken_report_header)
+    return kraken_report_table
+end
+
 function diamond_line_to_named_tuple(diamond_line)
     sline = split(line)
     values_named_tuple = (
