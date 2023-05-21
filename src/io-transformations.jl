@@ -130,13 +130,13 @@ julia> 1 + 1
 ```
 """
 function read_fastani(path::String)
-    data, header = uCSV.read(path, delim='\t')
+    data, header = uCSV.read(path, delim='\t', typedetectrows=100)
     header = [
-        "identifier",
-        "closest_reference",
-        "% identity",
-        "fragments mapped",
-        "total query fragments"
+        "query_identifier",
+        "reference_identifier",
+        "%_identity",
+        "fragments_mapped",
+        "total_query_fragments"
     ]
 
     ani_table = DataFrames.DataFrame(data, header)
@@ -194,6 +194,7 @@ function parse_blast_report(blast_report)
     header = split(last(split(header_line, ": ")), ", ")
     blast_col_types = Dict(
         "query id" => String,
+        "query title" => String,
         "subject id" => String,
         "subject gi" => String,
         "subject acc." => String,
