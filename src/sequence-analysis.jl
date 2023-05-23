@@ -92,15 +92,16 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+Create a dense kmer counts table (note, considers ALL POSSIBLE CANONICAL KMERS) for each fasta provided in a list.
+Scales very well for large numbers of organisms/fasta files, but not for k.
+Recommended for k <= 13, although 17 may still be possible
 
 ```jldoctest
 julia> 1 + 1
 2
 ```
 """
-function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
+function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet, outfile="")
     if alphabet == :AA
         canonical_mers = generate_all_possible_canonical_kmers(k, AA_ALPHABET)
     elseif alphabet == :DNA
@@ -108,7 +109,7 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
     elseif alphabet == :RNA
         canonical_mers = generate_all_possible_canonical_kmers(k, RNA_ALPHABET)
     else
-        error("invalid alphabet")
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
     if isempty(outfile)
         outfile = joinpath(pwd(), "$(hash(fasta_list)).$(alphabet).k$(k).bin")
@@ -131,7 +132,42 @@ function fasta_list_to_counts_table(;fasta_list, k, alphabet, outfile="")
             update_counts_matrix!(mer_counts_matrix, entity_index, entity_mer_counts, canonical_mers)            
         end
     end
-    return mer_counts_matrix, outfile
+    return canonical_mers, mer_counts_matrix, outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a sparse kmer counts table in memory for each fasta provided in a list
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function fasta_list_to_sparse_counts_table(;fasta_list, k, alphabet)
+    
+    fasta_kmer_counts_dict = Dict()
+    mer_counts_matrix = zeros(Int, length(canonical_mers), length(fasta_list))
+    
+    if alphabet == :DNA
+        kmer_type = Kmers.Kmer{BioSequences.DNAAlphabet{4}
+    elseif alphabet == :RNA
+        kmer_type = Kmers.Kmer{BioSequences.RNAAlphabet{4}, k}
+    elseif alphabet == :AA
+        kmer_type = Kmers.Kmer{BioSequences.AminoAcidAlphabet, k}
+    end
+    
+    for fasta in fasta_list
+        fasta_kmer_counts_dict[fasta] = count_canonical_kmers(kmer_type, fasta_file)         
+    end
+    canonical_mers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
+    for (col, fasta) in enumerate(fasta_list)
+        for (row, kmer) in enumerate(canonical_mers)
+            mer_counts_matrix[row, col] = fasta_kmer_counts_dict[fasta][kmer]
+        end
+    end
+    canonical_mers, mer_counts_matrix
 end
 
 """
@@ -227,6 +263,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+DEPRECATED: THIS WAS THE MEASURE WITH THE LEAST AGREEMENT TO EXISTING MEASURES LIKE BLAST AND % AVERAGE NUCLEOTIDE IDENTITY
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
 
@@ -259,6 +296,17 @@ function counts_matrix_to_size_normalized_cosine_distance_matrix(counts_table)
     return distance_matrix
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
     distance_matrix = zeros(n_entities, n_entities)
@@ -274,6 +322,17 @@ function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     return distance_matrix
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create cosine distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to cosine similarity (relative frequency)
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
 function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
     n_entities = size(probability_matrix, 2)
     distance_matrix = zeros(n_entities, n_entities)
