@@ -151,7 +151,7 @@ function fasta_list_to_sparse_counts_table(;fasta_list, k, alphabet)
     mer_counts_matrix = zeros(Int, length(canonical_mers), length(fasta_list))
     
     if alphabet == :DNA
-        kmer_type = Kmers.Kmer{BioSequences.DNAAlphabet{4}
+        kmer_type = Kmers.Kmer{BioSequences.DNAAlphabet{4}, k}
     elseif alphabet == :RNA
         kmer_type = Kmers.Kmer{BioSequences.RNAAlphabet{4}, k}
     elseif alphabet == :AA
