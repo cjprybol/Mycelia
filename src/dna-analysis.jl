@@ -297,9 +297,10 @@ julia> 1 + 1
 ```
 """
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
-function analyze_kmer_spectra(;out_directory, forward_reads, reverse_reads, k=17, target_coverage=0, plot_size=(600,400))
+function analyze_kmer_spectra(;out_directory, forward_reads="", reverse_reads="", k=17, target_coverage=0, plot_size=(600,400))
     @info "counting $k-mers"
-    canonical_kmer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},k}, [forward_reads, reverse_reads])
+    user_provided_reads = filter(x -> !isempty(x), [forward_reads, reverse_reads])
+    canonical_kmer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},k}, user_provided_reads)
 
     @info "determining max count"
     max_count = maximum(values(canonical_kmer_counts))
