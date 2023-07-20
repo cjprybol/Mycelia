@@ -5,6 +5,10 @@ Run me to backup (run the second version if we hit API throttling limits)
 rclone copy --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
 rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
 ```
+copy from Google Drive back to local
+```
+rclone copy --progress --exclude=*.{fastq.gz,fq.gz,bam} google_drive:Projects/viral-pangenome-discovery/data $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data
+```
 
 Multiples paths to discovery:
 - classify first
