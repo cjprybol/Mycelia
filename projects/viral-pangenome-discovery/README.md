@@ -8,6 +8,7 @@ rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 
 copy from Google Drive back to local
 ```
 rclone copy --progress --exclude=*.{fastq.gz,fq.gz,bam} google_drive:Projects/viral-pangenome-discovery/data $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data
+rclone copy --progress google_drive:Projects/viral-pangenome-discovery/data $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data
 ```
 
 Multiples paths to discovery:
