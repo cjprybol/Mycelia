@@ -493,6 +493,32 @@ function observe(records::AbstractVector{R};
     return outfile
 end
 
+# currently this is only for amino acid sequences, expand to include DNA and RNA via multiple dispatch
+function mutate_sequence(reference_sequence)
+    i = rand(1:length(reference_sequence))
+    mutation_type = rand([SequenceVariation.Substitution, SequenceVariation.Insertion, SequenceVariation.Deletion])
+    if mutation_type == SequenceVariation.Substitution
+        # new_amino_acid = BioSequences.AA_A
+        new_amino_acid = rand(amino_acids)
+        mutation_string = "$(reference_sequence[i])$(i)$(new_amino_acid)"
+    else
+        indel_size = rand(Distributions.truncated(Distributions.Poisson(1), lower=1))
+        if mutation_type == SequenceVariation.Insertion
+            inserted_sequence = join([rand(amino_acids) for i in 1:indel_size], "")
+            mutation_string = "$(i)$(inserted_sequence)"
+        else
+            @assert mutation_type == SequenceVariation.Deletion
+            i_stop = min(i+indel_size, length(reference_sequence))
+            mutation_string = "Δ$(i)-$(i_stop)"
+        end
+    end
+    # println(mutation_string)
+    mutation = SequenceVariation.Variation(reference_sequence, mutation_string)
+    haplotype = SequenceVariation.Haplotype(reference_sequence, [mutation])
+    mutant_sequence = SequenceVariation.reconstruct(haplotype)
+    return mutant_sequence, haplotype
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

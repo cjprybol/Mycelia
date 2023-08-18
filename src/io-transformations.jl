@@ -1,3 +1,60 @@
+function update_gff_with_mmseqs(gff_file, mmseqs_file)
+    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
+
+    gdf = DataFrames.groupby(mmseqs_results, "query")
+    for g in gdf
+        @assert issorted(g[!, "evalue"])
+    end
+    top_hits = DataFrames.combine(gdf, first)
+
+    id_to_product = Dict()
+    for row in DataFrames.eachrow(top_hits)
+        id = Dict(a => b for (a, b) in split.(split(last(split(row["qheader"], " # ")), ';'), '='))["ID"]
+        product = row["theader"]
+        id_to_product[id] = product
+    end
+
+    gff_table = Mycelia.GFF_to_table(gff_file)
+    for (i, row) in enumerate(DataFrames.eachrow(gff_table))
+        id = Dict(a => b for (a,b) in split.(split(row["attributes"], " "), "="))["ID"]
+        product = get(id_to_product, id, "")
+        gff_table[i, "attributes"] = "product=\"$(product)\" " * row["attributes"]
+        # gff_table[i, "attributes"] = "product=" * replace(id_to_product[id], " "=>"__") *  " $(row["attributes"])"
+    end
+    return gff_table
+end
+
+function GFF_to_table(gff_file)
+    gff_columns = [
+        :seqid,
+        :source,
+        :featuretype,
+        :seqstart,
+        :seqend,
+        :score,
+        :strand,
+        :phase,
+        :attributes
+    ]
+    table = DataFrames.DataFrame([[] for x in gff_columns], gff_columns)
+    for record in collect(Mycelia.open_gff(gff_file))
+        row = Dict(
+            :seqid => GFF3.seqid(record),
+            :source => GFF3.source(record),
+            :featuretype => GFF3.featuretype(record),
+            :seqstart => GFF3.seqstart(record),
+            :seqend => GFF3.seqend(record),
+            :score => GFF3.score(record),
+            :strand => GFF3.strand(record),
+            :phase => GFF3.phase(record),
+            :attributes => GFF3.attributes(record),
+        )
+        row[:attributes] = join(["$(attribute)=$(join(values, ','))" for (attribute, values) in row[:attributes]], " ")
+        push!(table, row)
+    end
+    return table
+end
+
 function read_kraken_report(kraken_report)
     kraken_report_header = [
         "percentage_of_fragments_at_or_below_taxon",
