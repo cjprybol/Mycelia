@@ -1,3 +1,77 @@
+function parse_virsorter_score_tsv(virsorter_score_tsv)
+    data, header = uCSV.read(virsorter_score_tsv, delim='\t', header=1)
+    if length(data) == 0
+        data = [[] for i in 1:length(header)]
+    end
+    return DataFrames.DataFrame(data, header)
+end
+
+function parse_mmseqs_tophit_aln(tophit_aln)
+    data, header = uCSV.read(tophit_aln, delim='\t')
+    # (1,2) identifiers for query and target sequences/profiles, (3) sequence identity, (4) alignment length, (5) number of mismatches, (6) number of gap openings, (7-8, 9-10) domain start and end-position in query and in target, (11) E-value, and (12) bit score.
+    # query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits
+    header = [
+        "query",
+        "target",
+        "percent identity",
+        "alignment length",
+        "number of mismatches",
+        "number of gaps",
+        "query start",
+        "query end",
+        "target start",
+        "target end",
+        "evalue",
+        "bit score"
+    ]
+    DataFrames.DataFrame(data, header)
+end
+
+function parse_mmseqs_easy_taxonomy_tophit_report(tophit_report)
+    data, header = uCSV.read(tophit_report, delim='\t')
+    # tophit_report
+    # (1) Target identifier 
+    # (2) Number of sequences aligning to target
+    # (3) Unique coverage of target uniqueAlignedResidues / targetLength
+    # (4) Target coverage alignedResidues / targetLength
+    # (5) Average sequence identity
+    # (6) Taxonomical information identifier, species, lineage
+    header = [
+        "target_id",
+        "number of sequences aligning to target",
+        "unique coverage of target (uniqueAlignedResidues / targetLength)",
+        "Target coverage (alignedResidues / targetLength)",
+        "Average sequence identity",
+        "taxon_id",
+        "taxon_rank",
+        "taxon_name"
+    ]
+    DataFrames.DataFrame(data, header)
+end
+
+function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
+    data, header = uCSV.read(lca_tsv, delim='\t')
+    # contig
+    # (1) a single taxonomy numeric identifier
+    # (2) a taxonomic rank column
+    # (3) taxonomic name column
+    # fragments retained
+    # fragments taxonomically assigned
+    # fragments in agreement with the contig label (i.e. same taxid or have it as an ancestor)
+    # the support received -log(E-value)
+    header = [
+        "contig_id",
+        "taxon_id",
+        "taxon_rank",
+        "taxon_name",
+        "fragments_retained",
+        "fragments_taxonomically_assigned",
+        "fragments_in_agreement_with_assignment",
+        "support -log(E-value)"
+    ]
+    return DataFrames.DataFrame(data, header)
+end
+
 function read_kraken_report(kraken_report)
     kraken_report_header = [
         "percentage_of_fragments_at_or_below_taxon",
