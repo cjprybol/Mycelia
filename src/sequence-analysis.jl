@@ -1,3 +1,148 @@
+function amino_acids_to_codons()
+    amino_acid_to_codon_map = Dict(a => Kmers.DNACodon for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
+    for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
+        amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+        amino_acid_to_codon_map[amino_acid] = codon
+    end   
+    return amino_acid_to_codon_map
+end
+
+function codons_to_amino_acids()
+    codons = Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
+    codon_to_amino_acid_map = Dict(codon => BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+    return codon_to_amino_acid_map
+end
+
+
+function genbank_to_codon_frequencies(genbank; allow_all=true)
+    # create an initial codon frequency table, where we initialize all possible codons with equal probability
+    # this way, if we don't see the amino acid in the observed proteins we're optimizing, we can still produce an codon profile
+    codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}() for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
+    if allow_all
+        for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
+            amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+            codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) + 1
+        end    
+    end
+    genome_genbank_data = GenomicAnnotations.readgbk(genbank)
+    for chromosome in genome_genbank_data
+        for gene in chromosome.genes
+            gene_range = GenomicAnnotations.locus(gene).position
+            gene_type = GenomicAnnotations.feature(gene)
+            # is_terminator = occursin(r"^TERM", gene.label)
+            if (length(gene_range) % 3 == 0) && (gene_type == :misc_feature)
+
+                fw_dnaseq = GenomicAnnotations.sequence(gene)
+                revcom_dnaseq = BioSequences.reverse_complement(fw_dnaseq)
+
+                fw_aaseq = BioSequences.translate(fw_dnaseq)
+                revcom_aaseq = BioSequences.translate(revcom_dnaseq)
+
+                if last(fw_aaseq) == BioSequences.AA_Term
+                    dnaseq = fw_dnaseq
+                    aaseq = fw_aaseq
+                elseif last(revcom_aaseq) == BioSequences.AA_Term
+                    dnaseq = revcom_dnaseq
+                    aaseq = revcom_aaseq
+                elseif first(fw_aaseq) == BioSequences.AA_M
+                    dnaseq = fw_dnaseq
+                    aaseq = fw_aaseq
+                elseif first(revcom_aaseq) == BioSequences.AA_M
+                    dnaseq = revcom_dnaseq
+                    aaseq = revcom_aaseq
+                else
+                    # @show "ambiguous"
+                    continue
+                end
+                
+                # for (mer, amino_acid) in zip(BioSequences.each(BioSequences.DNAMer{3}, dnaseq, 3), aaseq)
+                for ((i, codon), amino_acid) in zip(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(dnaseq), 3), aaseq)
+                    @assert amino_acid == first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+                    codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) + 1
+                end
+            end
+        end
+    end
+    return codon_frequencies
+end
+
+function normalize_codon_frequencies(codon_frequencies)
+    normalized_codon_frequencies = Dict{BioSymbols.AminoAcid, Dict{Kmers.DNACodon, Float64}}()
+    for (amino_acid, amino_acid_codon_frequencies) in codon_frequencies
+        total_count = sum(values(amino_acid_codon_frequencies))
+        normalized_codon_frequencies[amino_acid] = Dict(
+            amino_acid_codon => amino_acid_codon_frequency/total_count for (amino_acid_codon, amino_acid_codon_frequency) in amino_acid_codon_frequencies
+        )
+        if !isempty(normalized_codon_frequencies[amino_acid])
+            @assert abs(1-sum(values(normalized_codon_frequencies[amino_acid]))) <= eps()
+        end
+    end
+    return normalized_codon_frequencies
+end
+
+
+function reverse_translate(protein_sequence::BioSequences.LongAA)
+    this_sequence = BioSequences.LongDNA{2}()
+    codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}() for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
+    for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
+        amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+        codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) + 1
+    end    
+    for amino_acid in protein_sequence
+        # I'm collecting first because I'm worried about the keys and values not being sorted the same between queries, but that feels like it's not a viable worry
+        collected = collect(codon_frequencies[amino_acid])
+        codons = first.(collected)
+        frequencies = last.(collected)
+        chosen_codon_index = StatsBase.sample(1:length(codons), StatsBase.weights(frequencies))
+        chosen_codon = codons[chosen_codon_index]
+        @assert first(BioSequences.translate(BioSequences.LongDNA{2}(chosen_codon))) == amino_acid
+        this_sequence *= chosen_codon
+    end
+    @assert BioSequences.translate(this_sequence) == protein_sequence
+    return this_sequence
+end
+
+function codon_optimize(normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
+    return codon_optimize(normalized_codon_frequencies, reverse_translate(protein_sequence), n_iterations)
+end
+
+
+function codon_optimize(normalized_codon_frequencies, optimization_sequence::BioSequences.LongDNA, n_iterations)
+    protein_sequence = BioSequences.translate(optimization_sequence)
+    codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(optimization_sequence), 3)))
+    initial_log_likelihood = -log10(1.0)
+    for (codon, amino_acid) in collect(zip(codons, protein_sequence))
+        this_codon_likelihood = normalized_codon_frequencies[amino_acid][codon]
+        initial_log_likelihood -= log10(this_codon_likelihood)
+    end
+    best_sequence = optimization_sequence
+    best_likelihood = initial_log_likelihood
+
+    ProgressMeter.@showprogress for i in 1:n_iterations
+    # for iteration in 1:n_iterations
+        this_sequence = BioSequences.LongDNA{2}()
+        this_log_likelihood = -log10(1.0)
+        for amino_acid in protein_sequence
+            # I'm collecting first because I'm worried about the keys and values not being sorted the same between queries, but that feels like it's not a viable worry
+            collected = collect(normalized_codon_frequencies[amino_acid])
+            codons = first.(collected)
+            frequencies = last.(collected)
+            chosen_codon_index = StatsBase.sample(1:length(codons), StatsBase.weights(frequencies))
+            chosen_codon = codons[chosen_codon_index]
+            chosen_codon_frequency = frequencies[chosen_codon_index]
+            this_log_likelihood += -log10(chosen_codon_frequency)
+            this_sequence *= chosen_codon
+        end
+        if this_log_likelihood < best_likelihood
+            best_likelihood = this_log_likelihood
+            best_sequence = this_sequence
+        end
+        @assert BioSequences.translate(this_sequence) == protein_sequence
+    end
+    @show (best_likelihood)^-10 / (initial_log_likelihood)^-10
+    return best_sequence
+end
+
 function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
     kmer_counts_vector = zeros(length(kmer_to_index_map))
     for (kmer, count) in kmer_counts
@@ -24,9 +169,9 @@ function generate_all_possible_kmers(k, alphabet)
     if eltype(alphabet) == BioSymbols.AminoAcid
         kmers = [Kmers.Kmer{BioSequences.AminoAcidAlphabet}(BioSequences.LongAA(kv)) for kv in kmer_vectors]
     elseif eltype(alphabet) == BioSymbols.DNA
-        kmers = [Kmers.Kmer{BioSequences.DNAAlphabet{4}}(BioSequences.LongDNA{4}(kv)) for kv in kmer_vectors]
+        kmers = [Kmers.Kmer{BioSequences.DNAAlphabet{2}}(BioSequences.LongDNA{2}(kv)) for kv in kmer_vectors]
     elseif eltype(alphabet) == BioSymbols.RNA
-        kmers = [Kmers.Kmer{BioSequences.RNAAlphabet{4}}(BioSequences.LongRNA{4}(kv)) for kv in kmer_vectors]
+        kmers = [Kmers.Kmer{BioSequences.RNAAlphabet{2}}(BioSequences.LongRNA{2}(kv)) for kv in kmer_vectors]
     else
         error()
     end
@@ -491,6 +636,32 @@ function observe(records::AbstractVector{R};
     close(fastx_io)
     close(io)
     return outfile
+end
+
+# currently this is only for amino acid sequences, expand to include DNA and RNA via multiple dispatch
+function mutate_sequence(reference_sequence)
+    i = rand(1:length(reference_sequence))
+    mutation_type = rand([SequenceVariation.Substitution, SequenceVariation.Insertion, SequenceVariation.Deletion])
+    if mutation_type == SequenceVariation.Substitution
+        # new_amino_acid = BioSequences.AA_A
+        new_amino_acid = rand(amino_acids)
+        mutation_string = "$(reference_sequence[i])$(i)$(new_amino_acid)"
+    else
+        indel_size = rand(Distributions.truncated(Distributions.Poisson(1), lower=1))
+        if mutation_type == SequenceVariation.Insertion
+            inserted_sequence = join([rand(amino_acids) for i in 1:indel_size], "")
+            mutation_string = "$(i)$(inserted_sequence)"
+        else
+            @assert mutation_type == SequenceVariation.Deletion
+            i_stop = min(i+indel_size, length(reference_sequence))
+            mutation_string = "Δ$(i)-$(i_stop)"
+        end
+    end
+    # println(mutation_string)
+    mutation = SequenceVariation.Variation(reference_sequence, mutation_string)
+    haplotype = SequenceVariation.Haplotype(reference_sequence, [mutation])
+    mutant_sequence = SequenceVariation.reconstruct(haplotype)
+    return mutant_sequence, haplotype
 end
 
 """
