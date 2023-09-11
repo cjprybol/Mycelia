@@ -559,8 +559,10 @@ julia> 1 + 1
 2
 ```
 """
-function run_prodigal(;out_dir, fasta_file)
-    prodigal_dir = mkpath("$(out_dir)/prodigal")
+function run_prodigal(;fasta_file, out_dir="", use_conda=false)
+    if isempty(out_dir)
+        prodigal_dir = mkpath("$(fasta_file)_prodigal")
+    end
 
     # $ prodigal
     # -------------------------------------
@@ -591,17 +593,31 @@ function run_prodigal(;out_dir, fasta_file)
     #          -v:  Print version number and exit.
     
     if isempty(readdir(prodigal_dir))
-        cmd = 
-        `prodigal
-        -o $(prodigal_dir)/$(basename(fasta_file)).prodigal.gff
-        -f gff
-        -m
-        -p meta
-        -i $(fasta_file)
-        -a $(prodigal_dir)/$(basename(fasta_file)).prodigal.faa
-        -d $(prodigal_dir)/$(basename(fasta_file)).prodigal.fna
-        -s $(prodigal_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
-        `
+        if !use_conda
+            cmd = 
+            `prodigal
+            -o $(prodigal_dir)/$(basename(fasta_file)).prodigal.gff
+            -f gff
+            -m
+            -p meta
+            -i $(fasta_file)
+            -a $(prodigal_dir)/$(basename(fasta_file)).prodigal.faa
+            -d $(prodigal_dir)/$(basename(fasta_file)).prodigal.fna
+            -s $(prodigal_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
+            `
+        else
+            cmd = 
+            `conda run --no-capture-output -n prodigal prodigal
+            -o $(prodigal_dir)/$(basename(fasta_file)).prodigal.gff
+            -f gff
+            -m
+            -p meta
+            -i $(fasta_file)
+            -a $(prodigal_dir)/$(basename(fasta_file)).prodigal.faa
+            -d $(prodigal_dir)/$(basename(fasta_file)).prodigal.fna
+            -s $(prodigal_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
+            `
+        end
 
         p = pipeline(cmd, 
                 stdout="$(prodigal_dir)/$(basename(fasta_file)).prodigal.out",

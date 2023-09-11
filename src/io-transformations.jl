@@ -70,6 +70,7 @@ function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
         "support -log(E-value)"
     ]
     return DataFrames.DataFrame(data, header)
+end
 
 function update_gff_with_mmseqs(gff_file, mmseqs_file)
     mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
