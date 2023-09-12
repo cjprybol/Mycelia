@@ -1,3 +1,67 @@
+function trim_galore(;outdir="", identifier="")
+    
+    trim_galore_dir = joinpath(outdir, "trim_galore")
+    
+    forward_reads = joinpath(outdir, "$(identifier)_1.fastq.gz")
+    reverse_reads = joinpath(outdir, "$(identifier)_2.fastq.gz")
+    
+    trimmed_forward_reads = joinpath(trim_galore_dir, "$(identifier)_1_val_1.fq.gz")
+    trimmed_reverse_reads = joinpath(trim_galore_dir, "$(identifier)_2_val_2.fq.gz")
+    
+    # mamba create -n trim_galore -c bioconda trim_galore
+    if !isfile(trimmed_forward_reads) && !isfile(trimmed_reverse_reads)
+        cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+        run(cmd)
+    else
+        @info "$(trimmed_forward_reads) & $(trimmed_reverse_reads) already present"
+    end
+end
+
+function fasterq_dump(;outdir="", srr_identifier="")
+    
+    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
+    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
+    
+    forward_reads_gz = forward_reads * ".gz"
+    reverse_reads_gz = reverse_reads * ".gz"
+    
+    if !isfile(forward_reads_gz) && !isfile(reverse_reads_gz)
+        # --progress doesn't work well for jupyter output
+        fasterq_dump_cmd = `
+            fasterq-dump
+                --outdir $(outdir)
+                --mem 1G
+                --split-3
+                --threads $(min(Sys.CPU_THREADS, 4))
+                --skip-technical
+                $(srr_identifier)`
+        @time run(fasterq_dump_cmd)
+        run(`pigz $(forward_reads)`)
+        run(`pigz $(reverse_reads)`)
+    else
+        @info "$(forward_reads_gz) & $(reverse_reads_gz) already present"
+    end
+end
+
+function download_and_filter_sra_reads(;outdir="", srr_identifier="")
+    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
+    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
+    forward_reads_gz = forward_reads * ".gz"
+    reverse_reads_gz = reverse_reads * ".gz"
+    trimmed_forward_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_1_val_1.fq.gz")
+    trimmed_reverse_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_2_val_2.fq.gz")
+
+    if !(isfile(trimmed_forward_reads) && isfile(trimmed_reverse_reads))
+        @info "processing $(srr_identifier)"
+        fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
+        trim_galore(outdir=outdir, identifier=srr_identifier)
+    # else
+        # @info "$(srr_identifier) already processed..."
+    end
+    isfile(forward_reads_gz) && rm(forward_reads_gz)
+    isfile(reverse_reads_gz) && rm(reverse_reads_gz)
+end
+
 function amino_acids_to_codons()
     amino_acid_to_codon_map = Dict(a => Kmers.DNACodon for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
     for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
