@@ -35,6 +35,10 @@ note - mmseqs db is already in the drive!
 rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/JGI google_drive:Projects/reference-databases
 ```
 
+```bash
+rclone copy --progress google_drive:Projects/reference-databases/mmseqs.tar.gz $HOME/workspace/mmseqs_alt
+```
+
 ## Classification
 All of the samples have been classified using 3 algorithms, one of which used 3 databases, for a total of 5 independent classifications for each assembled sequence:
 - DNA
