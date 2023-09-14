@@ -24,3 +24,4 @@ notebooks/scripts/kmer-saturation*
 *snakemake/logs/*
 *.bam
 *.sam
+projects/ME-CFS/reference_data/

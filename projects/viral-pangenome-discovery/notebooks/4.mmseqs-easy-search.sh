@@ -1,14 +1,31 @@
 #!/bin/bash
-# LBL
+
+# SCG3 setup
 #SBATCH --mail-user=cameron.prybol@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --error=%x-%j.err
 #SBATCH --output=%x-%j.out
+#SBATCH --partition=batch
+#SBATCH --account=mpsnyder
+#SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
 #SBATCH --job-name=mmseqs_easy_search
-#SBATCH --partition=lr3
-#SBATCH --qos=lr_normal
+#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=32
+# OOM with 16 so doubling
+CPU=32
+# ~ 8Gb RAM / CPU
+
+## # LBL
+## SBATCH --mail-user=cameron.prybol@gmail.com
+## SBATCH --mail-type=ALL
+## SBATCH --error=%x-%j.err
+## SBATCH --output=%x-%j.out
+## SBATCH --ntasks=1
+## SBATCH --cpus-per-task=16
+## SBATCH --job-name=mmseqs_easy_search
+## SBATCH --partition=lr3
+## SBATCH --qos=lr_normal
 
 # NERSC
 # #SBATCH --mail-user=cameron.prybol@gmail.com
@@ -36,4 +53,4 @@ OUTPATH=$3
 # conda run --no-capture-output -n mmseqs2 mmseqs databases UniRef50 $HOME/workspace/mmseqs/UniRef50 $HOME/workspace/mmseqs/tmp
 
 # sbatch mmseqs-easy-search.sh $FASTA $DATABASE $OUTPATH
-conda run --no-capture-output -n mmseqs2 mmseqs easy-taxonomy --threads `nproc` $FASTA $DATABASE ${OUTPATH} ${OUTPATH}_TMP
+conda run --no-capture-output -n mmseqs2 mmseqs easy-taxonomy --threads $CPU $FASTA $DATABASE ${OUTPATH} ${OUTPATH}_TMP
