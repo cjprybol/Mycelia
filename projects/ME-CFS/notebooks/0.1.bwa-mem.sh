@@ -8,18 +8,32 @@
 #SBATCH --account=mpsnyder
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --job-name=trim-galore
+#SBATCH --job-name=map-reads-to-human
 #SBATCH --time=24:00:00
-#SBATCH --cpus-per-task=1
-CPU=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+CPU=8
 
-# conda create -n trim_galore -c bioconda trim-galore
-OUTPUT_DIRECTORY=$1
+FASTA=$1
 FORWARD=$2
 REVERSE=$3
+OUTFILE=$4
 
 # sbatch trim-galore.sh $OUTPUT_DIRECTORY $FORWARD $REVERSE
 # squeue -u $USER
+# conda create -n bwa-mem2 -c bioconda bwa-mem2
+# conda create -n samtools -c bioconda samtools
 
-conda run -n trim_galore trim_galore --suppress_warn --cores $CPU --output_dir $OUTPUT_DIRECTORY --paired $FORWARD $REVERSE
+conda run --live-stream --no-capture-output -n bwa-mem2 bwa-mem2 \
+    mem \
+    -t $CPU \
+    ${FASTA} \
+    ${FORWARD} \
+    ${REVERSE} \
+    | conda run --live-stream --no-capture-output -n samtools samtools view -bh \
+    | conda run --live-stream --no-capture-output -n samtools samtools sort \
+    > $OUTFILE
+    
+    
+    
 

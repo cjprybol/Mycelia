@@ -1,5 +1,7 @@
 module Mycelia
 
+__precompile__(false)
+
 import BioAlignments
 import BioSequences
 import BioSymbols
