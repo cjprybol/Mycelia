@@ -68,17 +68,14 @@ All contigs that have been identified as viral by at least 4 of the 7 above clas
     - in progress
         - kmers
         - JGI's IMG/VR
+            - data acquired by Globus
             - complete variant
             - high confidence variant
-    - NCBI via blast
-        - data obtained from Blast DBs
-    - IMG/VR via blast
-        - data acquired by Globus
 
 - Protein
     - complete
     - in progress
-        - UniRef100
+        - UniRef50
 
 Multiples paths to discovery:
 - classify first
