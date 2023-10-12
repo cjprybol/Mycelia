@@ -1,22 +1,18 @@
-# viral-pangenome-discovery
+# Viral Exposome
 
-# Figures
-- percent contigs viral by method
+## Figures
+- species, genus, family, order, class, phylum, kingdom
+    - Kraken
+    - mmseqs
+        - UniRef50
+        - UniRef90
+        - UniRef100
+    - Blast NT
 
-- percent reads viral by method
-
-- relative frequencies
-
+- which groups have the most divergence
+- sample by sample clusters
 - kmer saturation diversity of proteins and dna
-
 - diveristy gain over known databases for protein and dna
-
-- hone in on viral clades in different percent inclusions:
-- 0.5% (at least 3)
-- 1%
-- 10%
-- 90%
-- 99%
 
 Run me to backup (run the second version if we hit API throttling limits)
 ```bash
