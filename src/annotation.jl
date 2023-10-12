@@ -562,6 +562,8 @@ julia> 1 + 1
 function run_prodigal(;fasta_file, out_dir="", use_conda=false)
     if isempty(out_dir)
         prodigal_dir = mkpath("$(fasta_file)_prodigal")
+    else
+        prodigal_dir = mkpath(out_dir)
     end
 
     # $ prodigal

@@ -283,24 +283,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function update_counts_matrix!(matrix, sample_index, countmap, sorted_kmers)
-    for (i, kmer) in enumerate(sorted_kmers)
-        matrix[i, sample_index] = get(countmap, kmer, 0)
-    end
-    return matrix
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Create a dense kmer counts table (note, considers ALL POSSIBLE CANONICAL KMERS) for each fasta provided in a list.
 Scales very well for large numbers of organisms/fasta files, but not for k.
 Recommended for k <= 13, although 17 may still be possible
@@ -320,28 +302,21 @@ function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet, outfile="")
     else
         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
-    if isempty(outfile)
-        outfile = joinpath(pwd(), "$(hash(fasta_list)).$(alphabet).k$(k).bin")
-    end
-    if isfile(outfile)
-        println("$outfile found, loading into memory")
-        mer_counts_matrix = Mmap.mmap(open(outfile), Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
-    else
-        println("creating new counts matrix $outfile")
-        mer_counts_matrix = Mmap.mmap(open(outfile, "w+"), Array{Int, 2}, (length(canonical_mers), length(fasta_list)))
-        mer_counts_matrix .= 0
-        ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
-            if alphabet == :DNA
-                entity_mer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4}, k}, fasta_file)
-            elseif alphabet == :RNA
-                entity_mer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.RNAAlphabet{4}, k}, fasta_file)
-            elseif alphabet == :AA
-                entity_mer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.AminoAcidAlphabet, k}, fasta_file)
-            end
-            update_counts_matrix!(mer_counts_matrix, entity_index, entity_mer_counts, canonical_mers)            
+    mer_counts_matrix = zeros(length(canonical_mers), length(fasta_list))
+    ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
+        if alphabet == :DNA
+            KMER_TYPE = BioSequences.DNAAlphabet{2}
+        elseif alphabet == :RNA
+            KMER_TYPE = BioSequences.RNAAlphabet{2}
+        elseif alphabet == :AA
+            KMER_TYPE = BioSequences.AminoAcidAlphabet
+        end
+        entity_mer_counts = count_canonical_kmers(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
+        for (i, kmer) in enumerate(canonical_mers)
+            mer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
         end
     end
-    return canonical_mers, mer_counts_matrix, outfile
+    return canonical_mers, mer_counts_matrix
 end
 
 """

@@ -278,14 +278,26 @@ julia> 1 + 1
 function read_fastani(path::String)
     data, header = uCSV.read(path, delim='\t', typedetectrows=100)
     header = [
+        "query",
+        "reference",
+        "%_identity",
+        "fragments_mapped",
+        "total_query_fragments"
+    ]
+    ani_table = DataFrames.DataFrame(data, header)
+    ani_table[!, "query_identifier"] = replace.(basename.(ani_table[!, "query"]), r"\.(fasta|fna|fa)$" => "")
+    ani_table[!, "reference_identifier"] = replace.(basename.(ani_table[!, "reference"]), r"\.(fasta|fna|fa)$" => "")
+    columns = [
+        "query",
         "query_identifier",
+        "reference",
         "reference_identifier",
         "%_identity",
         "fragments_mapped",
         "total_query_fragments"
     ]
-
-    ani_table = DataFrames.DataFrame(data, header)
+    ani_table = ani_table[!, columns]    
+    return ani_table
 end
 
 """
