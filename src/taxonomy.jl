@@ -32,26 +32,74 @@ function list_full_taxonomy()
     return table
 end
 
+function list_ranks(;synonyms=false)
+    if !synonyms
+        return [
+            "top",
+            "superkingdom",
+            "kingdom",
+            "phylum",
+            "class",
+            "order",
+            "family",
+            "genus",
+            "species"
+        ]
+    else
+        return [
+            "top",
+            "superkingdom/domain",
+            "kingdom",
+            "phylum",
+            "class",
+            "order",
+            "family",
+            "genus",
+            "species"
+        ]
+    end
+end
+
+function list_toplevel()
+    return DataFrames.DataFrame(taxid=[0, 1], name=["unclassified", "root"])
+end
+    
+
+"""
+- top
+- superkingdom/domain
+- kingdom
+- phylum
+- class
+- order
+- family
+- genus
+- species
+"""
 function list_rank(rank)
-    ranks_to_shorthand = Dict(
-        "superkingdom" => "k",
-        "kingdom" => "K",
-        "phylum" => "p",
-        "class" => "c",
-        "order" => "o",
-        "family" => "f",
-        "genus" => "g",
-        "species" => "s"
-    )
-    shorthand = ranks_to_shorthand[rank]
-    p = pipeline(
-        `conda run --no-capture-output -n taxonkit taxonkit list --ids 1`,
-        `conda run --no-capture-output -n taxonkit taxonkit filter --equal-to "$(rank)"`,
-        `conda run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --format "{$(shorthand)}"`
-    )
-    data, header = uCSV.read(open(p), delim='\t')
-    header = ["taxid", "name"]
-    return DataFrames.DataFrame(data, header)
+    if rank == "top"
+        return list_toplevel()
+    else
+        ranks_to_shorthand = Dict(
+            "superkingdom" => "k",
+            "kingdom" => "K",
+            "phylum" => "p",
+            "class" => "c",
+            "order" => "o",
+            "family" => "f",
+            "genus" => "g",
+            "species" => "s"
+        )
+        shorthand = ranks_to_shorthand[rank]
+        p = pipeline(
+            `conda run --no-capture-output -n taxonkit taxonkit list --ids 1`,
+            `conda run --no-capture-output -n taxonkit taxonkit filter --equal-to "$(rank)"`,
+            `conda run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --format "{$(shorthand)}"`
+        )
+        data, header = uCSV.read(open(p), delim='\t')
+        header = ["taxid", "name"]
+        return DataFrames.DataFrame(data, header)
+    end
 end
 
 
