@@ -8,22 +8,20 @@ Multiomic analysis and data integration for [characterization](), [discovery](),
 
 Install Julia (if not already installed)
 ```bash
-curl -fsSL https://install.julialang.org | sh
+curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel release
 # add Julia to your $PATH by reloading the appropriate source file, as instructed by the installer
 source ~/.bashrc
 ```
 
-Install Mycelia
+Install Mycelia & precompile to validate installation
 ```
-julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); Pkg.precompile()'
+export LD_LIBRARY_PATH="" && julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); Pkg.precompile(); import Mycelia'
 ```
 
 Add Mycelia to your system path
 ```
 export PATH="$HOME/.julia/"
 ```
-
-
 
 See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 
