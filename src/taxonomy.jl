@@ -134,3 +134,21 @@ end
 function list_species()
     return list_rank("species")
 end
+
+# function list_subtaxa(taxid)
+#     return parse.(Int, filter(!isempty, strip.(readlines(`conda run --no-capture-output -n taxonkit taxonkit list --ids 10239`))))
+# end
+
+function list_subtaxa(taxid)
+    return parse.(Int, filter(!isempty, strip.(readlines(`conda run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
+end
+
+function name2taxid(name)
+    p = pipeline(`echo $(name)`, `conda run --no-capture-output -n taxonkit taxonkit name2taxid --show-rank`)
+    data, header = uCSV.read(open(p), delim='\t')
+    header = ["name", "taxid", "rank"]
+    return DataFrames.DataFrame(data, header)
+end
+
+# function lca(taxids)
+# end

@@ -1,5 +1,16 @@
 # Viral Exposome
 
+season - color scale
+person - shape
+location - annotation
+
+pip install nbconvert
+jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace 2.analyze-read-classifications.ipynb
+
+jupyter nbconvert --clear-output 2.analyze-read-classifications.ipynb
+
+ my_notebook.ipynb
+
 kraken samples to rerun
 SRR6399724
 SRR6399725
