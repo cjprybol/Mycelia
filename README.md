@@ -2,7 +2,26 @@
 
 ! In development !
 
-Multiomics knowledge graphs for [characterization](), [discovery](), and [biological design]().
+Multiomic analysis and data integration for [characterization](), [discovery](), [prediction](), and [biological design]().
+
+## Install
+
+Install Julia (if not already installed)
+```bash
+curl -fsSL https://install.julialang.org | sh
+# add Julia to your $PATH by reloading the appropriate source file, as instructed by the installer
+```
+
+Install Mycelia
+```
+julia -e 'Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); import Mycelia # this will pre-compile dependencies and confirm a successful installation'
+# add the Mycelia top-level command to your $PATH
+```
+
+(optional) Install IJulia to use the interactive notebooks
+```
+julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
+```
 
 See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 
