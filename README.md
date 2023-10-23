@@ -10,17 +10,17 @@ Install Julia (if not already installed)
 ```bash
 curl -fsSL https://install.julialang.org | sh
 # add Julia to your $PATH by reloading the appropriate source file, as instructed by the installer
-```
-
-Install IJulia
-```
-julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.build("IJulia")'
+source ~/.bashrc
 ```
 
 Install Mycelia
 ```
-julia -e 'Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); import Mycelia # this will pre-compile dependencies and confirm a successful installation'
-# add the Mycelia top-level command to your $PATH
+julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); Pkg.precompile()'
+```
+
+Add Mycelia to your system path
+```
+export PATH="$HOME/.julia/"
 ```
 
 
