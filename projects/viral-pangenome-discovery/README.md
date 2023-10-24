@@ -1,5 +1,11 @@
 # Viral Exposome
 
+conda create -n mmseqs2 -c bioconda mmseqs2
+
+conda run --live-stream --no-capture-output -n mmseqs2 mmseqs databases NT $HOME/workspace/mmseqs/NT $HOME/workspace/mmseqs/tmp
+
+mmseqs databases UniProtKB/Swiss-Prot $HOME/workspace/mmseqs $HOME/workspace/mmseqs/tmp
+
 season - color scale
 person - shape
 location - annotation

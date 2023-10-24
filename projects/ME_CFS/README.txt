@@ -19,11 +19,25 @@ what proteins are present
 
 Run me to backup (run the second version if we hit API throttling limits)
 ```bash
-rclone copy --progress $HOME/workspace/Mycelia/projects/ME_CFS/data ME_CFS:data
-rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress ... ...
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 1G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/Mycelia/projects/ME_CFS/data ME_CFS:data
 ```
+
 copy from Google Drive back to local
 ```bash
-rclone copy --progress ME_CFS:data $HOME/workspace/Mycelia/projects/ME_CFS/data
-rclone copy --progress --exclude=*.{fastq.gz,fq.gz,bam}
+rclone copy --progress --retries 5 ME_CFS:data $HOME/workspace/Mycelia/projects/ME_CFS/data
 ```
+
+helpful filters
+```bash
+--include "*kraken*"
+--exclude=*.{fastq.gz,fq.gz,bam}
+
+# e.g.
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" $HOME/workspace/Mycelia/projects/ME_CFS/data ME_CFS:data
+
+
+
+```
+
+
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" $HOME/workspace/Mycelia/projects/ME_CFS/data google_drive:Projects/ME_CFS/data
