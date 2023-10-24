@@ -1,5 +1,18 @@
 # Mycelia
 
+setup on SCG3
+```bash
+julia
+```
+then
+```julia
+ENV["LD_LIBRARY_PATH"] = ""
+import Pkg
+Pkg.add("IJulia")
+Pkg.build("IJulia")
+exit()
+```
+
 ! In development !
 
 Multiomics knowledge graphs for [characterization](), [discovery](), and [biological design]().
