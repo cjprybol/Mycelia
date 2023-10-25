@@ -1,26 +1,14 @@
 # Mycelia
 
-setup on SCG3
-```bash
-julia
-```
-then
-```julia
-ENV["LD_LIBRARY_PATH"] = ""
-import Pkg
-Pkg.add("IJulia")
-Pkg.build("IJulia")
-exit()
-```
-
 ! In development !
 
-Multiomic analysis and data integration for [characterization](), [discovery](), [prediction](), and [biological design]().
+Multiomic analysis and data integration for biological characterization, prediction, and  design.
 
 ## Install
 
 Install Julia (if not already installed)
 ```bash
+# replacing "release" with "lts" is a good alternate for deployments to production
 curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel release
 # add Julia to your $PATH by reloading the appropriate source file, as instructed by the installer
 source ~/.bashrc
@@ -28,6 +16,7 @@ source ~/.bashrc
 
 Install Mycelia & precompile to validate installation
 ```
+# don't use system shared libraries since that often creates issues for me on shared cluster environments
 export LD_LIBRARY_PATH="" && julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); Pkg.precompile(); import Mycelia'
 ```
 
