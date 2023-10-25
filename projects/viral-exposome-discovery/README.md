@@ -201,7 +201,9 @@ rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 
 ```
 copy from Google Drive back to local
 ```bash
-rclone copy --progress --exclude=*.{fastq.gz,fq.gz,bam} google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+# --exclude=*.{fq.gz,bam,fastq.gz}
+# rclone copy --progress --exclude=*.{bam,fastq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
 rclone copy --progress google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
 ```
 

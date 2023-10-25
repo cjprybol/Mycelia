@@ -1,6 +1,12 @@
-# import Pkg
-# Pkg.add("ArgParse")
-import ArgParse
+import Pkg
+Pkg.activate(".")
+pkgs = [
+    "ArgParse"
+]
+Pkg.add(pkgs)
+for pkg in pkgs
+    eval(Meta.parse("import $pkg"))
+end
 
 function parse_arguments()
     s = ArgParse.ArgParseSettings()
