@@ -196,13 +196,13 @@ SRR7365485
 
 Run me to backup (run the second version if we hit API throttling limits)
 ```bash
-rclone copy --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
-rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data google_drive:Projects/viral-pangenome-discovery/data
+rclone copy --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data google_drive:Projects/viral-exposome-discovery/data
+rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data google_drive:Projects/viral-exposome-discovery/data
 ```
 copy from Google Drive back to local
 ```bash
-rclone copy --progress --exclude=*.{fastq.gz,fq.gz,bam} google_drive:Projects/viral-pangenome-discovery/data $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data
-rclone copy --progress google_drive:Projects/viral-pangenome-discovery/data $HOME/workspace/Mycelia/projects/viral-pangenome-discovery/data
+rclone copy --progress --exclude=*.{fastq.gz,fq.gz,bam} google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+rclone copy --progress google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
 ```
 
 copy Globus-JGI reference DB into cloud for shuffling back and forth to non-globus machines
