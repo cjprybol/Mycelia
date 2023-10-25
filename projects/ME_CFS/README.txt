@@ -34,10 +34,16 @@ helpful filters
 
 # e.g.
 rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" $HOME/workspace/Mycelia/projects/ME_CFS/data ME_CFS:data
-
-
-
 ```
 
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" $HOME/workspace/Mycelia/projects/ME_CFS/data google_drive:Projects/ME_CFS/data
+
+
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/Mycelia/projects/ME_CFS/results google_drive:Projects/ME_CFS/results
+
+
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" $HOME/workspace/Mycelia/projects/ME_CFS/results google_drive:Projects/ME_CFS/results
 
 rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" $HOME/workspace/Mycelia/projects/ME_CFS/data google_drive:Projects/ME_CFS/data
+
+rclone copy --verbose --progress --retries 5 --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --include "*kraken*" google_drive:Projects/ME_CFS/data $HOME/workspace/Mycelia/projects/ME_CFS/data
