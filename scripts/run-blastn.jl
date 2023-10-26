@@ -37,7 +37,7 @@ function parse_arguments()
 end
 
 
-function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true, threads=min(Sys.CPU_THREADS, 8))
+function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=true, remote=false, wait=true, threads=min(Sys.CPU_THREADS, 8))
     blast_dir = mkpath(joinpath(out_dir, "blastn"))
     outfile = "$(blast_dir)/$(basename(fasta)).blastn.$(basename(blast_db)).$(task).txt"
     if remote
@@ -60,7 +60,7 @@ function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, re
         `
         /scg/apps/legacy/software/blast/2.2.31+/bin/blastn
         -num_threads $(threads)
-        -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+        -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids'
         -query $(fasta)
         -db /scg/apps/legacy/software/blast/db/$(blast_db)
         -out $(outfile)
