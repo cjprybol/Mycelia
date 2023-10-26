@@ -205,6 +205,11 @@ copy from Google Drive back to local
 # rclone copy --progress --exclude=*.{bam,fastq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
 rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
 rclone copy --progress google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+
+# --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1
+rclone copy --progress --include=*{final.contigs.fastg.gfa.fna.blastn.nt.megablast.txt} --verbose  google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+
+
 ```
 
 copy Globus-JGI reference DB into cloud for shuffling back and forth to non-globus machines
