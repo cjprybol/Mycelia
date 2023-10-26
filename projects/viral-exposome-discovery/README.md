@@ -194,6 +194,15 @@ SRR7365485
 - kmer saturation diversity of proteins and dna
 - diveristy gain over known databases for protein and dna
 
+results back and forth
+```bash
+rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results google_drive:Projects/viral-exposome-discovery/data/results
+
+rclone copy --progress --verbose google_drive:Projects/viral-exposome-discovery/data/results $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results
+
+```
+
+
 Run me to backup (run the second version if we hit API throttling limits)
 ```bash
 rclone copy --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data google_drive:Projects/viral-exposome-discovery/data
@@ -203,8 +212,16 @@ copy from Google Drive back to local
 ```bash
 # --exclude=*.{fq.gz,bam,fastq.gz}
 # rclone copy --progress --exclude=*.{bam,fastq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
-rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data/SRA $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA
+
 rclone copy --progress google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+```
+
+
+```bash
+rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA google_drive:Projects/viral-exposome-discovery/data/SRA
+
+# workspace/Mycelia/projects/viral-exposome-discovery/data/SRA
 ```
 
 copy Globus-JGI reference DB into cloud for shuffling back and forth to non-globus machines
