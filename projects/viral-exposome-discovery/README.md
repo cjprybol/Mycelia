@@ -1,5 +1,14 @@
 # Viral Exposome
 
+Andy's data location
+/oak/stanford/scg/lab_mpsnyder/microbiome_brooks/
+/oak/stanford/scg/lab_mpsnyder/microbiome_brooks/ultimagen/pool_2/kraken_reports
+
+Mingming's data
+/oak/stanford/projects/genomics/data/r84085_20231013_184512-GSSC-Snyder-MT-00000
+/oak/stanford/projects/genomics/data/r64283e_20231026_225118-GSSC-Snyder-MT-00000
+/labs/mpsnyder/share/exposome_data
+
 conda create -n mmseqs2 -c bioconda mmseqs2
 
 conda run --live-stream --no-capture-output -n mmseqs2 mmseqs databases NT $HOME/workspace/mmseqs/NT $HOME/workspace/mmseqs/tmp
