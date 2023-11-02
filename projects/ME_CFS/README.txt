@@ -17,6 +17,14 @@ what pathways are present
 what organisms are present
 what proteins are present
 
+
+organize kraken reports and upload to Google Drive
+```
+mkdir -p $HOME/workspace/Mycelia/projects/ME_CFS/results/kraken-reports
+cp $HOME/workspace/Mycelia/projects/ME_CFS/data/samples/*/*_trimgalore/*unmapped_kraken/*.html $HOME/workspace/Mycelia/projects/ME_CFS/results/kraken-reports/.
+rclone copy --verbose --progress $HOME/workspace/Mycelia/projects/ME_CFS/results ME_CFS:results
+```
+
 Run me to backup (run the second version if we hit API throttling limits)
 ```bash
 rclone copy --verbose --progress --retries 5 --drive-chunk-size 1G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/Mycelia/projects/ME_CFS/data ME_CFS:data

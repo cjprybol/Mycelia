@@ -14,10 +14,17 @@ curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel rele
 source ~/.bashrc
 ```
 
-Install Mycelia & precompile to validate installation
+Clone the repo
 ```
-# don't use system shared libraries since that often creates issues for me on shared cluster environments
-export LD_LIBRARY_PATH="" && julia -e 'import Pkg; Pkg.add("IJulia"); Pkg.develop(url="https://github.com/cjprybol/Mycelia.git"); Pkg.precompile(); import Mycelia'
+git clone .....
+```
+
+Pre-initialize
+```
+cd Mycelia
+export LD_LIBRARY_PATH=""
+julia -e 'import Pkg; Pkg.activate("."); Pkg.precompile(); import Mycelia'
+julia -e --project='.' 'import Pkg; Pkg.precompile(); import Mycelia'
 ```
 
 Add Mycelia to your system path

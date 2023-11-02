@@ -58,7 +58,7 @@ kraken_db = args["kraken_db"]
 threads = args["threads"]
 
 shared_basename = shared_prefix(basename(first(forward_reads)), basename(reverse_reads))
-shared_basename = replace(shared_basename, r"\W+$" => "")
+shared_basename = replace(replace(shared_basename, r"\W+$" => ""), r"_+$" => "")
 # @show shared_basename
 
 if isempty(out_directory)
