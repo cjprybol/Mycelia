@@ -1,5 +1,14 @@
 # Viral Exposome
 
+Andy's data location
+/oak/stanford/scg/lab_mpsnyder/microbiome_brooks/
+/oak/stanford/scg/lab_mpsnyder/microbiome_brooks/ultimagen/pool_2/kraken_reports
+
+Mingming's data
+/oak/stanford/projects/genomics/data/r84085_20231013_184512-GSSC-Snyder-MT-00000
+/oak/stanford/projects/genomics/data/r64283e_20231026_225118-GSSC-Snyder-MT-00000
+/labs/mpsnyder/share/exposome_data
+
 conda create -n mmseqs2 -c bioconda mmseqs2
 
 conda run --live-stream --no-capture-output -n mmseqs2 mmseqs databases NT $HOME/workspace/mmseqs/NT $HOME/workspace/mmseqs/tmp
@@ -217,6 +226,11 @@ rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --dri
 rclone copy --progress --include=*.{fq.gz} --verbose google_drive:Projects/viral-exposome-discovery/data/SRA $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA
 
 rclone copy --progress google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+
+# --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1
+rclone copy --progress --include=*{final.contigs.fastg.gfa.fna.blastn.nt.megablast.txt} --verbose  google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+
+
 ```
 
 
