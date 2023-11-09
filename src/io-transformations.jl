@@ -1,12 +1,14 @@
 function fasta_and_gff_to_genbank(;fasta, gff, genbank)
     # https://www.insdc.org/submitting-standards/feature-table/
     genbank_directory = dirname(genbank)
-    genbank_file = basename(genbank)
+    genbank_basename = basename(genbank)
+    genbank_prefix = replace(genbank, r"\.genbank$" => "")
+    genbank_extension = "genbank"
     # https://bioinformatics.stackexchange.com/a/11140
     # https://www.biostars.org/p/72220/#72272
     # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
     # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
-    run(`seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -ofname $(genbank_file) -ofdirectory $(genbank_directory) -auto`)
+    run(`seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname $(genbank_prefix) -osextension $(genbank_extension) -osdirectory $(genbank_directory) -auto`)
     return genbank
 end
 
