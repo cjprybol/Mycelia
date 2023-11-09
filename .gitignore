@@ -25,3 +25,5 @@ notebooks/scripts/kmer-saturation*
 *.bam
 *.sam
 projects/ME-CFS/reference_data/
+*.out
+*.err

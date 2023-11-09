@@ -1,4 +1,0 @@
-# add this to .bashrc
-# module load julia/1.6
-source $HOME/.bashrc
-julia -e 'import Pkg; Pkg.update(); Pkg.add("IJulia"); Pkg.build("IJulia")'

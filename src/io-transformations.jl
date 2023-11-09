@@ -182,6 +182,7 @@ function read_kraken_report(kraken_report)
 
     data, header = uCSV.read(kraken_report, delim='\t')
     kraken_report_table = DataFrames.DataFrame(data, kraken_report_header)
+    kraken_report_table[!, "scientific_name"] = string.(strip.(kraken_report_table[!, "scientific_name"]))
     return kraken_report_table
 end
 

@@ -2,7 +2,55 @@
 
 ! In development !
 
-Multiomics knowledge graphs for [characterization](), [discovery](), and [biological design]().
+Multiomic analysis and data integration for biological characterization, prediction, and  design.
+
+Mostly just a wrapper around existing best-in-class bioinformatics tools with just enough Julia code to glue them together and enable downsteam analytics.
+
+Designed for (academic and goverment) HPC and (GCP & AWS) cloud systems.
+
+## Install
+
+Install Julia (if not already installed)
+```bash
+# replacing "release" with "lts" is a good alternate for deployments to production
+curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel release
+# add Julia to your $PATH by reloading the appropriate source file, as instructed by the installer
+source ~/.bashrc
+```
+
+I have had trouble getting the visualization libraries Plots.jl and Makie.jl (and associated packages) to load correctly on Stanford's SCG3 due to the complexity of the native LD_LIBRARY_PATH
+
+I imagine other research supercomputer users may have similar issues, although I don't have these issues on cloud vendors like GCP or AWS
+
+To enable Julia to install all of it's own necessary dependencies independent of the system, I needed to reset the LD_LIBRARY_PATH variable prior to launching Julia
+
+This can be done easily when launching Julia from the command line by 
+```bash
+export LD_LIBRARY_PATH="" && julia
+```
+
+[And can be done for Julia jupyter kernels by setting the `env` key => value pair in the appropriate kernel.json file](https://stackoverflow.com/a/53595397)
+
+
+Clone the repo directly
+```
+cd /path/where/you/want/the/repo
+# for production usage
+git clone https://github.com/cjprybol/Mycelia.git
+# for development
+git clone git@github.com:cjprybol/Mycelia.git
+```
+
+Or as Julia package
+```
+import Pkg
+# for production usage
+Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
+# for development
+Pkg.develop(url="git@github.com:cjprybol/Mycelia.git")
+```
+
+## TODO: re-enable the command line API
 
 See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://research.cjp.garden/Mycelia/)
 
@@ -11,14 +59,9 @@ See the docs [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](http://res
 <!-- [![Coverage](https://github.com/cjprybol/Mycelia/badges/master/coverage.svg)](https://github.com/cjprybol/Mycelia.jl/commits/master) -->
 <!-- [![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor's%20Guide-blueviolet)](https://github.com/SciML/ColPrac) -->
 
-## Development and contributing
-
-1. branch/fork this repository and develop in github codespaces
-1. clone into `/your/path/to/Mycelia` and load the julia package into your Julia Project.toml
-  - `pkg> dev /your/path/to/Mycelia`
-
 ## Related & Relevant Projects & Companies
 
+- https://github.com/merenlab/anvio
 - https://github.com/SciGraph/SciGraph
 - https://github.com/geneontology/obographs
 - https://github.com/biolink/ontobio
