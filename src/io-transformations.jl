@@ -1,3 +1,23 @@
+function fasta_and_gff_to_genbank(;fasta, gff, genbank)
+    # https://www.insdc.org/submitting-standards/feature-table/
+    genbank_directory = dirname(genbank)
+    genbank_file = basename(genbank)
+    # https://bioinformatics.stackexchange.com/a/11140
+    # https://www.biostars.org/p/72220/#72272
+    # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
+    # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
+    run(`seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -ofname $(genbank_file) -ofdirectory $(genbank_directory) -auto`)
+    return genbank
+end
+
+# function genbank_to_fasta_and_gff(genbank_file)
+
+# end
+
+function open_genbank(genbank_file)
+    return GenomicAnnotations.readgbk(genbank_file)
+end
+
 function parse_virsorter_score_tsv(virsorter_score_tsv)
     data, header = uCSV.read(virsorter_score_tsv, delim='\t', header=1)
     if length(data) == 0
@@ -98,35 +118,56 @@ function update_gff_with_mmseqs(gff_file, mmseqs_file)
     return gff_table
 end
 
-function GFF_to_table(gff_file)
-    gff_columns = [
-        :seqid,
-        :source,
-        :featuretype,
-        :seqstart,
-        :seqend,
-        :score,
-        :strand,
-        :phase,
-        :attributes
-    ]
-    table = DataFrames.DataFrame([[] for x in gff_columns], gff_columns)
-    for record in collect(Mycelia.open_gff(gff_file))
-        row = Dict(
-            :seqid => GFF3.seqid(record),
-            :source => GFF3.source(record),
-            :featuretype => GFF3.featuretype(record),
-            :seqstart => GFF3.seqstart(record),
-            :seqend => GFF3.seqend(record),
-            :score => GFF3.score(record),
-            :strand => GFF3.strand(record),
-            :phase => GFF3.phase(record),
-            :attributes => GFF3.attributes(record),
-        )
-        row[:attributes] = join(["$(attribute)=$(join(values, ','))" for (attribute, values) in row[:attributes]], " ")
-        push!(table, row)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function open_gff(path::String)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
     end
-    return table
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+    end
+    return io
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function read_gff(gff_io)
+    data, header = uCSV.read(gff_io, delim='\t', header=0, comment='#')
+    header = [
+        "seqid",
+        "source",
+        "type",
+        "start",
+        "end",
+        "score",
+        "strand",
+        "phase",
+        "attributes"
+    ]
+    DataFrames.DataFrame(data, header)
 end
 
 function read_kraken_report(kraken_report)
@@ -543,33 +584,6 @@ function open_fastx(path::AbstractString)
         error()
     end
     return fastx_io
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function open_gff(path::String)
-    if isfile(path)
-        io = open(path)
-    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
-        path = replace(path, r"^ftp:" => "http:")
-        io = IOBuffer(HTTP.get(path).body)
-    else
-        error("unable to locate file $path")
-    end
-    path_base = basename(path)
-    if occursin(r"\.gz$", path_base)
-        io = CodecZlib.GzipDecompressorStream(io)
-    end
-    gff_io = GFF3.Reader(io)
-    return gff_io
 end
 
 """
