@@ -27,3 +27,4 @@ notebooks/scripts/kmer-saturation*
 projects/ME-CFS/reference_data/
 *.out
 *.err
+projects/ME_CFS/results/
