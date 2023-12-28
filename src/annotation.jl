@@ -202,110 +202,110 @@
 #     return amrfinderplus_dir
 # end
 
-function make_diamond_db(fasta_file, db_file=fasta_file)
-    @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
-end
+# function make_diamond_db(fasta_file, db_file=fasta_file)
+#     @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
+# end
 
-# in order to change this to be a standard blast where we don't need all pairwise hits
-# just drop the parameters id, min-score, max-target-seqs
-function pairwise_diamond(joint_fasta_file)
-    if !isfile("$(joint_fasta_file).dmnd")
-        make_diamond_db(joint_fasta_file)
-    end
-    n_records = count_records(joint_fasta_file)
-    # max_target_seqs = Int(ceil(sqrt(n_records)))
-    # @show "here!"
-    sensitivity = "--iterate"
-    # --block-size/-b
-    # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
-    # set block size to total memory / 8
-    available_gigabytes = floor(Sys.free_memory() / 1e9)
-    block_size = floor(available_gigabytes / 8)
+# # in order to change this to be a standard blast where we don't need all pairwise hits
+# # just drop the parameters id, min-score, max-target-seqs
+# function pairwise_diamond(joint_fasta_file)
+#     if !isfile("$(joint_fasta_file).dmnd")
+#         make_diamond_db(joint_fasta_file)
+#     end
+#     n_records = count_records(joint_fasta_file)
+#     # max_target_seqs = Int(ceil(sqrt(n_records)))
+#     # @show "here!"
+#     sensitivity = "--iterate"
+#     # --block-size/-b
+#     # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
+#     # set block size to total memory / 8
+#     available_gigabytes = floor(Sys.free_memory() / 1e9)
+#     block_size = floor(available_gigabytes / 8)
     
-    @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
-    # # pairwise output is all of the alignments, super helpful!
-    # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
-end
+#     @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
+#     # # pairwise output is all of the alignments, super helpful!
+#     # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
+# end
 
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run diamond search, returns path to diamond results.
+# Run diamond search, returns path to diamond results.
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function run_diamond(;
-        identifier,
-        out_dir,
-        protein_fasta,
-        diamond_db,
-        force=false,
-        outfile="$(identifier).prodigal.faa.diamond.txt"
-    )
-    diamond_dir = mkpath("$(out_dir)/diamond")
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function run_diamond(;
+#         identifier,
+#         out_dir,
+#         protein_fasta,
+#         diamond_db,
+#         force=false,
+#         outfile="$(identifier).prodigal.faa.diamond.txt"
+#     )
+#     diamond_dir = mkpath("$(out_dir)/diamond")
 
-    # http://www.diamondsearch.org/index.php?pages/command_line_options/
-    # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
-    #     This is the main pa-rameter for controlling the program’s memory usage.  
-    #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
-    #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
-    #     the memory usage will be about 12 GB
-    system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
-    # reference says 6 but let's round upwards towards 8
-    gb_per_block = 8
-    block_size = system_memory_in_gigabytes / gb_per_block
+#     # http://www.diamondsearch.org/index.php?pages/command_line_options/
+#     # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
+#     #     This is the main pa-rameter for controlling the program’s memory usage.  
+#     #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
+#     #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
+#     #     the memory usage will be about 12 GB
+#     system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
+#     # reference says 6 but let's round upwards towards 8
+#     gb_per_block = 8
+#     block_size = system_memory_in_gigabytes / gb_per_block
     
-    outfile = "$(diamond_dir)/$(outfile)"
+#     outfile = "$(diamond_dir)/$(outfile)"
     
-    if force || !isfile(outfile)
-        cmd = 
-        `diamond blastp
-        --threads $(Sys.CPU_THREADS)
-        --block-size $(block_size)
-        --db $(diamond_db)
-        --query $(protein_fasta)
-        --out $(outfile)
-        --evalue 0.001
-        --iterate
-        --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids
-        `
+#     if force || !isfile(outfile)
+#         cmd = 
+#         `diamond blastp
+#         --threads $(Sys.CPU_THREADS)
+#         --block-size $(block_size)
+#         --db $(diamond_db)
+#         --query $(protein_fasta)
+#         --out $(outfile)
+#         --evalue 0.001
+#         --iterate
+#         --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids
+#         `
 
-        # --un                     file for unaligned queries
-        # --al                     file or aligned queries
-        # --unfmt                  format of unaligned query file (fasta/fastq)
-        # --alfmt                  format of aligned query file (fasta/fastq)
-        # --unal                   report unaligned queries (0=no, 1=yes)
+#         # --un                     file for unaligned queries
+#         # --al                     file or aligned queries
+#         # --unfmt                  format of unaligned query file (fasta/fastq)
+#         # --alfmt                  format of aligned query file (fasta/fastq)
+#         # --unal                   report unaligned queries (0=no, 1=yes)
 
-#         Value 6 may be followed by a space-separated list of these keywords:
+# #         Value 6 may be followed by a space-separated list of these keywords:
 
-#         qseqid means Query Seq - id
-#         qtitle means Query title
-#         qlen means Query sequence length
-#         sseqid means Subject Seq - id
-#         sallseqid means All subject Seq - id(s), separated by a ';'
-#         stitle means Subject Title
-#         salltitles means All Subject Title(s), separated by a '<>'
-#         slen means Subject sequence length
-#         qstart means Start of alignment in query
-#         qend means End of alignment in query
-#         sstart means Start of alignment in subject
-#         send means End of alignment in subject
-#         evalue means Expect value
-#         bitscore means Bit score
-#         length means Alignment length
-#         pident means Percentage of identical matches
-#         nident means Number of identical matches
-#         mismatch means Number of mismatches
-#         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
+# #         qseqid means Query Seq - id
+# #         qtitle means Query title
+# #         qlen means Query sequence length
+# #         sseqid means Subject Seq - id
+# #         sallseqid means All subject Seq - id(s), separated by a ';'
+# #         stitle means Subject Title
+# #         salltitles means All Subject Title(s), separated by a '<>'
+# #         slen means Subject sequence length
+# #         qstart means Start of alignment in query
+# #         qend means End of alignment in query
+# #         sstart means Start of alignment in subject
+# #         send means End of alignment in subject
+# #         evalue means Expect value
+# #         bitscore means Bit score
+# #         length means Alignment length
+# #         pident means Percentage of identical matches
+# #         nident means Number of identical matches
+# #         mismatch means Number of mismatches
+# #         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
         
-        @time run(pipeline(cmd))
-    end
-    return outfile
-end
+#         @time run(pipeline(cmd))
+#     end
+#     return outfile
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -369,12 +369,8 @@ function run_mmseqs_easy_search(;out_dir, query_fasta, target_database, outfile,
     out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_search"))
     outfile = joinpath(out_dir, outfile * ".mmseqs_easy_search." * basename(target_database) * ".txt")
     
-    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits"
-    
-    if basename(target_database) in ["UniRef100", "UniRef90", "UniRef50", "UniProtKB", "TrEMBL", "Swiss-Prot", "NR", "GTDB", "SILVA", "Kalamari"]
-        format_output *= ",taxid"
-    end
-    
+    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid"
+        
     # note: cut exhaustive-search since it was taking far too long
     # --exhaustive-search
     # killed after 11 hours w/ 16 cores on UniRef100
@@ -387,7 +383,7 @@ function run_mmseqs_easy_search(;out_dir, query_fasta, target_database, outfile,
     # --start-sens 1 -s 7 --sens-steps 3
     if force || (!force && !isfile(outfile))
         cmd = 
-        `mmseqs
+        `conda run --no-capture-output -n mmseqs2 mmseqs
             easy-search
             $(query_fasta)
             $(target_database)

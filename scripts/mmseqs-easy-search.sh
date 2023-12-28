@@ -13,6 +13,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=32
 # OOM with 16 so doubling
+# OOM with 32 so doubling
 CPU=32
 # ~ 8Gb RAM / CPU
 
@@ -52,5 +53,24 @@ OUTPATH=$3
 # mkdir -p $HOME/workspace/mmseqs
 # conda run --no-capture-output -n mmseqs2 mmseqs databases UniRef50 $HOME/workspace/mmseqs/UniRef50 $HOME/workspace/mmseqs/tmp
 
+# kept getting OOO errors, so just running defaults
+# --start-sens 1 \
+# -s 7 \
+# --sens-steps 3 \
+# --threads $CPU \
+
 # sbatch mmseqs-easy-search.sh $FASTA $DATABASE $OUTPATH
-conda run --no-capture-output -n mmseqs2 mmseqs easy-taxonomy --threads $CPU $FASTA $DATABASE ${OUTPATH} ${OUTPATH}_TMP
+conda run --no-capture-output -n mmseqs2 \
+mmseqs easy-search \
+$FASTA \
+$DATABASE \
+${OUTPATH} \
+${OUTPATH}_TMP \
+--format-mode 4 \
+--format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid
+
+rm -rf ${OUTPATH}_TMP
+            
+           
+            
+            
