@@ -20,4 +20,4 @@ OUTDIR=$2
 GENOMAD_DB_DIR=$3
 # this should match cpus-per-task above
 N_THREADS=16
-conda run --no-capture-output -n genomad genomad end-to-end --threads $N_THREADS --splits $N_THREADS $ASSEMBLED_FASTA $OUTDIR $GENOMAD_DB_DIR
+conda run --no-capture-output -n genomad genomad end-to-end --threads $N_THREADS --cleanup --splits $N_THREADS $ASSEMBLED_FASTA $OUTDIR $GENOMAD_DB_DIR
