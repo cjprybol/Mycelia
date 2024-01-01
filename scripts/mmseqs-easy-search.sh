@@ -12,9 +12,8 @@
 #SBATCH --job-name=mmseqs_easy_search
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=32
-# OOM with 16 so doubling
-# OOM with 32 so doubling
-CPU=32
+#SBATCH --mem-per-cpu=16G
+CPU=16
 # ~ 8Gb RAM / CPU
 
 ## # LBL
