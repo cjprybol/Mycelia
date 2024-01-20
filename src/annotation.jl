@@ -464,6 +464,9 @@ julia> 1 + 1
 2
 ```
 """
+
+
+
 function run_mmseqs_easy_search(;
         query_fasta,
         target_database,
@@ -476,7 +479,7 @@ function run_mmseqs_easy_search(;
     tmp_dir = joinpath(out_dir, "tmp")
     if force || (!force && !isfile(outfile_path))
         cmd = 
-        `mmseqs
+        `conda run --no-capture-output -n mmseqs2 mmseqs
             easy-search
             $(query_fasta)
             $(target_database)

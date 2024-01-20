@@ -36,11 +36,14 @@ function parse_arguments()
     return ArgParse.parse_args(s)
 end
 
+"""
+currently uses conda run by default
+"""
 function run_blastn(;out_dir, fasta, blast_db, task="megablast", wait=true, threads=min(Sys.CPU_THREADS, 8))
     outfile = "$(out_dir)/$(basename(fasta)).blastn.$(basename(blast_db)).$(task).txt"
     # default max target seqs = 500, which seemed like too much
     # default evalue is 10, which also seems like too much
-        
+
     # if force || need_to_run
     # if remote
     #         -remote
@@ -55,11 +58,11 @@ function run_blastn(;out_dir, fasta, blast_db, task="megablast", wait=true, thre
     # -evalue 0.001
     cmd = 
     `
-    /scg/apps/legacy/software/blast/2.2.31+/bin/blastn
+    conda run --no-capture-output --live-stream --name blast blastn
     -num_threads $(threads)
-    -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids'
+    -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid staxids'
     -query $(fasta)
-    -db /scg/apps/legacy/software/blast/db/$(blast_db)
+    -db $(blast_db)
     -out $(outfile)
     -task $(task)
     `

@@ -542,7 +542,9 @@ function load_ncbi_metadata(db)
         download(ncbi_summary_url, ncbi_summary_file)
     end
     # buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
-    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "#  ", header=1, delim='\t')...)
+    types=[]
+    # ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', encodings=Dict("na" => missing), allowmissing=true, typedetectrows=100)...)
+    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', types=String)...)
     return ncbi_summary_table
 end
 

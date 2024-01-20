@@ -150,6 +150,19 @@ function name2taxid(name)
     return DataFrames.DataFrame(data, header)
 end
 
+function taxids2lineage_name_and_rank(taxids::AbstractVector{Int})
+    f = tempname()
+    open(f, "w") do io
+        for taxid in taxids
+            println(io, taxid)
+        end
+    end
+    data, header = uCSV.read(open(pipeline(`conda run --live-stream -n taxonkit taxonkit lineage --show-name --show-rank $(f)`)), delim='\t', header=false)
+    rm(f)
+    header = ["taxid", "lineage", "tax_name", "tax_rank"]
+    return DataFrames.DataFrame(data, header)
+end
+
 # function lca(taxids)
 # end
 
