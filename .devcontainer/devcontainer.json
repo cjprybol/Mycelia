@@ -22,11 +22,6 @@
 			"installDevTools": true,
 			"installREnv": true,
 			"installRMarkdown": true,
-			"installJupyterlab": true,
-			"version": "release",
-			"pakVersion": "auto",
-			"vscodeRSupport": "minimal",
-			"pandocVersion": "auto"
 		},
 		"ghcr.io/devcontainers-contrib/features/glances:2": {
 			"version": "latest"
