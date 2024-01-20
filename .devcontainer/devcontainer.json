@@ -41,7 +41,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "julia -e 'import Pkg; Pkg.add(\"IJulia\"); import IJulia'"
+	"postCreateCommand": "julia -e 'import Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"Julia\", \"\")'"
 
 	// Configure tool-specific properties.
 	// "customizations": {},
