@@ -35,7 +35,7 @@ function download_mmseqs_db(;db, outdir="$(homedir())/workspace/mmseqs", force=f
         if isempty(conda_env)
             cmd = `mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
         else
-            cmd = `conda run --live-stream -n $(conda_env) mmseqs databases --compressed 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
+            cmd = `conda run --live-stream -n $(conda_env) mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(outdir)/$(db) $(outdir)/tmp`
         end
         @time run(cmd, wait=wait)
     else

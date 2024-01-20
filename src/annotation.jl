@@ -1,3 +1,102 @@
+function run_transterm(;fasta, gff="")
+    # note in my one test with phage genomes, calling without gff yeilds more hits but average confidence is a bit lower
+    if isempty(gff)
+        coordinates = generate_transterm_coordinates_from_fasta(fasta)
+    else
+        coordinates = generate_transterm_coordinates_from_gff(gff)
+    end
+    # transterm_calls_file = run_transterm(fasta=fasta, coordinates=coordinates)
+    # TODO THIS SHOULD CALL CONDA VERSION
+    # TRANSTERM_DATA=$(find $(dirname $(dirname $(which conda))) -name "expterm.dat" | tail -n1)
+    transterm_calls_file = replace(coordinates, ".coords" => ".transterm.txt")
+    # run(`wget https://transterm.cbcb.umd.edu/transterm_hp_v2.09.zip`)
+    # run(`unzip transterm_hp_v2.09.zip`)
+    run(pipeline(`
+        ./transterm_hp_v2.09/transterm
+        -p ./transterm_hp_v2.09/expterm.dat
+        $(fasta)
+        $(coordinates)`, transterm_calls_file))
+    rm(coordinates)
+    return transterm_calls_file
+end
+
+
+
+function generate_transterm_coordinates_from_fasta(fasta)
+    # 10. USING TRANSTERM WITHOUT GENOME ANNOTATIONS
+
+    # TransTermHP uses known gene information for only 3 things: (1) tagging the
+    # putative terminators as either "inside genes" or "intergenic," (2) choosing the
+    # background GC-content percentage to compute the scores, because genes often
+    # have different GC content than the intergenic regions, and (3) producing
+    # slightly more readable output. Items (1) and (3) are not really necessary, and
+    # (2) has no effect if your genes have about the same GC-content as your
+    # intergenic regions.
+
+    # Unfortunately, TransTermHP doesn't yet have a simple option to run without an
+    # annotation file (either .ptt or .coords), and requires at least 2 genes to be
+    # present. The solution is to create fake, small genes that flank each
+    # chromosome. To do this, make a fake.coords file that contains only these two
+    # lines:
+
+    # 	fakegene1	1 2	chome_id
+    # 	fakegene2	L-1 L	chrom_id
+
+    # where L is the length of the input sequence and L-1 is 1 less than the length
+    # of the input sequence. "chrom_id" should be the word directly following the ">"
+    # in the .fasta file containing your sequence. (If, for example, your .fasta file
+    # began with ">seq1", then chrom_id = seq1).
+
+    # This creates a "fake" annotation with two 1-base-long genes flanking the
+    # sequence in a tail-to-tail arrangement: --> <--. TransTermHP can then be run
+    # with:
+
+    # 	transterm -p expterm.dat sequence.fasta fake.coords
+
+    # If the G/C content of your intergenic regions is about the same as your genes,
+    # then this won't have too much of an effect on the scores terminators receive.
+    # On the other hand, this use of TransTermHP hasn't been tested much at all, so
+    # it's hard to vouch for its accuracy.
+
+    coords_table = DataFrames.DataFrame(
+        gene_id = String[],
+        start = Int[],
+        stop = Int[],
+        chromosome = String[]
+    )
+    for record in Mycelia.open_fastx(fasta)
+        row = (
+            gene_id = FASTX.identifier(record) * "_start",
+            start = 1,
+            stop = 2,
+            chromosome = FASTX.identifier(record)
+        )
+        push!(coords_table, row)
+
+        row = (
+            gene_id = FASTX.identifier(record) * "_stop",
+            start = length(FASTX.sequence(record))-1,
+            stop = length(FASTX.sequence(record)),
+            chromosome = FASTX.identifier(record)
+        )
+        push!(coords_table, row)
+    end
+    transterm_coordinates_file = fasta * ".coords"
+    uCSV.write(transterm_coordinates_file, data = collect(DataFrames.eachcol(coords_table)), delim="  ")
+    return transterm_coordinates_file
+end
+
+function generate_transterm_coordinates_from_gff(gff_file)
+    raw_gff = Mycelia.read_gff(gff_file)
+    # switch start to be zero index by subtracting one
+    raw_gff[!, "start"] = raw_gff[!, "start"] .- 1
+    raw_gff[!, "gene_id"] = last.(split.(first.(split.(raw_gff[!, "attributes"], ";")), '='))
+    raw_gff = raw_gff[!, ["gene_id", "start", "end", "#seqid"]]
+    transterm_coordinates_file = gff_file * ".coords"
+    uCSV.write(transterm_coordinates_file, data = collect(DataFrames.eachcol(raw_gff)), delim="  ")
+    return transterm_coordinates_file
+end
+
 # function normalize_fasta(fasta_file, outdir)
 #     mkpath("$(outdir)/normalized_fasta")
 #     normalized_fasta_file = "$(outdir)/normalized_fasta/$(basename(fasta_file))"
@@ -202,110 +301,110 @@
 #     return amrfinderplus_dir
 # end
 
-function make_diamond_db(fasta_file, db_file=fasta_file)
-    @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
-end
+# function make_diamond_db(fasta_file, db_file=fasta_file)
+#     @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
+# end
 
-# in order to change this to be a standard blast where we don't need all pairwise hits
-# just drop the parameters id, min-score, max-target-seqs
-function pairwise_diamond(joint_fasta_file)
-    if !isfile("$(joint_fasta_file).dmnd")
-        make_diamond_db(joint_fasta_file)
-    end
-    n_records = count_records(joint_fasta_file)
-    # max_target_seqs = Int(ceil(sqrt(n_records)))
-    # @show "here!"
-    sensitivity = "--iterate"
-    # --block-size/-b
-    # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
-    # set block size to total memory / 8
-    available_gigabytes = floor(Sys.free_memory() / 1e9)
-    block_size = floor(available_gigabytes / 8)
+# # in order to change this to be a standard blast where we don't need all pairwise hits
+# # just drop the parameters id, min-score, max-target-seqs
+# function pairwise_diamond(joint_fasta_file)
+#     if !isfile("$(joint_fasta_file).dmnd")
+#         make_diamond_db(joint_fasta_file)
+#     end
+#     n_records = count_records(joint_fasta_file)
+#     # max_target_seqs = Int(ceil(sqrt(n_records)))
+#     # @show "here!"
+#     sensitivity = "--iterate"
+#     # --block-size/-b
+#     # https://github.com/bbuchfink/diamond/wiki/3.-Command-line-options#memory--performance-options
+#     # set block size to total memory / 8
+#     available_gigabytes = floor(Sys.free_memory() / 1e9)
+#     block_size = floor(available_gigabytes / 8)
     
-    @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
-    # # pairwise output is all of the alignments, super helpful!
-    # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
-end
+#     @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
+#     # # pairwise output is all of the alignments, super helpful!
+#     # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
+# end
 
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run diamond search, returns path to diamond results.
+# Run diamond search, returns path to diamond results.
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function run_diamond(;
-        identifier,
-        out_dir,
-        protein_fasta,
-        diamond_db,
-        force=false,
-        outfile="$(identifier).prodigal.faa.diamond.txt"
-    )
-    diamond_dir = mkpath("$(out_dir)/diamond")
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function run_diamond(;
+#         identifier,
+#         out_dir,
+#         protein_fasta,
+#         diamond_db,
+#         force=false,
+#         outfile="$(identifier).prodigal.faa.diamond.txt"
+#     )
+#     diamond_dir = mkpath("$(out_dir)/diamond")
 
-    # http://www.diamondsearch.org/index.php?pages/command_line_options/
-    # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
-    #     This is the main pa-rameter for controlling the program’s memory usage.  
-    #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
-    #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
-    #     the memory usage will be about 12 GB
-    system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
-    # reference says 6 but let's round upwards towards 8
-    gb_per_block = 8
-    block_size = system_memory_in_gigabytes / gb_per_block
+#     # http://www.diamondsearch.org/index.php?pages/command_line_options/
+#     # --block-size/-b #Block size in billions of sequence letters to be processed at a time.  
+#     #     This is the main pa-rameter for controlling the program’s memory usage.  
+#     #     Bigger numbers will increase the useof memory and temporary disk space, but also improve performance.  
+#     #     The program can beexpected to use roughly six times this number of memory (in GB). So for the default value of-b2.0, 
+#     #     the memory usage will be about 12 GB
+#     system_memory_in_gigabytes = Int(Sys.total_memory()) / 1e9
+#     # reference says 6 but let's round upwards towards 8
+#     gb_per_block = 8
+#     block_size = system_memory_in_gigabytes / gb_per_block
     
-    outfile = "$(diamond_dir)/$(outfile)"
+#     outfile = "$(diamond_dir)/$(outfile)"
     
-    if force || !isfile(outfile)
-        cmd = 
-        `diamond blastp
-        --threads $(Sys.CPU_THREADS)
-        --block-size $(block_size)
-        --db $(diamond_db)
-        --query $(protein_fasta)
-        --out $(outfile)
-        --evalue 0.001
-        --iterate
-        --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids
-        `
+#     if force || !isfile(outfile)
+#         cmd = 
+#         `diamond blastp
+#         --threads $(Sys.CPU_THREADS)
+#         --block-size $(block_size)
+#         --db $(diamond_db)
+#         --query $(protein_fasta)
+#         --out $(outfile)
+#         --evalue 0.001
+#         --iterate
+#         --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch staxids
+#         `
 
-        # --un                     file for unaligned queries
-        # --al                     file or aligned queries
-        # --unfmt                  format of unaligned query file (fasta/fastq)
-        # --alfmt                  format of aligned query file (fasta/fastq)
-        # --unal                   report unaligned queries (0=no, 1=yes)
+#         # --un                     file for unaligned queries
+#         # --al                     file or aligned queries
+#         # --unfmt                  format of unaligned query file (fasta/fastq)
+#         # --alfmt                  format of aligned query file (fasta/fastq)
+#         # --unal                   report unaligned queries (0=no, 1=yes)
 
-#         Value 6 may be followed by a space-separated list of these keywords:
+# #         Value 6 may be followed by a space-separated list of these keywords:
 
-#         qseqid means Query Seq - id
-#         qtitle means Query title
-#         qlen means Query sequence length
-#         sseqid means Subject Seq - id
-#         sallseqid means All subject Seq - id(s), separated by a ';'
-#         stitle means Subject Title
-#         salltitles means All Subject Title(s), separated by a '<>'
-#         slen means Subject sequence length
-#         qstart means Start of alignment in query
-#         qend means End of alignment in query
-#         sstart means Start of alignment in subject
-#         send means End of alignment in subject
-#         evalue means Expect value
-#         bitscore means Bit score
-#         length means Alignment length
-#         pident means Percentage of identical matches
-#         nident means Number of identical matches
-#         mismatch means Number of mismatches
-#         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
+# #         qseqid means Query Seq - id
+# #         qtitle means Query title
+# #         qlen means Query sequence length
+# #         sseqid means Subject Seq - id
+# #         sallseqid means All subject Seq - id(s), separated by a ';'
+# #         stitle means Subject Title
+# #         salltitles means All Subject Title(s), separated by a '<>'
+# #         slen means Subject sequence length
+# #         qstart means Start of alignment in query
+# #         qend means End of alignment in query
+# #         sstart means Start of alignment in subject
+# #         send means End of alignment in subject
+# #         evalue means Expect value
+# #         bitscore means Bit score
+# #         length means Alignment length
+# #         pident means Percentage of identical matches
+# #         nident means Number of identical matches
+# #         mismatch means Number of mismatches
+# #         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
         
-        @time run(pipeline(cmd))
-    end
-    return outfile
-end
+#         @time run(pipeline(cmd))
+#     end
+#     return outfile
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -365,43 +464,39 @@ julia> 1 + 1
 2
 ```
 """
-function run_mmseqs_easy_search(;out_dir, query_fasta, target_database, outfile, force=false)
-    out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_search"))
-    outfile = joinpath(out_dir, outfile * ".mmseqs_easy_search." * basename(target_database) * ".txt")
+function run_mmseqs_easy_search(;
+        query_fasta,
+        target_database,
+        out_dir=dirname(query_fasta),
+        outfile=basename(query_fasta) * ".mmseqs_easy_search." * basename(target_database) * ".txt",
+        format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
+        force=false)
     
-    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits"
-    
-    if basename(target_database) in ["UniRef100", "UniRef90", "UniRef50", "UniProtKB", "TrEMBL", "Swiss-Prot", "NR", "GTDB", "SILVA", "Kalamari"]
-        format_output *= ",taxid"
-    end
-    
-    # note: cut exhaustive-search since it was taking far too long
-    # --exhaustive-search
-    # killed after 11 hours w/ 16 cores on UniRef100
-    # running in base mode with UniRef100 @ 16 cores = 2h12m
-    # could consider the iterative sensitivity search?
-    # iterative was a bit faster and found matches for all of the same proteins
-    #  # Increasing sensitivity search (from 2 to 7 in 3 steps)
-    # mmseqs easy-search examples/QUERY.fasta examples/DB.fasta result.m8 tmp
-    # aim for sensitivities 1, 3, 5, 7
-    # --start-sens 1 -s 7 --sens-steps 3
-    if force || (!force && !isfile(outfile))
+    outfile_path = joinpath(out_dir, outfile)
+    tmp_dir = joinpath(out_dir, "tmp")
+    if force || (!force && !isfile(outfile_path))
         cmd = 
         `mmseqs
             easy-search
             $(query_fasta)
             $(target_database)
-            $(outfile)
-            $(joinpath(out_dir, "tmp"))
+            $(outfile_path)
+            $(tmp_dir)
             --format-mode 4
             --format-output $(format_output)
-            --start-sens 1 -s 7 --sens-steps 3
+            --start-sens 1 -s 7 --sens-steps 7
+            --sort-results 1
+            --remove-tmp-files 1
         `
         @time run(pipeline(cmd))
     else
-        @info "target outfile $(outfile) already exists, remove it or set force=true to re-generate"
+        @info "target outfile $(outfile_path) already exists, remove it or set force=true to re-generate"
     end
-    return outfile
+    # we set remote tmp files = 1 above, but it still doesn't seem to work?
+    if isdir(tmp_dir)
+        rm(tmp_dir, recursive=true)
+    end
+    return outfile_path
 end
 
 """
@@ -559,7 +654,8 @@ julia> 1 + 1
 2
 ```
 """
-function run_prodigal(;fasta_file, out_dir="", use_conda=false)
+function run_prodigal(;fasta_file, out_dir=dirname(fasta_file), use_conda=false)
+    
     # if isempty(out_dir)
     #     prodigal_dir = mkpath("$(fasta_file)_prodigal")
     # else
@@ -593,40 +689,36 @@ function run_prodigal(;fasta_file, out_dir="", use_conda=false)
     #          -t:  Write a training file (if none exists); otherwise, read and use
     #               the specified training file.
     #          -v:  Print version number and exit.
-    
-    if isempty(readdir(prodigal_dir))
-        if !use_conda
-            cmd = 
-            `prodigal
-            -o $(prodigal_dir)/$(basename(fasta_file)).prodigal.gff
-            -f gff
-            -m
-            -p meta
-            -i $(fasta_file)
-            -a $(prodigal_dir)/$(basename(fasta_file)).prodigal.faa
-            -d $(prodigal_dir)/$(basename(fasta_file)).prodigal.fna
-            -s $(prodigal_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
-            `
-        else
-            cmd = 
-            `conda run --no-capture-output -n prodigal prodigal
-            -o $(prodigal_dir)/$(basename(fasta_file)).prodigal.gff
-            -f gff
-            -m
-            -p meta
-            -i $(fasta_file)
-            -a $(prodigal_dir)/$(basename(fasta_file)).prodigal.faa
-            -d $(prodigal_dir)/$(basename(fasta_file)).prodigal.fna
-            -s $(prodigal_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
-            `
-        end
-
-        p = pipeline(cmd, 
-                stdout="$(prodigal_dir)/$(basename(fasta_file)).prodigal.out",
-                stderr="$(prodigal_dir)/$(basename(fasta_file)).prodigal.err")
-        run(p)
+    if !use_conda
+        cmd = 
+        `prodigal
+        -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
+        -f gff
+        -m
+        -p meta
+        -i $(fasta_file)
+        -a $(out_dir)/$(basename(fasta_file)).prodigal.faa
+        -d $(out_dir)/$(basename(fasta_file)).prodigal.fna
+        -s $(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
+        `
+    else
+        cmd = 
+        `conda run --no-capture-output -n prodigal prodigal
+        -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
+        -f gff
+        -m
+        -p meta
+        -i $(fasta_file)
+        -a $(out_dir)/$(basename(fasta_file)).prodigal.faa
+        -d $(out_dir)/$(basename(fasta_file)).prodigal.fna
+        -s $(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
+        `
     end
-    return prodigal_dir
+
+    p = pipeline(cmd, 
+            stdout="$(out_dir)/$(basename(fasta_file)).prodigal.out",
+            stderr="$(out_dir)/$(basename(fasta_file)).prodigal.err")
+    run(p)
 end
 
 # ```
@@ -652,30 +744,30 @@ end
 
 # ```
 
-"""
-    create_chromosome_genedata_table(chromosome)
+# """
+#     create_chromosome_genedata_table(chromosome)
 
-Take a chromosome from GenomicAnnotations.jl in GFF (and possibly genbank)
-and return the formed dataframe.
-"""
-function create_chromosome_genedata_table(chromosome)
-    # genedata is already provided as a dataframe with all of the Attributes as columns
-    table = copy(chromosome.genedata)
+# Take a chromosome from GenomicAnnotations.jl in GFF (and possibly genbank)
+# and return the formed dataframe.
+# """
+# function create_chromosome_genedata_table(chromosome)
+#     # genedata is already provided as a dataframe with all of the Attributes as columns
+#     table = copy(chromosome.genedata)
     
-    # the rest of these need to be created
-    # I'm inserting them directly into their correct locations
-    DataFrames.insertcols!(table, 1, "sequence-id" => fill(chromosome.name, DataFrames.nrow(table)))
+#     # the rest of these need to be created
+#     # I'm inserting them directly into their correct locations
+#     DataFrames.insertcols!(table, 1, "sequence-id" => fill(chromosome.name, DataFrames.nrow(table)))
     
-    DataFrames.insertcols!(table, 3, "feature" => GenomicAnnotations.feature.(chromosome.genes))
+#     DataFrames.insertcols!(table, 3, "feature" => GenomicAnnotations.feature.(chromosome.genes))
 
-    loci = getproperty.(GenomicAnnotations.locus.(chromosome.genes), :position)
-    DataFrames.insertcols!(table, 4, "start" => first.(loci))
-    DataFrames.insertcols!(table, 5, "stop" => last.(loci))
+#     loci = getproperty.(GenomicAnnotations.locus.(chromosome.genes), :position)
+#     DataFrames.insertcols!(table, 4, "start" => first.(loci))
+#     DataFrames.insertcols!(table, 5, "stop" => last.(loci))
     
-    DataFrames.insertcols!(table, 7, "strand" => .!GenomicAnnotations.iscomplement.(chromosome.genes))        
+#     DataFrames.insertcols!(table, 7, "strand" => .!GenomicAnnotations.iscomplement.(chromosome.genes))        
     
-    return table
-end
+#     return table
+# end
 
 # function create_chromosome_genedata_table(chromosome)
 #     table = chromosome.genedata
@@ -687,81 +779,3 @@ end
 #     table[!, "stop"] = last.(chromosome.genedata[!, "locus"])
 #     return table
 # end
-
-"""
-    gff_to_table(gff)
-
-Convert GenomicAnnotations.jl style GFF collection of chromosome vectors
-into a wide-form GFF table (Attributes column expanded such that every attribute has it's own column)
-"""
-function gff_to_table(gff)
-    # this is a no-op if already collected
-    gff = collect(gff)
-    table = create_chromosome_genedata_table(first(gff))
-    for chromosome in gff[2:end]
-        this_table = create_chromosome_genedata_table(chromosome)
-        table = vcat(table, this_table)
-    end
-    return table
-end
-
-# TODO: switch to using GenomicAnnotations if GFF3 package isn't updated
-# PR -> https://github.com/BioJulia/GFF3.jl/pull/12
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
-or get fasta directly from FTP site
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function get_gff(;db=""::String, accession=""::String, ftp=""::String)
-    if !isempty(db) && !isempty(accession)
-        # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
-        sleep(0.5)
-        url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=gff3&id=$(accession)"
-        return GenomicAnnotations.GFF.Reader(IOBuffer(HTTP.get(url).body))
-        # return GFF3.Reader(IOBuffer(HTTP.get(url).body))
-    elseif !isempty(ftp)
-        # return GFF3.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
-        return GenomicAnnotations.GFF.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
-    else
-        @error "invalid call"
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
-or get fasta directly from FTP site
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
-    if !isempty(db) && !isempty(accession)
-        # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
-        sleep(0.5)
-        # url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=genbank&id=$(accession)&rettype=text"
-        url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=genbank&id=$(accession)&retmode=text"
-        # readgbk can't read from an io buffer, so need to download to a temp file
-        # outfile = tempname()
-        # open(outfile, "w") do io
-        #     write(io, HTTP.get(url).body)
-        # end
-        # genbank_data = GenomicAnnotations.readgbk(outfile)
-        # rm(outfile)
-        # return genbank_data
-        return GenomicAnnotations.GenBank.Reader(IOBuffer(HTTP.get(url).body))
-    elseif !isempty(ftp)
-        return GenomicAnnotations.GenBank.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
-    else
-        @error "invalid call"
-    end
-end
