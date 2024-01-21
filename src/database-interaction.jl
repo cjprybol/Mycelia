@@ -537,14 +537,37 @@ function load_ncbi_metadata(db)
         error()
     end
     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
-    ncbi_summary_file = basename(ncbi_summary_url)
-    if !isfile(ncbi_summary_file)
-        download(ncbi_summary_url, ncbi_summary_file)
-    end
-    # buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
-    types=[]
+    # ncbi_summary_file = basename(ncbi_summary_url)
+    # if !isfile(ncbi_summary_file)
+    #     download(ncbi_summary_url, ncbi_summary_file)
+    # end
+    buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
+    # types=[]
     # ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', encodings=Dict("na" => missing), allowmissing=true, typedetectrows=100)...)
-    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', types=String)...)
+    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(buffer, comment = "## ", header=1, delim='\t', types=String)...)
+    ints = [
+        "taxid",
+        "species_taxid",
+        "genome_size",
+        "genome_size_ungapped",
+        "replicon_count",
+        "scaffold_count",
+        "contig_count",
+        "total_gene_count",
+        "protein_coding_gene_count",
+        "non_coding_gene_count"
+    ]
+    floats = ["gc_percent"]
+    dates = ["seq_rel_date", "annotation_date"]
+    for int in ints
+        ncbi_summary_table[!, int] = something.(tryparse.(Int, ncbi_summary_table[!, int]), missing)
+    end
+    for float in floats
+        ncbi_summary_table[!, float] = something.(tryparse.(Float64, ncbi_summary_table[!, float]), missing)
+    end
+    for date in dates
+        ncbi_summary_table[!, date] = Dates.Date.(ncbi_summary_table[!, date], Dates.dateformat"yyyy/mm/dd")
+    end
     return ncbi_summary_table
 end
 

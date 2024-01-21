@@ -751,6 +751,17 @@ function open_fastx(path::AbstractString)
     return fastx_io
 end
 
+function write_fasta(;outfile, records)
+    open(outfile, "w") do io
+        fastx_io = FASTX.FASTA.Writer(io)
+        for record in records
+            write(fastx_io, record)
+        end
+        close(fastx_io)
+    end
+    return outfile
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
