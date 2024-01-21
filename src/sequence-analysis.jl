@@ -589,7 +589,7 @@ julia> 1 + 1
 2
 ```
 """
-function random_fasta_record(;seed=rand(Int), L = rand(0:Int(typemax(UInt16))))
+function random_fasta_record(;seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
     id = Random.randstring(Int(ceil(log(L + 1))))
     seq = BioSequences.randdnaseq(Random.seed!(seed), L)
     return FASTX.FASTA.Record(id, seq)

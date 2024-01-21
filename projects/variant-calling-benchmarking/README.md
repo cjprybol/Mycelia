@@ -9,10 +9,14 @@ real genomes:
 - 20240121.identify-small-reference-genomes.ipynb
 
 Simulated chromosomes:
-- [ ] 10kb, 100kb, 1Mb
+- [x] 10kb, 100kb, 1Mb
 
 producing variants
 - [ ] substitutions, insertion/deletions, inversions, translocations, and duplications <= 10% of chromosome length
+
+- https://biojulia.dev/GeneticVariation.jl/stable/man/io/vcf-bcf.html
+- https://github.com/rasmushenningsson/VariantCallFormat.jl
+- https://github.com/OpenMendel/VCFTools.jl
 
 simulating reads
 - 10, 100, 1000x
