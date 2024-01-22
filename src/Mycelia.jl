@@ -56,11 +56,12 @@ const AA_ALPHABET = filter(
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
 function add_bioconda_env(pkg)
-    run(`$(Conda.conda) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) (pkg) -y`)
+    run(`$(Conda.conda) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
     # Conda.runconda(`create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
 end
 
-function add_bioconda_envs()
+function add_bioconda_envs(;force=false)
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))    
     for pkg in [
             "htslib",
             "tabix",
@@ -72,7 +73,12 @@ function add_bioconda_envs()
             "mmseqs2",
             "minimap2"
         ]
-        add_bioconda_env(pkg)
+        if !(pkg in current_environments) && !force
+            @info "installing conda environment $(pkg)"
+            add_bioconda_env(pkg)
+        else
+            @info "conda environment $(pkg) already present; set force=true to update/re-install"
+        end
     end
 end
 
