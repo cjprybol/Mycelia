@@ -6,11 +6,10 @@ Andy's data location
 
 results back and forth
 ```bash
-rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results google_drive:Projects/viral-exposome-discovery/data/results
-rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA google_drive:Projects/viral-exposome-discovery/data/SRA
-
-rclone copy --progress --verbose google_drive:Projects/viral-exposome-discovery/data/results $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results
-
+rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results exposome:viral-exposome-discovery/data/results
+rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA exposome:viral-exposome-discovery/data/SRA
+rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/exposome_data exposome:viral-exposome-discovery/data/exposome_data
+# rclone copy --progress --verbose google_drive:Projects/viral-exposome-discovery/data/results $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results
 ```
 
 

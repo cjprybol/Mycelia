@@ -1,3 +1,29 @@
+function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    reader = open(MODULE.Reader, xam)
+    header = reader.header
+    record_iterator = Iterators.filter(record -> true, reader)
+    if filter_unmapped
+        record_iterator = Iterators.filter(record -> MODULE.ismapped(record), record_iterator)
+    end
+    if primary_only
+        record_iterator = Iterators.filter(record -> MODULE.isprimary(record), record_iterator)
+    end
+    record_iterator = Iterators.filter(record -> MODULE.mappingquality(record) >= min_mapping_quality, record_iterator)
+    record_iterator = Iterators.filter(record -> MODULE.alignlength(record) >= min_align_length, record_iterator)
+    records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
+    # reset header to specify sorted
+    header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
+    return (;records, header)
+end
+
+
 # # map reads to the assembly and run qualimap QC
 # bwt_index = "$(assembled_fasta).bwt"
 # if !isfile(bwt_index)

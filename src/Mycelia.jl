@@ -2,6 +2,7 @@ module Mycelia
 
 __precompile__(false)
 
+# import ArgParse
 import BioAlignments
 import BioSequences
 import BioSymbols
@@ -34,6 +35,7 @@ import Random
 import Statistics
 import StatsBase
 import StatsPlots
+import XAM
 import uCSV
 
 # preserve definitions between code jldoctest code blocks

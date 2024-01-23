@@ -1,9 +1,9 @@
 import Pkg
-Pkg.activate(".")
+# Pkg.activate(;temp=true)
 pkgs = [
     "ArgParse"
 ]
-Pkg.add(pkgs)
+# Pkg.add(pkgs)
 for pkg in pkgs
     eval(Meta.parse("import $pkg"))
 end

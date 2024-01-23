@@ -95,7 +95,7 @@ function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
 end
 
 function update_gff_with_mmseqs(gff_file, mmseqs_file)
-    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
+    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t', )...)
 
     gdf = DataFrames.groupby(mmseqs_results, "query")
     for g in gdf
@@ -103,23 +103,23 @@ function update_gff_with_mmseqs(gff_file, mmseqs_file)
     end
     top_hits = DataFrames.combine(gdf, first)
 
-    id_to_product = Dict()
+    id_to_product = Dict{String, String}()
     for row in DataFrames.eachrow(top_hits)
         id = Dict(a => b for (a, b) in split.(split(last(split(row["qheader"], " # ")), ';'), '='))["ID"]
         product = row["theader"]
         id_to_product[id] = product
     end
 
-    gff_table = Mycelia.GFF_to_table(gff_file)
+    gff_table = Mycelia.read_gff(gff_file)
     for (i, row) in enumerate(DataFrames.eachrow(gff_table))
         id = Dict(a => b for (a,b) in split.(split(row["attributes"], " "), "="))["ID"]
+        # drop ';partial'
+        id = string(first(split(id, ';')))
         product = get(id_to_product, id, "")
         gff_table[i, "attributes"] = "product=\"$(product)\" " * row["attributes"]
-        # gff_table[i, "attributes"] = "product=" * replace(id_to_product[id], " "=>"__") *  " $(row["attributes"])"
     end
     return gff_table
 end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -168,6 +168,17 @@ function read_gff(gff_io)
         "strand",
         "phase",
         "attributes"
+    ]
+    types=[
+        String,
+        String,
+        String,
+        Int,
+        Int,
+        Int,
+        String,
+        Int,
+        String
     ]
     DataFrames.DataFrame(data, header)
 end
