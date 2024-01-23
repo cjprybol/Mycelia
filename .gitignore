@@ -24,7 +24,8 @@ notebooks/scripts/kmer-saturation*
 *snakemake/logs/*
 *.bam
 *.sam
-projects/ME-CFS/reference_data/
+projects/me-cfs/reference_data/
 *.out
 *.err
-projects/ME_CFS/results/
+projects/me-cfs/results/
+projects/viral-exposome-discovery/results/

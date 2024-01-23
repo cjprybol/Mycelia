@@ -8,6 +8,7 @@ import BioSequences
 import BioSymbols
 import Clustering
 import CodecZlib
+import Conda
 import DataFrames
 import DataStructures
 import Dates
@@ -55,6 +56,33 @@ const RNA_ALPHABET = BioSymbols.ACGU
 const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
+
+function add_bioconda_env(pkg)
+    run(`$(Conda.conda) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+    # Conda.runconda(`create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+end
+
+function add_bioconda_envs(;force=false)
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))    
+    for pkg in [
+            "htslib",
+            "tabix",
+            "bcftools",
+            "vcftools",
+            "samtools",
+            "flye",
+            "prodigal",
+            "mmseqs2",
+            "minimap2"
+        ]
+        if !(pkg in current_environments) && !force
+            @info "installing conda environment $(pkg)"
+            add_bioconda_env(pkg)
+        else
+            @info "conda environment $(pkg) already present; set force=true to update/re-install"
+        end
+    end
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
