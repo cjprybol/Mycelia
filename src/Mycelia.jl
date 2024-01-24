@@ -84,6 +84,39 @@ function add_bioconda_envs(;force=false)
     end
 end
 
+function sbatch(;
+            job_name::String,
+            mail_user::String="ALL",
+            mail_type::String,
+            logdir::String=pwd(),
+            partition::String,
+            account::String,
+            nodes::Int=1,
+            ntasks::Int=1,
+            time::String="1-00:00:00",
+            cpus_per_task::Int,
+            mem_gb::Int,
+            cmd::String
+        )
+        submission = 
+        `sbatch
+        --job-name=$(job_name)
+        --mail-user=$(mail_user)
+        --mail-type=$(mail_type)
+        --error=$(logdir)/$(job_name).%x-%j.err
+        --output=$(logdir)/$(job_name).%x-%j.out
+        --partition=$(batch)
+        --account=$(account)
+        --nodes=$(nodes)
+        --ntasks=$(ntasks)
+        --time=$(time)   
+        --cpus-per-task=$(cpus_per_task)
+        --mem=$(mem_gb)G
+        --wrap $(cmd)
+        `
+        run(submission)
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't import yourself :)

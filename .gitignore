@@ -29,3 +29,4 @@ projects/me-cfs/reference_data/
 *.err
 projects/me-cfs/results/
 projects/viral-exposome-discovery/results/
+projects/ME_CFS/*
