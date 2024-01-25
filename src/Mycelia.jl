@@ -6,6 +6,7 @@ __precompile__(false)
 import BioAlignments
 import BioSequences
 import BioSymbols
+# import CairoMakie
 import Clustering
 import CodecZlib
 import Conda
@@ -39,6 +40,8 @@ import StatsPlots
 import XAM
 import uCSV
 
+import Pkg
+
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
 # use this to build up a story as we go, where outputs of earlier defined functions feed into
@@ -57,23 +60,53 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
+const MAMBA = joinpath(Conda.BINDIR, "mamba")
+
 function add_bioconda_env(pkg)
-    run(`$(Conda.conda) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+    run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
     # Conda.runconda(`create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
 end
 
 function add_bioconda_envs(;force=false)
-    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))    
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
+    # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
+    Conda.add("mamba")
+    ENV["CONDA_JL_CONDA_EXE"] = joinpath(Conda.ROOTENV, "bin", "mamba")
     for pkg in [
-            "htslib",
-            "tabix",
-            "bcftools",
-            "vcftools",
-            "samtools",
-            "flye",
-            "prodigal",
-            "mmseqs2",
-            "minimap2"
+        "art",
+        # "bioconvert",
+        "badread",
+        "bcftools",
+        "bedtools",
+        "blast",
+        # "bwa",
+        "bwa-mem2",
+        "deepvariant",
+        "emboss",
+        "freebayes",
+        "flye",
+        "gatk4",
+        # "gffread",
+        "htslib",
+        "megahit",
+        "medaka",
+        "minimap2",
+        "mmseqs2",
+        "nanocaller",
+        "nanoq",
+        "nanosim",
+        "pggb",
+        "polypolish",
+        "prodigal",
+        "raven-assembler",
+        "samtools",
+        "sniffles",
+        "spades",
+        "tabix",
+        "transtermhp",
+        "trim-galore",
+        "vcftools",
+        "vg"
         ]
         if !(pkg in current_environments) && !force
             @info "installing conda environment $(pkg)"

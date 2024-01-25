@@ -12,8 +12,7 @@ Simulated chromosomes:
 - [x] 10kb, 100kb, 1Mb
 
 producing variants
-- [ ] substitutions, insertion/deletions, inversions, translocations, and duplications <= 10% of chromosome length
-
+- [x] substitutions, insertion/deletions, inversions, translocations, and duplications <= 10% of chromosome length
 - https://biojulia.dev/GeneticVariation.jl/stable/man/io/vcf-bcf.html
 - https://github.com/rasmushenningsson/VariantCallFormat.jl
 - https://github.com/OpenMendel/VCFTools.jl
@@ -60,6 +59,9 @@ short-only variant calling
 long-only variant calling
 - sniffles
 - https://github.com/WGLab/NanoCaller
+
+Not tested:
+- Clair3
 - https://github.com/kishwarshafin/pepper
 
 results, analysis, discussion

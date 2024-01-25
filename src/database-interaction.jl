@@ -47,27 +47,23 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Smart downloading of blast dbs depending on interactive, non interactive context
+
+For a list of all available databases, run: ``
 """
-function download_blast_db(;db, outdir="$(homedir())/workspace/blastdb", source="", wait=true, conda_env="")
+function download_blast_db(;db, outdir="$(homedir())/workspace/blastdb", source="", wait=true)
     @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(outdir)
     current_directory = pwd()
     cd(outdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
-        if isempty(conda_env)
-            cmd = `update_blastdb.pl $(db) --decompress`
-        else
-            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress`
-        end
+        cmd = `$(Conda.conda) run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress`
     else
         @info "downloading from source $(source)"
-        if isempty(conda_env)
-            cmd = `update_blastdb.pl $(db) --decompress --source $(source)`
-        elseif source == "ncbi"
-            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+        if source == "ncbi"
+            cmd = `$(Conda.conda) run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
         else
-            cmd = `conda run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source)`
+            cmd = `$(Conda.conda) run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source)`
         end
     end
     run(cmd, wait=wait)
