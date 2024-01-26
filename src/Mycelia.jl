@@ -68,10 +68,11 @@ function add_bioconda_env(pkg)
 end
 
 function add_bioconda_envs(;force=false)
+    if !isfile(MAMBA)
+        Conda.add("mamba")
+    end
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
     # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
-    Conda.add("mamba")
-    ENV["CONDA_JL_CONDA_EXE"] = joinpath(Conda.ROOTENV, "bin", "mamba")
     for pkg in [
         "art",
         # "bioconvert",
@@ -95,6 +96,7 @@ function add_bioconda_envs(;force=false)
         "nanocaller",
         "nanoq",
         "nanosim",
+        "ncbi-datasets-cli",
         "pggb",
         "polypolish",
         "prodigal",

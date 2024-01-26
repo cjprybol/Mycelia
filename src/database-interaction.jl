@@ -1,3 +1,121 @@
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# ncbi_datasets_genome(; kwargs...)
+
+# Download and rehydrate a data package from [NCBI datasets genome tool](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/)
+
+# Specify the download using either
+
+# - [taxon](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/datasets_download_genome_taxon/)
+
+# or
+
+# - [accession(https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/datasets_download_genome_accession/)
+
+# # Arguments
+# - `annotated::Bool=false`: Limit to annotated genomes.
+# - `api_key::String=""`: Specify an NCBI API key.
+# - `assembly_level::Array{String}=[]`: Limit to genomes at specific assembly levels (e.g., "chromosome", "complete", "contig", "scaffold"). Default is empty (no specific level).
+# - `assembly_source::String="all"`: Limit to 'RefSeq' (GCF_) or 'GenBank' (GCA_) genomes. Default is "all".
+# - `assembly_version::String=""`: Limit to 'latest' assembly accession version or include 'all' (latest + previous versions).
+# - `chromosomes::Array{String}=[]`: Limit to a specified, comma-delimited list of chromosomes, or 'all' for all chromosomes.
+# - `debug::Bool=false`: Emit debugging info.
+# - `dehydrated::Bool=false`: Download a dehydrated zip archive including the data report and locations of data files (use the rehydrate command to retrieve data files).
+# - `exclude_atypical::Bool=false`: Exclude atypical assemblies.
+# - `filename::String=""`: Specify a custom file name for the downloaded data package. Default is "taxon.zip" or "accession.zip" if left blank.
+# - `include::Array{String}=["genome"]`: Specify the data files to include (e.g., "genome", "rna", "protein"). Default includes genomic sequence files only.
+# - `mag::String="all"`: Limit to metagenome assembled genomes (only) or remove them from the results (exclude). Default is "all".
+# - `no_progressbar::Bool=false`: Hide the progress bar.
+# - `preview::Bool=false`: Show information about the requested data package without downloading.
+# - `reference::Bool=false`: Limit to reference genomes.
+# - `released_after::String=""`: Limit to genomes released on or after a specified date (MM/DD/YYYY).
+# - `released_before::String=""`: Limit to genomes released on or before a specified date (MM/DD/YYYY).
+# - `search::Array{String}=[]`: Limit results to genomes with specified text in the searchable fields (e.g., species, assembly name).
+
+# # Returns
+# - The result of the API call.
+# """
+
+# function ncbi_datasets_genome(;
+#         taxon=missing,
+#         accession=missing,
+#         annotated=false,
+#         api_key="",
+#         assembly_level=[],
+#         assembly_source="all",
+#         assembly_version="",
+#         chromosomes=[],
+#         debug=false,
+#         dehydrated=false,
+#         exclude_atypical=false,
+#         filename="",
+#         outdir="",
+#         include=["genome"],
+#         mag="all",
+#         no_progressbar=false,
+#         preview=false,
+#         reference=false,
+#         released_after="",
+#         released_before="",
+#         search=[])
+
+#     # Base command
+#     command = "$(MAMBA) run --live-stream -n ncbi-datasets-cli datasets download genome "
+    
+#     if !ismissing(taxon) && !ismissing(accession)
+#         @error "can only provide taxon or accession, not both" taxon accession
+#     elseif ismissing(taxon) && ismissing(accession)
+#         @error "must provide either taxon or accession"
+#     elseif !ismissing(taxon) && ismissing(accession)
+#         command *= "taxon $(taxon) "
+#         if isempty(filename)
+#             filename = string(taxon) * ".zip"
+#         end
+#     elseif !ismissing(accession) && ismissing(taxon)
+#         command *= "accession $(accession) "
+#         if isempty(filename)
+#             filename = string(accession) * ".zip"
+#         end
+#     end
+    
+#     @assert occursin(r"\.zip$", filename)
+    
+#     if !isempty(outdir)
+#         filename = joinpath(outdir, filename)
+#     end
+
+#     annotated && (command *= "--annotated ")
+#     !isempty(api_key) && (command *= "--api-key $api_key ")
+#     !isempty(assembly_level) && (command *= "--assembly-level $(join(assembly_level, ',')) ")
+#     command *= "--assembly-source $assembly_source "
+#     !isempty(assembly_version) && (command *= "--assembly-version $assembly_version ")
+#     !isempty(chromosomes) && (command *= "--chromosomes $(join(chromosomes, ',')) ")
+#     debug && (command *= "--debug ")
+#     dehydrated && (command *= "--dehydrated ")
+#     exclude_atypical && (command *= "--exclude-atypical ")
+#     command *= "--filename $filename "
+#     !isempty(include) && (command *= "--include $(join(include, ',')) ")
+#     command *= "--mag $mag "
+#     no_progressbar && (command *= "--no-progressbar ")
+#     preview && (command *= "--preview ")
+#     reference && (command *= "--reference ")
+#     !isempty(released_after) && (command *= "--released-after $released_after ")
+#     !isempty(released_before) && (command *= "--released-before $released_before ")
+#     for s in search
+#         command *= "--search $s "
+#     end
+
+#     # Execute the command
+#     println("Executing command: $command")
+#     run(`$command`)
+#     if dehydrated
+#         @info "add code to rehydrate here"
+#     end
+#     return true
+# end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -28,19 +146,19 @@ Download mmseqs databases
 - Kalamari              Nucleotide           yes        https://github.com/lskatz/Kalamari
 ```
 """
-function download_mmseqs_db(;db, outdir="$(homedir())/workspace/mmseqs", force=false, wait=true, conda_env="")
-    mkpath(outdir)
-    db_path = joinpath(outdir, db)
+function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=false, wait=true)
+    mkpath(dbdir)
+    db_path = joinpath(dbdir, db)
     if !isfile(db_path) || force
-        if isempty(conda_env)
-            cmd = `mmseqs databases --compressed 1 --remove-tmp-files 1 $(db) $(outdir)/$(db) $(outdir)/tmp`
-        else
-            cmd = `conda run --live-stream -n $(conda_env) mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(outdir)/$(db) $(outdir)/tmp`
-        end
+        cmd = `$(MAMBA) run --live-stream -n mmseqs2 mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(dbdir)/$(db) $(dbdir)/tmp`
         @time run(cmd, wait=wait)
     else
         @info "db $db @ $(db_path) already exists, set force=true to overwrite"
     end
+end
+
+function list_blastdbs()
+    readlines(`$(MAMBA) run --live-stream -n blast update_blastdb.pl --showall`)
 end
 
 """
@@ -48,38 +166,35 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Smart downloading of blast dbs depending on interactive, non interactive context
 
-For a list of all available databases, run: ``
+For a list of all available databases, run: `Mycelia.list_blastdbs()`
 """
-function download_blast_db(;db, outdir="$(homedir())/workspace/blastdb", source="", wait=true)
+function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="", wait=true)
     @assert source in ["", "aws", "gcp", "ncbi"]
-    mkpath(outdir)
+    mkpath(dbdir)
     current_directory = pwd()
-    cd(outdir)
+    cd(dbdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
-        cmd = `$(Conda.conda) run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress`
+        cmd = `$(MAMBA) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
     else
         @info "downloading from source $(source)"
         if source == "ncbi"
-            cmd = `$(Conda.conda) run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+            cmd = `$(MAMBA) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
         else
-            cmd = `$(Conda.conda) run --live-stream -n $(conda_env) update_blastdb.pl $(db) --decompress --source $(source)`
+            cmd = `$(MAMBA) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
         end
     end
     run(cmd, wait=wait)
-    # if isinteractive() ||
-    #     # 2023-01-23 11:00:52
-    #     # ~ 1-2 hours
-    #     # 260 gb
-    #     # will only download if different from current
-    #     @time run(`update_blastdb.pl $(db) --source ncbi --decompress`)
-    # else
-    #     # aws and gcp downloads are MUCH faster, but they will re-download each time
-    #     # this makes them better for single-use, non-interactive cloud builds, but terrible for local development
-    #     # ~ 20 minutes
-    #     @time run(`update_blastdb.pl $(db) --decompress`)
-    # end
     cd(current_directory)
+end
+
+function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).fasta.gz")
+    p = pipeline(`$(MAMBA) run --live-stream -n blast blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
+    if compressed
+        p = pipeline(p, `gzip`)
+    end
+    run(pipeline(p, outfile))
+    return outfile
 end
 
 # neo_import_dir = "/Users/cameronprybol/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-8ab8baac-5dea-4137-bb24-e0b426447940/import"
@@ -693,7 +808,12 @@ function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
         # API will block if we request more than 3 times per second, so set a 1/3 second sleep to set max of 3 requests per second when looping
         sleep(0.34)
         url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=fasta&id=$(accession)"
-        return FASTX.FASTA.Reader(IOBuffer(HTTP.get(url).body))
+        body = HTTP.get(url).body
+        try
+            return FASTX.FASTA.Reader(IOBuffer(body))
+        catch e
+            @error e body
+        end
     elseif !isempty(ftp)
         return FASTX.FASTA.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
     else

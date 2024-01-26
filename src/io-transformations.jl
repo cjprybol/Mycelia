@@ -761,8 +761,12 @@ function open_fastx(path::AbstractString)
     return fastx_io
 end
 
-function write_fasta(;outfile, records)
+function write_fasta(;outfile, records, gzipped=false)
     open(outfile, "w") do io
+        if gzipped
+            @assert occursin(r"\.gz$", outfile)
+            io = CodecZlib.GzipCompressorStream(io)
+        end
         fastx_io = FASTX.FASTA.Writer(io)
         for record in records
             write(fastx_io, record)
