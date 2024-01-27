@@ -1144,13 +1144,13 @@ function deduplicate_fasta_file(in_fasta, out_fasta)
     return out_fasta
 end
 
-function merge_fasta_files(list_of_fasta_files, joint_fasta_file)
-    open(joint_fasta_file, "w") do io
-        for f in list_of_fasta_files
+function merge_fasta_files(;fasta_files, fasta_file)
+    open(fasta_file, "w") do io
+        ProgressMeter.@showprogress for f in fasta_files
             write(io, read(f))
         end
     end
-    return joint_fasta_file
+    return fasta_file
 end
 
 # """

@@ -1,3 +1,36 @@
+Acquire
+- [x] ICTV reference viral
+- [x] refseq viral
+- [x] human genome
+- [x] IMG/VR viral
+    - copied using GLOBUS from JGI to NERSC, then rclone to Stanford Google Drive, Then rclone Google Drive to SCG3
+    - rclone copy --progress $HOME/workspace/JGI stanford_viral_exposome:JGI
+    - rclone copy --progress exposome:JGI $HOME/workspace/JGI
+- [x] nt viral
+
+map reads to each
+- bwa-mem2
+- [x] ICTV reference viral
+- [x] refseq viral
+- [x] human genome
+
+unable to build bwa-mem2 indices w/ 1Tb of memory, skipped mapping with these databases
+blast instead
+- [x] nt viral
+- [x] IMG/VR viral
+    - copied using GLOBUS from JGI to NERSC, then rclone to Stanford Google Drive, Then rclone Google Drive to SCG3
+    - rclone copy --progress $HOME/workspace/JGI stanford_viral_exposome:JGI
+    - rclone copy --progress exposome:JGI $HOME/workspace/JGI
+
+
+do variant calling
+
+do binned co-assembly
+
+associate taxa/variant abundance with other taxa/host/location/season/
+
+
+
 # Viral Exposome
 
 Andy's data location

@@ -71,6 +71,9 @@ function add_bioconda_envs(;force=false)
     if !isfile(MAMBA)
         Conda.add("mamba")
     end
+    if !isfile(joinpath(Conda.BINDIR, "pigz"))
+        run(`$(MAMBA) install pigz -y`)
+    end
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
     # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
     for pkg in [
@@ -119,37 +122,57 @@ function add_bioconda_envs(;force=false)
     end
 end
 
+"""
+    sbatch(;
+                job_name::String,
+                mail_user::String,
+                mail_type::String="ALL",
+                logdir::String=pwd(),
+                partition::String,
+                account::String,
+                nodes::Int=1,
+                ntasks::Int=1,
+                time::String="1-00:00:00",
+                cpus_per_task::Int,
+                mem_gb::Int,
+                cmd::String
+            )
+
+Submit a command to SLURM using sbatch
+"""
 function sbatch(;
-            job_name::String,
-            mail_user::String="ALL",
-            mail_type::String,
-            logdir::String=pwd(),
-            partition::String,
-            account::String,
-            nodes::Int=1,
-            ntasks::Int=1,
-            time::String="1-00:00:00",
-            cpus_per_task::Int,
-            mem_gb::Int,
-            cmd::String
-        )
-        submission = 
-        `sbatch
-        --job-name=$(job_name)
-        --mail-user=$(mail_user)
-        --mail-type=$(mail_type)
-        --error=$(logdir)/$(job_name).%x-%j.err
-        --output=$(logdir)/$(job_name).%x-%j.out
-        --partition=$(batch)
-        --account=$(account)
-        --nodes=$(nodes)
-        --ntasks=$(ntasks)
-        --time=$(time)   
-        --cpus-per-task=$(cpus_per_task)
-        --mem=$(mem_gb)G
-        --wrap $(cmd)
-        `
-        run(submission)
+        job_name::String,
+        mail_user::String,
+        mail_type::String="ALL",
+        logdir::String=pwd(),
+        partition::String,
+        account::String,
+        nodes::Int=1,
+        ntasks::Int=1,
+        time::String="1-00:00:00",
+        cpus_per_task::Int=1,
+        mem_gb::Int=8,
+        cmd::String
+    )
+    submission = 
+    `sbatch
+    --job-name=$(job_name)
+    --mail-user=$(mail_user)
+    --mail-type=$(mail_type)
+    --error=$(logdir)/%j.%x.err
+    --output=$(logdir)/%j.%x.out
+    --partition=$(partition)
+    --account=$(account)
+    --nodes=$(nodes)
+    --ntasks=$(ntasks)
+    --time=$(time)   
+    --cpus-per-task=$(cpus_per_task)
+    --mem=$(mem_gb)G
+    --wrap $(cmd)
+    `
+    run(submission)
+    sleep(1)
+    return true
 end
 
 # dynamic import of files??
