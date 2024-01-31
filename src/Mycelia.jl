@@ -84,7 +84,7 @@ function add_bioconda_envs(;force=false)
         "bedtools",
         "blast",
         # "bwa",
-        "bwa-mem2",
+        # "bwa-mem2",
         "deepvariant",
         "emboss",
         "freebayes",
@@ -106,6 +106,7 @@ function add_bioconda_envs(;force=false)
         "raven-assembler",
         "samtools",
         "sniffles",
+        "sourmash",
         "spades",
         "tabix",
         "transtermhp",
@@ -177,26 +178,10 @@ end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
-# don't import yourself :)
-all_julia_files = filter(x -> x != "Mycelia.jl", all_julia_files)
-for f in all_julia_files
+# don't recusively import this file
+all_other_julia_files = filter(x -> x != "Mycelia.jl", all_julia_files)
+for f in all_other_julia_files
     include(f)
 end
-
-# for f in [
-#         "database-interaction.jl",
-#         "genome-annotations.jl",
-#         "graph-construction.jl",
-#         "graph-interaction.jl",
-#         "graph-polishing.jl",
-#         "graph-simplification.jl",
-#         "graph-traversal.jl",
-#         "io-transformations.jl",
-#         "proteome-analysis.jl",
-#         "sequence-interactions.jl",
-#         # "viterbi.jl"
-#     ]
-#     include(f)
-# end
 
 end # module

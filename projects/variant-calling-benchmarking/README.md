@@ -42,10 +42,7 @@ graph-based variant calling
 - vg
 - pggb
 
-short read mapping
-- bwa-mem
-
-long read mapping
+read mapping
 - minimap2
 
 variant calling
@@ -59,10 +56,7 @@ short-only variant calling
 long-only variant calling
 - sniffles
 - https://github.com/WGLab/NanoCaller
-
-Not tested:
 - Clair3
-- https://github.com/kishwarshafin/pepper
 
 results, analysis, discussion
 - analyze accuracy of Mycelia against all of the other approaches individually
@@ -73,5 +67,5 @@ references
 - https://www.frontiersin.org/articles/10.3389/fgene.2022.887644/full
 - https://ieeexplore.ieee.org/document/18626
 
-
-
+Considered but not tested:
+- https://github.com/kishwarshafin/pepper

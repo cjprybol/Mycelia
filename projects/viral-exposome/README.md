@@ -1,3 +1,7 @@
+
+
+
+
 Acquire
 - [x] ICTV reference viral
 - [x] refseq viral
@@ -10,26 +14,30 @@ Acquire
 
 map reads to each
 - bwa-mem2
-- [x] ICTV reference viral
-- [x] refseq viral
-- [x] human genome
+    - [x] ICTV reference viral
+    - [x] refseq viral
+    - [x] human genome
+Got stuck with bwa-mem2 for larger fastas, unable to build bwa-mem2 indices w/ 1Tb of memory
 
-unable to build bwa-mem2 indices w/ 1Tb of memory, skipped mapping with these databases
-blast instead
-- [x] nt viral
-- [x] IMG/VR viral
+Trying to subset the fastas with sourmash
+- not working, limited to single core and running out of time (24 hours) on Slurm
+
+Switched to minimap2 which was more resource efficient
+- minimap2
+    - [x] nt viral
+    - [x] IMG/VR viral
     - copied using GLOBUS from JGI to NERSC, then rclone to Stanford Google Drive, Then rclone Google Drive to SCG3
     - rclone copy --progress $HOME/workspace/JGI stanford_viral_exposome:JGI
     - rclone copy --progress exposome:JGI $HOME/workspace/JGI
+    
+- unable to build blast database with IMG/VR records due to IDs being >= 50 characters long, so did not bother blasting
 
+do variant calling of mapped reads against 
 
-do variant calling
-
-do binned co-assembly
+do binned co-assembly + graph-based variant-calling
+shared set of variants
 
 associate taxa/variant abundance with other taxa/host/location/season/
-
-
 
 # Viral Exposome
 
