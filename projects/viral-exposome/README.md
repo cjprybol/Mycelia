@@ -1,7 +1,3 @@
-
-
-
-
 Acquire
 - [x] ICTV reference viral
 - [x] refseq viral
@@ -21,6 +17,8 @@ Got stuck with bwa-mem2 for larger fastas, unable to build bwa-mem2 indices w/ 1
 
 Trying to subset the fastas with sourmash
 - not working, limited to single core and running out of time (24 hours) on Slurm
+- did work for IMG/VR k=11,13,17,23,31,41,53 but no nt_viral and none of the other k sizes
+- [ ] IMG/VR sourmash on each short read sample
 
 Switched to minimap2 which was more resource efficient
 - minimap2
@@ -32,10 +30,8 @@ Switched to minimap2 which was more resource efficient
     
 - unable to build blast database with IMG/VR records due to IDs being >= 50 characters long, so did not bother blasting
 
-do variant calling of mapped reads against 
-
-do binned co-assembly + graph-based variant-calling
-shared set of variants
+- [ ] do variant calling of mapped reads against references
+- [ ] do binned co-assembly w/ megabhit + graph-based variant-calling against reference w/ PGGB
 
 associate taxa/variant abundance with other taxa/host/location/season/
 

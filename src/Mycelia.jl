@@ -87,6 +87,7 @@ function add_bioconda_envs(;force=false)
         # "bwa-mem2",
         "deepvariant",
         "emboss",
+        "filtlong",
         "freebayes",
         "flye",
         "gatk4",
@@ -98,7 +99,8 @@ function add_bioconda_envs(;force=false)
         "mmseqs2",
         "nanocaller",
         "nanoq",
-        "nanosim",
+        # "nanosim",
+        # "nanosim-h",
         "ncbi-datasets-cli",
         "pggb",
         "polypolish",
@@ -174,6 +176,10 @@ function sbatch(;
     run(submission)
     sleep(1)
     return true
+end
+
+function fasta_genome_size(fasta_file)
+    return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
 end
 
 # dynamic import of files??
