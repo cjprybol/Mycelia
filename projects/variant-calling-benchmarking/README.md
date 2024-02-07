@@ -34,18 +34,19 @@ From here, reads take two paths:
 2. mapping-based variant calling
 
 ## assembly
-- [ ] short read only assembly
+- [x] short read only assembly
     - Mycelia
     - MegaHIT
     - spades --isolate
-- [ ] long read only assembly
+- [x] long read only assembly
     - Mycelia
     - metaflye
     - raven https://github.com/lbcb-sci/raven
 - [ ] hybrid-assembly
     - Mycelia
-    - https://github.com/rrwick/Polypolish
-    - hybrid metaspades
+- didn't run
+    - https://github.com/rrwick/Polypolish - too complex
+    - hybrid metaspades - didn't due to mmap issue?
     
 ## assembly-graph variant calling
 - [ ] graph-based variant calling
@@ -57,17 +58,17 @@ From here, reads take two paths:
     - minimap2
 
 ## mapping-based variant-calling
-- [ ] long and short variant calling
-    - https://github.com/google/deepvariant
+- [x] long and short variant calling
     - bcftools https://samtools.github.io/bcftools/howtos/variant-calling.html
     - Freebayes
-- [ ] short-read variant calling
+- [x] long-read variant calling
+    - Clair3
+- didn't work when attempted
+    - https://github.com/google/deepvariant
     - gatk
-- [ ] long-read variant calling
     - nanovar
     - sniffles
     - https://github.com/WGLab/NanoCaller
-    - Clair3
 
 ## results, analysis, discussion
 - [ ] analyze accuracy of Mycelia against all of the other approaches individually

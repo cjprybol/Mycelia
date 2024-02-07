@@ -1,3 +1,17 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function load_graph(file)
+    return FileIO.load(file)["graph"]
+end
+
 function parse_transterm_output(transterm_output)
     
    #     3. FORMAT OF THE TRANSTERM OUTPUT

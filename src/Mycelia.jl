@@ -83,12 +83,14 @@ function add_bioconda_envs(;force=false)
         "bcftools",
         "bedtools",
         "blast",
+        "clair3-illumina",
+        "clair3",    
         # "bwa",
         # "bwa-mem2",
-        "deepvariant",
+        # "deepvariant",
         "emboss",
         "filtlong",
-        "freebayes",
+        # "freebayes",
         "flye",
         "gatk4",
         # "gffread",
@@ -98,14 +100,17 @@ function add_bioconda_envs(;force=false)
         "minimap2",
         "mmseqs2",
         "nanocaller",
-        "nanoq",
+        "nanovar",
+        # "nanoq",
         # "nanosim",
         # "nanosim-h",
         "ncbi-datasets-cli",
         "pggb",
-        "polypolish",
+        "picard",
+        # "polypolish",
         "prodigal",
         "raven-assembler",
+        "rtg-tools",
         "samtools",
         "sniffles",
         "sourmash",
@@ -122,28 +127,14 @@ function add_bioconda_envs(;force=false)
         else
             @info "conda environment $(pkg) already present; set force=true to update/re-install"
         end
+        run(`$(MAMBA) clean --all -y`)
     end
 end
 
 """
-    sbatch(;
-                job_name::String,
-                mail_user::String,
-                mail_type::String="ALL",
-                logdir::String=pwd(),
-                partition::String,
-                account::String,
-                nodes::Int=1,
-                ntasks::Int=1,
-                time::String="1-00:00:00",
-                cpus_per_task::Int,
-                mem_gb::Int,
-                cmd::String
-            )
-
 Submit a command to SLURM using sbatch
 """
-function sbatch(;
+function scg_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
@@ -154,7 +145,7 @@ function sbatch(;
         ntasks::Int=1,
         time::String="1-00:00:00",
         cpus_per_task::Int=1,
-        mem_gb::Int=8,
+        mem_gb::Int=cpus_per_task * 8,
         cmd::String
     )
     submission = 
@@ -178,8 +169,58 @@ function sbatch(;
     return true
 end
 
+"""
+Submit a command to SLURM using sbatch
+"""
+function nersc_sbatch(;
+        job_name::String,
+        mail_user::String,
+        mail_type::String="ALL",
+        logdir::String=pwd(),
+        qos::String,
+        nodes::Int=1,
+        ntasks::Int=1,
+        time::String="1-00:00:00",
+        cpus_per_task::Int=1,
+        mem_gb::Int=cpus_per_task * 2,
+        cmd::String,
+        constrain::String="cpu"
+    )
+    submission = 
+    `sbatch
+    --job-name=$(job_name)
+    --mail-user=$(mail_user)
+    --mail-type=$(mail_type)
+    --error=$(logdir)/%j.%x.err
+    --output=$(logdir)/%j.%x.out
+    --qos=$(qos)
+    --nodes=$(nodes)
+    --ntasks=$(ntasks)
+    --time=$(time)   
+    --cpus-per-task=$(cpus_per_task)
+    --mem=$(mem_gb)G
+    --constraint=cpu
+    --wrap $(cmd)
+    `
+    run(submission)
+    sleep(1)
+    return true
+end
+
 function fasta_genome_size(fasta_file)
     return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
+end
+
+function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
+    open(fasta, "w") do io
+        fastx_io = FASTX.FASTA.Writer(io)
+        gfa_graph = Mycelia.parse_gfa(gfa)
+        for v in Graphs.vertices(gfa_graph)
+            record = FASTX.FASTA.Record(gfa_graph.vprops[v][:identifier], gfa_graph.vprops[v][:sequence])
+            write(fastx_io, record)
+        end
+        close(fastx_io)
+    end
 end
 
 # dynamic import of files??
