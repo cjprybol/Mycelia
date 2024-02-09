@@ -855,12 +855,17 @@ end
 Create a weighted, strand-specific kmer (de bruijn) graph from a set of kmers
 and a series of sequence observations in FASTA format.
 """
-function build_stranded_kmer_graph(canonical_kmers, observations)
-    if isempty(canonical_kmers)
-        @error "isempty(canonical_kmers) = $(isempty(canonical_kmers))"
-    elseif isempty(observations)
-        @error "isempty(observations) = $(isempty(observations))"
-    end
+function build_stranded_kmer_graph(kmer_type, observations::AbstractVector{<:Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}})
+    
+    canonical_kmer_counts = Mycelia.count_canonical_kmers(kmer_type, observations)
+    canonical_kmers = collect(keys(canonical_kmer_counts))
+    # @show canonical_kmers
+    
+    # if isempty(canonical_kmers)
+    #     @error "isempty(canonical_kmers) = $(isempty(canonical_kmers))"
+    # elseif isempty(observations)
+    #     @error "isempty(observations) = $(isempty(observations))"
+    # end
     stranded_kmers = sort!(vcat(canonical_kmers, [BioSequences.reverse_complement(kmer) for kmer in canonical_kmers]))
     stranded_kmer_to_reverse_complement_map = [
         findfirst(stranded_kmer -> BioSequences.reverse_complement(stranded_kmer) == kmer, stranded_kmers) for kmer in stranded_kmers
@@ -911,5 +916,7 @@ function build_stranded_kmer_graph(canonical_kmers, observations)
             push!(stranded_kmer_graph.gprops[:observation_color_map], observation_index)
         end
     end
+    @info Graphs.nv(stranded_kmer_graph)
+    @info Graphs.ne(stranded_kmer_graph)
     return stranded_kmer_graph
 end

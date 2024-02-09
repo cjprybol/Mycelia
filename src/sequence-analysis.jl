@@ -634,7 +634,11 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
             error_type = rand(1:3)
             if error_type == 1
                 # mismatch
-                push!(new_seq, rand(setdiff(alphabet, character)))
+                new_character = rand(alphabet)
+                while new_character == character
+                    new_character = rand(alphabet)
+                end
+                push!(new_seq, new_character)
             elseif error_type == 2
                 # insertion
                 total_insertions = 1 + rand(Distributions.Poisson(error_rate))
