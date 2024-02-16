@@ -64,10 +64,10 @@ const MAMBA = joinpath(Conda.BINDIR, "mamba")
 
 function add_bioconda_env(pkg)
     run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-    # Conda.runconda(`create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+    run(`$(MAMBA) clean --all -y`)
 end
 
-function add_bioconda_envs(;force=false)
+function add_bioconda_envs(;all=false, force=false)
     if !isfile(MAMBA)
         Conda.add("mamba")
     end
@@ -76,59 +76,61 @@ function add_bioconda_envs(;force=false)
     end
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
     # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
-    for pkg in [
-        "art",
-        # "bioconvert",
-        "badread",
-        "bcftools",
-        "bedtools",
-        "blast",
-        "clair3-illumina",
-        "clair3",    
-        # "bwa",
-        # "bwa-mem2",
-        # "deepvariant",
-        "emboss",
-        "filtlong",
-        # "freebayes",
-        "flye",
-        "gatk4",
-        # "gffread",
-        "htslib",
-        "megahit",
-        "medaka",
-        "minimap2",
-        "mmseqs2",
-        "nanocaller",
-        "nanovar",
-        # "nanoq",
-        # "nanosim",
-        # "nanosim-h",
-        "ncbi-datasets-cli",
-        "pggb",
-        "picard",
-        # "polypolish",
-        "prodigal",
-        "raven-assembler",
-        "rtg-tools",
-        "samtools",
-        "sniffles",
-        "sourmash",
-        "spades",
-        "tabix",
-        "transtermhp",
-        "trim-galore",
-        "vcftools",
-        "vg"
-        ]
-        if !(pkg in current_environments) && !force
-            @info "installing conda environment $(pkg)"
-            add_bioconda_env(pkg)
-        else
-            @info "conda environment $(pkg) already present; set force=true to update/re-install"
+    if all
+        for pkg in [
+            "art",
+            # "bioconvert",
+            "badread",
+            "bcftools",
+            "bedtools",
+            "blast",
+            "clair3-illumina",
+            "clair3",    
+            # "bwa",
+            # "bwa-mem2",
+            # "deepvariant",
+            "emboss",
+            "filtlong",
+            # "freebayes",
+            "flye",
+            "gatk4",
+            # "gffread",
+            "htslib",
+            "megahit",
+            "medaka",
+            "minimap2",
+            "mmseqs2",
+            "nanocaller",
+            "nanovar",
+            # "nanoq",
+            # "nanosim",
+            # "nanosim-h",
+            "ncbi-datasets-cli",
+            "pggb",
+            "picard",
+            # "polypolish",
+            "prodigal",
+            "raven-assembler",
+            "rtg-tools",
+            "samtools",
+            "sniffles",
+            "sourmash",
+            "spades",
+            "tabix",
+            "transtermhp",
+            "trim-galore",
+            "vcftools",
+            "vg"
+            ]
+            if !(pkg in current_environments) && !force
+                @info "installing conda environment $(pkg)"
+                add_bioconda_env(pkg)
+            else
+                @info "conda environment $(pkg) already present; set force=true to update/re-install"
+            end
         end
-        run(`$(MAMBA) clean --all -y`)
     end
+    run(`$(MAMBA) clean --all -y`)
 end
 
 """
