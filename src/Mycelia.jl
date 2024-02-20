@@ -62,9 +62,15 @@ const AA_ALPHABET = filter(
 
 const MAMBA = joinpath(Conda.BINDIR, "mamba")
 
-function add_bioconda_env(pkg)
-    run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-    run(`$(MAMBA) clean --all -y`)
+function add_bioconda_env(pkg; force=false)
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
+    if !(pkg in current_environments) || force
+        @info "installing conda environment $(pkg)"
+        run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        run(`$(MAMBA) clean --all -y`)
+    else
+        @info "conda environment $(pkg) already present; set force=true to update/re-install"
+    end
 end
 
 function add_bioconda_envs(;all=false, force=false)
@@ -122,7 +128,7 @@ function add_bioconda_envs(;all=false, force=false)
             "vcftools",
             "vg"
             ]
-            if !(pkg in current_environments) && !force
+            if !(pkg in current_environments) || force
                 @info "installing conda environment $(pkg)"
                 add_bioconda_env(pkg)
             else

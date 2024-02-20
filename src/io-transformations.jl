@@ -1,4 +1,21 @@
 """
+include_string = "gff3,rna,cds,protein,genome,seq-report"
+"""
+function ncbi_genome_download_accession(;
+        accession,
+        outpath=joinpath(tempname(), accession * ".zip"),
+        include_string = "genome"
+    )
+    mkpath(dirname(outpath))
+    run(`$(Mycelia.MAMBA) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath)`)
+    outfolder = replace(outpath, ".zip" => "")
+    run(`unzip -d $(outfolder) $(outpath)`)
+    outfolder = joinpath(outfolder, "ncbi_dataset", "data", accession)
+    return outfolder
+end
+
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 A short description of the function
