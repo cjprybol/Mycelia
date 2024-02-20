@@ -22,11 +22,6 @@
 			"installDevTools": true,
 			"installREnv": true,
 			"installRMarkdown": true,
-			"installJupyterlab": true,
-			"version": "release",
-			"pakVersion": "auto",
-			"vscodeRSupport": "minimal",
-			"pandocVersion": "auto"
 		},
 		"ghcr.io/devcontainers-contrib/features/glances:2": {
 			"version": "latest"
@@ -46,7 +41,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "julia -e 'import Pkg; Pkg.add(\"IJulia\"); import IJulia'"
+	"postCreateCommand": "julia -e 'import Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"Julia\", \"\")'"
 
 	// Configure tool-specific properties.
 	// "customizations": {},

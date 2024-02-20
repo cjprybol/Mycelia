@@ -1,3 +1,29 @@
+function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    reader = open(MODULE.Reader, xam)
+    header = reader.header
+    record_iterator = Iterators.filter(record -> true, reader)
+    if filter_unmapped
+        record_iterator = Iterators.filter(record -> MODULE.ismapped(record), record_iterator)
+    end
+    if primary_only
+        record_iterator = Iterators.filter(record -> MODULE.isprimary(record), record_iterator)
+    end
+    record_iterator = Iterators.filter(record -> MODULE.mappingquality(record) >= min_mapping_quality, record_iterator)
+    record_iterator = Iterators.filter(record -> MODULE.alignlength(record) >= min_align_length, record_iterator)
+    records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
+    # reset header to specify sorted
+    header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
+    return (;records, header)
+end
+
+
 # # map reads to the assembly and run qualimap QC
 # bwt_index = "$(assembled_fasta).bwt"
 # if !isfile(bwt_index)
@@ -461,12 +487,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir="", min_k=3, max_k=31, threshold=0.1, kmers_to_assess=10_000_000)
-    if isempty(outdir)
-        outdir = joinpath(pwd(), "kmer-saturation")
-    end
-    mkpath(outdir)
-    
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=3, max_k=31, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
     ks = Primes.primes(min_k, max_k)
     minimum_saturation = Inf
     midpoint = Inf
@@ -492,32 +513,37 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
         predicted_saturation = inferred_maximum / max_canonical_kmers
         @show k, predicted_saturation
 
-        scale = 300
-        p = StatsPlots.scatter(
-            sampling_points,
-            kmer_counts,
-            label="observed kmer counts",
-            ylabel="# unique kmers",
-            xlabel="# kmers assessed",
-            title = "sequencing saturation @ k = $k",
-            legend=:outertopright,
-            size=(2*scale, 1*scale),
-            margins=3Plots.PlotMeasures.mm
-            )
-        StatsPlots.hline!(p, [max_canonical_kmers], label="absolute maximum")
-        StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum")
-        StatsPlots.vline!(p, [inferred_midpoint], label="inferred midpoint")
-        # xs = vcat(sampling_points, [last(sampling_points) * 2^i for i in 1:2])
-        xs = sort([sampling_points..., inferred_midpoint])
-        ys = calculate_v(xs, fit.param)
-        StatsPlots.plot!(
-            p,
-            xs,
-            ys,
-            label="fit trendline")
-        display(p)
-        StatsPlots.savefig(p, joinpath(outdir, "$k.png"))
-        StatsPlots.savefig(p, joinpath(outdir, "$k.svg"))
+        if plot
+            scale = 300
+            p = StatsPlots.scatter(
+                sampling_points,
+                kmer_counts,
+                label="observed kmer counts",
+                ylabel="# unique kmers",
+                xlabel="# kmers assessed",
+                title = "sequencing saturation @ k = $k",
+                legend=:outertopright,
+                size=(2*scale, 1*scale),
+                margins=3Plots.PlotMeasures.mm
+                )
+            StatsPlots.hline!(p, [max_canonical_kmers], label="absolute maximum")
+            StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum")
+            StatsPlots.vline!(p, [inferred_midpoint], label="inferred midpoint")
+            # xs = vcat(sampling_points, [last(sampling_points) * 2^i for i in 1:2])
+            xs = sort([sampling_points..., inferred_midpoint])
+            ys = calculate_v(xs, fit.param)
+            StatsPlots.plot!(
+                p,
+                xs,
+                ys,
+                label="fit trendline")
+            display(p)
+            if !ismissing(outdir)
+                StatsPlots.savefig(p, joinpath(outdir, "$k.png"))
+                StatsPlots.savefig(p, joinpath(outdir, "$k.svg"))
+            end
+        end
+            
 
         if predicted_saturation < minimum_saturation
             minimum_saturation = predicted_saturation
@@ -525,10 +551,12 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
             midpoint = inferred_midpoint 
         end
         if predicted_saturation < threshold
-            chosen_k_file = joinpath(outdir, "chosen_k.txt")
-            println("chosen k = $k")
-            open(chosen_k_file, "w") do io
-                println(io, k)
+            if !ismissing(outdir)
+                chosen_k_file = joinpath(outdir, "chosen_k.txt")
+                println("chosen k = $k")
+                open(chosen_k_file, "w") do io
+                    println(io, k)
+                end
             end
             return k
         end

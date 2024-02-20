@@ -590,7 +590,7 @@ julia> 1 + 1
 2
 ```
 """
-function random_fasta_record(;seed=rand(Int), L = rand(0:Int(typemax(UInt16))))
+function random_fasta_record(;seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
     id = Random.randstring(Int(ceil(log(L + 1))))
     seq = BioSequences.randdnaseq(Random.seed!(seed), L)
     return FASTX.FASTA.Record(id, seq)
@@ -635,7 +635,11 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
             error_type = rand(1:3)
             if error_type == 1
                 # mismatch
-                push!(new_seq, rand(setdiff(alphabet, character)))
+                new_character = rand(alphabet)
+                while new_character == character
+                    new_character = rand(alphabet)
+                end
+                push!(new_seq, new_character)
             elseif error_type == 2
                 # insertion
                 total_insertions = 1 + rand(Distributions.Poisson(error_rate))
@@ -1145,13 +1149,13 @@ function deduplicate_fasta_file(in_fasta, out_fasta)
     return out_fasta
 end
 
-function merge_fasta_files(list_of_fasta_files, joint_fasta_file)
-    open(joint_fasta_file, "w") do io
-        for f in list_of_fasta_files
+function merge_fasta_files(;fasta_files, fasta_file)
+    open(fasta_file, "w") do io
+        ProgressMeter.@showprogress for f in fasta_files
             write(io, read(f))
         end
     end
-    return joint_fasta_file
+    return fasta_file
 end
 
 # """

@@ -1,3 +1,17 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+A short description of the function
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function load_graph(file)
+    return FileIO.load(file)["graph"]
+end
+
 function parse_transterm_output(transterm_output)
     
    #     3. FORMAT OF THE TRANSTERM OUTPUT
@@ -239,7 +253,7 @@ function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
 end
 
 function update_gff_with_mmseqs(gff_file, mmseqs_file)
-    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
+    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t', )...)
 
     gdf = DataFrames.groupby(mmseqs_results, "query")
     for g in gdf
@@ -247,7 +261,7 @@ function update_gff_with_mmseqs(gff_file, mmseqs_file)
     end
     top_hits = DataFrames.combine(gdf, first)
 
-    id_to_product = Dict()
+    id_to_product = Dict{String, String}()
     for row in DataFrames.eachrow(top_hits)
         id = Dict(a => b for (a, b) in split.(split(last(split(row["qheader"], " # ")), ';'), '='))["ID"]
         product = replace(row["theader"], " " => "__")
@@ -258,11 +272,10 @@ function update_gff_with_mmseqs(gff_file, mmseqs_file)
     for (i, row) in enumerate(DataFrames.eachrow(gff_table))
         id = Dict(a => b for (a,b) in split.(filter(!isempty, split(row["attributes"], ';')), '='))["ID"]
         product = get(id_to_product, id, "")
-        gff_table[i, "attributes"] = "label=$(product);product=$(product);" * row["attributes"]
+        gff_table[i, "attributes"] = "label=\"$(product)\";product=\"$(product)\";" * row["attributes"]
     end
     return gff_table
 end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -325,6 +338,17 @@ function read_gff(gff_io)
         "strand",
         "phase",
         "attributes"
+    ]
+    types=[
+        String,
+        String,
+        String,
+        Int,
+        Int,
+        Int,
+        String,
+        Int,
+        String
     ]
     DataFrames.DataFrame(data, header)
 end
@@ -674,47 +698,117 @@ julia> 1 + 1
 2
 ```
 """
-function graph_to_gfa(graph, kmer_size, outfile="$(kmer_size).gfa")
-    kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
+function graph_to_gfa(;graph, outfile)
+    # kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
     # add fastq here too???
-    record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
-    edgemer_edges = collect(MetaGraphs.filter_edges(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size+1})))
+    # record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
+    # edgemer_edges = collect(MetaGraphs.filter_edges(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size+1})))
     open(outfile, "w") do io
         println(io, "H\tVN:Z:1.0")
-        for vertex in kmer_vertices
+        for vertex in Graphs.vertices(graph)
             if haskey(graph.vprops[vertex], :kmer)
                 sequence = graph.vprops[vertex][:kmer]
             else
                 sequence = graph.vprops[vertex][:sequence]
             end
-            # depth = graph.vprops[vertex][:count]
+            depth = graph.vprops[vertex][:count]
             # depth = length(graph.vprops[vertex][:evidence])
-            total_count = 0
-            vertex_outneighbors = Graphs.outneighbors(graph, vertex)
-            for connected_record in intersect(vertex_outneighbors, record_vertices)
-                edge = Graphs.Edge(vertex, connected_record)
-                total_count += MetaGraphs.get_prop(graph, edge, :count)
-            end
+            # total_count = 0
+            # vertex_outneighbors = Graphs.outneighbors(graph, vertex)
+            # for connected_record in vertex_outneighbors
+            #     edge = Graphs.Edge(vertex, connected_record)
+            #     total_count += MetaGraphs.get_prop(graph, edge, :count)
+            # end
 
-            fields = ["S", "$vertex", sequence, "DP:f:$(total_count)"]
+            fields = ["S", "$vertex", sequence, "DP:f:$(depth)"]
             line = join(fields, '\t')
             println(io, line)
         end
-        overlap = kmer_size - 1
-        for edgemer_edge in edgemer_edges
-            source_kmer, dest_kmer = Mycelia.edgemer_to_vertex_kmers(MetaGraphs.get_prop(graph, edgemer_edge, :sequence))
-            link = ["L",
-                        edgemer_edge.src,
-                        BioSequences.iscanonical(source_kmer) ? '+' : '-',
-                        edgemer_edge.dst,
-                        BioSequences.iscanonical(dest_kmer) ? '+' : '-',
-                        "$(overlap)M"]
-            line = join(link, '\t')
-            println(io, line)
+        overlap = MetaGraphs.get_prop(graph, :k) - 1
+        for edge in collect(Graphs.edges(graph))
+            # @show edge
+            # @show MetaGraphs.props(graph, edge)
+            unique_orientations = unique(observation.orientation for observation in MetaGraphs.get_prop(graph, edge, :observations))
+            # @show unique_orientations
+            source_kmer = edge.src
+            destination_kmer = edge.dst
+            for unique_orientation in unique_orientations
+                # source_kmer, dest_kmer = Mycelia.edgemer_to_vertex_kmers(MetaGraphs.get_prop(graph, edgemer_edge, :sequence))
+                link = ["L",
+                            edge.src,
+                            first(unique_orientation) ? '+' : '-',
+                            edge.dst,
+                            last(unique_orientation) ? '+' : '-',
+                            "$(overlap)M"]
+                line = join(link, '\t')
+                println(io, line)
+            end
+                
+            # source_kmer, dest_kmer = Mycelia.edgemer_to_vertex_kmers(MetaGraphs.get_prop(graph, edgemer_edge, :sequence))
+            # link = ["L",
+            #             edgemer_edge.src,
+            #             BioSequences.iscanonical(source_kmer) ? '+' : '-',
+            #             edgemer_edge.dst,
+            #             BioSequences.iscanonical(dest_kmer) ? '+' : '-',
+            #             "$(overlap)M"]
+            # line = join(link, '\t')
+            # println(io, line)
         end
     end
-    return
+    return outfile
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function graph_to_gfa(graph, kmer_size, outfile="$(kmer_size).gfa")
+#     kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
+#     # add fastq here too???
+#     record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
+#     edgemer_edges = collect(MetaGraphs.filter_edges(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size+1})))
+#     open(outfile, "w") do io
+#         println(io, "H\tVN:Z:1.0")
+#         for vertex in kmer_vertices
+#             if haskey(graph.vprops[vertex], :kmer)
+#                 sequence = graph.vprops[vertex][:kmer]
+#             else
+#                 sequence = graph.vprops[vertex][:sequence]
+#             end
+#             # depth = graph.vprops[vertex][:count]
+#             # depth = length(graph.vprops[vertex][:evidence])
+#             total_count = 0
+#             vertex_outneighbors = Graphs.outneighbors(graph, vertex)
+#             for connected_record in intersect(vertex_outneighbors, record_vertices)
+#                 edge = Graphs.Edge(vertex, connected_record)
+#                 total_count += MetaGraphs.get_prop(graph, edge, :count)
+#             end
+
+#             fields = ["S", "$vertex", sequence, "DP:f:$(total_count)"]
+#             line = join(fields, '\t')
+#             println(io, line)
+#         end
+#         overlap = kmer_size - 1
+#         for edgemer_edge in edgemer_edges
+#             source_kmer, dest_kmer = Mycelia.edgemer_to_vertex_kmers(MetaGraphs.get_prop(graph, edgemer_edge, :sequence))
+#             link = ["L",
+#                         edgemer_edge.src,
+#                         BioSequences.iscanonical(source_kmer) ? '+' : '-',
+#                         edgemer_edge.dst,
+#                         BioSequences.iscanonical(dest_kmer) ? '+' : '-',
+#                         "$(overlap)M"]
+#             line = join(link, '\t')
+#             println(io, line)
+#         end
+#     end
+#     return
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -749,6 +843,21 @@ function open_fastx(path::AbstractString)
         error()
     end
     return fastx_io
+end
+
+function write_fasta(;outfile=tempname()*".fna", records, gzipped=false)
+    open(outfile, "w") do io
+        if gzipped
+            @assert occursin(r"\.gz$", outfile)
+            io = CodecZlib.GzipCompressorStream(io)
+        end
+        fastx_io = FASTX.FASTA.Writer(io)
+        for record in records
+            write(fastx_io, record)
+        end
+        close(fastx_io)
+    end
+    return outfile
 end
 
 """
