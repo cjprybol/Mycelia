@@ -1,6 +1,67 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Create an in-memory kmer-graph that records:
+- all kmers
+- counts
+- all *observed* edges between kmers
+- edge orientations
+- edge counts
+
+```jldoctest
+julia> 1 + 1
+2
+```
+"""
+function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
+    
+    @info "counting kmers"
+    @time kmer_counts = count_canonical_kmers(KMER_TYPE, fastxs)
+    K = length(keys(kmer_counts))
+    k = length(first(keys(kmer_counts)))
+    
+    @info "initializing graph with $(K) $(k)mer states"
+    graph = MetaGraphs.MetaGraph(K)
+    MetaGraphs.set_prop!(graph, :k, k)
+    
+    @info "adding kmers and kmer counts"
+    ProgressMeter.@showprogress for (i, (kmer, count)) in enumerate(kmer_counts)
+    #     @show i, kmer, count
+        MetaGraphs.set_prop!(graph, i, :kmer, kmer)
+        MetaGraphs.set_prop!(graph, i, :count, count)
+    end
+    
+    @info "indexing kmers"
+    # allow graph[kmer, :kmer] to dict-lookup the index of a kmer
+    MetaGraphs.set_indexing_prop!(graph, :kmer)
+    
+    @info "adding records to graph"
+    graph = add_fastx_records_to_graph!(graph, fastxs)
+
+    @info "adding edges and edge counts"
+    graph = add_record_edgemers_to_graph!(graph)
+    
+    return graph
+end
+
+function fastx_to_kmer_graph(KMER_TYPE, fastx::AbstractString)
+    return fastx_to_kmer_graph(KMER_TYPE, [fastx])
+end
+
+function add_fastx_records_to_graph!(graph, fastxs)
+    record_dict = Dict(String(FASTX.description(record)) => record for record in Mycelia.open_fastx(first(fastxs)))
+    for fastx in fastxs[2:end]
+        for record in Mycelia.open_fastx(fastx)
+            record_dict[String(FASTX.description(record))] = record
+        end
+    end
+    MetaGraphs.set_prop!(graph, :records, record_dict)
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 A short description of the function
 
 ```jldoctest
@@ -8,18 +69,21 @@ julia> 1 + 1
 2
 ```
 """
-# for kmer_size in kmer_sizes
-function add_fasta_record_kmers_to_graph!(graph, kmer_size)
-    record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
-    for vertex in record_vertices
-        record_identifier = graph.vprops[vertex][:identifier]
-        record_sequence = graph.vprops[vertex][:sequence]
-        kmer_counts = Mycelia.count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},kmer_size}, record_sequence)
-        Mycelia.add_kmers_to_graph!(graph, keys(kmer_counts))
-        Mycelia.add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
-        Mycelia.add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
+function add_record_edgemers_to_graph!(graph)
+    edgemer_size = graph.gprops[:k] + 1
+    ProgressMeter.@showprogress for (record_id, record) in graph.gprops[:records]
+        for (index, observed_edgemer) in Kmers.EveryKmer{Kmers.DNAKmer{edgemer_size}}(BioSequences.LongDNA{2}(FASTX.sequence(record)))
+            add_edgemer_to_graph!(graph, record_id, index, observed_edgemer)
+        end
     end
     return graph
+end
+
+
+function edgemer_to_vertex_kmers(edgemer)
+    a = Kmers.Kmer{BioSequences.DNAAlphabet{2}}(collect(edgemer[i] for i in 1:length(edgemer)-1))
+    b = Kmers.Kmer{BioSequences.DNAAlphabet{2}}(collect(edgemer[i] for i in 2:length(edgemer)))
+    return a, b
 end
 
 """
@@ -33,195 +97,269 @@ julia> 1 + 1
 ```
 """
 function add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
-    observed_orientation = BioSequences.iscanonical(observed_edgemer)
-    canonical_edgemer = BioSequences.canonical(observed_edgemer)
+    # observed_orientation = BioSequences.iscanonical(observed_edgemer)
+    # canonical_edgemer = BioSequences.canonical(observed_edgemer)
     observed_source_kmer, observed_destination_kmer = Mycelia.edgemer_to_vertex_kmers(observed_edgemer)
+    
     canonical_source_kmer = BioSequences.canonical(observed_source_kmer)
     canonical_destination_kmer = BioSequences.canonical(observed_destination_kmer)
-    source_kmer_index = graph[canonical_source_kmer, :identifier]
-    destination_kmer_index = graph[canonical_destination_kmer, :identifier]
+    
+    source_kmer_orientation = BioSequences.iscanonical(observed_source_kmer)
+    destination_kmer_orientation = BioSequences.iscanonical(observed_destination_kmer)
+    
+    source_kmer_index = graph[canonical_source_kmer, :kmer]
+    destination_kmer_index = graph[canonical_destination_kmer, :kmer]
+    
     edgemer = Graphs.Edge(source_kmer_index, destination_kmer_index)
+    orientation = (source_kmer_orientation => destination_kmer_orientation)
+    observation = (;record_identifier, index, orientation)
+    
     if !Graphs.has_edge(graph, edgemer)
         Graphs.add_edge!(graph, edgemer)
-        MetaGraphs.set_prop!(graph, edgemer, :evidence, Dict(record_identifier => Set([(index, observed_orientation)])))
-        MetaGraphs.set_prop!(graph, edgemer, :identifier, canonical_edgemer)
-        MetaGraphs.set_prop!(graph, edgemer, :sequence, canonical_edgemer)
-        MetaGraphs.set_prop!(graph, edgemer, :TYPE, typeof(observed_edgemer))
+        MetaGraphs.set_prop!(graph, edgemer, :observations, Set([observation]))
     else
-        evidence = MetaGraphs.get_prop(graph, edgemer, :evidence)
-        if haskey(evidence, record_identifier)
-            record_evidence = evidence[record_identifier]
-            record_evidence = push!(record_evidence, (index, observed_orientation))
-        else
-            record_evidence = Set([(index, observed_orientation)])
-        end
-        evidence[record_identifier] = record_evidence
-        MetaGraphs.set_prop!(graph, edgemer, :evidence, evidence)
+        observations = push!(MetaGraphs.get_prop(graph, edgemer, :observations), observation)
+        MetaGraphs.set_prop!(graph, edgemer, :observations, observations)
     end
     return graph
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
-    vertex_id = graph[record_identifier, :identifier]
-    record_sequence = MetaGraphs.get_prop(graph, vertex_id, :sequence)
-    edgemer_size = kmer_size + 1
-    for (index, observed_edgemer) in Kmers.EveryKmer{Kmers.Kmer{BioSequences.DNAAlphabet{4},edgemer_size}}(record_sequence)
-        add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
-    end
-    return graph
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
-    for (kmer, count) in kmer_counts
-        kmer_vertex = graph[kmer, :identifier]
-        record_vertex = graph[record_identifier, :identifier]
-        edge = Graphs.Edge(kmer_vertex, record_vertex)
-        if !Graphs.has_edge(graph, edge)
-            Graphs.add_edge!(graph, edge)
-            MetaGraphs.set_prop!(graph, edge, :TYPE, "RECORD_KMER_COUNT")
-            MetaGraphs.set_prop!(graph, edge, :count, count)
-        else
-            graph_count = MetaGraphs.get_prop(graph, edge, :count)
-            if graph_count != count
-                @warn "edge found but this count $(count) != current count $(graph_count)"
-            # else
-                # @info "edge exists and matches current data"
-            end
-        end
-    end
-    return graph
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_kmers_to_graph!(graph, kmers)
-    for kmer in kmers
-        if !haskey(graph.metaindex[:identifier], kmer)
-            Graphs.add_vertex!(graph)
-            v = Graphs.nv(graph)
-            MetaGraphs.set_prop!(graph, v, :identifier, kmer)
-            MetaGraphs.set_prop!(graph, v, :sequence, kmer)
-            MetaGraphs.set_prop!(graph, v, :TYPE, typeof(kmer))
-        end
-    end
-    return graph
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_metadata_from_table!(
-        graph::MetaGraphs.AbstractMetaGraph,
-        table::DataFrames.AbstractDataFrame;
-        identifier_column::Union{Symbol, AbstractString} = :identifier)
-    for row in DataFrames.eachrow(table)
-        add_metadata_from_table_row!(graph, row, identifier_column)
-    end
-    return graph
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_metadata_from_table_row!(graph, row, identifier_column)
-    other_columns = filter(n -> n != :identifier, Symbol.(names(row)))
-    row_metadata_dict = Dict(column => row[column] for column in other_columns)
-    metadata_dict = Dict(row[identifier_column] => row_metadata_dict)
-    Mycelia.add_metadata_to_graph!(graph, metadata_dict::AbstractDict)
-end
 
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_key_value_pair_to_node!(graph, identifier, key, value)
-    node_id = graph[identifier, :identifier]
-    MetaGraphs.set_prop!(graph, node_id, Symbol(key), value)
-    return graph
-end
+# A short description of the function
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_fastx_to_graph!(graph, fastx_file::AbstractString)
+#     for record in Mycelia.open_fastx(fastx_file)
+#         add_fastx_record_to_graph!(graph, record)
+#     end
+#     return graph
+# end
 
-A short description of the function
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_metadata_to_node!(graph, identifier, metadata::AbstractVector{<:Pair})
-    for (key, value) in metadata
-        add_key_value_pair_to_node!(graph, identifier, key, value)
-    end
-    return graph
-end
+# A short description of the function
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_fastx_record_to_graph!(graph, record::FASTX.FASTA.Record)
+#     try
+#         graph[FASTX.identifier(record), :identifier]
+#         @info "node $(FASTX.identifier(record)) already present"
+#     catch
+#         Graphs.add_vertex!(graph)
+#         vertex_id = Graphs.nv(graph)
 
-A short description of the function
+#         MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_metadata_to_graph!(graph, metadata_dict::AbstractDict)
-    for (identifier, metadata) in metadata_dict
-        add_metadata_to_node!(graph, identifier, collect(metadata))
-    end
-    return graph
-end
+#         MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
+
+#         MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
+
+#         sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+#         MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
+#     end
+#     return graph
+# end
+    
+# function add_fastx_record_to_graph!(graph, record::FASTX.FASTQ.Record)
+#     Graphs.add_vertex!(graph)
+#     vertex_id = Graphs.nv(graph)
+    
+#     MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
+    
+#     MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
+    
+#     MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
+    
+#     sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+#     MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
+    
+#     MetaGraphs.set_prop!(graph, vertex_id, :quality, FASTX.quality_scores(record))
+    
+#     return graph
+# end
+
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# # for kmer_size in kmer_sizes
+# function add_fasta_record_kmers_to_graph!(graph, kmer_size)
+#     record_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, FASTX.FASTA.Record))
+#     for vertex in record_vertices
+#         record_identifier = graph.vprops[vertex][:identifier]
+#         record_sequence = graph.vprops[vertex][:sequence]
+#         kmer_counts = Mycelia.count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},kmer_size}, record_sequence)
+#         Mycelia.add_kmers_to_graph!(graph, keys(kmer_counts))
+#         Mycelia.add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
+#         Mycelia.add_record_edgemers_to_graph!(graph, record_identifier, kmer_size)
+#     end
+#     return graph
+# end
+
+
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_record_kmer_counts_to_graph!(graph, kmer_counts, record_identifier)
+#     for (kmer, count) in kmer_counts
+#         kmer_vertex = graph[kmer, :identifier]
+#         record_vertex = graph[record_identifier, :identifier]
+#         edge = Graphs.Edge(kmer_vertex, record_vertex)
+#         if !Graphs.has_edge(graph, edge)
+#             Graphs.add_edge!(graph, edge)
+#             MetaGraphs.set_prop!(graph, edge, :TYPE, "RECORD_KMER_COUNT")
+#             MetaGraphs.set_prop!(graph, edge, :count, count)
+#         else
+#             graph_count = MetaGraphs.get_prop(graph, edge, :count)
+#             if graph_count != count
+#                 @warn "edge found but this count $(count) != current count $(graph_count)"
+#             # else
+#                 # @info "edge exists and matches current data"
+#             end
+#         end
+#     end
+#     return graph
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_kmers_to_graph!(graph, kmers)
+#     for kmer in kmers
+#         if !haskey(graph.metaindex[:identifier], kmer)
+#             Graphs.add_vertex!(graph)
+#             v = Graphs.nv(graph)
+#             MetaGraphs.set_prop!(graph, v, :identifier, kmer)
+#             MetaGraphs.set_prop!(graph, v, :sequence, kmer)
+#             MetaGraphs.set_prop!(graph, v, :TYPE, typeof(kmer))
+#         end
+#     end
+#     return graph
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_metadata_from_table!(
+#         graph::MetaGraphs.AbstractMetaGraph,
+#         table::DataFrames.AbstractDataFrame;
+#         identifier_column::Union{Symbol, AbstractString} = :identifier)
+#     for row in DataFrames.eachrow(table)
+#         add_metadata_from_table_row!(graph, row, identifier_column)
+#     end
+#     return graph
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_metadata_from_table_row!(graph, row, identifier_column)
+#     other_columns = filter(n -> n != :identifier, Symbol.(names(row)))
+#     row_metadata_dict = Dict(column => row[column] for column in other_columns)
+#     metadata_dict = Dict(row[identifier_column] => row_metadata_dict)
+#     Mycelia.add_metadata_to_graph!(graph, metadata_dict::AbstractDict)
+# end
+
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_key_value_pair_to_node!(graph, identifier, key, value)
+#     node_id = graph[identifier, :identifier]
+#     MetaGraphs.set_prop!(graph, node_id, Symbol(key), value)
+#     return graph
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_metadata_to_node!(graph, identifier, metadata::AbstractVector{<:Pair})
+#     for (key, value) in metadata
+#         add_key_value_pair_to_node!(graph, identifier, key, value)
+#     end
+#     return graph
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function add_metadata_to_graph!(graph, metadata_dict::AbstractDict)
+#     for (identifier, metadata) in metadata_dict
+#         add_metadata_to_node!(graph, identifier, collect(metadata))
+#     end
+#     return graph
+# end
 
 # need to get identifier column and then all non-identifier columns and then pass that to above
 # function add_metadata_to_graph!(graph, metadata_table::DataFrames.AbstractDataFrame)
@@ -231,221 +369,56 @@ end
 #     return graph
 # end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# A short description of the function
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function initialize_graph()
-    graph = MetaGraphs.MetaDiGraph()
-    MetaGraphs.set_indexing_prop!(graph, :identifier)
-    return graph
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_fastx_to_graph!(graph, fastx_files::AbstractVector{<:AbstractString})
-    for fastx_file in fastx_files
-        add_fastx_to_graph!(graph, fastx_file)
-    end
-    return graph
-end
-
-function add_fastx_to_graph!(graph, fastx_file::AbstractString)
-    for record in Mycelia.open_fastx(fastx_file)
-        add_fastx_record_to_graph!(graph, record)
-    end
-    return graph
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function add_fastx_record_to_graph!(graph, record::FASTX.FASTA.Record)
-    
-    try
-        graph[FASTX.identifier(record), :identifier]
-        @info "node $(FASTX.identifier(record)) already present"
-    catch
-        Graphs.add_vertex!(graph)
-        vertex_id = Graphs.nv(graph)
-
-        MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
-
-        MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
-
-        MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
-
-        sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
-        MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
-    end
-    return graph
-end
-    
-function add_fastx_record_to_graph!(graph, record::FASTX.FASTQ.Record)
-    Graphs.add_vertex!(graph)
-    vertex_id = Graphs.nv(graph)
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :TYPE, typeof(record))
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :identifier, FASTX.identifier(record))
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :description, FASTX.description(record))
-    
-    sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
-    MetaGraphs.set_prop!(graph, vertex_id, :sequence, sequence)
-    
-    MetaGraphs.set_prop!(graph, vertex_id, :quality, FASTX.quality_scores(record))
-    
-    return graph
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function initialize_graph()
+#     graph = MetaGraphs.MetaDiGraph()
+#     MetaGraphs.set_indexing_prop!(graph, :identifier)
+#     return graph
+# end
 
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+# A short description of the function
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function construct(KMER_TYPE, fastx, out)
-    mkpath(dirname(out))
-    if !occursin(r"\.jld2$", out)
-        out *= ".jld2"
-    end
-    if !isfile(out)
-        graph = fastx_to_kmer_graph(KMER_TYPE, fastx)
-        @info "saving graph"
-        FileIO.save(out, Dict("graph" => graph))
-        return graph
-    else
-        @info "graph $out already exists, loading existing"
-        return load_graph(out)
-    end
-end
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function construct(KMER_TYPE, fastx, out)
+#     mkpath(dirname(out))
+#     if !occursin(r"\.jld2$", out)
+#         out *= ".jld2"
+#     end
+#     if !isfile(out)
+#         graph = fastx_to_kmer_graph(KMER_TYPE, fastx)
+#         @info "saving graph"
+#         FileIO.save(out, Dict("graph" => graph))
+#         return graph
+#     else
+#         @info "graph $out already exists, loading existing"
+#         return load_graph(out)
+#     end
+# end
 
-function construct(args)
-    @show args
-    @assert (0 < args["k"] < 64) && isodd(args["k"]) 
-    KMER_TYPE = BioSequences.BigDNAMer{args["k"]}
-    construct(KMER_TYPE, args["fastx"], args["out"])
-end
+# function construct(args)
+#     @show args
+#     @assert (0 < args["k"] < 64) && isodd(args["k"]) 
+#     KMER_TYPE = BioSequences.BigDNAMer{args["k"]}
+#     construct(KMER_TYPE, args["fastx"], args["out"])
+# end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function load_graph(file)
-    return FileIO.load(file)["graph"]
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Create an in-memory kmer-graph that records:
-- all kmers
-- counts
-- all *observed* edges between kmers
-- edge orientations
-- edge counts
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-
-# note: indexing will break if we mix BigDNAMer and normal DNAMer types, so just force requirement of BigDNAMer
-# can't do the restriction because the type here is `DataType` rather than the actual kmer type
-function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
-    
-    if !(KMER_TYPE <: BioSequences.BigDNAMer)
-        error()
-    end
-    
-    @info "counting kmers"
-    @time kmer_counts = count_canonical_kmers(KMER_TYPE, fastxs)
-    
-    @info "initializing graph"
-    K = length(keys(kmer_counts))
-    k = length(first(keys(kmer_counts)))
-    # create an undirected kmer graph from the sequence
-    graph = MetaGraphs.MetaGraph(K)
-    # graph = Graphs.SimpleGraph(K)
-
-#     MetaGraphs.set_prop!(graph, :kmer_counts, kmer_counts)
-    MetaGraphs.set_prop!(graph, :k, k)
-
-    @info "adding node metadata"
-    ProgressMeter.@showprogress for (i, (kmer, count)) in enumerate(kmer_counts)
-    #     @show i, kmer, count
-        MetaGraphs.set_prop!(graph, i, :kmer, kmer)
-        MetaGraphs.set_prop!(graph, i, :count, count)
-    end
-    # allow graph[kmer, :kmer] to dict-lookup the index of a kmer
-    MetaGraphs.set_indexing_prop!(graph, :kmer)
-
-#     kmers = collect(keys(kmer_counts))
-
-    # p = ProgressMeter.Progress(8452, 1)
-    # 50 minutes
-    # 40 minutes
-    # 0:09:51!
-    @info "adding edges"
-    ProgressMeter.@showprogress for (i, fastx) in enumerate(fastxs)
-#         @show i, fastx
-#         n_records = count_records(fastx)
-#         p = ProgressMeter.Progress(n_records, 1)
-        for record in open_fastx(fastx)
-            for edge_mer in BioSequences.each(BioSequences.BigDNAMer{k+1}, FASTX.sequence(record))
-#                 add_edge_to_graph(graph, edge_mer, kmers)
-                add_edge_to_simple_kmer_graph!(graph, edge_mer)
-            end
-#             ProgressMeter.next!(p)
-        end
-    end
-    return graph
-end
-
-function fastx_to_kmer_graph(KMER_TYPE, fastx::AbstractString)
-    fastx_to_kmer_graph(KMER_TYPE, [fastx])
-end
-
-
-function edgemer_to_vertex_kmers(edgemer)
-    a = Kmers.Kmer{BioSequences.DNAAlphabet{4}}(collect(edgemer[i] for i in 1:length(edgemer)-1))
-    b = Kmers.Kmer{BioSequences.DNAAlphabet{4}}(collect(edgemer[i] for i in 2:length(edgemer)))
-    return a, b
-end
 
 # # @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, kmers, sequence_edge)
 # @inline function add_edge_to_simple_kmer_graph!(simple_kmer_graph, sequence_edge)

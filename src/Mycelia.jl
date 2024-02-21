@@ -62,12 +62,18 @@ const AA_ALPHABET = filter(
 
 const MAMBA = joinpath(Conda.BINDIR, "mamba")
 
-function add_bioconda_env(pkg)
-    run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-    # Conda.runconda(`create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+function add_bioconda_env(pkg; force=false)
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
+    if !(pkg in current_environments) || force
+        @info "installing conda environment $(pkg)"
+        run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        run(`$(MAMBA) clean --all -y`)
+    else
+        @info "conda environment $(pkg) already present; set force=true to update/re-install"
+    end
 end
 
-function add_bioconda_envs(;force=false)
+function add_bioconda_envs(;all=false, force=false)
     if !isfile(MAMBA)
         Conda.add("mamba")
     end
@@ -76,74 +82,67 @@ function add_bioconda_envs(;force=false)
     end
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
     # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
-    for pkg in [
-        "art",
-        # "bioconvert",
-        "badread",
-        "bcftools",
-        "bedtools",
-        "blast",
-        # "bwa",
-        # "bwa-mem2",
-        "deepvariant",
-        "emboss",
-        "filtlong",
-        "freebayes",
-        "flye",
-        "gatk4",
-        # "gffread",
-        "htslib",
-        "megahit",
-        "medaka",
-        "minimap2",
-        "mmseqs2",
-        "nanocaller",
-        "nanoq",
-        # "nanosim",
-        # "nanosim-h",
-        "ncbi-datasets-cli",
-        "pggb",
-        "polypolish",
-        "prodigal",
-        "raven-assembler",
-        "samtools",
-        "sniffles",
-        "sourmash",
-        "spades",
-        "tabix",
-        "transtermhp",
-        "trim-galore",
-        "vcftools",
-        "vg"
-        ]
-        if !(pkg in current_environments) && !force
-            @info "installing conda environment $(pkg)"
-            add_bioconda_env(pkg)
-        else
-            @info "conda environment $(pkg) already present; set force=true to update/re-install"
+    if all
+        for pkg in [
+            "art",
+            # "bioconvert",
+            "badread",
+            "bcftools",
+            "bedtools",
+            "blast",
+            "clair3-illumina",
+            "clair3",    
+            # "bwa",
+            # "bwa-mem2",
+            # "deepvariant",
+            "emboss",
+            "filtlong",
+            # "freebayes",
+            "flye",
+            "gatk4",
+            # "gffread",
+            "htslib",
+            "megahit",
+            "medaka",
+            "minimap2",
+            "mmseqs2",
+            "nanocaller",
+            "nanovar",
+            # "nanoq",
+            # "nanosim",
+            # "nanosim-h",
+            "ncbi-datasets-cli",
+            "pggb",
+            "picard",
+            # "polypolish",
+            "prodigal",
+            "raven-assembler",
+            "rtg-tools",
+            "samtools",
+            "sniffles",
+            "sourmash",
+            "spades",
+            "tabix",
+            "transtermhp",
+            "trim-galore",
+            "vcftools",
+            "vg"
+            ]
+            if !(pkg in current_environments) || force
+                @info "installing conda environment $(pkg)"
+                add_bioconda_env(pkg)
+            else
+                @info "conda environment $(pkg) already present; set force=true to update/re-install"
+            end
         end
     end
+    run(`$(MAMBA) clean --all -y`)
 end
 
 """
-    sbatch(;
-                job_name::String,
-                mail_user::String,
-                mail_type::String="ALL",
-                logdir::String=pwd(),
-                partition::String,
-                account::String,
-                nodes::Int=1,
-                ntasks::Int=1,
-                time::String="1-00:00:00",
-                cpus_per_task::Int,
-                mem_gb::Int,
-                cmd::String
-            )
-
 Submit a command to SLURM using sbatch
 """
-function sbatch(;
+function scg_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
@@ -154,7 +153,7 @@ function sbatch(;
         ntasks::Int=1,
         time::String="1-00:00:00",
         cpus_per_task::Int=1,
-        mem_gb::Int=8,
+        mem_gb::Int=cpus_per_task * 8,
         cmd::String
     )
     submission = 
@@ -178,8 +177,58 @@ function sbatch(;
     return true
 end
 
+"""
+Submit a command to SLURM using sbatch
+"""
+function nersc_sbatch(;
+        job_name::String,
+        mail_user::String,
+        mail_type::String="ALL",
+        logdir::String=pwd(),
+        qos::String,
+        nodes::Int=1,
+        ntasks::Int=1,
+        time::String="1-00:00:00",
+        cpus_per_task::Int=1,
+        mem_gb::Int=cpus_per_task * 2,
+        cmd::String,
+        constrain::String="cpu"
+    )
+    submission = 
+    `sbatch
+    --job-name=$(job_name)
+    --mail-user=$(mail_user)
+    --mail-type=$(mail_type)
+    --error=$(logdir)/%j.%x.err
+    --output=$(logdir)/%j.%x.out
+    --qos=$(qos)
+    --nodes=$(nodes)
+    --ntasks=$(ntasks)
+    --time=$(time)   
+    --cpus-per-task=$(cpus_per_task)
+    --mem=$(mem_gb)G
+    --constraint=cpu
+    --wrap $(cmd)
+    `
+    run(submission)
+    sleep(1)
+    return true
+end
+
 function fasta_genome_size(fasta_file)
     return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
+end
+
+function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
+    open(fasta, "w") do io
+        fastx_io = FASTX.FASTA.Writer(io)
+        gfa_graph = Mycelia.parse_gfa(gfa)
+        for v in Graphs.vertices(gfa_graph)
+            record = FASTX.FASTA.Record(gfa_graph.vprops[v][:identifier], gfa_graph.vprops[v][:sequence])
+            write(fastx_io, record)
+        end
+        close(fastx_io)
+    end
 end
 
 # dynamic import of files??

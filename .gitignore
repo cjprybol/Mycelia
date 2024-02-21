@@ -31,3 +31,4 @@ projects/me-cfs/results/
 projects/viral-exposome-discovery/results/
 projects/ME_CFS/*
 deps/build.log
+*.jpg

@@ -166,20 +166,14 @@ function reverse_translate(protein_sequence::BioSequences.LongAA)
     return this_sequence
 end
 
-function codon_optimize(normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
-    return codon_optimize(normalized_codon_frequencies, reverse_translate(protein_sequence), n_iterations)
-end
-
-
-function codon_optimize(normalized_codon_frequencies, optimization_sequence::BioSequences.LongDNA, n_iterations)
-    protein_sequence = BioSequences.translate(optimization_sequence)
-    codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(optimization_sequence), 3)))
+function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
+    best_sequence = reverse_translate(protein_sequence)
+    codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(best_sequence), 3)))
     initial_log_likelihood = -log10(1.0)
     for (codon, amino_acid) in collect(zip(codons, protein_sequence))
         this_codon_likelihood = normalized_codon_frequencies[amino_acid][codon]
         initial_log_likelihood -= log10(this_codon_likelihood)
     end
-    best_sequence = optimization_sequence
     best_likelihood = initial_log_likelihood
 
     ProgressMeter.@showprogress for i in 1:n_iterations
@@ -205,7 +199,14 @@ function codon_optimize(normalized_codon_frequencies, optimization_sequence::Bio
     end
     @show (best_likelihood)^-10 / (initial_log_likelihood)^-10
     return best_sequence
+    
 end
+
+
+# function codon_optimize(;normalized_codon_frequencies, optimization_sequence::BioSequences.LongDNA, n_iterations)
+#     protein_sequence = BioSequences.translate(optimization_sequence)
+
+# end
 
 function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
     kmer_counts_vector = zeros(length(kmer_to_index_map))
@@ -634,7 +635,11 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
             error_type = rand(1:3)
             if error_type == 1
                 # mismatch
-                push!(new_seq, rand(setdiff(alphabet, character)))
+                new_character = rand(alphabet)
+                while new_character == character
+                    new_character = rand(alphabet)
+                end
+                push!(new_seq, new_character)
             elseif error_type == 2
                 # insertion
                 total_insertions = 1 + rand(Distributions.Poisson(error_rate))
