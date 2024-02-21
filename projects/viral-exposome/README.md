@@ -1,3 +1,8 @@
+```
+# -name "*.sam"
+find . -type f -exec du -h {} + | sort -rh | head -n 100
+```
+
 Acquire
 - [x] ICTV reference viral
 - [x] refseq viral

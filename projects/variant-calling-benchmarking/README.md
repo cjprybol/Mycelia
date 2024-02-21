@@ -44,8 +44,7 @@ From here, reads take two paths:
     - raven https://github.com/lbcb-sci/raven
 - [ ] hybrid-assembly
     - Mycelia
-    - https://github.com/rrwick/Polypolish
-    - hybrid metaspades
+    - couldn't get hybrid spades or polypolish to run 
     
 ## assembly-graph variant calling
 - [ ] graph-based variant calling
