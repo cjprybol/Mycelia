@@ -415,6 +415,7 @@ julia> 1 + 1
 ```
 """
 function run_mmseqs_easy_taxonomy(;out_dir, query_fasta, target_database, outfile, force=false)
+    add_bioconda_env("mmseqs2")
     out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_taxonomy"))
     outfile = joinpath(out_dir, outfile * ".mmseqs_easy_taxonomy." * basename(target_database) * ".txt")
     # note I tried adjusting all of the following, and none of them improved overall runtime
@@ -442,7 +443,7 @@ function run_mmseqs_easy_taxonomy(;out_dir, query_fasta, target_database, outfil
     
     if force || (!force && !isfile(outfile))
         cmd = 
-        `mmseqs
+        `$(MAMBA) run --no-capture-output -n mmseqs2 mmseqs
          easy-taxonomy
          $(query_fasta)
          $(target_database)
@@ -475,11 +476,12 @@ function run_mmseqs_easy_search(;
         format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
         force=false)
     
+    add_bioconda_env("mmseqs2")
     outfile_path = joinpath(out_dir, outfile)
     tmp_dir = joinpath(out_dir, "tmp")
     if force || (!force && !isfile(outfile_path))
         cmd = 
-        `conda run --no-capture-output -n mmseqs2 mmseqs
+        `$(MAMBA) run --no-capture-output -n mmseqs2 mmseqs
             easy-search
             $(query_fasta)
             $(target_database)
@@ -511,6 +513,7 @@ julia> 1 + 1
 ```
 """
 function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true)
+    # add_bioconda_env("prodigal")
     blast_dir = mkpath(joinpath(out_dir, "blastn"))
     outfile = "$(blast_dir)/$(basename(fasta)).blastn.$(basename(blast_db)).$(task).txt"
     # if remote
@@ -604,6 +607,7 @@ julia> 1 + 1
 ```
 """
 function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
+    # add_bioconda_env("prodigal")
     blast_dir = mkpath(joinpath(out_dir, blast_command))
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
     if remote
@@ -657,7 +661,7 @@ julia> 1 + 1
 2
 ```
 """
-function run_prodigal(;fasta_file, out_dir=dirname(fasta_file), use_conda=false)
+function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     
     # if isempty(out_dir)
     #     prodigal_dir = mkpath("$(fasta_file)_prodigal")
@@ -692,31 +696,18 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file), use_conda=false)
     #          -t:  Write a training file (if none exists); otherwise, read and use
     #               the specified training file.
     #          -v:  Print version number and exit.
-    if !use_conda
-        cmd = 
-        `prodigal
-        -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
-        -f gff
-        -m
-        -p meta
-        -i $(fasta_file)
-        -a $(out_dir)/$(basename(fasta_file)).prodigal.faa
-        -d $(out_dir)/$(basename(fasta_file)).prodigal.fna
-        -s $(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
-        `
-    else
-        cmd = 
-        `conda run --no-capture-output -n prodigal prodigal
-        -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
-        -f gff
-        -m
-        -p meta
-        -i $(fasta_file)
-        -a $(out_dir)/$(basename(fasta_file)).prodigal.faa
-        -d $(out_dir)/$(basename(fasta_file)).prodigal.fna
-        -s $(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
-        `
-    end
+    add_bioconda_env("prodigal")
+    cmd = 
+    `$(Mycelia.MAMBA) run --no-capture-output -n prodigal prodigal
+    -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
+    -f gff
+    -m
+    -p meta
+    -i $(fasta_file)
+    -a $(out_dir)/$(basename(fasta_file)).prodigal.faa
+    -d $(out_dir)/$(basename(fasta_file)).prodigal.fna
+    -s $(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
+    `
 
     p = pipeline(cmd, 
             stdout="$(out_dir)/$(basename(fasta_file)).prodigal.out",

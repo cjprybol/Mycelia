@@ -63,6 +63,7 @@ const AA_ALPHABET = filter(
 const MAMBA = joinpath(Conda.BINDIR, "mamba")
 
 function add_bioconda_env(pkg; force=false)
+    add_bioconda_envs()
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
     if !(pkg in current_environments) || force
         @info "installing conda environment $(pkg)"
@@ -229,6 +230,14 @@ function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
         end
         close(fastx_io)
     end
+end
+
+function determine_fasta_coverage(bam)
+    genome_coverage_file = bam * ".coverage.txt"
+    if !isfile(genome_coverage_file)
+        run(pipeline(`$(Mycelia.MAMBA) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
+    end
+    return genome_coverage_file
 end
 
 # dynamic import of files??

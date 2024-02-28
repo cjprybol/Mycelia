@@ -1,3 +1,10 @@
+function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
+    if !isfile(fasta) || force
+        run(`$(Mycelia.MAMBA) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
+    end
+end
+
+
 """
 include_string = "gff3,rna,cds,protein,genome,seq-report"
 """
@@ -168,7 +175,7 @@ function fasta_and_gff_to_genbank(;fasta, gff, genbank)
     # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
 #     -osname
     # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
-    run(`seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
+    run(`$(Mycelia.MAMBA) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
     # return genbank
 end
 
