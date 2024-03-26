@@ -71,13 +71,13 @@ julia> 1 + 1
 2
 ```
 """
-function fastani(;query_list="", reference_list="", outfile="", force=false)
+function fastani_list(;query_list="", reference_list="", outfile="", force=false)
     Mycelia.add_bioconda_env("fastani")
     if !isfile(outfile) || force
         # run(`fastANI --ql $(query_list) --rl $(reference_list) -o $(outfile)`)
         run(
         pipeline(
-            `$(Mycelia.MAMBA) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) -o $(outfile)`,
+            `$(Mycelia.MAMBA) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) --threads $(Sys.CPU_THREADS) -o $(outfile)`,
             stdout=outfile * "fastani.stdout.txt",
             stderr=outfile * "fastani.stderr.txt"
             )
@@ -86,7 +86,7 @@ function fastani(;query_list="", reference_list="", outfile="", force=false)
 end
 
 # ./fastANI -q [QUERY_GENOME] -r [REFERENCE_GENOME] -o [OUTPUT_FILE] 
-function fastani(;query="", reference="", outfile="", force=false)
+function fastani_pair(;query="", reference="", outfile="", force=false)
     Mycelia.add_bioconda_env("fastani")
     if !isfile(outfile) || force
         run(
