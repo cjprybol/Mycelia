@@ -44,6 +44,7 @@ From here, reads take two paths:
     - raven https://github.com/lbcb-sci/raven
 - [ ] hybrid-assembly
     - Mycelia
+    - couldn't get hybrid spades or polypolish to run 
 - didn't run
     - https://github.com/rrwick/Polypolish - too complex
     - hybrid metaspades - didn't due to mmap issue?

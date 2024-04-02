@@ -1,3 +1,37 @@
+function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
+    add_bioconda_env("emboss")
+    if !isfile(fasta) || force
+        run(`$(Mycelia.MAMBA) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
+    end
+end
+
+
+"""
+include_string = "gff3,rna,cds,protein,genome,seq-report"
+"""
+function ncbi_genome_download_accession(;
+        accession,
+        outdir = pwd(),
+        outpath = joinpath(outdir, accession * ".zip"),
+        include_string = "genome"
+    )
+    outfolder = joinpath(outdir, accession)
+    if !isdir(outfolder)
+        add_bioconda_env("ncbi-datasets-cli")
+        if isfile(outpath)
+            @info "$(outpath) already exists, skipping download..."
+        else
+            mkpath(outdir)
+            run(`$(Mycelia.MAMBA) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath)`)
+        end
+        run(`unzip -d $(outfolder) $(outpath)`)
+    end
+    final_outfolder = joinpath(outfolder, "ncbi_dataset", "data", accession)
+    isfile(outpath) && rm(outpath)
+    return final_outfolder
+end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -141,6 +175,7 @@ function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
 end
 
 function fasta_and_gff_to_genbank(;fasta, gff, genbank)
+    add_bioconda_env("emboss")
     # https://www.insdc.org/submitting-standards/feature-table/
     genbank_directory = dirname(genbank)
     genbank_basename = basename(genbank)
@@ -151,7 +186,7 @@ function fasta_and_gff_to_genbank(;fasta, gff, genbank)
     # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
 #     -osname
     # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
-    run(`seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
+    run(`$(Mycelia.MAMBA) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
     # return genbank
 end
 
@@ -625,68 +660,70 @@ function parse_blast_report(blast_report)
     return DataFrames.DataFrame(data, header, makeunique=true)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Parse a GFA file into a genome graph - need to finish implementation and assert contig normalization (i.e. is canonical) before using with my code
+# Parse a GFA file into a genome graph - need to finish implementation and assert contig normalization (i.e. is canonical) before using with my code
 
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function parse_gfa(gfa)
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function parse_gfa(gfa)
     
-    gfa_record_types = Dict(
-        '#' => "Comment",
-        'H' => "Header",
-        'S' => "Segment",
-        'L' => "Link",
-        'J' => "Jump",
-        'C' => "Containment",
-        'P' => "Path",
-        'W' => "Walk"
-    )
+#     # collect(GraphicalFragmentAssembly.Reader(open(primary_contig_gfa)))
+    
+#     gfa_record_types = Dict(
+#         '#' => "Comment",
+#         'H' => "Header",
+#         'S' => "Segment",
+#         'L' => "Link",
+#         'J' => "Jump",
+#         'C' => "Containment",
+#         'P' => "Path",
+#         'W' => "Walk"
+#     )
 
-    gfa_graph = MetaGraphs.MetaDiGraph()
-    MetaGraphs.set_prop!(gfa_graph, :paths, Dict{String, Any}())
-    for line in eachline(gfa)
-        record_type = gfa_record_types[line[1]]
-        if record_type == "Header"
-            # metadata
-            sline = split(line)
-            # add me later
-        elseif record_type == "Comment"
-            # metadata
-            # add me later
-        elseif record_type == "Segment"
-            # node
-            record_type, record_name, sequence = split(line, '\t')
-            Graphs.add_vertex!(gfa_graph)
-            node_index = Graphs.nv(gfa_graph)
-            MetaGraphs.set_prop!(gfa_graph, node_index, :identifier, record_name)
-            MetaGraphs.set_indexing_prop!(gfa_graph, :identifier)
-            MetaGraphs.set_prop!(gfa_graph, node_index, :sequence, sequence)
-        elseif record_type == "Link"
-            record_type, source_identifier, source_orientation, destination_identifier, destination_orientation, overlap_CIGAR = split(line, '\t')
-            source_index = gfa_graph[source_identifier, :identifier]
-            destination_index = gfa_graph[destination_identifier, :identifier]
-            edge = Graphs.Edge(source_index, destination_index)
-            Graphs.add_edge!(gfa_graph, edge)
-            MetaGraphs.set_prop!(gfa_graph, edge, :source_identifier, source_identifier)
-            MetaGraphs.set_prop!(gfa_graph, edge, :source_orientation, source_orientation)
-            MetaGraphs.set_prop!(gfa_graph, edge, :destination_identifier, destination_identifier)
-            MetaGraphs.set_prop!(gfa_graph, edge, :destination_orientation, destination_orientation)
-            MetaGraphs.set_prop!(gfa_graph, edge, :overlap_CIGAR, overlap_CIGAR)
-        elseif record_type == "Path"
-            record_type, path_identifier, segments, overlaps = split(line, '\t')
-            gfa_graph.gprops[:paths][path_identifier] = Dict("segments" => segments, "overlaps" => overlaps)
-        else
-            @warn "GFA line type $(record_type) not currently handled by the import - please add"
-        end
-    end
-    return gfa_graph
-end
+#     gfa_graph = MetaGraphs.MetaDiGraph()
+#     MetaGraphs.set_prop!(gfa_graph, :paths, Dict{String, Any}())
+#     for line in eachline(gfa)
+#         record_type = gfa_record_types[line[1]]
+#         if record_type == "Header"
+#             # metadata
+#             sline = split(line)
+#             # add me later
+#         elseif record_type == "Comment"
+#             # metadata
+#             # add me later
+#         elseif record_type == "Segment"
+#             # node
+#             record_type, record_name, sequence = split(line, '\t')
+#             Graphs.add_vertex!(gfa_graph)
+#             node_index = Graphs.nv(gfa_graph)
+#             MetaGraphs.set_prop!(gfa_graph, node_index, :identifier, record_name)
+#             MetaGraphs.set_indexing_prop!(gfa_graph, :identifier)
+#             MetaGraphs.set_prop!(gfa_graph, node_index, :sequence, sequence)
+#         elseif record_type == "Link"
+#             record_type, source_identifier, source_orientation, destination_identifier, destination_orientation, overlap_CIGAR = split(line, '\t')
+#             source_index = gfa_graph[source_identifier, :identifier]
+#             destination_index = gfa_graph[destination_identifier, :identifier]
+#             edge = Graphs.Edge(source_index, destination_index)
+#             Graphs.add_edge!(gfa_graph, edge)
+#             MetaGraphs.set_prop!(gfa_graph, edge, :source_identifier, source_identifier)
+#             MetaGraphs.set_prop!(gfa_graph, edge, :source_orientation, source_orientation)
+#             MetaGraphs.set_prop!(gfa_graph, edge, :destination_identifier, destination_identifier)
+#             MetaGraphs.set_prop!(gfa_graph, edge, :destination_orientation, destination_orientation)
+#             MetaGraphs.set_prop!(gfa_graph, edge, :overlap_CIGAR, overlap_CIGAR)
+#         elseif record_type == "Path"
+#             record_type, path_identifier, segments, overlaps = split(line, '\t')
+#             gfa_graph.gprops[:paths][path_identifier] = Dict("segments" => segments, "overlaps" => overlaps)
+#         else
+#             @warn "GFA line type $(record_type) not currently handled by the import - please add"
+#         end
+#     end
+#     return gfa_graph
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

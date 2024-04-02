@@ -166,20 +166,14 @@ function reverse_translate(protein_sequence::BioSequences.LongAA)
     return this_sequence
 end
 
-function codon_optimize(normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
-    return codon_optimize(normalized_codon_frequencies, reverse_translate(protein_sequence), n_iterations)
-end
-
-
-function codon_optimize(normalized_codon_frequencies, optimization_sequence::BioSequences.LongDNA, n_iterations)
-    protein_sequence = BioSequences.translate(optimization_sequence)
-    codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(optimization_sequence), 3)))
+function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
+    best_sequence = reverse_translate(protein_sequence)
+    codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(best_sequence), 3)))
     initial_log_likelihood = -log10(1.0)
     for (codon, amino_acid) in collect(zip(codons, protein_sequence))
         this_codon_likelihood = normalized_codon_frequencies[amino_acid][codon]
         initial_log_likelihood -= log10(this_codon_likelihood)
     end
-    best_sequence = optimization_sequence
     best_likelihood = initial_log_likelihood
 
     ProgressMeter.@showprogress for i in 1:n_iterations
@@ -205,7 +199,14 @@ function codon_optimize(normalized_codon_frequencies, optimization_sequence::Bio
     end
     @show (best_likelihood)^-10 / (initial_log_likelihood)^-10
     return best_sequence
+    
 end
+
+
+# function codon_optimize(;normalized_codon_frequencies, optimization_sequence::BioSequences.LongDNA, n_iterations)
+#     protein_sequence = BioSequences.translate(optimization_sequence)
+
+# end
 
 function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
     kmer_counts_vector = zeros(length(kmer_to_index_map))
@@ -292,7 +293,8 @@ julia> 1 + 1
 2
 ```
 """
-function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet, outfile="")
+function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet)
+    k > 13 && warn("consider using fasta_list_to_sparse_counts_table")
     if alphabet == :AA
         canonical_mers = generate_all_possible_canonical_kmers(k, AA_ALPHABET)
     elseif alphabet == :DNA
@@ -329,10 +331,7 @@ julia> 1 + 1
 2
 ```
 """
-function fasta_list_to_sparse_counts_table(;fasta_list, k, alphabet)
-    
-    fasta_kmer_counts_dict = Dict()
-    mer_counts_matrix = zeros(Int, length(canonical_mers), length(fasta_list))
+function fasta_list_to_sparse_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
     
     if alphabet == :DNA
         kmer_type = Kmers.Kmer{BioSequences.DNAAlphabet{4}, k}
@@ -342,10 +341,15 @@ function fasta_list_to_sparse_counts_table(;fasta_list, k, alphabet)
         kmer_type = Kmers.Kmer{BioSequences.AminoAcidAlphabet, k}
     end
     
-    for fasta in fasta_list
-        fasta_kmer_counts_dict[fasta] = count_canonical_kmers(kmer_type, fasta_file)         
+    fasta_kmer_counts_dict = Dict()
+    @info "counting kmers..."
+    ProgressMeter.@showprogress for fasta_file in fasta_list
+        fasta_kmer_counts_dict[fasta_file] = count_canonical_kmers(kmer_type, fasta_file)         
     end
     canonical_mers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
+    mer_counts_matrix = SparseArrays.spzeros(Int, length(canonical_mers), length(fasta_list))
+    
+    @info "populating sparse counts matrix..."
     for (col, fasta) in enumerate(fasta_list)
         for (row, kmer) in enumerate(canonical_mers)
             mer_counts_matrix[row, col] = fasta_kmer_counts_dict[fasta][kmer]
@@ -381,22 +385,22 @@ julia> 1 + 1
 2
 ```
 """
-function count_matrix_to_probability_matrix(
-        counts_matrix,
-        probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
-    )
-    probability_matrix = Mmap.mmap(probability_matrix_file, Array{Float64, 2}, size(counts_matrix))
-    if !isfile(probability_matrix_file)
-        println("creating new probability matrix $probability_matrix_file")
-        # probability_matrix .= count_matrix_to_probability_matrix(counts_matrix)
-        for (i, col) in enumerate(eachcol(counts_matrix))
-            probability_matrix[:, i] .= col ./ sum(col)
-        end
-    else
-        println("probability matrix found $probability_matrix_file")
-    end
-    return probability_matrix, probability_matrix_file
-end
+# function count_matrix_to_probability_matrix(
+#         counts_matrix,
+#         probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
+#     )
+#     probability_matrix = Mmap.mmap(probability_matrix_file, Array{Float64, 2}, size(counts_matrix))
+#     if !isfile(probability_matrix_file)
+#         println("creating new probability matrix $probability_matrix_file")
+#         # probability_matrix .= count_matrix_to_probability_matrix(counts_matrix)
+#         for (i, col) in enumerate(eachcol(counts_matrix))
+#             probability_matrix[:, i] .= col ./ sum(col)
+#         end
+#     else
+#         println("probability matrix found $probability_matrix_file")
+#     end
+#     return probability_matrix, probability_matrix_file
+# end
 
 function count_matrix_to_probability_matrix(counts_matrix)
     probability_matrix = zeros(size(counts_matrix))
@@ -417,7 +421,7 @@ julia> 1 + 1
 2
 ```
 """
-function distance_matrix_to_newick(distance_matrix, labels, outfile)
+function distance_matrix_to_newick(;distance_matrix, labels, outfile)
     # phage_names = phage_host_table[indices, :name]
     # this is equivalent to UPGMA
     tree = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
@@ -1148,12 +1152,46 @@ function deduplicate_fasta_file(in_fasta, out_fasta)
     return out_fasta
 end
 
-function merge_fasta_files(;fasta_files, fasta_file)
+"""
+Join fasta files without any regard to record uniqueness.
+
+A cross-platform version of `cat *.fasta > joint.fasta`
+
+See merge_fasta_files
+"""
+function concatenate_fasta_files(;fasta_files, fasta_file)
     open(fasta_file, "w") do io
         ProgressMeter.@showprogress for f in fasta_files
             write(io, read(f))
         end
     end
+    return fasta_file
+end
+
+"""
+Join fasta files while adding origin prefixes to the identifiers.
+
+Does not guarantee uniqueness but will warn if conflicts arise
+"""
+function merge_fasta_files(;fasta_files, fasta_file)
+    @info "merging $(length(fasta_files)) files..."
+    identifiers = Set{String}()
+    open(fasta_file, "w") do io
+        fastx_io = FASTX.FASTA.Writer(io)
+        ProgressMeter.@showprogress for f in fasta_files
+            for record in Mycelia.open_fastx(f)
+                original_record_id = FASTX.identifier(record)
+                new_record_id = basename(f) * "__" * original_record_id
+                if new_record_id in identifiers
+                    @warn "new identifier $(new_record_id) already in identifiers!!!"
+                end
+                push!(identifiers, new_record_id)
+                new_record = FASTX.FASTA.Record(new_record_id, FASTX.sequence(record))
+                write(fastx_io, new_record)
+            end
+        end
+    end
+    @info "$(length(identifiers)) records merged..."
     return fasta_file
 end
 

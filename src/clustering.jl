@@ -27,7 +27,7 @@ function fit_optimal_number_of_clusters(distance_matrix)
     # silhouette_scores = Union{Float64, Missing}[]
     silhouette_scores = Float64[]
 
-    for k in ks_to_try[1:3]
+    for k in ks_to_try[1:5]
         @show k
         @time this_clustering = Clustering.kmeans(distance_matrix, k)
         push!(within_cluster_sum_of_squares, wcss(this_clustering))
