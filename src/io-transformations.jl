@@ -1,7 +1,7 @@
 function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
     add_bioconda_env("emboss")
     if !isfile(fasta) || force
-        run(`$(Mycelia.MAMBA) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
+        run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
     end
 end
 
@@ -22,7 +22,7 @@ function ncbi_genome_download_accession(;
             @info "$(outpath) already exists, skipping download..."
         else
             mkpath(outdir)
-            run(`$(Mycelia.MAMBA) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath)`)
         end
         run(`unzip -d $(outfolder) $(outpath)`)
     end
@@ -186,7 +186,7 @@ function fasta_and_gff_to_genbank(;fasta, gff, genbank)
     # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
 #     -osname
     # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
-    run(`$(Mycelia.MAMBA) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
+    run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
     # return genbank
 end
 

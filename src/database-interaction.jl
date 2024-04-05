@@ -1,7 +1,19 @@
+function prefetch(;SRR, outdir=pwd())
+    Mycelia.add_bioconda_env("sra-tools")
+    run(`$(Mycelia.CONDA_RUNNERA) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
+end
+
+# function fastq_dump(SRR, outdir=SRR)
+#     Mycelia.add_bioconda_env("sra-tools")
+#     $(CONDA_RUNNER) run --live-stream -n sra-tools fastq-dump /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980 --split-3 --skip-technical --gzip --outdir /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980
+
+
+
+
 # taxon=694009
-# mamba run --live-stream -n ncbi-datasets-cli datasets download genome taxon 694009 --dehydrated --filename /global/cfs/cdirs/m4269/cjprybol/coronaviridae/data/ncbi-datasets.694009.zip
+# $(CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome taxon 694009 --dehydrated --filename /global/cfs/cdirs/m4269/cjprybol/coronaviridae/data/ncbi-datasets.694009.zip
 # unzip /global/cfs/cdirs/m4269/cjprybol/coronaviridae/data/ncbi-datasets.694009.zip -d /global/cfs/cdirs/m4269/cjprybol/coronaviridae/data/ncbi-datasets.694009
-# mamba run --live-stream -n ncbi-datasets-cli datasets rehydrate --directory /global/cfs/cdirs/m4269/cjprybol/coronaviridae/data/ncbi-datasets.694009
+# $(CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets rehydrate --directory /global/cfs/cdirs/m4269/cjprybol/coronaviridae/data/ncbi-datasets.694009
 
 
 
@@ -68,7 +80,7 @@
 #         search=[])
 
 #     # Base command
-#     command = "$(MAMBA) run --live-stream -n ncbi-datasets-cli datasets download genome "
+#     command = "$(CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome "
     
 #     if !ismissing(taxon) && !ismissing(accession)
 #         @error "can only provide taxon or accession, not both" taxon accession
@@ -154,10 +166,11 @@ Download mmseqs databases
 ```
 """
 function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=false, wait=true)
+    Mycelia.add_bioconda_env("mmseqs2")
     mkpath(dbdir)
     db_path = joinpath(dbdir, db)
     if !isfile(db_path) || force
-        cmd = `$(MAMBA) run --live-stream -n mmseqs2 mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(dbdir)/$(db) $(dbdir)/tmp`
+        cmd = `$(CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(dbdir)/$(db) $(dbdir)/tmp`
         @time run(cmd, wait=wait)
     else
         @info "db $db @ $(db_path) already exists, set force=true to overwrite"
@@ -165,7 +178,8 @@ function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=fa
 end
 
 function list_blastdbs()
-    readlines(`$(MAMBA) run --live-stream -n blast update_blastdb.pl --showall`)
+    Mycelia.add_bioconda_env("blast")
+    readlines(`$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall`)
 end
 
 """
@@ -176,19 +190,20 @@ Smart downloading of blast dbs depending on interactive, non interactive context
 For a list of all available databases, run: `Mycelia.list_blastdbs()`
 """
 function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="", wait=true)
+    Mycelia.add_bioconda_env("blast")
     @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(dbdir)
     current_directory = pwd()
     cd(dbdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
-        cmd = `$(MAMBA) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
+        cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
     else
         @info "downloading from source $(source)"
         if source == "ncbi"
-            cmd = `$(MAMBA) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+            cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
         else
-            cmd = `$(MAMBA) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
+            cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
         end
     end
     run(cmd, wait=wait)
@@ -196,7 +211,7 @@ function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="
 end
 
 function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).fasta.gz")
-    p = pipeline(`$(MAMBA) run --live-stream -n blast blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
+    p = pipeline(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
     if compressed
         p = pipeline(p, `gzip`)
     end
