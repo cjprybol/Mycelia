@@ -60,25 +60,44 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
-const MAMBA = joinpath(Conda.BINDIR, "mamba")
+function find_mamba()
+    try
+        CONDA_RUNNER = strip(read(`which mamba`, String))
+        return CONDA_RUNNER
+    catch
+        CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+        return CONDA_RUNNER
+    end
+end
+
+const CONDA_RUNNER = find_mamba()
+        
+# try
+#     @info "native mamba detected, using that..."
+    
+# catch
+#     @info "native mamba not detected"
+#     # const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
+#     CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+# end
 
 function add_bioconda_env(pkg; force=false)
     try
-        current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
+        current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
         if !(pkg in current_environments) || force
             @info "installing conda environment $(pkg)"
-            run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-            run(`$(MAMBA) clean --all -y`)
+            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+            run(`$(CONDA_RUNNER) clean --all -y`)
         else
             @info "conda environment $(pkg) already present; set force=true to update/re-install"
         end
     catch
         add_bioconda_envs()
-        current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
+        current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
         if !(pkg in current_environments) || force
             @info "installing conda environment $(pkg)"
-            run(`$(MAMBA) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-            run(`$(MAMBA) clean --all -y`)
+            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+            run(`$(CONDA_RUNNER) clean --all -y`)
         else
             @info "conda environment $(pkg) already present; set force=true to update/re-install"
         end
@@ -86,13 +105,13 @@ function add_bioconda_env(pkg; force=false)
 end
 
 function add_bioconda_envs(;all=false, force=false)
-    if !isfile(MAMBA)
+    if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
         Conda.add("mamba")
     end
     if !isfile(joinpath(Conda.BINDIR, "pigz"))
-        run(`$(MAMBA) install pigz -y`)
+        run(`$(CONDA_RUNNER) install pigz -y`)
     end
-    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(Conda.conda) env list`))))))
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
     # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
     if all
         for pkg in [
@@ -148,7 +167,7 @@ function add_bioconda_envs(;all=false, force=false)
             end
         end
     end
-    run(`$(MAMBA) clean --all -y`)
+    run(`$(CONDA_RUNNER) clean --all -y`)
 end
 
 """
@@ -233,7 +252,7 @@ end
 
 function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
     Mycelia.add_bioconda_env("gfatools")
-    p = pipeline(`$(Mycelia.MAMBA) run --live-stream -n gfatools gfatools gfa2fa $(gfa)`, fasta)
+    p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools gfa2fa $(gfa)`, fasta)
     run(p)
     return fasta
     # collect(GraphicalFragmentAssembly.Reader(open(primary_contig_gfa)))
@@ -251,7 +270,7 @@ end
 function determine_fasta_coverage(bam)
     genome_coverage_file = bam * ".coverage.txt"
     if !isfile(genome_coverage_file)
-        run(pipeline(`$(Mycelia.MAMBA) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
     end
     return genome_coverage_file
 end
@@ -312,7 +331,7 @@ end
 function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwise")
     Mycelia.add_bioconda_env("mmseqs2")
     mkpath(output)
-    run(`$(Mycelia.MAMBA) run --live-stream -n mmseqs2 mmseqs easy-search
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search
         $(fasta)
         $(fasta)
         $(output)/$(basename(fasta)).mmseqs_pairwise_search.txt $(tempdir())
@@ -324,17 +343,17 @@ end
 
 function mmseqs_easy_linclust(;fasta, output=fasta*".mmseqs_easy_linclust", tmp=tempdir())
     Mycelia.add_bioconda_env("mmseqs2")   
-    run(`$(Mycelia.MAMBA) run --live-stream -n mmseqs2 mmseqs createdb $(fasta) $(fasta)_DB`)
-    run(`$(Mycelia.MAMBA) run --live-stream -n mmseqs2 mmseqs createindex --search-type 3 $(fasta)_DB $(tempdir())`)
-    run(`$(Mycelia.MAMBA) run --live-stream -n mmseqs2 mmseqs easy-linclust $(fasta)_DB $(output) $(tmp)`)
-    run(`$(Mycelia.MAMBA) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta)_DB $(fasta)_DB $(output) $(output).tsv`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(fasta) $(fasta)_DB`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createindex --search-type 3 $(fasta)_DB $(tempdir())`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-linclust $(fasta)_DB $(output) $(tmp)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta)_DB $(fasta)_DB $(output) $(output).tsv`)
     return "$(output).tsv"
 end
 
 function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=tempdir())
     Mycelia.add_bioconda_env("mmseqs2")
-    run(`Mycelia.MAMBA run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id 0.5 -c 0.8 --cov-mode 1`)
-    run(`$(Mycelia.MAMBA) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta) $(fasta) $(output) $(output).tsv`)
+    run(`Mycelia.CONDA_RUNNER run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id 0.5 -c 0.8 --cov-mode 1`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta) $(fasta) $(output) $(output).tsv`)
     return "$(output).tsv"
 end
 

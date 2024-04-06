@@ -77,7 +77,7 @@ function fastani_list(;query_list="", reference_list="", outfile="", force=false
         # run(`fastANI --ql $(query_list) --rl $(reference_list) -o $(outfile)`)
         run(
         pipeline(
-            `$(Mycelia.MAMBA) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) --threads $(Sys.CPU_THREADS) -o $(outfile)`,
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) --threads $(Sys.CPU_THREADS) -o $(outfile)`,
             stdout=outfile * "fastani.stdout.txt",
             stderr=outfile * "fastani.stderr.txt"
             )
@@ -91,7 +91,7 @@ function fastani_pair(;query="", reference="", outfile="", force=false)
     if !isfile(outfile) || force
         run(
         pipeline(
-            `$(Mycelia.MAMBA) run --live-stream -n fastani fastANI -q $(query) -r $(reference) -o $(outfile)`,
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastani fastANI -q $(query) -r $(reference) -o $(outfile)`,
             stdout=outfile * "fastani.stdout.txt",
             stderr=outfile * "fastani.stderr.txt"
             )

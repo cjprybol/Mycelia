@@ -443,7 +443,7 @@ function run_mmseqs_easy_taxonomy(;out_dir, query_fasta, target_database, outfil
     
     if force || (!force && !isfile(outfile))
         cmd = 
-        `$(MAMBA) run --no-capture-output -n mmseqs2 mmseqs
+        `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
          easy-taxonomy
          $(query_fasta)
          $(target_database)
@@ -481,7 +481,7 @@ function run_mmseqs_easy_search(;
     tmp_dir = joinpath(out_dir, "tmp")
     if force || (!force && !isfile(outfile_path))
         cmd = 
-        `$(MAMBA) run --no-capture-output -n mmseqs2 mmseqs
+        `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
             easy-search
             $(query_fasta)
             $(target_database)
@@ -698,7 +698,7 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     #          -v:  Print version number and exit.
     add_bioconda_env("prodigal")
     cmd = 
-    `$(Mycelia.MAMBA) run --no-capture-output -n prodigal prodigal
+    `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n prodigal prodigal
     -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
     -f gff
     -m
