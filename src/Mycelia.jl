@@ -70,16 +70,8 @@ function find_mamba()
     end
 end
 
+# can add support for conda too if needed
 const CONDA_RUNNER = find_mamba()
-        
-# try
-#     @info "native mamba detected, using that..."
-    
-# catch
-#     @info "native mamba not detected"
-#     # const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
-#     CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
-# end
 
 function add_bioconda_env(pkg; force=false)
     try
@@ -355,6 +347,31 @@ function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=te
     run(`Mycelia.CONDA_RUNNER run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id 0.5 -c 0.8 --cov-mode 1`)
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta) $(fasta) $(output) $(output).tsv`)
     return "$(output).tsv"
+end
+
+function filter_long_reads(;
+        in_fastq,
+        out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
+        min_mean_q = 20,
+        keep_percent = 95
+    )
+    Mycelia.add_bioconda_env("filtlong")
+    p1 = pipeline(
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
+        `pigz`
+    )
+    p2 = pipeline(p1, out_fastq)
+    return p2
+end
+
+function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
+    Mycelia.add_bioconda_env("blast")
+    if !isfile(fasta)
+        # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
+        @time run(pipeline(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt '%f' -db $(path_to_db)`, `pigz`), fasta))
+    else
+        @info "$(fasta) already present"
+    end
 end
 
 # dynamic import of files??
