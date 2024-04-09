@@ -72,6 +72,8 @@ end
 
 # can add support for conda too if needed
 const CONDA_RUNNER = find_mamba()
+const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
+const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 
 function add_bioconda_env(pkg; force=false)
     try
@@ -373,6 +375,103 @@ function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
         @info "$(fasta) already present"
     end
 end
+
+function fastx_stats(fastq)
+    Mycelia.add_bioconda_env("seqkit")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats $(fastq)`)
+end
+
+function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+    Mycelia.add_bioconda_env("seqkit")
+    if ismissing(n_reads) && ismissing(proportion_reads)
+        error("please specify the number or proportion of reads")
+    elseif !ismissing(n_reads)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --two-pass --number $(n_reads) $(in_fastq)`, `gzip`)
+        if isempty(out_fastq)
+            out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.N$(n_reads).fq.gz")
+        end
+    elseif !ismissing(proportion_reads)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --proportion $(proportion_reads) $(in_fastq)`, `gzip`)
+        if isempty(out_fastq)
+            out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.P$(proportion_reads).fq.gz")
+        end
+    end
+    @assert !isempty(out_fastq)
+    run(pipeline(p, out_fastq))
+    return out_fastq
+end
+
+# function subsample_reads_seqtk(;in_fastq::String, out_fastq="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+#     Mycelia.add_bioconda_env("seqtk")
+#     if ismissing(n_reads) && ismissing(proportion_reads)
+#         error("please specify the number or proportion of reads")
+#     elseif !ismissing(n_reads)
+#         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqtk seqtk sample -2 $(n_reads) $(in_fastq)`, `gzip`)
+#         if isempty(out_fastq)
+#             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqtk.N$(n_reads).fq.gz")
+#         end
+#     elseif !ismissing(proportion_reads)
+#         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqtk seqtk sample -2 $(proportion_reads) $(in_fastq)`, `gzip`)
+#         if isempty(out_fastq)
+#             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqtk.P$(proportion_reads).fq.gz")
+#         end
+#     end
+#     @assert !isempty(out_fastq)
+#     run(pipeline(p, out_fastq))
+#     return out_fastq
+# end
+
+# subsample_reads_seqtk(in_fastq = fastq, n_reads=10)
+
+
+"""
+Will write out reads as SAM and also write out an error free SAM. Choose the reads from the version you want
+"""
+# # ? art short read
+function simulate_short_reads()
+    # $(Mycelia.MAMBA) run --live-stream -n art \
+    # art_illumina \
+    # --samout \
+    # --errfree \
+    # --paired \
+    # --seqSys HS25 \
+    # --len 150 \
+    # --mflen 500 \
+    # --sdev 10 \
+    # --in $(fasta_file) \
+    # --out $(fasta_file).art.$(coverage)x. \
+    # --rcount
+end
+
+"""
+quantity is either fold coverage, or total bases sequenced - NOT TOTAL READS
+
+To go by total reads, do # reads * 15,000 = quantity
+"""
+function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.$(quantity).fq.gz"))
+    if !isfile(outfile)
+        Mycelia.add_bioconda_env("badread")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
+end
+    
+function simulate_nanopore_reads()
+# badread simulate --reference ref.fasta --quantity 50x | gzip > reads.fastq.gz
+end
+
+function simulate_nearly_perfect_long_reads()
+    # badread simulate --reference ref.fasta --quantity 50x --error_model random \
+    # --qscore_model ideal --glitches 0,0,0 --junk_reads 0 --random_reads 0 --chimeras 0 \
+    # --identity 30,3 --length 40000,20000 --start_adapter_seq "" --end_adapter_seq "" \
+    # | gzip > reads.fastq.gz
+end
+
+
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
