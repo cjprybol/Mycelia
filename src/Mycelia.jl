@@ -39,6 +39,7 @@ import StatsBase
 import StatsPlots
 import XAM
 import uCSV
+import Downloads
 
 import Pkg
 
@@ -470,8 +471,151 @@ function simulate_nearly_perfect_long_reads()
     # | gzip > reads.fastq.gz
 end
 
+function filter_long_reads(;
+        in_fastq,
+        out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
+        min_mean_q = 20,
+        keep_percent = 95
+    )
+    Mycelia.add_bioconda_env("filtlong")
+    p1 = pipeline(
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
+        `pigz`
+    )
+    p2 = pipeline(p1, out_fastq)
+    return p2
+end
 
+"""
+My standard pacbio aligning and sorting. No filtering done in this step.
 
+Use shell_only=true to get string command to submit to SLURM
+"""
+function map_pacbio_reads(;
+        fastq,
+        reference_fasta,
+        temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
+        # outfile = replace(temp_sam_outfile, ".sam" => ".sorted.bam"),
+        outfile = replace(temp_sam_outfile, ".sam" => ".sorted.sam.gz"),
+        threads = Sys.CPU_THREADS,
+        # 4G is the default
+        # for 512Gb RAM this will ask for 102G of index
+        index_chunk_size="$(Int(floor(Sys.total_memory()/5 / 1e9)))G",
+        shell_only = false
+    )
+    @show index_chunk_size
+    @show threads
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    if shell_only
+        # cmd =
+        # """
+        # $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        # && $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile) \\
+        # | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile) \\
+        # && rm $(temp_sam_outfile)
+        # """
+        # return cmd
+    else
+        if !isfile(outfile)
+            map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+            run(map)
+            # note - mapping to NCBI NT has too many sequences and header is invalid BAM spec
+            # switch to writing out gzip compressed sam instead
+            # p = pipeline(
+            #     `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile)`,
+            #     `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile)`
+            # )
+            p = pipeline(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile)`,
+                `gzip`
+            )
+            # run(pipeline(p))
+            run(pipeline(p, outfile))
+            rm(temp_sam_outfile)
+        else
+            @info "$(outfile) already present"
+        end
+    end
+end
+
+# """
+# My standard pacbio aligning and sorting. No filtering done in this step.
+
+# Use shell_only=true to get string command to submit to SLURM
+# """
+# function minimap_index_pacbio(;
+#         reference_fasta,
+#         outfile = replace(reference_fasta, Mycelia.FASTA_REGEX => ".pacbio.mmi"),
+#         threads = Sys.CPU_THREADS,
+#         shell_only = false
+#     )
+#     Mycelia.add_bioconda_env("minimap2")
+#     Mycelia.add_bioconda_env("samtools")
+#     if shell_only
+#         cmd =
+#         """
+#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -ax map-pb $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile) \\
+#         | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile) \\
+#         && rm $(temp_sam_outfile)
+#         """
+#         return cmd
+#     else
+#         if !isfile(outfile)
+#             map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -ax map-pb $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+#             run(map)
+#             p = pipeline(
+#                 `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile)`,
+#                 `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile)`
+#             )
+#             run(p)
+#             rm(temp_sam_outfile)
+#         else
+#             @info "$(outfile) already present"
+#         end
+#     end
+# end
+
+# function filter_short_reads()
+# end
+
+# function map_short_reads()
+# end
+
+function download_genome_by_accession(;accession, outdir=pwd())
+    temp_fasta = joinpath(outdir, accession * ".fna")
+    outfile = temp_fasta * ".gz"
+    if !isfile(outfile)
+        try
+            # pull the entire record so that if the download fails we don't leave an empty file
+            fasta_records = collect(Mycelia.get_sequence(db = "nuccore", accession = accession))
+            open(temp_fasta, "w") do io
+                fastx_io = FASTX.FASTA.Writer(io)
+                for fasta_record in fasta_records
+                    write(fastx_io, fasta_record)
+                end
+                close(fastx_io)
+                run(`gzip $(temp_fasta)`)
+                @assert isfile(outfile)
+            end
+        catch e
+            println("An error occurred: ", e)
+            
+        end
+    end
+    return outfile
+end
+
+function download_genome_by_ftp(;ftp, outdir=pwd())
+    url = Mycelia.ncbi_ftp_path_to_url(ftp_path=ftp, extension="genomic.fna.gz")
+    outfile = joinpath(outdir, basename(url))
+    if !isfile(outfile)
+        return Downloads.download(url, outfile)
+    else
+        return outfile
+    end
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))

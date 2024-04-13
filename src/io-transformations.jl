@@ -7,6 +7,10 @@ end
 
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Download an accession using NCBI datasets command line tool
+
 include_string = "gff3,rna,cds,protein,genome,seq-report"
 """
 function ncbi_genome_download_accession(;
