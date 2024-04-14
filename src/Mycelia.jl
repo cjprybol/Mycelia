@@ -470,8 +470,164 @@ function simulate_nearly_perfect_long_reads()
     # | gzip > reads.fastq.gz
 end
 
+# cap at 4 threads, 1Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
+function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*1e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"))
+    @show fastx
+    @show k
+    @show threads
+    @show max_mem
+    @show canonical
+    @show outfile
+    Mycelia.add_bioconda_env("kmer-jellyfish")
+    jellyfish_buffer_size = parse(Int, first(split(read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish mem --mer-len $(k) --mem $(max_mem)`, String))))
+    @show jellyfish_buffer_size
+    
+    if canonical
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --canonical --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile)`
+    else
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile)`
+    end
+    run(cmd)
+    return outfile
+end
 
+# conda install -c bioconda kmer-jellyfish
 
+# count, bc, info, stats, histo, dump, merge, query, cite, mem, jf
+
+# Usage: jellyfish count [options] file:path+
+
+# Count k-mers in fasta or fastq files
+
+# Options (default value in (), *required):
+#  -m, --mer-len=uint32                    *Length of mer
+#  -s, --size=uint64                       *Initial hash size
+#  -t, --threads=uint32                     Number of threads (1)
+#      --sam=PATH                           SAM/BAM/CRAM formatted input file
+#  -F, --Files=uint32                       Number files open simultaneously (1)
+#  -g, --generator=path                     File of commands generating fast[aq]
+#  -G, --Generators=uint32                  Number of generators run simultaneously (1)
+#  -S, --shell=string                       Shell used to run generator commands ($SHELL or /bin/sh)
+#  -o, --output=string                      Output file (mer_counts.jf)
+#  -c, --counter-len=Length in bitsM         Length bits of counting field (7)
+#      --out-counter-len=Length in bytes    Length in bytes of counter field in output (4)
+#  -C, --canonical                          Count both strand, canonical representation (false)
+#      --bc=peath                           Bloom counter to filter out singleton mers
+#      --bf-size=uint64                     Use bloom filter to count high-frequency mers
+#      --bf-fp=double                       False positive rate of bloom filter (0.01)
+#      --if=path                            Count only k-mers in this files
+#  -Q, --min-qual-char=string               Any base with quality below this character is changed to N
+#      --quality-start=int32                ASCII for quality values (64)
+#      --min-quality=int32                  Minimum quality. A base with lesser quality becomes an N
+#  -p, --reprobes=uint32                    Maximum number of reprobes (126)
+#      --text                               Dump in text format (false)
+#      --disk                               Disk operation. Do not do size doubling (false)
+#  -L, --lower-count=uint64                 Don't output k-mer with count < lower-count
+#  -U, --upper-count=uint64                 Don't output k-mer with count > upper-count
+#      --timing=Timing file                 Print timing information
+#      --usage                              Usage
+#  -h, --help                               This message
+#      --full-help                          Detailed help
+#  -V, --version                            Version
+
+# Usage: jellyfish histo [options] db:path
+#  -l, --low=uint64                         Low count value of histogram (1)
+#  -h, --high=uint64                        High count value of histogram (10000)
+#  -f, --full                               Full histo. Don't skip count 0. (false)
+#  -o, --output=string                      Output file
+
+# Usage: jellyfish dump [options] db:path
+
+# Dump k-mer counts
+
+# By default, dump in a fasta format where the header is the count and
+# the sequence is the sequence of the k-mer. The column format is a 2
+# column output: k-mer count.
+
+# Options (default value in (), *required):
+#  -c, --column                             Column format (false)
+#  -t, --tab                                Tab separator (false)
+#  -L, --lower-count=uint64                 Don't output k-mer with count < lower-count
+#  -U, --upper-count=uint64                 Don't output k-mer with count > upper-count
+#  -o, --output=string                      Output file
+#      --usage                              Usage
+#  -h, --help                               This message
+#  -V, --version                            Version
+
+# Usage: jellyfish merge [options] input:string+
+
+# Merge jellyfish databases
+
+# Options (default value in (), *required):
+#  -o, --output=string                      Output file (mer_counts_merged.jf)
+#  -m, --min                                Compute min count instead of sum (false)
+#  -M, --max                                Compute max count instead of sum (false)
+#  -j, --jaccard                            Compute the jaccard and weighted jaccard similarities (false)
+#  -L, --lower-count=uint64                 Don't output k-mer with count < lower-count
+#  -U, --upper-count=uint64                 Don't output k-mer with count > upper-count
+#      --usage                              Usage
+#  -h, --help                               This message
+#  -V, --version                            Version
+
+# Usage: jellyfish query [options] file:path mers:string+
+
+# Query a Jellyfish database
+
+# Options (default value in (), *required):
+#  -s, --sequence=path                      Output counts for all mers in sequence
+#  -o, --output=path                        Output file (stdout)
+#  -i, --interactive                        Interactive, queries from stdin (false)
+#  -l, --load                               Force pre-loading of database file into memory (false)
+#  -L, --no-load                            Disable pre-loading of database file into memory (false)
+#  -U, --usage                              Usage
+#  -h, --help                               This message
+#  -V, --version                            Version
+
+# Usage: jellyfish mem [options] file:path+
+
+# Give memory usage information
+
+# The mem subcommand gives some information about the memory usage of
+# Jellyfish when counting mers. If one replace 'count' by 'mem' in the
+# command line, it displays the amount of memory needed. All the
+# switches of the count subcommand are supported, although only the
+# meaningful one for computing the memory usage are used.
+
+# If the '--size' (-s) switch is omitted and the --mem switch is passed
+# with an amount of memory in bytes, then the largest size that fit in
+# that amount of memory is returned.
+
+# The memory usage information only takes into account the hash to store
+# the k-mers, not various buffers (e.g. in parsing the input files). But
+# typically those will be small in comparison to the hash.
+
+# Options (default value in (), *required):
+#  -m, --mer-len=uint32                    *Length of mer
+#  -s, --size=uint64                        Initial hash size
+#  -c, --counter-len=Length in bits         Length bits of counting field (7)
+#  -p, --reprobes=uint32                    Maximum number of reprobes (126)
+#      --mem=uint64                         Return maximum size to fit within that memory
+#      --bc=peath                           Ignored switch
+#      --usage                              Usage
+#  -h, --help                               This message
+#      --full-help                          Detailed help
+#  -V, --version                            Version
+
+function jitter(x, n)
+    return [x + rand() / 3 * (ifelse(rand(Bool), 1, -1)) for i in 1:n]
+end
+
+function fasta_to_reference_kmer_counts(;kmer_type, fasta)
+    kmer_counts = Dict{kmer_type, Int}()
+    for record in Mycelia.open_fastx(fasta)
+        record_sequence = BioSequences.LongDNA{2}(FASTX.sequence(record))
+        forward_counts = StatsBase.countmap(kmer for (i, kmer) in Kmers.EveryKmer{kmer_type}(record_sequence))
+        reverse_counts = StatsBase.countmap(kmer for (i, kmer) in Kmers.EveryKmer{kmer_type}(BioSequences.reverse_complement(record_sequence)))
+        record_counts = merge(+, forward_counts, reverse_counts)
+        merge!(+, kmer_counts, record_counts)
+    end
+    return kmer_counts
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
