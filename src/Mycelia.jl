@@ -166,6 +166,8 @@ function add_bioconda_envs(;all=false, force=false)
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Submit a command to SLURM using sbatch
 """
 function scg_sbatch(;
@@ -204,19 +206,33 @@ function scg_sbatch(;
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Submit a command to SLURM using sbatch
+
+https://docs.nersc.gov/jobs/policy/
+https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
+
+default is to use shared qos
+
+use
+- regular
+- preempt (reduced credit usage but not guaranteed to finish)
+- premium (priorty runs limited to 5x throughput)
+
+max request is 512Gb memory and 128 cores per node
 """
 function nersc_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
         logdir::String=pwd(),
-        qos::String,
+        qos::String="shared",
         nodes::Int=1,
         ntasks::Int=1,
         time::String="1-00:00:00",
         cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 2,
+        mem_gb::Int=cpus_per_task * 4,
         cmd::String,
         constrain::String="cpu"
     )
@@ -426,6 +442,8 @@ end
 
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Will write out reads as SAM and also write out an error free SAM. Choose the reads from the version you want
 """
 # # ? art short read
@@ -445,6 +463,8 @@ function simulate_short_reads()
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 quantity is either fold coverage, or total bases sequenced - NOT TOTAL READS
 
 To go by total reads, do # reads * 15,000 = quantity
@@ -471,25 +491,50 @@ function simulate_nearly_perfect_long_reads()
     # | gzip > reads.fastq.gz
 end
 
-# cap at 4 threads, 1Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
-function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*1e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"))
-    @show fastx
-    @show k
-    @show threads
-    @show max_mem
-    @show canonical
-    @show outfile
+# cap at 4 threads, 8Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
+function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*8e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"))
+    # @show fastx
+    # @show k
+    # @show threads
+    # @show max_mem
+    # @show canonical
+    # @show outfile
     Mycelia.add_bioconda_env("kmer-jellyfish")
-    jellyfish_buffer_size = parse(Int, first(split(read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish mem --mer-len $(k) --mem $(max_mem)`, String))))
-    @show jellyfish_buffer_size
-    
+    mem = Int(floor(max_mem))
+    jellyfish_buffer_size = parse(Int, first(split(read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish mem --mer-len $(k) --mem $(mem)`, String))))
+    # @show jellyfish_buffer_size
     if canonical
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --canonical --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --canonical --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile) /dev/fd/0`
     else
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile) /dev/fd/0`
     end
-    run(cmd)
-    return outfile
+    if occursin(r"\.gz$", fastx)
+        open_cmd = `gzip -dc $(fastx)`
+    else
+        open_cmd = `cat $(fastx)`
+    end
+    if !isfile(outfile)
+        run(pipeline(open_cmd, cmd))
+    end
+    
+    temp_fasta = outfile * ".fna"
+    fna_counts = temp_fasta * ".gz"
+    if !isfile(fna_counts)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish dump --output $(temp_fasta) $(outfile)`)
+        run(`gzip $(temp_fasta)`)
+    end
+
+    temp_tab = outfile * ".tab"
+    tabular_counts = temp_tab * ".gz"
+    if !isfile(tabular_counts)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish dump --column --tab --output $(temp_tab) $(outfile)`)
+        run(`gzip $(temp_tab)`)
+    end
+    histogram = outfile * ".histogram"
+    if !isfile(histogram)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish histo --output $(histogram) $(outfile)`)
+    end
+    return (;outfile, fna_counts, tabular_counts, histogram)
 end
 
 # conda install -c bioconda kmer-jellyfish
@@ -646,6 +691,8 @@ function filter_long_reads(;
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 My standard pacbio aligning and sorting. No filtering done in this step.
 
 Use shell_only=true to get string command to submit to SLURM

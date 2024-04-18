@@ -208,6 +208,7 @@ function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="
     end
     run(cmd, wait=wait)
     cd(current_directory)
+    return "$(dbdir)/$(db)"
 end
 
 function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).fasta.gz")
