@@ -904,7 +904,9 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-A short description of the function
+Plots a histogram of kmer counts against # of kmers with those counts
+
+Returns the plot object for adding additional layers and saving
 
 ```jldoctest
 julia> 1 + 1
