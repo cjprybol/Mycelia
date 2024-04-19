@@ -823,6 +823,16 @@ function download_genome_by_ftp(;ftp, outdir=pwd())
     end
 end
 
+# https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/taxonomy/
+function ncbi_taxon_summary(taxa_id)
+    Mycelia.add_bioconda_env("ncbi-datasets")
+    p = pipeline(
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets datasets summary taxonomy taxon $(taxa_id) --as-json-lines`,
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets dataformat tsv taxonomy --template tax-summary`
+        )
+    return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
