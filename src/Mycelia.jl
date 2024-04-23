@@ -902,6 +902,44 @@ function ncbi_taxon_summary(taxa_id)
     return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
 end
 
+function nearest_prime(n::Int)
+    if n < 2
+        return 2
+    end
+    next_p = Primes.nextprime(n)
+    prev_p = Primes.prevprime(n)
+    if n - prev_p <= next_p - n
+        return prev_p
+    else
+        return next_p
+    end
+end
+
+function fibonacci_numbers_less_than(n::Int)
+    if n <= 0
+        return []
+    elseif n == 1
+        return [0]
+    else
+        fib = [0, 1]
+        next_fib = fib[end] + fib[end-1]
+        while next_fib < n
+            push!(fib, next_fib)
+            next_fib = fib[end] + fib[end-1]
+        end
+        return fib
+    end
+end
+
+function ks(;min=0, max=10_000)
+    # flip from all odd primes to only nearest to fibonnaci primes
+    flip_point = 23
+    vcat(
+        filter(isodd, Primes.primes(min, flip_point)),
+        filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max)))
+    )
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
