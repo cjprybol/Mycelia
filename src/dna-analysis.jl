@@ -503,7 +503,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=3, max_k=31, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
     ks = Primes.primes(min_k, max_k)
     minimum_saturation = Inf
     midpoint = Inf
@@ -579,6 +579,6 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
     end
 end
 
-function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=31, threshold=0.1, kmers_to_assess=10_000_000)
+function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000)
     assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power, kmers_to_assess=kmers_to_assess)
 end
