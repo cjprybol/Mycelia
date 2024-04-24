@@ -287,34 +287,43 @@ end
 
 function annotate_fasta(;
         fasta,
-        identifier = replace(basename(fasta), r"\.f(na|asta|a)" => ""),
-        basedir = identifier,
-        mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50"
+        identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+        basedir = pwd(),        
+        mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
+        threads=Sys.CPU_THREADS
     )
-    mkpath(basedir)
-    f = joinpath(basedir, basename(fasta))
-    # make this an rclone copy for portability
-    cp(fasta, f, force=true)
-    Mycelia.run_prodigal(fasta_file=f)
-    nucleic_acid_fasta = f * ".prodigal.fna"
-    amino_acid_fasta = f * ".prodigal.faa"
-    gff_file = f * ".prodigal.gff"
+    # @show basedir
+    outdir = joinpath(basedir, identifier)
+    @assert outdir != fasta
+    if !isdir(outdir)
+        @show isdir(outdir)
+        mkpath(outdir)
+        f = joinpath(outdir, basename(fasta))
+        # make this an rclone copy for portability
+        cp(fasta, f, force=true)
+        Mycelia.run_prodigal(fasta_file=f)
+        nucleic_acid_fasta = f * ".prodigal.fna"
+        amino_acid_fasta = f * ".prodigal.faa"
+        gff_file = f * ".prodigal.gff"
 
-    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
-    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
-    transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+        mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
+        transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
 
-    joint_gff = Mycelia.write_gff(
-        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
-        outfile=f * ".gff")
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
+        joint_gff = Mycelia.write_gff(
+            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
+            outfile=f * ".gff")
+        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
 
-    transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-    joint_gff_raw_fasta = Mycelia.write_gff(
-        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
-        outfile=f * ".transterm_raw.gff")
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
-    return basedir
+        transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+        joint_gff_raw_fasta = Mycelia.write_gff(
+            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
+            outfile=f * ".transterm_raw.gff")
+        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
+    else
+        @info "$(outdir) already present, skipping..."
+    end
+    return outdir
 end
 
 function rclone_list_directories(path)
@@ -499,8 +508,8 @@ function map_pacbio_reads(;
         outfile = replace(temp_sam_outfile, ".sam" => ".sorted.sam.gz"),
         threads = Sys.CPU_THREADS,
         # 4G is the default
-        # for 512Gb RAM this will ask for 102G of index
-        index_chunk_size="$(Int(floor(Sys.total_memory()/5 / 1e9)))G",
+        # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
+        index_chunk_size="$(Int(floor(Sys.total_memory()/3 / 1e9)))G",
         shell_only = false
     )
     @show index_chunk_size
@@ -615,6 +624,18 @@ function download_genome_by_ftp(;ftp, outdir=pwd())
     else
         return outfile
     end
+end
+
+function normalized_current_datetime()
+    return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
+end
+
+function githash(;short=false)
+    git_hash = rstrip(read(`git rev-parse HEAD`, String))
+    if short
+        git_hash = git_hash[1:8]
+    end
+    return git_hash
 end
 
 # dynamic import of files??
