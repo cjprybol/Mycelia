@@ -474,6 +474,7 @@ function run_mmseqs_easy_search(;
         out_dir=dirname(query_fasta),
         outfile=basename(query_fasta) * ".mmseqs_easy_search." * basename(target_database) * ".txt",
         format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
+        threads = Sys.CPU_THREADS,
         force=false)
     
     add_bioconda_env("mmseqs2")
@@ -487,6 +488,7 @@ function run_mmseqs_easy_search(;
             $(target_database)
             $(outfile_path)
             $(tmp_dir)
+            --threads $(threads)
             --format-mode 4
             --format-output $(format_output)
             --start-sens 1 -s 7 --sens-steps 7

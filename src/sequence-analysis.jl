@@ -1153,6 +1153,8 @@ function deduplicate_fasta_file(in_fasta, out_fasta)
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Join fasta files without any regard to record uniqueness.
 
 A cross-platform version of `cat *.fasta > joint.fasta`
@@ -1169,6 +1171,8 @@ function concatenate_fasta_files(;fasta_files, fasta_file)
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Join fasta files while adding origin prefixes to the identifiers.
 
 Does not guarantee uniqueness but will warn if conflicts arise

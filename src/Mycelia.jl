@@ -306,34 +306,43 @@ end
 
 function annotate_fasta(;
         fasta,
-        identifier = replace(basename(fasta), r"\.f(na|asta|a)" => ""),
-        basedir = identifier,
-        mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50"
+        identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+        basedir = pwd(),        
+        mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
+        threads=Sys.CPU_THREADS
     )
-    mkpath(basedir)
-    f = joinpath(basedir, basename(fasta))
-    # make this an rclone copy for portability
-    cp(fasta, f, force=true)
-    Mycelia.run_prodigal(fasta_file=f)
-    nucleic_acid_fasta = f * ".prodigal.fna"
-    amino_acid_fasta = f * ".prodigal.faa"
-    gff_file = f * ".prodigal.gff"
+    # @show basedir
+    outdir = joinpath(basedir, identifier)
+    @assert outdir != fasta
+    if !isdir(outdir)
+        @show isdir(outdir)
+        mkpath(outdir)
+        f = joinpath(outdir, basename(fasta))
+        # make this an rclone copy for portability
+        cp(fasta, f, force=true)
+        Mycelia.run_prodigal(fasta_file=f)
+        nucleic_acid_fasta = f * ".prodigal.fna"
+        amino_acid_fasta = f * ".prodigal.faa"
+        gff_file = f * ".prodigal.gff"
 
-    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
-    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
-    transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+        mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
+        transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
 
-    joint_gff = Mycelia.write_gff(
-        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
-        outfile=f * ".gff")
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
+        joint_gff = Mycelia.write_gff(
+            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
+            outfile=f * ".gff")
+        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
 
-    transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-    joint_gff_raw_fasta = Mycelia.write_gff(
-        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
-        outfile=f * ".transterm_raw.gff")
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
-    return basedir
+        transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+        joint_gff_raw_fasta = Mycelia.write_gff(
+            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
+            outfile=f * ".transterm_raw.gff")
+        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
+    else
+        @info "$(outdir) already present, skipping..."
+    end
+    return outdir
 end
 
 function rclone_list_directories(path)
@@ -739,8 +748,8 @@ function map_pacbio_reads(;
         outfile = replace(temp_sam_outfile, ".sam" => ".sorted.sam.gz"),
         threads = Sys.CPU_THREADS,
         # 4G is the default
-        # for 512Gb RAM this will ask for 102G of index
-        index_chunk_size="$(Int(floor(Sys.total_memory()/5 / 1e9)))G",
+        # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
+        index_chunk_size="$(Int(floor(Sys.total_memory()/3 / 1e9)))G",
         shell_only = false
     )
     @show index_chunk_size
@@ -857,6 +866,18 @@ function download_genome_by_ftp(;ftp, outdir=pwd())
     end
 end
 
+function normalized_current_datetime()
+    return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
+end
+
+function githash(;short=false)
+    git_hash = rstrip(read(`git rev-parse HEAD`, String))
+    if short
+        git_hash = git_hash[1:8]
+    end
+    return git_hash
+end
+
 # CSV is too memory inefficient, the others too slow :(
 # # using uCSV
 # # k=11
@@ -939,6 +960,53 @@ function ks(;min=0, max=10_000)
         filter(isodd, Primes.primes(min, flip_point)),
         filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max)))
     )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function rclone_upload(source, dest)
+    done = false
+    sleep_timer = 60
+    attempts = 0
+    while !done && attempts < 3
+        attempts += 1
+        try
+            # https://forum.rclone.org/t/google-drive-uploads-failing-http-429/34147/9
+            # --tpslimit                                       Limit HTTP transactions per second to this
+            # --drive-chunk-size SizeSuffix                    Upload chunk size (default 8Mi)
+            # --drive-upload-cutoff SizeSuffix                 Cutoff for switching to chunked upload (default 8Mi)
+            # not currently using these but they may become helpful
+            # --drive-pacer-burst int                          Number of API calls to allow without sleeping (default 100)
+            # --drive-pacer-min-sleep Duration                 Minimum time to sleep between API calls (default 100ms)
+            cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            @info "uploading $(source) to $(dest) with command: $(cmd)"
+            run(cmd)
+            done = true
+        catch
+            @info "upload incomplete, sleeping $(sleep_timer) seconds and trying again..."
+            sleep(sleep_timer)
+            sleep_timer *= 2
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function drop_empty_columns(table)
+    is_empty_column = map(col -> all(isempty.(col)), eachcol(table))
+    return table[!, .!is_empty_column]
+end
+
+function tarchive(;directory, tarchive=folder * ".tar.gz")
+    run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+    return tarchive
+end
+
+function tar_extract(;tarchive, directory=replace(tarchive, r"\.tar\.gz$" => ""))
+    run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+    return directory
 end
 
 # dynamic import of files??
