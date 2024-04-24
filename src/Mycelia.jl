@@ -998,6 +998,16 @@ function drop_empty_columns(table)
     return table[!, .!is_empty_column]
 end
 
+function tarchive(;directory, tarchive=folder * ".tar.gz")
+    run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+    return tarchive
+end
+
+function tar_extract(;tarchive, directory=replace(tarchive, r"\.tar\.gz$" => ""))
+    run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+    return directory
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
