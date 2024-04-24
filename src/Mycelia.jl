@@ -961,6 +961,43 @@ function ks(;min=0, max=10_000)
     )
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function rclone_upload(source, dest)
+    done = false
+    sleep_timer = 60
+    attempts = 0
+    while !done && attempts < 3
+        attempts += 1
+        try
+            # https://forum.rclone.org/t/google-drive-uploads-failing-http-429/34147/9
+            # --tpslimit                                       Limit HTTP transactions per second to this
+            # --drive-chunk-size SizeSuffix                    Upload chunk size (default 8Mi)
+            # --drive-upload-cutoff SizeSuffix                 Cutoff for switching to chunked upload (default 8Mi)
+            # not currently using these but they may become helpful
+            # --drive-pacer-burst int                          Number of API calls to allow without sleeping (default 100)
+            # --drive-pacer-min-sleep Duration                 Minimum time to sleep between API calls (default 100ms)
+            cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            @info "uploading $(source) to $(dest) with command: $(cmd)"
+            run(cmd)
+            done = true
+        catch
+            @info "upload incomplete, sleeping $(sleep_timer) seconds and trying again..."
+            sleep(sleep_timer)
+            sleep_timer *= 2
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function drop_empty_columns(table)
+    is_empty_column = map(col -> all(isempty.(col)), eachcol(table))
+    return table[!, .!is_empty_column]
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
