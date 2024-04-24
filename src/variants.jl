@@ -160,3 +160,25 @@ function equivalent_fasta_sequences(fasta_1, fasta_2)
     @show setdiff(fasta_2_hashes, fasta_1_hashes)
     return fasta_1_hashes == fasta_2_hashes
 end
+
+# function normalize_vcf(;reference_fasta, vcf, normalized_vcf=)
+function normalize_vcf(;reference_fasta, vcf_file)
+    normalized_vcf=replace(vcf_file, Mycelia.VCF_REGEX => ".sorted.normalized.vcf")
+    out_vcf = normalized_vcf * ".gz"
+    if !isfile(out_vcf)
+        if occursin(r"\.gz$", x)
+            gzipped_vcf = vcf_file
+        else
+            gzipped_vcf = "$(vcf).gz"
+            run(`$(Conda.conda) run --live-stream -n htslib bgzip $(vcf_file)`)
+        end
+        tabix_index = "$(gzipped_vcf).tbi"
+        if !isfile(tabix_index)
+            run(`$(Conda.conda) run --live-stream -n tabix tabix -f -p vcf $(vcf_file).gz`)
+        end
+        run(pipeline(`$(Conda.conda) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`, normalized_vcf_file))
+        run(`$(Conda.conda) run --live-stream -n htslib bgzip $(normalized_vcf_file)`)
+        run(`$(Conda.conda) run --live-stream -n tabix tabix -p vcf $(out_vcf)`)
+    end
+    return out_vcf
+end

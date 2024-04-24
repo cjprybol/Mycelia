@@ -77,6 +77,7 @@ end
 const CONDA_RUNNER = find_mamba()
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
+const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
 
 function add_bioconda_env(pkg; force=false)
     try
