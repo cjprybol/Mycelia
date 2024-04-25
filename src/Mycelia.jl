@@ -965,7 +965,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function rclone_upload(source, dest)
+function rclone_copy(source, dest)
     done = false
     sleep_timer = 60
     attempts = 0
@@ -980,11 +980,11 @@ function rclone_upload(source, dest)
             # --drive-pacer-burst int                          Number of API calls to allow without sleeping (default 100)
             # --drive-pacer-min-sleep Duration                 Minimum time to sleep between API calls (default 100ms)
             cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
-            @info "uploading $(source) to $(dest) with command: $(cmd)"
+            @info "copying $(source) to $(dest) with command: $(cmd)"
             run(cmd)
             done = true
         catch
-            @info "upload incomplete, sleeping $(sleep_timer) seconds and trying again..."
+            @info "copying incomplete, sleeping $(sleep_timer) seconds and trying again..."
             sleep(sleep_timer)
             sleep_timer *= 2
         end
@@ -999,7 +999,7 @@ function drop_empty_columns(table)
     return table[!, .!is_empty_column]
 end
 
-function tarchive(;directory, tarchive=folder * ".tar.gz")
+function tarchive(;directory, tarchive=directory * ".tar.gz")
     run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
     return tarchive
 end
