@@ -1010,6 +1010,11 @@ function tar_extract(;tarchive, directory=replace(tarchive, r"\.tar\.gz$" => "")
     return directory
 end
 
+function samtools_index_fasta(;fasta)
+    Mycelia.add_bioconda_env("samtools")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
