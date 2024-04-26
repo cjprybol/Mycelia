@@ -6,10 +6,17 @@ function run_transterm(;fasta, gff="")
         coordinates = generate_transterm_coordinates_from_gff(gff)
     end
     transterm_calls_file = replace(coordinates, ".coords" => ".transterm.txt")
-    Mycelia.add_bioconda_env("transtermhp")    
-    conda_base = chomp(read(`$(Mycelia.CONDA_RUNNER) info --base`, String))
+    Mycelia.add_bioconda_env("transtermhp")
+
+    conda_base = dirname(dirname(Mycelia.CONDA_RUNNER))
     dat_file = "$(conda_base)/envs/transtermhp/data/expterm.dat"
+    # @show isfile(dat_file)
+    # @assert = first(readlines(`find $(conda_base) -name "expterm.dat"`))
+    # @show dat_file
     @assert isfile(dat_file)
+    # conda_base = chomp(read(`$(Mycelia.CONDA_RUNNER) info --base`, String))
+    # dat_file = "$(conda_base)/envs/transtermhp/data/expterm.dat"
+    # @assert isfile(dat_file)
     run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta) $(coordinates)`, transterm_calls_file))    
     rm(coordinates)
     return transterm_calls_file
