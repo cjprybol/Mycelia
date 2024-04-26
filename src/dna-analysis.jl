@@ -1,12 +1,18 @@
 function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
     if occursin(r"\.bam$", xam)
         MODULE = XAM.BAM
+        io = open(xam)
     elseif occursin(r"\.sam$", xam)
         MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
     else
         error("unrecognized file extension in file: $xam")
     end
-    reader = open(MODULE.Reader, xam)
+    # reader = open(MODULE.Reader, io)
+    reader = MODULE.Reader(io)
     header = reader.header
     record_iterator = Iterators.filter(record -> true, reader)
     if filter_unmapped
@@ -20,6 +26,7 @@ function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_q
     records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
     # reset header to specify sorted
     header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
+    close(io)
     return (;records, header)
 end
 
@@ -542,9 +549,9 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
                 size=(2*scale, 1*scale),
                 margins=3Plots.PlotMeasures.mm
                 )
-            StatsPlots.hline!(p, [max_canonical_kmers], label="absolute maximum")
-            StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum")
-            StatsPlots.vline!(p, [inferred_midpoint], label="inferred midpoint")
+            StatsPlots.hline!(p, [max_canonical_kmers], label="absolute maximum", line = :solid, linewidth = 2)
+            StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum", line = :dash, linewidth = 2)
+            StatsPlots.vline!(p, [inferred_midpoint], label="inferred midpoint", line = :dot, linewidth = 2)
             # xs = vcat(sampling_points, [last(sampling_points) * 2^i for i in 1:2])
             xs = sort([sampling_points..., inferred_midpoint])
             ys = calculate_v(xs, fit.param)
@@ -552,7 +559,9 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
                 p,
                 xs,
                 ys,
-                label="fit trendline")
+                label="fit trendline",
+                line=:dashdot,
+                linewidth = 2)
             display(p)
             if !ismissing(outdir)
                 StatsPlots.savefig(p, joinpath(outdir, "$k.png"))

@@ -1152,6 +1152,9 @@ function deduplicate_fasta_file(in_fasta, out_fasta)
     return out_fasta
 end
 
+
+# seqkit concat $(cat fasta_files.txt) > merged.fasta
+# seqtk seq -L $(cat fasta_files.txt) > merged.fasta
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1161,13 +1164,13 @@ A cross-platform version of `cat *.fasta > joint.fasta`
 
 See merge_fasta_files
 """
-function concatenate_fasta_files(;fasta_files, fasta_file)
-    open(fasta_file, "w") do io
-        ProgressMeter.@showprogress for f in fasta_files
-            write(io, read(f))
-        end
+function concatenate_files(;files, file)
+    close(open(file, "w"))
+    ProgressMeter.@showprogress for f in files
+        # stderr=file_path
+        run(pipeline(`cat $(f)`, stdout=file, append=true))
     end
-    return fasta_file
+    return file
 end
 
 """
@@ -1183,9 +1186,9 @@ function merge_fasta_files(;fasta_files, fasta_file)
     open(fasta_file, "w") do io
         fastx_io = FASTX.FASTA.Writer(io)
         ProgressMeter.@showprogress for f in fasta_files
+            f_id = replace(basename(f), Mycelia.FASTA_REGEX => "")
             for record in Mycelia.open_fastx(f)
-                original_record_id = FASTX.identifier(record)
-                new_record_id = basename(f) * "__" * original_record_id
+                new_record_id = f_id * "__" * FASTX.identifier(record)
                 if new_record_id in identifiers
                     @warn "new identifier $(new_record_id) already in identifiers!!!"
                 end

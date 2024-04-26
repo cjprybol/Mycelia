@@ -56,6 +56,8 @@ import Pkg
 const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
+const NERSC_MEM=512
+const NERSC_CPU=256
 # const AA_ALPHABET = filter(
 #     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
 #     BioSymbols.alphabet(BioSymbols.AminoAcid))
@@ -203,8 +205,9 @@ function scg_sbatch(;
     --mem=$(mem_gb)G
     --wrap $(cmd)
     `
+    sleep(5)
     run(submission)
-    sleep(1)
+    sleep(5)
     return true
 end
 
@@ -224,8 +227,10 @@ use
 - premium (priorty runs limited to 5x throughput)
 
 max request is 512Gb memory and 128 cores per node
+
+https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
 """
-function nersc_sbatch(;
+function nersc_sbatch_shared(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
@@ -235,9 +240,9 @@ function nersc_sbatch(;
         ntasks::Int=1,
         time::String="1-00:00:00",
         cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 4,
+        mem_gb::Int=cpus_per_task * 2,
         cmd::String,
-        constrain::String="cpu"
+        constraint::String="cpu"
     )
     submission = 
     `sbatch
@@ -255,8 +260,115 @@ function nersc_sbatch(;
     --constraint=cpu
     --wrap $(cmd)
     `
+    sleep(5)
     run(submission)
-    sleep(1)
+    sleep(5)
+    return true
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Submit a command to SLURM using sbatch
+
+https://docs.nersc.gov/jobs/policy/
+https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
+
+default is to use shared qos
+
+use
+- regular
+- preempt (reduced credit usage but not guaranteed to finish)
+- premium (priorty runs limited to 5x throughput)
+
+https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
+"""
+function nersc_sbatch_regular(;
+        job_name::String,
+        mail_user::String,
+        mail_type::String="ALL",
+        logdir::String=pwd(),
+        qos::String="regular",
+        nodes::Int=1,
+        ntasks::Int=1,
+        time::String="1-00:00:00",
+        cpus_per_task::Int=Mycelia.NERSC_CPU,
+        mem_gb::Int=Int(floor(Mycelia.NERSC_MEM * .9)),
+        cmd::String,
+        constraint::String="cpu"
+    )
+    submission = 
+    `sbatch
+    --job-name=$(job_name)
+    --mail-user=$(mail_user)
+    --mail-type=$(mail_type)
+    --error=$(logdir)/%j.%x.err
+    --output=$(logdir)/%j.%x.out
+    --qos=$(qos)
+    --nodes=$(nodes)
+    --ntasks=$(ntasks)
+    --time=$(time)   
+    --cpus-per-task=$(cpus_per_task)
+    --mem=$(mem_gb)G
+    --constraint=cpu
+    --wrap $(cmd)
+    `
+    sleep(5)
+    run(submission)
+    sleep(5)
+    return true
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Submit a command to SLURM using sbatch
+
+https://docs.nersc.gov/jobs/policy/
+https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
+
+default is to use shared qos
+
+use
+- regular
+- preempt (reduced credit usage but not guaranteed to finish)
+- premium (priorty runs limited to 5x throughput)
+
+https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
+"""
+function nersc_sbatch_premium(;
+        job_name::String,
+        mail_user::String,
+        mail_type::String="ALL",
+        logdir::String=pwd(),
+        qos::String="premium",
+        nodes::Int=1,
+        ntasks::Int=1,
+        time::String="1-00:00:00",
+        cpus_per_task::Int=Mycelia.NERSC_CPU,
+        mem_gb::Int=Int(floor(Mycelia.NERSC_MEM * .9)),
+        cmd::String,
+        constraint::String="cpu"
+    )
+    submission = 
+    `sbatch
+    --job-name=$(job_name)
+    --mail-user=$(mail_user)
+    --mail-type=$(mail_type)
+    --error=$(logdir)/%j.%x.err
+    --output=$(logdir)/%j.%x.out
+    --qos=$(qos)
+    --nodes=$(nodes)
+    --ntasks=$(ntasks)
+    --time=$(time)   
+    --cpus-per-task=$(cpus_per_task)
+    --mem=$(mem_gb)G
+    --constraint=cpu
+    --wrap $(cmd)
+    `
+    sleep(5)
+    run(submission)
+    sleep(5)
     return true
 end
 
@@ -744,44 +856,32 @@ function map_pacbio_reads(;
         fastq,
         reference_fasta,
         temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
-        # outfile = replace(temp_sam_outfile, ".sam" => ".sorted.bam"),
-        outfile = replace(temp_sam_outfile, ".sam" => ".sorted.sam.gz"),
+        outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz"),
         threads = Sys.CPU_THREADS,
-        # 4G is the default
-        # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
-        index_chunk_size="$(Int(floor(Sys.total_memory()/3 / 1e9)))G",
+        memory = Sys.total_memory(),
         shell_only = false
     )
+    # 4G is the default
+    # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
+    index_chunk_size = "$(Int(floor(memory/5e9)))G"
     @show index_chunk_size
     @show threads
     Mycelia.add_bioconda_env("minimap2")
-    Mycelia.add_bioconda_env("samtools")
+    # Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
     if shell_only
-        # cmd =
-        # """
-        # $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-        # && $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile) \\
-        # | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile) \\
-        # && rm $(temp_sam_outfile)
-        # """
-        # return cmd
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+        return cmd
     else
         if !isfile(outfile)
             map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
             run(map)
-            # note - mapping to NCBI NT has too many sequences and header is invalid BAM spec
-            # switch to writing out gzip compressed sam instead
-            # p = pipeline(
-            #     `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile)`,
-            #     `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile)`
-            # )
-            p = pipeline(
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile)`,
-                `gzip`
-            )
-            # run(pipeline(p))
-            run(pipeline(p, outfile))
-            rm(temp_sam_outfile)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`)
+            @assert isfile(outfile)
         else
             @info "$(outfile) already present"
         end
@@ -1004,7 +1104,7 @@ function tarchive(;directory, tarchive=directory * ".tar.gz")
     return tarchive
 end
 
-function tar_extract(;tarchive, directory=replace(tarchive, r"\.tar\.gz$" => ""))
+function tar_extract(;tarchive, directory=dirname(tarchive))
     run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
     return directory
 end
