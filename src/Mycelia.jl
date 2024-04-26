@@ -999,6 +999,7 @@ function drop_empty_columns(table)
     return table[!, .!is_empty_column]
 end
 
+# Need to add hashdeep & logging
 function tarchive(;directory, tarchive=directory * ".tar.gz")
     run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
     return tarchive

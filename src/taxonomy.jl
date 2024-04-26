@@ -1,9 +1,26 @@
 # https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/
 
+function setup_taxonkit_taxonomy()
+    run(`wget -q ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
+    Mycelia.tar_extract(tarchive="taxdump.tar.gz", directory=mkpath("$(homedir())/.taxonkit"))
+end
+
+
+
+# this is faster than NCBI version
+# run(pipeline(
+#         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon 1 --children --as-json-lines`,
+#         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
+#     )
+# )
 function list_full_taxonomy()
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
     p = pipeline(
-        `conda run --no-capture-output -n taxonkit taxonkit list --ids 1`,
-        `conda run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --add-prefix --fill-miss-rank --show-lineage-taxids --format '{k}\;{K}\;{p}\;{c}\;{o}\;{f}\;{g}\;{s}'`
+        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids 1`,
+        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --add-prefix --fill-miss-rank --show-lineage-taxids --format '{k};{K};{p};{c};{o};{f};{g};{s}'`
     )
     data, header = uCSV.read(open(p), delim='\t')
     header = ["taxid", "lineage", "taxid_lineage"]
@@ -142,7 +159,7 @@ end
 # end
 
 function list_subtaxa(taxid)
-    return parse.(Int, filter(!isempty, strip.(readlines(`conda run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
+    return parse.(Int, filter(!isempty, strip.(readlines(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
 end
 
 function name2taxid(name)
@@ -152,22 +169,60 @@ function name2taxid(name)
     return DataFrames.DataFrame(data, header)
 end
 
-function taxids2lineage_name_and_rank(taxids::AbstractVector{Int})
+# other ncbi-datasets reports that I didn't find as useful initially
+# run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon 10114 --report names`))
+# x = JSON.parse(open(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon "rattus norvegicus"`)))
+# run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download taxonomy taxon 33554 --children`))
+
+# more useful
+function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
+    Mycelia.add_bioconda_env("ncbi-datasets-cli")
+    joint_table = DataFrames.DataFrame()
+    ProgressMeter.@showprogress for taxid in taxids
+        cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon $(taxid) --as-json-lines`
+        cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
+        io = open(pipeline(cmd1, cmd2))
+        append!(joint_table, DataFrames.DataFrame(uCSV.read(io, delim='\t', header=1)), promote=true)
+    end
+    return joint_table
+end
+
+# more complete
+function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
     f = tempname()
     open(f, "w") do io
         for taxid in taxids
             println(io, taxid)
         end
     end
-    data, header = uCSV.read(open(pipeline(`conda run --live-stream -n taxonkit taxonkit lineage --show-name --show-rank $(f)`)), delim='\t', header=false)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lineage --show-lineage-taxids --show-lineage-ranks $(f)`
+    data, header = uCSV.read(open(pipeline(cmd)), delim='\t', header=false)
     rm(f)
-    header = ["taxid", "lineage", "tax_name", "tax_rank"]
+    header = ["taxid", "lineage", "lineage-taxids", "lineage-ranks"]
     return DataFrames.DataFrame(data, header)
 end
 
-# function lca(taxids)
-# end
+function taxids2lca(ids::Vector{Int})
+    # Convert the list of integers to a space-separated string
+    input_str = join(ids, " ")
 
+    # Pass the input string to the `taxonkit lca` command and capture the output
+    output = read(pipeline(`echo $(input_str)`, `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lca`), String)
+
+    # Split the output string and select the last item
+    lca_id = split(chomp(output), "\t")[end]
+
+    # Convert the LCA identifier to an integer and return it
+    return parse(Int, lca_id)
+end
+
+function names2taxids(names::AbstractVector{<:AbstractString})
+    results = []
+    ProgressMeter.@showprogress for name in names
+        push!(results, Mycelia.name2taxid(name))
+    end
+    return reduce(vcat, results)
+end
 
 # """
 # Downloads and unpacks the desired .tar.gz prebuilt kraken index
