@@ -1331,7 +1331,7 @@ function polish_fastq(;fastq, k=1)
     return (fastq = fastq_out * ".gz", k=assembly_k)
 end
 
-function build_directed_kmer_graph(;fastq, k=1, plot=true)
+function build_directed_kmer_graph(;fastq, k=1, plot=false)
     if k == 1
         assembly_k = Mycelia.assess_dnamer_saturation([fastq])
     else
@@ -1474,7 +1474,7 @@ function build_directed_kmer_graph(;fastq, k=1, plot=true)
 end
 
 # selected after trialing previous and next ks and finding those to be too unstable
-function iterative_polishing(fastq, max_k = 89)
+function iterative_polishing(fastq, max_k = 89, plot=false)
     # initial polishing
     polishing_results = [polish_fastq(fastq=fastq)]
     while (!ismissing(last(polishing_results).k)) && (last(polishing_results).k < max_k)
