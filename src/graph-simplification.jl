@@ -305,136 +305,227 @@
 # 2
 # ```
 # """
-function determine_oriented_untigs(kmer_graph, untigs)
-    oriented_untigs = []
-    for path in untigs
-        sequence = BioSequences.LongDNASeq(kmer_graph.vprops[first(path)][:kmer])
-        if length(path) == 1
-            orientations = [true]
-        elseif length(path) > 1
-            initial_edge = Graphs.Edge(path[1], path[2])
-            initial_orientation = first(kmer_graph.eprops[initial_edge][:orientations]).source_orientation
-            orientations = [initial_orientation]
-            if !initial_orientation
-                sequence = BioSequences.reverse_complement(sequence)
-            end
+# function determine_oriented_untigs(kmer_graph, untigs)
+#     oriented_untigs = []
+#     for path in untigs
+#         sequence = BioSequences.LongDNASeq(kmer_graph.vprops[first(path)][:kmer])
+#         if length(path) == 1
+#             orientations = [true]
+#         elseif length(path) > 1
+#             initial_edge = Graphs.Edge(path[1], path[2])
+#             initial_orientation = first(kmer_graph.eprops[initial_edge][:orientations]).source_orientation
+#             orientations = [initial_orientation]
+#             if !initial_orientation
+#                 sequence = BioSequences.reverse_complement(sequence)
+#             end
 
-            for (src, dst) in zip(path[1:end-1], path[2:end])
-                edge = Graphs.Edge(src, dst)
-                destination = BioSequences.LongDNASeq(kmer_graph.vprops[edge.dst][:kmer])
-                destination_orientation = first(kmer_graph.eprops[edge][:orientations]).destination_orientation
-                push!(orientations, destination_orientation)
-                if !destination_orientation
-                    destination = BioSequences.reverse_complement(destination)
-                end
-                sequence_suffix = sequence[end-length(destination)+2:end]
-                destination_prefix = destination[1:end-1]
-                @assert sequence_suffix == destination_prefix
-                push!(sequence, destination[end])
-            end
-        end
+#             for (src, dst) in zip(path[1:end-1], path[2:end])
+#                 edge = Graphs.Edge(src, dst)
+#                 destination = BioSequences.LongDNASeq(kmer_graph.vprops[edge.dst][:kmer])
+#                 destination_orientation = first(kmer_graph.eprops[edge][:orientations]).destination_orientation
+#                 push!(orientations, destination_orientation)
+#                 if !destination_orientation
+#                     destination = BioSequences.reverse_complement(destination)
+#                 end
+#                 sequence_suffix = sequence[end-length(destination)+2:end]
+#                 destination_prefix = destination[1:end-1]
+#                 @assert sequence_suffix == destination_prefix
+#                 push!(sequence, destination[end])
+#             end
+#         end
 
-        oriented_untig = 
-        (
-            sequence = BioSequences.canonical(sequence),
-            path = BioSequences.iscanonical(sequence) ? path : reverse(path),
-            orientations = BioSequences.iscanonical(sequence) ? orientations : reverse(.!orientations),
-            weight = Statistics.median([kmer_graph.vprops[v][:weight] for v in path])
-        )
+#         oriented_untig = 
+#         (
+#             sequence = BioSequences.canonical(sequence),
+#             path = BioSequences.iscanonical(sequence) ? path : reverse(path),
+#             orientations = BioSequences.iscanonical(sequence) ? orientations : reverse(.!orientations),
+#             weight = Statistics.median([kmer_graph.vprops[v][:weight] for v in path])
+#         )
 
-        push!(oriented_untigs, oriented_untig)
-    end
-    return oriented_untigs
-end
+#         push!(oriented_untigs, oriented_untig)
+#     end
+#     return oriented_untigs
+# end
+
+# # """
+# # $(DocStringExtensions.TYPEDSIGNATURES)
+
+# # Description
+
+# # ```jldoctest
+# # julia> 1 + 1
+# # 2
+# # ```
+# # """
+# function resolve_untigs(kmer_graph)
+#     untigs = Vector{Int}[]
+#     visited = falses(Graphs.nv(kmer_graph))
+#     first_unvisited = findfirst(!, visited)
+#     while first_unvisited != nothing
+#         forward_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, true)
+#         reverse_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, false)
+#         inverted_reverse_walk = [Graphs.Edge(e.dst, e.src) for e in reverse(reverse_walk)]
+#         edges = vcat(inverted_reverse_walk, forward_walk)
+#         if isempty(edges)
+#             untig = [first_unvisited]
+#         else
+#             untig = vcat([first(edges).src], [edge.dst for edge in edges])
+#         end
+#         push!(untigs, untig)
+#         for vertex in untig
+#             visited[vertex] = true
+#         end
+#         first_unvisited = findfirst(!, visited)
+#     end
+#     return untigs
+# end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Description
 
 # ```jldoctest
 # julia> 1 + 1
 # 2
 # ```
 # """
-function resolve_untigs(kmer_graph)
-    untigs = Vector{Int}[]
-    visited = falses(Graphs.nv(kmer_graph))
-    first_unvisited = findfirst(!, visited)
-    while first_unvisited != nothing
-        forward_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, true)
-        reverse_walk = oriented_unbranching_walk(kmer_graph, first_unvisited, false)
-        inverted_reverse_walk = [Graphs.Edge(e.dst, e.src) for e in reverse(reverse_walk)]
-        edges = vcat(inverted_reverse_walk, forward_walk)
-        if isempty(edges)
-            untig = [first_unvisited]
-        else
-            untig = vcat([first(edges).src], [edge.dst for edge in edges])
-        end
-        push!(untigs, untig)
-        for vertex in untig
-            visited[vertex] = true
-        end
-        first_unvisited = findfirst(!, visited)
-    end
-    return untigs
-end
+# function oriented_unbranching_walk(kmer_graph, vertex, orientation)
+#     walk = []
+#     viable_neighbors = find_unbranched_neighbors(kmer_graph, vertex, orientation)
+#     while length(viable_neighbors) == 1
+# #         @show "found a viable neighbor!!"
+#         viable_neighbor = first(viable_neighbors)
+#         edge = Graphs.Edge(vertex, viable_neighbor)
+#         push!(walk, edge)
+#         vertex = edge.dst
+#         viable_neighbors = Set{Int}()
+#         destination_orientations = [o.destination_orientation for o in kmer_graph.eprops[edge][:orientations]]
+#         for destination_orientation in destination_orientations
+#             union!(viable_neighbors, find_unbranched_neighbors(kmer_graph, vertex, destination_orientation))
+#         end
+#     end
+#     return walk
+# end
 
-function apply_kmedoids_treshold(graph)
-    kmer_counts = [MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-    kmer_counts_histogram = sort(collect(StatsBase.countmap(values(kmer_counts))), by=x->x[1])
+# Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
+# or get fasta directly from FTP site
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function find_unbranched_neighbors(kmer_graph, vertex, orientation)
+#     downstream_vertices = find_downstream_vertices(kmer_graph, vertex, orientation)
+# #     backtrack_vertices
+# #     @show downstream_vertices
+#     if length(downstream_vertices) == 1
+#         downstream_vertex = first(downstream_vertices)
+# #         @show downstream_vertex
+#         edge = Graphs.Edge(vertex, downstream_vertex)
+# #         @show edge
+#         destination_orientations = [o.destination_orientation for o in kmer_graph.eprops[edge][:orientations]]
+# #         @show destination_orientations
+#         for destination_orientation in destination_orientations
+#             backtrack_vertices = find_downstream_vertices(kmer_graph, downstream_vertex, !destination_orientation)
+# #             @show backtrack_vertices
+#             # if the only backtrack is the vertex we're on, then we can simplify
+#             if backtrack_vertices == Set([vertex])
+#                 return downstream_vertices
+#             end
+#         end
+#     end
+#     return Int[]
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
+# or get fasta directly from FTP site
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function find_downstream_vertices(kmer_graph, vertex, orientation)
+#     viable_neighbors = Set{Int}()
+#     for neighbor in Graphs.neighbors(kmer_graph, vertex)
+#         not_same_vertex = vertex != neighbor
+#         candidate_edge = Graphs.Edge(vertex, neighbor)
+#         # palindromes can have multiple viable orientations
+#         # check each viable orientation individually
+#         edge_src_orientations = [e.source_orientation for e in kmer_graph.eprops[candidate_edge][:orientations]]
+#         for edge_src_orientation in edge_src_orientations
+# #             edge_src_orientation = kmer_graph.eprops[candidate_edge][:orientations].source_orientation
+#             viable_orientation = edge_src_orientation == orientation
+#             if not_same_vertex && viable_orientation
+#                 push!(viable_neighbors, neighbor)
+#             end
+#         end
+#     end
+#     return viable_neighbors
+# end
+
+
+# function apply_kmedoids_treshold(graph)
+#     kmer_counts = [MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
+
+#     kmer_counts_histogram = sort(collect(StatsBase.countmap(values(kmer_counts))), by=x->x[1])
+
+# #     scale = 250
+# #     p = plot_kmer_frequency_spectra(values(kmer_counts), size=(2scale,scale), log_scale=log2, title="kmer frequencies")
+# #     display(p)
+
+# #     p = StatsPlots.scatter(log2.(first.(kmer_counts_histogram)))
+# #     display(p)
+
+#     kmer_depth_of_coverage_bins = log2.(first.(kmer_counts_histogram))
+
+#     distance_matrix = zeros((length(kmer_depth_of_coverage_bins), length(kmer_depth_of_coverage_bins)))
+#     for (row, depth_of_coverage_bin_1) in enumerate(kmer_depth_of_coverage_bins)
+#         for (col, depth_of_coverage_bin_2) in enumerate(kmer_depth_of_coverage_bins)
+#             distance = abs(depth_of_coverage_bin_1 - depth_of_coverage_bin_2)
+#             distance_matrix[row, col] = distance
+#         end
+#     end
+#     distance_matrix
+
+#     # max out k at the same max k we use for DNAMers
+#     max_k = min(length(kmer_depth_of_coverage_bins), 63)
+#     ks = Primes.primes(2, max_k)
+#     ys = map(k ->
+#                 Statistics.mean(Statistics.mean(Clustering.silhouettes(Clustering.kmedoids(distance_matrix, k), distance_matrix)) for i in 1:100),
+#                 ks)
+
+#     p = StatsPlots.plot(ks, ys, label="silhouette score", ylabel = "silhouette score", xlabel = "number of clusters")
+#     display(p)
+
+#     ymax, ymax_index = findmax(ys)
+#     optimal_k = ks[ymax_index]
+#     clusterings = [Clustering.kmedoids(distance_matrix, optimal_k) for i in 1:10]
+#     max_value, max_value_index = findmax(clustering -> Statistics.mean(Clustering.silhouettes(clustering, distance_matrix)), clusterings)
+#     optimal_clustering = clusterings[max_value_index]
+#     # optimal_clustering.assignments
+#     min_medoid_value, min_medoid_index = findmin(optimal_clustering.medoids)
+#     indices_to_include = map(assignment -> assignment .!= min_medoid_index, optimal_clustering.assignments)
+#     # kmer_depth_of_coverage_bins
+#     threshold = Int(ceil(2^maximum(kmer_depth_of_coverage_bins[.!indices_to_include]))) + 1
 
 #     scale = 250
-#     p = plot_kmer_frequency_spectra(values(kmer_counts), size=(2scale,scale), log_scale=log2, title="kmer frequencies")
+#     p = plot_kmer_frequency_spectra(values(kmer_counts), log_scale = log2, size=(2scale,scale), title="kmer frequencies")
+#     StatsPlots.vline!(p, log2.([threshold]))
 #     display(p)
 
-#     p = StatsPlots.scatter(log2.(first.(kmer_counts_histogram)))
-#     display(p)
+#     # find all vertices with count > threshold
+#     vertices_to_keep = [v for v in Graphs.vertices(graph) if (MetaGraphs.get_prop(graph, v, :count) > threshold)]
+#     # induce subgraph
+#     induced_subgraph, vertex_map = Graphs.induced_subgraph(graph, vertices_to_keep)
 
-    kmer_depth_of_coverage_bins = log2.(first.(kmer_counts_histogram))
-
-    distance_matrix = zeros((length(kmer_depth_of_coverage_bins), length(kmer_depth_of_coverage_bins)))
-    for (row, depth_of_coverage_bin_1) in enumerate(kmer_depth_of_coverage_bins)
-        for (col, depth_of_coverage_bin_2) in enumerate(kmer_depth_of_coverage_bins)
-            distance = abs(depth_of_coverage_bin_1 - depth_of_coverage_bin_2)
-            distance_matrix[row, col] = distance
-        end
-    end
-    distance_matrix
-
-    # max out k at the same max k we use for DNAMers
-    max_k = min(length(kmer_depth_of_coverage_bins), 63)
-    ks = Primes.primes(2, max_k)
-    ys = map(k ->
-                Statistics.mean(Statistics.mean(Clustering.silhouettes(Clustering.kmedoids(distance_matrix, k), distance_matrix)) for i in 1:100),
-                ks)
-
-    p = StatsPlots.plot(ks, ys, label="silhouette score", ylabel = "silhouette score", xlabel = "number of clusters")
-    display(p)
-
-    ymax, ymax_index = findmax(ys)
-    optimal_k = ks[ymax_index]
-    clusterings = [Clustering.kmedoids(distance_matrix, optimal_k) for i in 1:10]
-    max_value, max_value_index = findmax(clustering -> Statistics.mean(Clustering.silhouettes(clustering, distance_matrix)), clusterings)
-    optimal_clustering = clusterings[max_value_index]
-    # optimal_clustering.assignments
-    min_medoid_value, min_medoid_index = findmin(optimal_clustering.medoids)
-    indices_to_include = map(assignment -> assignment .!= min_medoid_index, optimal_clustering.assignments)
-    # kmer_depth_of_coverage_bins
-    threshold = Int(ceil(2^maximum(kmer_depth_of_coverage_bins[.!indices_to_include]))) + 1
-
-    scale = 250
-    p = plot_kmer_frequency_spectra(values(kmer_counts), log_scale = log2, size=(2scale,scale), title="kmer frequencies")
-    StatsPlots.vline!(p, log2.([threshold]))
-    display(p)
-
-    # find all vertices with count > threshold
-    vertices_to_keep = [v for v in Graphs.vertices(graph) if (MetaGraphs.get_prop(graph, v, :count) > threshold)]
-    # induce subgraph
-    induced_subgraph, vertex_map = Graphs.induced_subgraph(graph, vertices_to_keep)
-
-    # set kmer as indexing prop
-    MetaGraphs.set_indexing_prop!(induced_subgraph, :kmer)
-    return induced_subgraph
-end
+#     # set kmer as indexing prop
+#     MetaGraphs.set_indexing_prop!(induced_subgraph, :kmer)
+#     return induced_subgraph
+# end
