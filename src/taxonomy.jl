@@ -163,6 +163,10 @@ function list_subtaxa(taxid)
 end
 
 function name2taxid(name)
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
     p = pipeline(`echo $(name)`, `conda run --no-capture-output -n taxonkit taxonkit name2taxid --show-rank`)
     data, header = uCSV.read(open(p), delim='\t')
     header = ["name", "taxid", "rank"]
@@ -189,6 +193,10 @@ end
 
 # more complete
 function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
     f = tempname()
     open(f, "w") do io
         for taxid in taxids
@@ -203,6 +211,10 @@ function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
 end
 
 function taxids2lca(ids::Vector{Int})
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
     # Convert the list of integers to a space-separated string
     input_str = join(ids, " ")
 

@@ -1485,6 +1485,68 @@ function iterative_polishing(fastq, max_k = 89, plot=false)
     return polishing_results
 end
 
+function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".seqid2taxid.txt.gz")
+    Mycelia.add_bioconda_env("blast")
+    if !isfile(outfile)
+        # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
+        @time run(pipeline(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt "%a %T" -db $(path_to_db)`, `gzip`), outfile))
+    else
+        @info "$(outfile) already present"
+    end
+    return outfile
+end
+
+function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
+    data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
+    header = ["sequence_id", "taxid"]
+    DataFrames.DataFrame(data, header)
+end
+
+function xam_records_to_dataframe(records)
+    record_table = DataFrames.DataFrame(
+        template = String[],
+        flag = UInt16[],
+        reference = String[],
+        position = UnitRange{Int}[],
+        cigar = String[],
+        mappingquality = UInt8[],
+        alignlength = Int[],
+        ismapped = Bool[],
+        isprimary = Bool[]
+    )
+    
+    # short read mate pairs
+    # XAM.SAM.isnextmapped(record)
+    # XAM.SAM.nextposition(record)
+    # XAM.SAM.nextrefname(record)
+    # XAM.SAM.alignment(record)
+
+    # internal functions? output nonsense
+    # XAM.SAM.templength(record)
+    # XAM.SAM.sequence(record)
+    # XAM.SAM.seqlength(record)
+    # XAM.SAM.quality(record)
+    # XAM.SAM.auxdata(record)
+    
+    for record in records
+        row = (
+            template = XAM.SAM.tempname(record),
+            flag = XAM.flag(record),
+            reference = XAM.SAM.refname(record),
+            position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
+            mappingquality = XAM.SAM.mappingquality(record),
+            cigar = XAM.SAM.cigar(record),
+            alignlength = XAM.SAM.alignlength(record),
+            ismapped = XAM.SAM.ismapped(record),
+            isprimary = XAM.SAM.isprimary(record),
+            )
+        push!(record_table, row)
+    end
+    return record_table
+end
+        
+
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
