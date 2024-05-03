@@ -1100,9 +1100,58 @@ function drop_empty_columns(table)
     return table[!, .!is_empty_column]
 end
 
+# # Need to add hashdeep & logging
+# function tarchive(;directory, tarchive=directory * ".tar.gz")
+#     run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+#     return tarchive
+# end
+
+function install_hashdeep()
+    if Sys.which("hashdeep") !== nothing
+        println("hashdeep executable found")
+    else
+        println("hashdeep executable not found in PATH, installing")
+        try
+            run(`sudo apt install hashdeep -y`)
+        catch
+            run(`apt install hashdeep -y`)
+        end
+    end
+end
+
 # Need to add hashdeep & logging
-function tarchive(;directory, tarchive=directory * ".tar.gz")
-    run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+function create_tarchive(;directory, tarchive=directory * ".tar.gz")
+    directory = normpath(directory)
+    tarchive = normpath(tarchive)
+    output_dir = mkpath(dirname(tarchive))
+    
+    install_hashdeep()
+
+
+    working_dir, source = splitdir(directory)
+    if isempty(source)
+        source = working_dir
+        working_dir = pwd()
+    end
+    if isempty(working_dir)
+        working_dir = pwd()
+    end
+    println("output_dir: $output_dir\n" *
+            "working_dir: $working_dir\n" *
+            "source: $source\n" *
+            "target_file: $tarchive")
+    log_file = tarchive * ".log"
+    hashdeep_file = tarchive * ".hashdeep.dfxml"
+    
+    if !isfile(tarchive)
+        run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+    end
+    if !isfile(log_file)
+        run(pipeline(`tar -tvf $(tarchive)`,log_file))
+    end
+    if !isfile(hashdeep_file)
+        run(pipeline(`hashdeep -c md5,sha1,sha256 -b -d $(tarchive)`,hashdeep_file))
+    end
     return tarchive
 end
 
@@ -1116,6 +1165,42 @@ function samtools_index_fasta(;fasta)
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
 end
 
+# not a very good function yet, but good enough for the pinches I need it for
+function parse_gfa(gfa)
+    segments = Vector{String}()
+    links = Vector{Pair{String, String}}()
+    paths = Dict{String, Vector{String}}()
+    for l in eachline(open(gfa))
+        s = split(l, '\t')
+        if first(s) == "S"
+            # segment
+            @show "here!"
+            push!(segments, string(s[2]))
+        elseif first(s) == "L"
+            # link
+            push!(links, string(s[2]) => string(s[4]))
+        elseif first(s) == "P"
+            # path
+            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
+        elseif first(s) == "A" # hifiasm https://hifiasm.readthedocs.io/en/latest/interpreting-output.html#output-file-formats
+            continue
+        else
+            println(l)
+            error("unexpected line encountered while parsing GFA")
+        end
+    end
+
+    g = Graphs.SimpleGraph(length(segments))
+
+    for link in links
+        (u, v) = link
+        ui = findfirst(segments .== u)
+        vi = findfirst(segments .== v)
+        Graphs.add_edge!(g, ui => vi)
+    end
+    return g
+end
+    
 function find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_indices)
     indices = findall(.!record_kmer_solidity)  # Find the indices of false values
     if isempty(indices)
