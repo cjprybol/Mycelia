@@ -1629,8 +1629,74 @@ function xam_records_to_dataframe(records)
     end
     return record_table
 end
-        
 
+function assess_assembly_quality(;assembled_sequence::BioSequences.LongDNA{2}, fastq::String, ks::Vector{Int}=filter(x -> 11 <= x <= 53, Mycelia.ks()))
+    results = DataFrames.DataFrame()
+    ProgressMeter.@showprogress for k in ks
+        observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, fastq)
+        assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembled_sequence)
+        cosine_distance = kmer_counts_to_cosine_similarity(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
+        js_divergence = kmer_counts_to_js_divergence(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
+        qv = kmer_counts_to_merqury_qv(raw_data_counts=observed_canonical_kmer_counts, assembly_counts=assembled_canonical_kmer_counts)
+        push!(results, (;k, cosine_distance, js_divergence, qv))
+    end
+    return results
+end
+
+# function assess_assembly_quality(;assembled_sequence::BioSequences.LongDNA{2}, fastq::String, k::Int)
+#     assess_assembly_quality(assembled_sequence=assembled_sequence, fastq=fastq, ks=[k])
+# end
+
+function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
+    sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
+    a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+    # Distances.cosine_dist(a, b) == Distances.cosine_dist(b, a) == Distances.cosine_dist(a ./ sum(a), b ./ sum(b)) == Distances.cosine_dist(b ./ sum(b), a ./ sum(a))
+    return Distances.cosine_dist(a, b)
+end
+
+function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
+    sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
+    a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+    a_norm = a ./ sum(a)
+    b_norm = b ./ sum(b)
+    # Distances.js_divergence(a ./ sum(a), b ./ sum(b)) == Distances.js_divergence(b ./ sum(b), a ./ sum(a))
+    # Distances.js_divergence(a, b) != Distances.js_divergence(a ./ sum(a), b ./ sum(b))
+    return Distances.js_divergence(a_norm, b_norm)
+end
+
+function jaccard_similarity(set1, set2)
+    return length(intersect(set1, set2)) / length(union(set1, set2))
+end
+
+function jaccard_distance(set1, set2)
+    return 1.0 - jaccard_similarity(set1, set2)
+end
+
+# function kmer_counts_to_jaccard(kmer_counts_1::AbstractDict{Kmers.DNAKmer{k}, Int64}, kmer_counts_2::AbstractDict{Kmers.DNAKmer{k}, Int64}) where k
+#     # sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
+#     # a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+#     # b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+#     # a_indices = findall(a .> 0)
+#     # b_indices = findall(b .> 0)
+#     # return Distances.jaccard(a_indices, b_indices)
+#     return jaccard(collect(keys(kmer_counts_1)), collect(keys(kmer_counts_2)))
+# end
+
+function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}, assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}) where {k,N}
+    # Ktotal = # of kmers found in assembly
+    Ktotal = length(keys(assembly_counts))
+    # Kshared = # of shared kmers between assembly and readset
+    Kshared = length(intersect(keys(raw_data_counts), keys(assembly_counts)))
+    # probabilitiy_base_in_assembly_correct
+    P = (Kshared/Ktotal)^(1/k)
+    # # Error rate
+    E = 1-P
+    QV = -10log10(E)
+    # return (;P, E, QV)
+    return QV
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
