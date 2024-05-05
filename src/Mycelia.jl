@@ -1630,11 +1630,11 @@ function xam_records_to_dataframe(records)
     return record_table
 end
 
-function assess_assembly_quality(;assembled_sequence::BioSequences.LongDNA{2}, fastq::String, ks::Vector{Int}=filter(x -> 11 <= x <= 53, Mycelia.ks()))
+function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 11 <= x <= 53, Mycelia.ks()))
     results = DataFrames.DataFrame()
     ProgressMeter.@showprogress for k in ks
-        observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, fastq)
-        assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembled_sequence)
+        observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
+        assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly)
         cosine_distance = kmer_counts_to_cosine_similarity(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
         js_divergence = kmer_counts_to_js_divergence(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
         qv = kmer_counts_to_merqury_qv(raw_data_counts=observed_canonical_kmer_counts, assembly_counts=assembled_canonical_kmer_counts)
