@@ -139,17 +139,17 @@ function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, 
     isfile("$(vcf_file).gz") && rm("$(vcf_file).gz")
     isfile("$(vcf_file).gz.tbi") && rm("$(vcf_file).gz.tbi")
     normalized_vcf_file = replace(vcf_file, ".vcf" => ".normalized.vcf")
-    run(`$(Conda.conda) run --live-stream -n htslib bgzip $(vcf_file)`)
-    run(`$(Conda.conda) run --live-stream -n tabix tabix -f -p vcf $(vcf_file).gz`)
-    run(pipeline(`$(Conda.conda) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`, normalized_vcf_file))
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(vcf_file)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -f -p vcf $(vcf_file).gz`)
+    run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`, normalized_vcf_file))
     rm("$(vcf_file).gz")
     rm("$(vcf_file).gz.tbi")
     isfile("$(normalized_vcf_file).gz") && rm("$(normalized_vcf_file).gz")
     isfile("$(normalized_vcf_file).gz.tbi") && rm("$(normalized_vcf_file).gz.tbi")
     isfile("$(normalized_vcf_file).fna") && rm("$(normalized_vcf_file).fna")
-    run(`$(Conda.conda) run --live-stream -n htslib bgzip $(normalized_vcf_file)`)
-    run(`$(Conda.conda) run --live-stream -n tabix tabix -p vcf $(normalized_vcf_file).gz`)
-    run(`$(Conda.conda) run --live-stream -n bcftools bcftools consensus -f $(in_fasta) $(normalized_vcf_file).gz -o $(out_fasta)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(normalized_vcf_file)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -p vcf $(normalized_vcf_file).gz`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools consensus -f $(in_fasta) $(normalized_vcf_file).gz -o $(out_fasta)`)
     return out_fasta
 end
 
@@ -163,22 +163,25 @@ end
 
 # function normalize_vcf(;reference_fasta, vcf, normalized_vcf=)
 function normalize_vcf(;reference_fasta, vcf_file)
+    add_bioconda_env("htslib")
+    add_bioconda_env("tabix")
+    add_bioconda_env("bcftools")
     normalized_vcf=replace(vcf_file, Mycelia.VCF_REGEX => ".sorted.normalized.vcf")
     out_vcf = normalized_vcf * ".gz"
     if !isfile(out_vcf)
-        if occursin(r"\.gz$", x)
+        if occursin(r"\.gz$", vcf_file)
             gzipped_vcf = vcf_file
         else
-            gzipped_vcf = "$(vcf).gz"
-            run(`$(Conda.conda) run --live-stream -n htslib bgzip $(vcf_file)`)
+            gzipped_vcf = "$(vcf_file).gz"
+            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip -c $(vcf_file)`, gzipped_vcf))
         end
         tabix_index = "$(gzipped_vcf).tbi"
         if !isfile(tabix_index)
-            run(`$(Conda.conda) run --live-stream -n tabix tabix -f -p vcf $(vcf_file).gz`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -f -p vcf $(gzipped_vcf)`)
         end
-        run(pipeline(`$(Conda.conda) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`, normalized_vcf_file))
-        run(`$(Conda.conda) run --live-stream -n htslib bgzip $(normalized_vcf_file)`)
-        run(`$(Conda.conda) run --live-stream -n tabix tabix -p vcf $(out_vcf)`)
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(reference_fasta) $(gzipped_vcf)`, normalized_vcf))
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(normalized_vcf)`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -p vcf $(out_vcf)`)
     end
     return out_vcf
 end
