@@ -510,7 +510,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
-function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
+function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=7, max_k=17, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
     ks = Primes.primes(min_k, max_k)
     minimum_saturation = Inf
     midpoint = Inf
@@ -538,16 +538,24 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
 
         if plot
             scale = 300
+            fontsize = 14
             p = StatsPlots.scatter(
                 sampling_points,
                 kmer_counts,
-                label="observed kmer counts",
-                ylabel="# unique kmers",
+                label="observed counts",
+                ylabel="# unique canonical kmers",
                 xlabel="# kmers assessed",
                 title = "sequencing saturation @ k = $k",
-                legend=:outertopright,
-                size=(2*scale, 1*scale),
-                margins=3Plots.PlotMeasures.mm
+                # legend=:outertopright,
+                # size=(2*scale, 1*scale),
+                margins=5Plots.PlotMeasures.mm,
+                titlefontsize=fontsize,
+                xguidefontsize=fontsize,
+                yguidefontsize=fontsize,
+                legendfontsize=fontsize-2,
+                xtickfontsize=fontsize-6,
+                ytickfontsize=fontsize-4,
+                # xrotation=45
                 )
             StatsPlots.hline!(p, [max_canonical_kmers], label="absolute maximum", line = :solid, linewidth = 2)
             StatsPlots.hline!(p, [inferred_maximum], label="inferred maximum", line = :dash, linewidth = 2)
@@ -562,9 +570,12 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
                 label="fit trendline",
                 line=:dashdot,
                 linewidth = 2)
+            if k != first(ks)
+                StatsPlots.plot!(p, legend=false)
+            end
             display(p)
             if !ismissing(outdir)
-                StatsPlots.savefig(p, joinpath(outdir, "$k.png"))
+                # StatsPlots.savefig(p, joinpath(outdir, "$k.png"))
                 StatsPlots.savefig(p, joinpath(outdir, "$k.svg"))
             end
         end

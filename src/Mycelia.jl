@@ -57,8 +57,13 @@ import Pkg
 const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
-const NERSC_MEM=512
-const NERSC_CPU=256
+
+# Mycelia.NERSC_MEM * .95
+# const NERSC_MEM=512
+# const NERSC_MEM=480
+const NERSC_MEM=460
+# const NERSC_CPU=240
+const NERSC_CPU=240
 # const AA_ALPHABET = filter(
 #     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
 #     BioSymbols.alphabet(BioSymbols.AminoAcid))
@@ -539,8 +544,28 @@ function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads
         end
     end
     @assert !isempty(out_fastq)
-    run(pipeline(p, out_fastq))
+    if !isfile(out_fastq)
+        run(pipeline(p, out_fastq))
+    else
+        @info "$(out_fastq) already present"
+    end
     return out_fastq
+end
+
+function parse_rtg_eval_output(f)
+    # import CodecZlib
+    flines = readlines(CodecZlib.GzipDecompressorStream(open(f)))
+    header_line = last(filter(fline -> occursin(r"^#", fline), flines))
+    header = lstrip.(split(header_line, "\t"), '#')
+    data_lines = filter(fline -> !occursin(r"^#", fline), flines)
+    if isempty(data_lines)
+        data = [Float64[] for i in 1:length(header)]
+    else
+        data, h = uCSV.read(IOBuffer(join(data_lines, '\n')), delim='\t')
+    end
+    # data = [[parse(Float64, x)] for x in split(last(flines), '\t')]
+    # @show data, header
+    DataFrames.DataFrame(data, header)
 end
 
 # function subsample_reads_seqtk(;in_fastq::String, out_fastq="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
@@ -1593,24 +1618,22 @@ function xam_records_to_dataframe(records)
         flag = UInt16[],
         reference = String[],
         position = UnitRange{Int}[],
-        cigar = String[],
         mappingquality = UInt8[],
+        cigar = String[],
+        # rnext = String[],
+        # pnext = Int[],
+        tlen = Int[],
+        sequence = BioSequences.LongDNA{4}[],
+        quality = UInt8[],
         alignlength = Int[],
         ismapped = Bool[],
-        isprimary = Bool[]
+        isprimary = Bool[],
+        alignment = BioAlignments.Alignment[],
+        alignment_score = Int[],
+        mismatches = Int[]
     )
-    
-    # short read mate pairs
-    # XAM.SAM.isnextmapped(record)
-    # XAM.SAM.nextposition(record)
-    # XAM.SAM.nextrefname(record)
-    # XAM.SAM.alignment(record)
 
-    # internal functions? output nonsense
-    # XAM.SAM.templength(record)
-    # XAM.SAM.sequence(record)
-    # XAM.SAM.seqlength(record)
-    # XAM.SAM.quality(record)
+    # future versions
     # XAM.SAM.auxdata(record)
     
     for record in records
@@ -1621,11 +1644,19 @@ function xam_records_to_dataframe(records)
             position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
             mappingquality = XAM.SAM.mappingquality(record),
             cigar = XAM.SAM.cigar(record),
+            # rnext = XAM.SAM.nextrefname(record),
+            # pnext = XAM.SAM.nextposition(record),
+            tlen = XAM.SAM.templength(record),
+            sequence = XAM.SAM.sequence(record),
+            quality = XAM.SAM.quality(record),
             alignlength = XAM.SAM.alignlength(record),
             ismapped = XAM.SAM.ismapped(record),
             isprimary = XAM.SAM.isprimary(record),
+            alignment = XAM.SAM.alignment(record),
+            alignment_score = record["AS"],
+            mismatches = record["NM"]
             )
-        push!(record_table, row)
+        push!(record_table, row, promote=true)
     end
     return record_table
 end
@@ -1696,6 +1727,122 @@ function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{
     QV = -10log10(E)
     # return (;P, E, QV)
     return QV
+end
+
+function system_mem_to_minimap_index_size(;system_mem_gb, denominator=6)
+    # smaller, higher diversity databases do better with >=5 as the denominator - w/ <=4 they run out of memory
+    # denominator = 5 # produced OOM for NT on NERSC
+    # denominator = 10 was only 56% efficient for NT on NERSC
+    value = Int(floor(system_mem_gb/denominator))
+    # 4G is the default
+    # this value should be larger for larger memory machines, and smaller for smaller ones
+    # it seems related to the total size of the sequences stored in memory, rather than the total size of the in-memory database
+    return "$(value)G"
+end
+# system_mem_to_minimap_index_size(Mycelia.NERSC_MEM)
+
+"""
+Run this on the machine you intend to use to map the reads to confirm the index will fit
+"""
+function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, denominator=6)
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    if as_string
+        cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)"
+    else
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)`
+    end
+    outfile = index_file
+    return (;cmd, outfile)
+end
+
+"""
+aligning and compressing. No sorting or filtering.
+
+Use shell_only=true to get string command to submit to SLURM
+"""
+function minimap_map(;
+        fasta,
+        mem_gb,
+        mapping_type,
+        threads,
+        fastq,
+        as_string=false,
+        denominator=6
+    )
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    temp_sam_outfile = fastq * "." * basename(fasta) * "." * "minimap2.sam"
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = [map, compress]
+    end
+    return (;cmd, outfile)
+end
+
+
+"""
+aligning and compressing. No sorting or filtering.
+
+Use shell_only=true to get string command to submit to SLURM
+"""
+function minimap_map_with_index(;
+        fasta,
+        mem_gb,
+        mapping_type,
+        threads,
+        fastq,
+        as_string=false,
+        denominator=6
+    )
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    @show index_file
+    @assert isfile(index_file)
+    temp_sam_outfile = fastq * "." * basename(index_file) * "." * "minimap2.sam"
+    # outfile = temp_sam_outfile
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = [map, compress]
+    end
+    return (;cmd, outfile)
+end
+
+function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
+    Mycelia.add_bioconda_env("samtools")
+    bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
+    gzip_cmd = `gzip`
+    p = pipeline(bam_to_fastq_cmd, gzip_cmd)
+    if !isfile(fastq)
+        @time run(pipeline(p, fastq))
+    else
+        @info "$(fastq) already exists"
+    end
+    return fastq
 end
 
 # dynamic import of files??
