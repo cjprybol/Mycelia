@@ -1624,7 +1624,7 @@ function xam_records_to_dataframe(records)
         # pnext = Int[],
         tlen = Int[],
         sequence = BioSequences.LongDNA{4}[],
-        quality = UInt8[],
+        # quality = UInt8[],
         alignlength = Int[],
         ismapped = Bool[],
         isprimary = Bool[],
@@ -1648,7 +1648,7 @@ function xam_records_to_dataframe(records)
             # pnext = XAM.SAM.nextposition(record),
             tlen = XAM.SAM.templength(record),
             sequence = XAM.SAM.sequence(record),
-            quality = XAM.SAM.quality(record),
+            # quality = XAM.SAM.quality(record),
             alignlength = XAM.SAM.alignlength(record),
             ismapped = XAM.SAM.ismapped(record),
             isprimary = XAM.SAM.isprimary(record),
@@ -1844,6 +1844,12 @@ function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     end
     return fastq
 end
+
+function normalize_countmap(countmap)
+    sum_total = sum(values(countmap))
+    return Dict(k => v/sum_total for (k, v) in countmap)
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
