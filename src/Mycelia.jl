@@ -1306,47 +1306,6 @@ function samtools_index_fasta(;fasta)
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
 end
 
-# not a very good function yet, but good enough for the pinches I need it for
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function parse_gfa(gfa)
-    segments = Vector{String}()
-    links = Vector{Pair{String, String}}()
-    paths = Dict{String, Vector{String}}()
-    for l in eachline(open(gfa))
-        s = split(l, '\t')
-        if first(s) == "S"
-            # segment
-            push!(segments, string(s[2]))
-        elseif first(s) == "L"
-            # link
-            push!(links, string(s[2]) => string(s[4]))
-        elseif first(s) == "P"
-            # path
-            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
-        elseif first(s) == "A" # hifiasm https://hifiasm.readthedocs.io/en/latest/interpreting-output.html#output-file-formats
-            continue
-        else
-            println(l)
-            error("unexpected line encountered while parsing GFA")
-        end
-    end
-
-    g = MetaGraphs.MetaGraph(length(segments))
-
-    for link in links
-        (u, v) = link
-        ui = findfirst(segments .== u)
-        vi = findfirst(segments .== v)
-        Graphs.add_edge!(g, ui => vi)
-    end
-    for (i, id) in enumerate(segments)
-        MetaGraphs.set_prop!(g, i, :id, id)
-    end
-    return g
-end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
@@ -2127,9 +2086,63 @@ function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.
     return samtools_flagstat
 end
 
+# not a very good function yet, but good enough for the pinches I need it for
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function parse_gfa(gfa)
+    segments = Vector{FASTX.FASTA.Record}()
+    links = Vector{Pair{String, String}}()
+    paths = Dict{String, Vector{String}}()
+    for l in eachline(open(gfa))
+        s = split(l, '\t')
+        if first(s) == "H"
+            # header line
+            continue
+        elseif first(s) == "S"
+            # segment
+            # push!(segments, string(s[2]))
+            identifier = string(s[2])
+            description = string(s[4])
+            sequence = string(s[3])
+            push!(segments, FASTX.FASTA.Record("$(identifier) $(description)", sequence))
+        elseif first(s) == "L"
+            # link
+            push!(links, string(s[2]) => string(s[4]))
+        elseif first(s) == "P"
+            # path
+            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
+        elseif first(s) == "A" # hifiasm https://hifiasm.readthedocs.io/en/latest/interpreting-output.html#output-file-formats
+            continue
+        else
+            println(l)
+            error("unexpected line encountered while parsing GFA")
+        end
+    end
+
+    g = MetaGraphs.MetaGraph(length(segments))
+
+    for link in links
+        (u, v) = link
+        ui = findfirst(FASTX.identifier.(segments) .== u)
+        vi = findfirst(FASTX.identifier.(segments) .== v)
+        Graphs.add_edge!(g, ui => vi)
+    end
+    for (i, segment) in enumerate(segments)
+        MetaGraphs.set_prop!(g, i, :id, FASTX.identifier(segment))
+    end
+    MetaGraphs.set_prop!(g, :records, segments)
+    return g
+end
+
 function gfa_to_structure_table(gfa)
     gfa_metagraph = parse_gfa(gfa)
     contig_table = DataFrames.DataFrame()
+    records = MetaGraphs.get_prop(gfa_metagraph, :records)
+    contig_lengths = Dict(FASTX.identifier(record) => length(FASTX.sequence(record)) for record in records)
+    # @show String.(FASTX.description.(records))
+    # try
+    # contig_depths = Dict(FASTX.identifier(record) => first(match(r"^.*?dp:i:(\d+).*$", String(FASTX.description(record))).captures) for record in records)
     for (i, connected_component) in enumerate(Graphs.connected_components(gfa_metagraph))
         subgraph, node_map = Graphs.induced_subgraph(gfa_metagraph, connected_component)
         # display(subgraph)
@@ -2138,11 +2151,14 @@ function gfa_to_structure_table(gfa)
             connected_component = i,
             contigs = join(contigs, ","),
             is_circular = Graphs.is_cyclic(subgraph),
-            is_closed = (length(contigs) == 1) && Graphs.is_cyclic(subgraph)
+            is_closed = (length(contigs) == 1) && Graphs.is_cyclic(subgraph),
+            lengths = join([contig_lengths[contig] for contig in contigs], ","),
+            # depths = join([contig_depths[contig] for contig in contigs], ","),
             )
         push!(contig_table, row)
     end
-    contig_table
+    
+    return (;contig_table, records)
 end
 
 # dynamic import of files??
