@@ -701,14 +701,16 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*8e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"))
+function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*8e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
     # @show fastx
     # @show k
     # @show threads
     # @show max_mem
     # @show canonical
     # @show outfile
-    Mycelia.add_bioconda_env("kmer-jellyfish")
+    if conda_check
+        Mycelia.add_bioconda_env("kmer-jellyfish")
+    end
     mem = Int(floor(max_mem))
     
     # Usage: jellyfish mem [options] file:path+
