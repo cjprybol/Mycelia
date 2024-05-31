@@ -611,7 +611,6 @@ julia> 1 + 1
 ```
 """
 function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
-    # add_bioconda_env("prodigal")
     blast_dir = mkpath(joinpath(out_dir, blast_command))
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
     if remote
@@ -700,23 +699,31 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     #          -t:  Write a training file (if none exists); otherwise, read and use
     #               the specified training file.
     #          -v:  Print version number and exit.
-    add_bioconda_env("prodigal")
-    cmd = 
-    `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n prodigal prodigal
-    -o $(out_dir)/$(basename(fasta_file)).prodigal.gff
-    -f gff
-    -m
-    -p meta
-    -i $(fasta_file)
-    -a $(out_dir)/$(basename(fasta_file)).prodigal.faa
-    -d $(out_dir)/$(basename(fasta_file)).prodigal.fna
-    -s $(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt
-    `
-
-    p = pipeline(cmd, 
-            stdout="$(out_dir)/$(basename(fasta_file)).prodigal.out",
-            stderr="$(out_dir)/$(basename(fasta_file)).prodigal.err")
-    run(p)
+    gff = "$(out_dir)/$(basename(fasta_file)).prodigal.gff"
+    faa = "$(out_dir)/$(basename(fasta_file)).prodigal.faa"
+    fna = "$(out_dir)/$(basename(fasta_file)).prodigal.fna"
+    gene_scores = "$(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt"
+    std_out = "$(out_dir)/$(basename(fasta_file)).prodigal.out"
+    std_err = "$(out_dir)/$(basename(fasta_file)).prodigal.err"
+    
+    # I usually delete the rest, so don't reprocess if outputs of interest are present
+    if (!isfile(gff) && !isfile(faa))
+        add_bioconda_env("prodigal")
+        cmd = 
+        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n prodigal prodigal
+        -f gff
+        -m
+        -p meta
+        -o $(gff)
+        -i $(fasta_file)
+        -a $(faa)
+        -d $(fna)
+        -s $(gene_scores)
+        `
+        p = pipeline(cmd, stdout=std_out, stderr=std_err)
+        run(p)
+    end
+    return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
 end
 
 # ```

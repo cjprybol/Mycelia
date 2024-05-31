@@ -159,6 +159,10 @@ end
 # end
 
 function list_subtaxa(taxid)
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
     return parse.(Int, filter(!isempty, strip.(readlines(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
 end
 

@@ -701,7 +701,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*8e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
+function jellyfish_count(;fastx, k, threads=Int(round(Sys.CPU_THREADS/2)), max_mem=Int(round(Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
     # @show fastx
     # @show k
     # @show threads
