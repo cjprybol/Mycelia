@@ -517,7 +517,6 @@ julia> 1 + 1
 ```
 """
 function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true)
-    # add_bioconda_env("prodigal")
     blast_dir = mkpath(joinpath(out_dir, "blastn"))
     outfile = "$(blast_dir)/$(basename(fasta)).blastn.$(basename(blast_db)).$(task).txt"
     # if remote

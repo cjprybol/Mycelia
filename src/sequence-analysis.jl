@@ -77,7 +77,6 @@ function codons_to_amino_acids()
     return codon_to_amino_acid_map
 end
 
-
 function genbank_to_codon_frequencies(genbank; allow_all=true)
     # create an initial codon frequency table, where we initialize all possible codons with equal probability
     # this way, if we don't see the amino acid in the observed proteins we're optimizing, we can still produce an codon profile
@@ -284,7 +283,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create a dense kmer counts table (note, considers ALL POSSIBLE CANONICAL KMERS) for each fasta provided in a list.
+Create a dense kmer counts table (canonical for DNA, stranded for RNA & AA) for each fasta provided in a list.
 Scales very well for large numbers of organisms/fasta files, but not for k.
 Recommended for k <= 13, although 17 may still be possible
 
@@ -294,31 +293,71 @@ julia> 1 + 1
 ```
 """
 function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet)
-    k > 13 && warn("consider using fasta_list_to_sparse_counts_table")
+    k > 13 && error("use fasta_list_to_sparse_counts_table")
     if alphabet == :AA
-        canonical_mers = generate_all_possible_canonical_kmers(k, AA_ALPHABET)
+        KMER_TYPE = BioSequences.AminoAcidAlphabet
+        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
+        COUNT = count_kmers
     elseif alphabet == :DNA
-        canonical_mers = generate_all_possible_canonical_kmers(k, DNA_ALPHABET)
+        KMER_TYPE = BioSequences.DNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
+        COUNT = count_canonical_kmers
     elseif alphabet == :RNA
-        canonical_mers = generate_all_possible_canonical_kmers(k, RNA_ALPHABET)
+        KMER_TYPE = BioSequences.RNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
+        COUNT = count_kmers
     else
         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
-    mer_counts_matrix = zeros(length(canonical_mers), length(fasta_list))
-    ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
-        if alphabet == :DNA
-            KMER_TYPE = BioSequences.DNAAlphabet{2}
-        elseif alphabet == :RNA
-            KMER_TYPE = BioSequences.RNAAlphabet{2}
-        elseif alphabet == :AA
-            KMER_TYPE = BioSequences.AminoAcidAlphabet
+    kmer_counts_matrix = zeros(length(sorted_kmers), length(fasta_list))
+    progress = ProgressMeter.Progress(length(fasta_list))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for (entity_index, fasta_file) in collect(enumerate(fasta_list))
+        # Acquire the lock before updating the progress
+        lock(reenrantlock) do
+            # Update the progress meter
+            ProgressMeter.next!(progress)
         end
-        entity_mer_counts = count_canonical_kmers(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
-        for (i, kmer) in enumerate(canonical_mers)
-            mer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
+        for (i, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
         end
     end
-    return canonical_mers, mer_counts_matrix
+    return (;sorted_kmers, kmer_counts_matrix)
+end
+
+function biosequences_to_dense_counts_table(;biosequences, k)
+    k > 13 && error("use fasta_list_to_sparse_counts_table")    
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = BioSequences.AminoAcidAlphabet
+        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = BioSequences.DNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = BioSequences.RNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+    end
+    kmer_counts_matrix = zeros(length(sorted_kmers), length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for (entity_index, biosequence) in collect(enumerate(biosequences))
+        # Acquire the lock before updating the progress
+        lock(reenrantlock) do
+            # Update the progress meter
+            ProgressMeter.next!(progress)
+        end
+        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, biosequence)
+        for (i, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        end
+    end
+    return (;sorted_kmers, kmer_counts_matrix)
 end
 
 """
@@ -331,31 +370,75 @@ julia> 1 + 1
 2
 ```
 """
-function fasta_list_to_sparse_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
+# function fasta_list_to_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
+#     if alphabet == :AA
+#         KMER_TYPE = Kmers.AAKmer{k}
+#         COUNT = count_kmers
+#     elseif alphabet == :DNA
+#         KMER_TYPE = Kmers.DNAKmer{k}
+#         COUNT = count_canonical_kmers
+#     elseif alphabet == :RNA
+#         KMER_TYPE = Kmers.RNAKmer{k}
+#         COUNT = count_kmers
+#     else
+#         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+#     end
     
-    if alphabet == :DNA
-        kmer_type = Kmers.Kmer{BioSequences.DNAAlphabet{4}, k}
-    elseif alphabet == :RNA
-        kmer_type = Kmers.Kmer{BioSequences.RNAAlphabet{4}, k}
-    elseif alphabet == :AA
-        kmer_type = Kmers.Kmer{BioSequences.AminoAcidAlphabet, k}
+#     fasta_kmer_counts_dict = Dict()
+#     progress = ProgressMeter.Progress(length(fasta_list))
+#     reenrantlock = ReentrantLock()
+#     Threads.@threads for fasta_file in fasta_list
+#         # Acquire the lock before updating the progress
+#         these_kmer_counts = COUNT(KMER_TYPE, fasta_file)
+#         lock(reenrantlock) do
+#             # Update the progress meter
+#             ProgressMeter.next!(progress)
+#             fasta_kmer_counts_dict[fasta_file] = these_kmer_counts
+#         end
+#     end
+#     sorted_kmers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
+#     kmer_counts_matrix = zeros(length(sorted_kmers), length(fasta_list))
+#     @info "populating sparse counts matrix..."
+#     for (col, fasta) in enumerate(fasta_list)
+#         for (row, kmer) in enumerate(sorted_kmers)
+#             kmer_counts_matrix[row, col] = get(fasta_kmer_counts_dict[fasta], kmer, 0)
+#         end
+#     end
+#     return (;sorted_kmers, kmer_counts_matrix)
+# end
+
+function biosequences_to_counts_table(;biosequences, k)
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = Kmers.AAKmer{k}
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
     
-    fasta_kmer_counts_dict = Dict()
-    @info "counting kmers..."
-    ProgressMeter.@showprogress for fasta_file in fasta_list
-        fasta_kmer_counts_dict[fasta_file] = count_canonical_kmers(kmer_type, fasta_file)         
+    kmer_counts = Vector{OrderedCollections.OrderedDict{KMER_TYPE, Int}}(undef, length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for i in eachindex(biosequences)
+        lock(reenrantlock) do
+            ProgressMeter.next!(progress)
+        end
+        kmer_counts[i] = COUNT(KMER_TYPE, biosequences[i])
     end
-    canonical_mers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
-    mer_counts_matrix = SparseArrays.spzeros(Int, length(canonical_mers), length(fasta_list))
-    
+    sorted_kmers = sort(collect(reduce(union, keys.(kmer_counts))))
+    kmer_counts_matrix = SparseArrays.spzeros(Int, length(mers), length(biosequences))
     @info "populating sparse counts matrix..."
-    for (col, fasta) in enumerate(fasta_list)
-        for (row, kmer) in enumerate(canonical_mers)
-            mer_counts_matrix[row, col] = fasta_kmer_counts_dict[fasta][kmer]
+    for (col, biosequence) in enumerate(biosequences)
+        for (row, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[row, col] = get(kmer_counts[col], kmer, 0)
         end
     end
-    canonical_mers, mer_counts_matrix
+    return (;sorted_kmers, kmer_counts_matrix)
 end
 
 """
@@ -847,7 +930,15 @@ end
 
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     # TODO: need to figure out how to infer the sequence type
-    return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+    if eltype(KMER_TYPE) == BioSymbols.DNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.RNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongRNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.AminoAcid
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongAA, record))
+    else
+        @error KMER_TYPE
+    end
 end
 
 function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}

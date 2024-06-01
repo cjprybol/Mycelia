@@ -509,26 +509,32 @@ function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwi
     return output
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function mmseqs_easy_linclust(;fasta, output=fasta*".mmseqs_easy_linclust", tmp=tempdir())
-    Mycelia.add_bioconda_env("mmseqs2")   
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(fasta) $(fasta)_DB`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createindex --search-type 3 $(fasta)_DB $(tempdir())`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-linclust $(fasta)_DB $(output) $(tmp)`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta)_DB $(fasta)_DB $(output) $(output).tsv`)
-    return "$(output).tsv"
-end
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function mmseqs_easy_linclust(;fasta, output=fasta*".mmseqs_easy_linclust", tmp=mktempdir())
+#     Mycelia.add_bioconda_env("mmseqs2")   
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(fasta) $(fasta)_DB`)
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createindex --search-type 3 $(fasta)_DB $(tempdir())`)
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-linclust $(fasta)_DB $(output) $(tmp)`)
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta)_DB $(fasta)_DB $(output) $(output).tsv`)
+#     return "$(output).tsv"
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=tempdir())
-    Mycelia.add_bioconda_env("mmseqs2")
-    run(`Mycelia.CONDA_RUNNER run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id 0.5 -c 0.8 --cov-mode 1`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta) $(fasta) $(output) $(output).tsv`)
-    return "$(output).tsv"
+# --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
+function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mktempdir())
+    outfile = "$(output)_cluster.tsv"
+    if !isfile(outfile)
+        Mycelia.add_bioconda_env("mmseqs2")
+        # at least 50% equivalent
+        # --min-seq-id 0.5 -c 0.8
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`)
+    end
+    rm(tmp, recursive=true)
+    return "$(output)_cluster.tsv"
 end
 
 """
