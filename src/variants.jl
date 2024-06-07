@@ -1,3 +1,6 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function simulate_variants(fasta_record::FASTX.FASTA.Record;        
         n_variants = Int(floor(sqrt(length(FASTX.sequence(fasta_record))))),
         window_size = Int(ceil(length(FASTX.sequence(fasta_record)) / n_variants)),
@@ -96,6 +99,9 @@ function simulate_variants(fasta_record::FASTX.FASTA.Record;
     return vcf_table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function simulate_variants(fasta_file::String)
     vcf_file = fasta_file * ".vcf"
     modified_fasta_file = vcf_file * ".fna"
@@ -106,7 +112,10 @@ function simulate_variants(fasta_file::String)
     Mycelia.write_vcf_table(vcf_file=vcf_file, vcf_table=vcf_table, fasta_file=fasta_file)
     return Mycelia.update_fasta_with_vcf(in_fasta = fasta_file, vcf_file = vcf_file)
 end
-    
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function write_vcf_table(;vcf_file, vcf_table, fasta_file)
     true_variant = vcf_table[!, "REF"] .!= vcf_table[!, "ALT"]
     if !all(true_variant)
@@ -134,7 +143,10 @@ function write_vcf_table(;vcf_file, vcf_table, fasta_file)
         end
     end
 end
-    
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, ".vcf" => ".normalized.vcf.fna"))
     isfile("$(vcf_file).gz") && rm("$(vcf_file).gz")
     isfile("$(vcf_file).gz.tbi") && rm("$(vcf_file).gz.tbi")
@@ -153,6 +165,9 @@ function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, 
     return out_fasta
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function equivalent_fasta_sequences(fasta_1, fasta_2)
     fasta_1_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_1))
     fasta_2_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_2))
@@ -162,6 +177,9 @@ function equivalent_fasta_sequences(fasta_1, fasta_2)
 end
 
 # function normalize_vcf(;reference_fasta, vcf, normalized_vcf=)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function normalize_vcf(;reference_fasta, vcf_file)
     add_bioconda_env("htslib")
     add_bioconda_env("tabix")

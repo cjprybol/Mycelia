@@ -79,7 +79,9 @@ function add_record_edgemers_to_graph!(graph)
     return graph
 end
 
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function edgemer_to_vertex_kmers(edgemer)
     a = Kmers.Kmer{BioSequences.DNAAlphabet{2}}(collect(edgemer[i] for i in 1:length(edgemer)-1))
     b = Kmers.Kmer{BioSequences.DNAAlphabet{2}}(collect(edgemer[i] for i in 2:length(edgemer)))

@@ -1,3 +1,6 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
     if occursin(r"\.bam$", xam)
         MODULE = XAM.BAM
@@ -30,6 +33,9 @@ function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_q
     return (;records, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_xam_to_summary_table(xam)
     record_table = DataFrames.DataFrame(
         template = String[],
@@ -160,6 +166,9 @@ function fastani_list(;query_list="", reference_list="", outfile="", force=false
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 # ./fastANI -q [QUERY_GENOME] -r [REFERENCE_GENOME] -o [OUTPUT_FILE] 
 function fastani_pair(;query="", reference="", outfile="", force=false)
     Mycelia.add_bioconda_env("fastani")
@@ -578,6 +587,9 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     return (sampling_points = sampling_points, unique_kmer_counts = unique_kmer_counts, eof = true)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=7, max_k=17, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
     ks = Primes.primes(min_k, max_k)
     minimum_saturation = Inf
@@ -667,6 +679,9 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000)
     assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power, kmers_to_assess=kmers_to_assess)
 end

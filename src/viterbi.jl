@@ -491,9 +491,8 @@
 #     return maximum_likelihood_path, maximum_likelihood_value
 # end
 
-
 """
-document me
+$(DocStringExtensions.TYPEDSIGNATURES)
 """
 function sequence_to_stranded_path(stranded_kmers, sequence)
     KMER_TYPE = typeof(first(stranded_kmers))
@@ -507,7 +506,7 @@ function sequence_to_stranded_path(stranded_kmers, sequence)
 end
 
 """
-document me
+$(DocStringExtensions.TYPEDSIGNATURES)
 """
 function path_to_sequence(kmers, path)
     # @show path
@@ -518,11 +517,9 @@ function path_to_sequence(kmers, path)
     return sequence
 end
 
-# """
-#     edge_probability(stranded_kmer_graph, edge)
-#
-# Compute the probability of an edge relative to all edges of a given source vertex
-# """
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function edge_probability(stranded_kmer_graph, edge)
     neighbors = Graphs.outneighbors(stranded_kmer_graph, edge.src)
     neighbor_under_consideration = findfirst(neighbor -> neighbor == edge.dst, neighbors)
@@ -536,43 +533,9 @@ function edge_probability(stranded_kmer_graph, edge)
     return p
 end
 
-# """
-#     viterbi_maximum_likelihood_traversal(stranded_kmer_graph; error_rate=1-1/k + 1))
-#
-#
-#
-# ```jldoctest
-# import Primes
-# julia> for prime in Primes.primes(3, 101)
-#            println("$prime assumes accuracy of $(1-1/(prime + 1))")
-#        end
-# 3 assumes accuracy of 0.6666666666666667
-# 5 assumes accuracy of 0.8
-# 7 assumes accuracy of 0.8571428571428572
-# 11 assumes accuracy of 0.9090909090909091
-# 13 assumes accuracy of 0.9230769230769231
-# 17 assumes accuracy of 0.9411764705882353
-# 19 assumes accuracy of 0.9473684210526316
-# 23 assumes accuracy of 0.9565217391304348
-# 29 assumes accuracy of 0.9655172413793104
-# 31 assumes accuracy of 0.967741935483871
-# 37 assumes accuracy of 0.972972972972973
-# 41 assumes accuracy of 0.975609756097561
-# 43 assumes accuracy of 0.9767441860465116
-# 47 assumes accuracy of 0.9787234042553191
-# 53 assumes accuracy of 0.9811320754716981
-# 59 assumes accuracy of 0.9830508474576272
-# 61 assumes accuracy of 0.9836065573770492
-# 67 assumes accuracy of 0.9850746268656716
-# 71 assumes accuracy of 0.9859154929577465
-# 73 assumes accuracy of 0.9863013698630136
-# 79 assumes accuracy of 0.9873417721518988
-# 83 assumes accuracy of 0.9879518072289156
-# 89 assumes accuracy of 0.9887640449438202
-# 97 assumes accuracy of 0.9896907216494846
-# 101 assumes accuracy of 0.9900990099009901
-# ```
-# """
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
                                                error_rate::Float64=1/(stranded_kmer_graph.gprops[:k] + 1),
                                                verbosity::String="dataset")
@@ -850,7 +813,7 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
 end
 
 """
-    build_stranded_kmer_graph(canonical_kmers, observations)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Create a weighted, strand-specific kmer (de bruijn) graph from a set of kmers
 and a series of sequence observations in FASTA format.

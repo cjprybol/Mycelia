@@ -1,3 +1,6 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function run_transterm(;fasta, gff="")
     # note in my one test with phage genomes, calling without gff yeilds more hits but average confidence is a bit lower
     if isempty(gff)
@@ -22,8 +25,9 @@ function run_transterm(;fasta, gff="")
     return transterm_calls_file
 end
 
-
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function generate_transterm_coordinates_from_fasta(fasta)
     # 10. USING TRANSTERM WITHOUT GENOME ANNOTATIONS
 
@@ -88,6 +92,9 @@ function generate_transterm_coordinates_from_fasta(fasta)
     return transterm_coordinates_file
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function generate_transterm_coordinates_from_gff(gff_file)
     raw_gff = Mycelia.read_gff(gff_file)
     # switch start to be zero index by subtracting one
@@ -467,9 +474,6 @@ julia> 1 + 1
 2
 ```
 """
-
-
-
 function run_mmseqs_easy_search(;
         query_fasta,
         target_database,

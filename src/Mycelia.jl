@@ -71,6 +71,9 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function find_mamba()
     try
         CONDA_RUNNER = strip(read(`which mamba`, String))
@@ -87,6 +90,9 @@ const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function add_bioconda_env(pkg; force=false)
     try
         current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
@@ -110,6 +116,9 @@ function add_bioconda_env(pkg; force=false)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function add_bioconda_envs(;all=false, force=false)
     if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
         Conda.add("mamba")
@@ -876,6 +885,9 @@ function jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_file, out
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function load_jellyfish_counts(jellyfish_counts)
     @assert occursin(r"\.jf\.tsv\.gz$", jellyfish_counts)
     open(jellyfish_counts) do io
@@ -2021,6 +2033,9 @@ function bandage_visualize(;gfa, img=gfa*".png")
     return img
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function xam_to_contig_mapping_stats(xam)
     xam_results = Mycelia.parse_xam_to_summary_table(xam)
     xam_results = xam_results[xam_results[!, "isprimary"] .& xam_results[!, "ismapped"], :]
@@ -2072,10 +2087,16 @@ function xam_to_contig_mapping_stats(xam)
     return contig_mapping_stats
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fastx_to_contig_lengths(fastx)
     OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta_xam_mapping_stats(;fasta, xam)
     fastx_contig_lengths = fastx_to_contig_lengths(fasta)
     xam_stats = xam_to_contig_mapping_stats(xam)
@@ -2087,6 +2108,9 @@ function fasta_xam_mapping_stats(;fasta, xam)
     return fastx_contig_mapping_stats_table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
     if !isfile(samtools_flagstat)
         run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`, samtools_flagstat))
@@ -2143,6 +2167,9 @@ function parse_gfa(gfa)
     return g
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function gfa_to_structure_table(gfa)
     gfa_metagraph = parse_gfa(gfa)
     contig_table = DataFrames.DataFrame()
@@ -2169,6 +2196,9 @@ function gfa_to_structure_table(gfa)
     return (;contig_table, records)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function copy_with_unique_identifier(infile, out_directory, unique_identifier; force=true)
     outfile = joinpath(out_directory, unique_identifier * "." * basename(infile))
     cp(infile, outfile, force=force)

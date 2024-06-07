@@ -1,3 +1,6 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
     add_bioconda_env("emboss")
     if !isfile(fasta) || force
@@ -38,18 +41,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function load_graph(file)
     return FileIO.load(file)["graph"]
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_transterm_output(transterm_output)
     
    #     3. FORMAT OF THE TRANSTERM OUTPUT
@@ -99,6 +98,9 @@ function parse_transterm_output(transterm_output)
     return transterm_table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function transterm_output_to_gff(transterm_output)
     transterm_table = parse_transterm_output(transterm_output)
     transterm_table[!, "source"] .= "transterm"
@@ -126,11 +128,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
 or get fasta directly from FTP site
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function get_gff(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
@@ -150,11 +147,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
 or get fasta directly from FTP site
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
@@ -178,6 +170,9 @@ function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta_and_gff_to_genbank(;fasta, gff, genbank)
     add_bioconda_env("emboss")
     # https://www.insdc.org/submitting-standards/feature-table/
@@ -213,10 +208,16 @@ end
 
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function open_genbank(genbank_file)
     return GenomicAnnotations.readgbk(genbank_file)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_virsorter_score_tsv(virsorter_score_tsv)
     data, header = uCSV.read(virsorter_score_tsv, delim='\t', header=1)
     if length(data) == 0
@@ -225,6 +226,9 @@ function parse_virsorter_score_tsv(virsorter_score_tsv)
     return DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_mmseqs_tophit_aln(tophit_aln)
     data, header = uCSV.read(tophit_aln, delim='\t')
     # (1,2) identifiers for query and target sequences/profiles, (3) sequence identity, (4) alignment length, (5) number of mismatches, (6) number of gap openings, (7-8, 9-10) domain start and end-position in query and in target, (11) E-value, and (12) bit score.
@@ -246,6 +250,9 @@ function parse_mmseqs_tophit_aln(tophit_aln)
     DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_mmseqs_easy_taxonomy_tophit_report(tophit_report)
     data, header = uCSV.read(tophit_report, delim='\t')
     # tophit_report
@@ -268,6 +275,9 @@ function parse_mmseqs_easy_taxonomy_tophit_report(tophit_report)
     DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
     data, header = uCSV.read(lca_tsv, delim='\t')
     # contig
@@ -291,6 +301,9 @@ function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
     return DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function update_gff_with_mmseqs(gff_file, mmseqs_file)
     mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t', )...)
 
@@ -315,15 +328,9 @@ function update_gff_with_mmseqs(gff_file, mmseqs_file)
     end
     return gff_table
 end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function open_gff(path::String)
     if isfile(path)
@@ -343,13 +350,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function read_gff(gff::AbstractString)
     return read_gff(open_gff(gff))
@@ -357,13 +357,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function read_gff(gff_io)
     data, header = uCSV.read(gff_io, delim='\t', header=0, comment='#')
@@ -392,11 +385,17 @@ function read_gff(gff_io)
     DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function write_gff(;gff, outfile)
     uCSV.write(outfile, gff, delim='\t')
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function read_kraken_report(kraken_report)
     kraken_report_header = [
         "percentage_of_fragments_at_or_below_taxon",
@@ -538,11 +537,6 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Imports results of fastani
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function read_fastani(path::String)
     data, header = uCSV.read(path, delim='\t', typedetectrows=100)
@@ -573,11 +567,6 @@ end
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
 # Imports results of Diamond (or blast) in outfmt 6 as a DataFrame
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
 # """
 # function read_diamond(path::String)
 #   diamond_colnames = [ "qseqid", "sseqid", "pident", "length", "mismatch", "gapopen", "qstart", "qend", "sstart", "send", "evalue", "bitscore" ]
@@ -603,11 +592,6 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Expects output type 7 from BLAST, default output type 6 doesn't have the header comments and won't auto-parse
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function parse_blast_report(blast_report)
     # example header line 
@@ -668,11 +652,6 @@ end
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
 # Parse a GFA file into a genome graph - need to finish implementation and assert contig normalization (i.e. is canonical) before using with my code
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
 # """
 # function parse_gfa(gfa)
     
@@ -731,13 +710,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function graph_to_gfa(;graph, outfile)
     # kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
@@ -853,13 +825,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function open_fastx(path::AbstractString)
     if isfile(path)
@@ -886,6 +851,9 @@ function open_fastx(path::AbstractString)
     return fastx_io
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function write_fasta(;outfile=tempname()*".fna", records, gzipped=false)
     open(outfile, "w") do io
         if gzipped
@@ -907,11 +875,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Plots a histogram of kmer counts against # of kmers with those counts
 
 Returns the plot object for adding additional layers and saving
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     kmer_counts_hist = StatsBase.countmap(c for c in counts)
@@ -936,16 +899,9 @@ function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     return p
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Description
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function convert(args)
     @show args
     in_type = missing
@@ -989,13 +945,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function plot_graph(graph)
     
@@ -1016,13 +965,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function save_graph(graph::Graphs.AbstractGraph, outfile::String)
     if !occursin(r"\.jld2$", outfile)
@@ -1034,13 +976,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function load_graph(file::String)
     return FileIO.load(file)["graph"]
