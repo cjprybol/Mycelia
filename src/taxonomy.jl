@@ -5,8 +5,6 @@ function setup_taxonkit_taxonomy()
     Mycelia.tar_extract(tarchive="taxdump.tar.gz", directory=mkpath("$(homedir())/.taxonkit"))
 end
 
-
-
 # this is faster than NCBI version
 # run(pipeline(
 #         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon 1 --children --as-json-lines`,

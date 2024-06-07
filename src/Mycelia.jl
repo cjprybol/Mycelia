@@ -22,7 +22,7 @@ import FASTX
 import FileIO
 import GenomicAnnotations
 import GFF3
-import GraphRecipes
+# import GraphRecipes
 import Graphs
 import GLM
 import HTTP
@@ -2167,6 +2167,12 @@ function gfa_to_structure_table(gfa)
     end
     
     return (;contig_table, records)
+end
+
+function copy_with_unique_identifier(infile, out_directory, unique_identifier; force=true)
+    outfile = joinpath(out_directory, unique_identifier * "." * basename(infile))
+    cp(infile, outfile, force=force)
+    return outfile
 end
 
 # dynamic import of files??
