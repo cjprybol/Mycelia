@@ -42,4 +42,6 @@ Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 Pkg.develop(url="git@github.com:cjprybol/Mycelia.git")
 ```
 
-documentation and pre-prints in prep
+documentation in prep
+
+https://doi.org/10.1101/2024.05.29.596541
