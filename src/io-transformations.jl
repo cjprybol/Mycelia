@@ -304,14 +304,24 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function update_gff_with_mmseqs(gff_file, mmseqs_file)
-    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t', )...)
-
-    gdf = DataFrames.groupby(mmseqs_results, "query")
-    for g in gdf
-        @assert issorted(g[!, "evalue"])
+function read_mmseqs_easy_search(mmseqs_file; top_hit_only=false)
+    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
+    if top_hit_only
+        gdf = DataFrames.groupby(mmseqs_results, "query")
+        for g in gdf
+            @assert issorted(g[!, "evalue"])
+        end
+        top_hits = DataFrames.combine(gdf, first)
+        mmseqs_results = top_hits
     end
-    top_hits = DataFrames.combine(gdf, first)
+    return mmseqs_results
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function update_gff_with_mmseqs(gff_file, mmseqs_file)
+    top_hits = read_mmseqs_easy_search(mmseqs_file, top_hit_only=true)
 
     id_to_product = Dict{String, String}()
     for row in DataFrames.eachrow(top_hits)
