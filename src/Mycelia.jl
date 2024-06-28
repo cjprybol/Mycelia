@@ -95,7 +95,7 @@ function add_bioconda_env(pkg; force=false)
             run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
             run(`$(CONDA_RUNNER) clean --all -y`)
         else
-            @info "conda environment $(pkg) already present; set force=true to update/re-install"
+            # @info "conda environment $(pkg) already present; set force=true to update/re-install"
         end
     catch
         add_bioconda_envs()
@@ -105,7 +105,7 @@ function add_bioconda_env(pkg; force=false)
             run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
             run(`$(CONDA_RUNNER) clean --all -y`)
         else
-            @info "conda environment $(pkg) already present; set force=true to update/re-install"
+            # @info "conda environment $(pkg) already present; set force=true to update/re-install"
         end
     end
 end
@@ -1607,57 +1607,60 @@ function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".se
 end
 
 function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
-    data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
-    header = ["sequence_id", "taxid"]
-    DataFrames.DataFrame(data, header)
+    return CSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ', header=["sequence_id", "taxid"], DataFrames.DataFrame)
+    # data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
+    # header = ["sequence_id", "taxid"]
+    # DataFrames.DataFrame(data, header)
 end
 
-function xam_records_to_dataframe(records)
+function parse_xam_to_mapped_records_table(xam)
     record_table = DataFrames.DataFrame(
         template = String[],
         flag = UInt16[],
         reference = String[],
         position = UnitRange{Int}[],
         mappingquality = UInt8[],
-        cigar = String[],
-        # rnext = String[],
-        # pnext = Int[],
         tlen = Int[],
-        sequence = BioSequences.LongDNA{4}[],
-        # quality = UInt8[],
         alignlength = Int[],
         ismapped = Bool[],
         isprimary = Bool[],
-        alignment = BioAlignments.Alignment[],
         alignment_score = Int[],
         mismatches = Int[]
     )
-
-    # future versions
-    # XAM.SAM.auxdata(record)
-    
-    for record in records
-        row = (
-            template = XAM.SAM.tempname(record),
-            flag = XAM.flag(record),
-            reference = XAM.SAM.refname(record),
-            position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
-            mappingquality = XAM.SAM.mappingquality(record),
-            cigar = XAM.SAM.cigar(record),
-            # rnext = XAM.SAM.nextrefname(record),
-            # pnext = XAM.SAM.nextposition(record),
-            tlen = XAM.SAM.templength(record),
-            sequence = XAM.SAM.sequence(record),
-            # quality = XAM.SAM.quality(record),
-            alignlength = XAM.SAM.alignlength(record),
-            ismapped = XAM.SAM.ismapped(record),
-            isprimary = XAM.SAM.isprimary(record),
-            alignment = XAM.SAM.alignment(record),
-            alignment_score = record["AS"],
-            mismatches = record["NM"]
-            )
-        push!(record_table, row, promote=true)
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+        io = open(xam)
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
+    else
+        error("unrecognized file extension in file: $xam")
     end
+    # filter out header lines
+    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
+    # reader = MODULE.Reader(io)
+    for record in reader
+        if XAM.SAM.ismapped(record)
+            row = (
+                template = XAM.SAM.tempname(record),
+                flag = XAM.flag(record),
+                reference = XAM.SAM.refname(record),
+                position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
+                mappingquality = XAM.SAM.mappingquality(record),
+                tlen = XAM.SAM.templength(record),
+                alignlength = XAM.SAM.alignlength(record),
+                ismapped = XAM.SAM.ismapped(record),
+                isprimary = XAM.SAM.isprimary(record),
+                alignment_score = record["AS"],
+                mismatches = record["NM"]
+                )
+            push!(record_table, row, promote=true)
+        end
+    end
+    close(io)
     return record_table
 end
 
@@ -1848,6 +1851,27 @@ end
 function normalize_countmap(countmap)
     sum_total = sum(values(countmap))
     return Dict(k => v/sum_total for (k, v) in countmap)
+end
+
+function extract_pacbiosample_information(xml)
+    xml_dict = XMLDict.parse_xml(read(xml, String))
+    wellsample = xml_dict["ExperimentContainer"]["Runs"]["Run"]["Outputs"]["SubreadSets"]["SubreadSet"]["DataSetMetadata"]["Collections"]["CollectionMetadata"]["WellSample"]
+
+    # Initialize empty arrays to store the data
+    biosample_names = []
+    barcode_names = []
+    
+    if haskey(wellsample, "BioSamples")
+        # display(wellsample)
+        for bs in wellsample["BioSamples"]["BioSample"]
+            push!(biosample_names, bs[:Name])
+            push!(barcode_names, bs["DNABarcodes"]["DNABarcode"][:Name])
+        end
+    end
+
+    # Create the DataFrame
+    df = DataFrames.DataFrame(BioSampleName=biosample_names, BarcodeName=barcode_names)
+    return df
 end
 
 

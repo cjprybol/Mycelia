@@ -7,10 +7,20 @@ end
 
 
 """
-$(DocStringExtensions.TYPEDSIGNATURES)
+    function ncbi_genome_download_accession(;
+            accession,
+            outdir = pwd(),
+            outpath = joinpath(outdir, accession * ".zip"),
+            include_string = "genome"
+        )
 
 Download an accession using NCBI datasets command line tool
 
+the .zip download output to outpath will be unzipped
+
+returns the outfolder
+
+ncbi's default include string is 
 include_string = "gff3,rna,cds,protein,genome,seq-report"
 """
 function ncbi_genome_download_accession(;
@@ -26,9 +36,9 @@ function ncbi_genome_download_accession(;
             @info "$(outpath) already exists, skipping download..."
         else
             mkpath(outdir)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath) --no-progressbar`)
         end
-        run(`unzip -d $(outfolder) $(outpath)`)
+        run(`unzip -q -d $(outfolder) $(outpath)`)
     end
     final_outfolder = joinpath(outfolder, "ncbi_dataset", "data", accession)
     isfile(outpath) && rm(outpath)
