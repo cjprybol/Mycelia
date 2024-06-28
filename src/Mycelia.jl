@@ -22,7 +22,7 @@ import FASTX
 import FileIO
 import GenomicAnnotations
 import GFF3
-import GraphRecipes
+# import GraphRecipes
 import Graphs
 import GLM
 import HTTP
@@ -71,6 +71,9 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function find_mamba()
     try
         CONDA_RUNNER = strip(read(`which mamba`, String))
@@ -87,6 +90,9 @@ const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function add_bioconda_env(pkg; force=false)
     try
         current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
@@ -110,6 +116,9 @@ function add_bioconda_env(pkg; force=false)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function add_bioconda_envs(;all=false, force=false)
     if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
         Conda.add("mamba")
@@ -378,10 +387,16 @@ function nersc_sbatch_premium(;
     return true
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta_genome_size(fasta_file)
     return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
     Mycelia.add_bioconda_env("gfatools")
     p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools gfa2fa $(gfa)`, fasta)
@@ -399,6 +414,9 @@ function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
     # end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function determine_fasta_coverage(bam)
     genome_coverage_file = bam * ".coverage.txt"
     if !isfile(genome_coverage_file)
@@ -410,6 +428,9 @@ end
 #outdir="$(homedir())/software/bandage"
 # I don't think that this is very portable - assumes sudo and linux
 # can make a bandage_jll to fix this longer term
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function download_bandage(outdir="/usr/local/bin")
     bandage_executable = joinpath(outdir, "Bandage")
     if !isfile(bandage_executable)
@@ -417,11 +438,20 @@ function download_bandage(outdir="/usr/local/bin")
         run(`unzip Bandage_Ubuntu_static_v0_8_1.zip`)
         isfile("sample_LastGraph") && rm("sample_LastGraph")
         isfile("Bandage_Ubuntu_static_v0_8_1.zip") && rm("Bandage_Ubuntu_static_v0_8_1.zip")
-        run(`sudo mv Bandage $(outdir)`)
+        try # not root
+            run(`sudo mv Bandage $(outdir)`)
+            run(`sudo apt install libxcb-glx0 libx11-xcb-dev libfontconfig libgl1-mesa-glx -y`)
+        catch # root
+            run(`mv Bandage $(outdir)`)
+            run(`apt install libxcb-glx0 libx11-xcb-dev libfontconfig libgl1-mesa-glx -y`)
+        end
     end
     return bandage_executable
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function annotate_fasta(;
         fasta,
         identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
@@ -463,12 +493,18 @@ function annotate_fasta(;
     return outdir
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function rclone_list_directories(path)
     directories = [join(split(line)[5:end], " ") for line in eachline(open(`rclone lsd $(path)`))]
     directories = joinpath.(path, directories)
     return directories
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwise")
     Mycelia.add_bioconda_env("mmseqs2")
     mkpath(output)
@@ -482,22 +518,37 @@ function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwi
     return output
 end
 
-function mmseqs_easy_linclust(;fasta, output=fasta*".mmseqs_easy_linclust", tmp=tempdir())
-    Mycelia.add_bioconda_env("mmseqs2")   
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(fasta) $(fasta)_DB`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createindex --search-type 3 $(fasta)_DB $(tempdir())`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-linclust $(fasta)_DB $(output) $(tmp)`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta)_DB $(fasta)_DB $(output) $(output).tsv`)
-    return "$(output).tsv"
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function mmseqs_easy_linclust(;fasta, output=fasta*".mmseqs_easy_linclust", tmp=mktempdir())
+#     Mycelia.add_bioconda_env("mmseqs2")   
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(fasta) $(fasta)_DB`)
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createindex --search-type 3 $(fasta)_DB $(tempdir())`)
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-linclust $(fasta)_DB $(output) $(tmp)`)
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta)_DB $(fasta)_DB $(output) $(output).tsv`)
+#     return "$(output).tsv"
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+# --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
+function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mktempdir())
+    outfile = "$(output)_cluster.tsv"
+    if !isfile(outfile)
+        Mycelia.add_bioconda_env("mmseqs2")
+        # at least 50% equivalent
+        # --min-seq-id 0.5 -c 0.8
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`)
+    end
+    rm(tmp, recursive=true)
+    return "$(output)_cluster.tsv"
 end
 
-function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=tempdir())
-    Mycelia.add_bioconda_env("mmseqs2")
-    run(`Mycelia.CONDA_RUNNER run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id 0.5 -c 0.8 --cov-mode 1`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createtsv $(fasta) $(fasta) $(output) $(output).tsv`)
-    return "$(output).tsv"
-end
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function filter_long_reads(;
         in_fastq,
         out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
@@ -513,6 +564,9 @@ function filter_long_reads(;
     return p2
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
     Mycelia.add_bioconda_env("blast")
     if !isfile(fasta)
@@ -523,11 +577,17 @@ function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fastx_stats(fastq)
     Mycelia.add_bioconda_env("seqkit")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats $(fastq)`)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
     Mycelia.add_bioconda_env("seqkit")
     if ismissing(n_reads) && ismissing(proportion_reads)
@@ -552,6 +612,9 @@ function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads
     return out_fastq
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_rtg_eval_output(f)
     # import CodecZlib
     flines = readlines(CodecZlib.GzipDecompressorStream(open(f)))
@@ -629,11 +692,17 @@ function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.
     end
     return outfile
 end
-    
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function simulate_nanopore_reads()
 # badread simulate --reference ref.fasta --quantity 50x | gzip > reads.fastq.gz
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function simulate_nearly_perfect_long_reads()
     # badread simulate --reference ref.fasta --quantity 50x --error_model random \
     # --qscore_model ideal --glitches 0,0,0 --junk_reads 0 --random_reads 0 --chimeras 0 \
@@ -644,14 +713,19 @@ end
 # conda install -c bioconda kmer-jellyfish
 # count, bc, info, stats, histo, dump, merge, query, cite, mem, jf
 # cap at 4 threads, 8Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
-function jellyfish_count(;fastx, k, threads=min(4, Sys.CPU_THREADS), max_mem=min(threads*8e9, (Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"))
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function jellyfish_count(;fastx, k, threads=Int(round(Sys.CPU_THREADS/2)), max_mem=Int(round(Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
     # @show fastx
     # @show k
     # @show threads
     # @show max_mem
     # @show canonical
     # @show outfile
-    Mycelia.add_bioconda_env("kmer-jellyfish")
+    if conda_check
+        Mycelia.add_bioconda_env("kmer-jellyfish")
+    end
     mem = Int(floor(max_mem))
     
     # Usage: jellyfish mem [options] file:path+
@@ -789,6 +863,9 @@ end
 # 20.690993 seconds (521.75 k allocations: 37.253 MiB, 0.58% compilation time)
 # 17
 # 412.670050 seconds (529.86 k allocations: 37.007 MiB, 0.03% compilation time)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_file, outfile=replace(jellyfish_counts_file, r"\.tsv\.gz$" => ".count_histogram.tsv"))
     # sorting with LC_ALL=C is the biggest speed up here of anything I've found
     if !isfile(outfile)
@@ -808,6 +885,18 @@ function jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_file, out
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function load_jellyfish_counts(jellyfish_counts)
+    @assert occursin(r"\.jf\.tsv\.gz$", jellyfish_counts)
+    open(jellyfish_counts) do io
+        table = CSV.read(CodecZlib.GzipDecompressorStream(io), DataFrames.DataFrame, delim="\t", header=["kmer", "count"])
+        k = length(table[1, "kmer"])
+        table[!, "kmer"] = map(x -> Kmers.DNAKmer{k}(String(x)), collect(table[!, "kmer"]))
+        return table
+    end
+end
 
 # Usage: jellyfish merge [options] input:string+
 
@@ -839,11 +928,16 @@ end
 #  -V, --version                            Version
 
 
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function jitter(x, n)
     return [x + rand() / 3 * (ifelse(rand(Bool), 1, -1)) for i in 1:n]
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta_to_reference_kmer_counts(;kmer_type, fasta)
     kmer_counts = Dict{kmer_type, Int}()
     for record in Mycelia.open_fastx(fasta)
@@ -856,6 +950,9 @@ function fasta_to_reference_kmer_counts(;kmer_type, fasta)
     return kmer_counts
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function filter_long_reads(;
         in_fastq,
         out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
@@ -871,48 +968,48 @@ function filter_long_reads(;
     return p2
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-My standard pacbio aligning and sorting. No filtering done in this step.
+# My standard pacbio aligning and sorting. No filtering done in this step.
 
-Use shell_only=true to get string command to submit to SLURM
-"""
-function map_pacbio_reads(;
-        fastq,
-        reference_fasta,
-        temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
-        outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz"),
-        threads = Sys.CPU_THREADS,
-        memory = Sys.total_memory(),
-        shell_only = false
-    )
-    # 4G is the default
-    # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
-    index_chunk_size = "$(Int(floor(memory/5e9)))G"
-    @show index_chunk_size
-    @show threads
-    Mycelia.add_bioconda_env("minimap2")
-    # Mycelia.add_bioconda_env("samtools")
-    Mycelia.add_bioconda_env("pigz")
-    if shell_only
-        cmd =
-        """
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-        """
-        return cmd
-    else
-        if !isfile(outfile)
-            map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-            run(map)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`)
-            @assert isfile(outfile)
-        else
-            @info "$(outfile) already present"
-        end
-    end
-end
+# Use shell_only=true to get string command to submit to SLURM
+# """
+# function map_pacbio_reads(;
+#         fastq,
+#         reference_fasta,
+#         temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
+#         outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz"),
+#         threads = Sys.CPU_THREADS,
+#         memory = Sys.total_memory(),
+#         shell_only = false
+#     )
+#     # 4G is the default
+#     # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
+#     index_chunk_size = "$(Int(floor(memory/5e9)))G"
+#     @show index_chunk_size
+#     @show threads
+#     Mycelia.add_bioconda_env("minimap2")
+#     # Mycelia.add_bioconda_env("samtools")
+#     Mycelia.add_bioconda_env("pigz")
+#     if shell_only
+#         cmd =
+#         """
+#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+#         """
+#         return cmd
+#     else
+#         if !isfile(outfile)
+#             map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+#             run(map)
+#             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`)
+#             @assert isfile(outfile)
+#         else
+#             @info "$(outfile) already present"
+#         end
+#     end
+# end
 
 # """
 # My standard pacbio aligning and sorting. No filtering done in this step.
@@ -958,6 +1055,9 @@ end
 # function map_short_reads()
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function download_genome_by_accession(;accession, outdir=pwd())
     temp_fasta = joinpath(outdir, accession * ".fna")
     outfile = temp_fasta * ".gz"
@@ -982,6 +1082,9 @@ function download_genome_by_accession(;accession, outdir=pwd())
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function download_genome_by_ftp(;ftp, outdir=pwd())
     url = Mycelia.ncbi_ftp_path_to_url(ftp_path=ftp, extension="genomic.fna.gz")
     outfile = joinpath(outdir, basename(url))
@@ -992,10 +1095,16 @@ function download_genome_by_ftp(;ftp, outdir=pwd())
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function normalized_current_datetime()
     return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function githash(;short=false)
     git_hash = rstrip(read(`git rev-parse HEAD`, String))
     if short
@@ -1041,6 +1150,9 @@ end
 
 
 # https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/taxonomy/
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function ncbi_taxon_summary(taxa_id)
     Mycelia.add_bioconda_env("ncbi-datasets")
     p = pipeline(
@@ -1050,6 +1162,9 @@ function ncbi_taxon_summary(taxa_id)
     return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function nearest_prime(n::Int)
     if n < 2
         return 2
@@ -1063,6 +1178,9 @@ function nearest_prime(n::Int)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fibonacci_numbers_less_than(n::Int)
     if n <= 0
         return []
@@ -1079,6 +1197,9 @@ function fibonacci_numbers_less_than(n::Int)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function ks(;min=0, max=10_000)
     # flip from all odd primes to only nearest to fibonnaci primes
     flip_point = 23
@@ -1091,11 +1212,10 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function rclone_copy(source, dest)
+function rclone_copy(source, dest; config="", max_attempts=3, sleep_timer=60)
     done = false
-    sleep_timer = 60
     attempts = 0
-    while !done && attempts < 3
+    while !done && attempts < max_attempts
         attempts += 1
         try
             # https://forum.rclone.org/t/google-drive-uploads-failing-http-429/34147/9
@@ -1105,7 +1225,11 @@ function rclone_copy(source, dest)
             # not currently using these but they may become helpful
             # --drive-pacer-burst int                          Number of API calls to allow without sleeping (default 100)
             # --drive-pacer-min-sleep Duration                 Minimum time to sleep between API calls (default 100ms)
-            cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            if isempty(config)
+                cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            else
+                cmd = `rclone --config $(config) copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            end
             @info "copying $(source) to $(dest) with command: $(cmd)"
             run(cmd)
             done = true
@@ -1131,6 +1255,9 @@ end
 #     return tarchive
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function install_hashdeep()
     if Sys.which("hashdeep") !== nothing
         println("hashdeep executable found")
@@ -1145,6 +1272,9 @@ function install_hashdeep()
 end
 
 # Need to add hashdeep & logging
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function create_tarchive(;directory, tarchive=directory * ".tar.gz")
     directory = normpath(directory)
     tarchive = normpath(tarchive)
@@ -1180,52 +1310,25 @@ function create_tarchive(;directory, tarchive=directory * ".tar.gz")
     return tarchive
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function tar_extract(;tarchive, directory=dirname(tarchive))
     run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
     return directory
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function samtools_index_fasta(;fasta)
     Mycelia.add_bioconda_env("samtools")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
 end
 
-# not a very good function yet, but good enough for the pinches I need it for
-function parse_gfa(gfa)
-    segments = Vector{String}()
-    links = Vector{Pair{String, String}}()
-    paths = Dict{String, Vector{String}}()
-    for l in eachline(open(gfa))
-        s = split(l, '\t')
-        if first(s) == "S"
-            # segment
-            @show "here!"
-            push!(segments, string(s[2]))
-        elseif first(s) == "L"
-            # link
-            push!(links, string(s[2]) => string(s[4]))
-        elseif first(s) == "P"
-            # path
-            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
-        elseif first(s) == "A" # hifiasm https://hifiasm.readthedocs.io/en/latest/interpreting-output.html#output-file-formats
-            continue
-        else
-            println(l)
-            error("unexpected line encountered while parsing GFA")
-        end
-    end
-
-    g = Graphs.SimpleGraph(length(segments))
-
-    for link in links
-        (u, v) = link
-        ui = findfirst(segments .== u)
-        vi = findfirst(segments .== v)
-        Graphs.add_edge!(g, ui => vi)
-    end
-    return g
-end
-    
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_indices)
     indices = findall(.!record_kmer_solidity)  # Find the indices of false values
     if isempty(indices)
@@ -1267,6 +1370,9 @@ function find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_i
     return resampling_stretches
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fastq_record(;identifier, sequence, quality_scores)
     # Fastx wont parse anything higher than 93
     quality_scores = min.(quality_scores, 93)
@@ -1274,6 +1380,9 @@ function fastq_record(;identifier, sequence, quality_scores)
     return FASTX.parse(FASTX.FASTQRecord, record_string)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function process_fastq_record(;record, kmer_graph, yen_k_shortest_paths_and_weights, yen_k=3)
     ordered_kmers = MetaGraphs.get_prop(kmer_graph, :ordered_kmers)
     likely_valid_kmers = Set(ordered_kmers[MetaGraphs.get_prop(kmer_graph, :likely_valid_kmer_indices)])
@@ -1418,6 +1527,9 @@ function process_fastq_record(;record, kmer_graph, yen_k_shortest_paths_and_weig
     return new_record
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function polish_fastq(;fastq, k=1)
     kmer_graph = build_directed_kmer_graph(fastq=fastq, k=k)
     assembly_k = MetaGraphs.get_prop(kmer_graph, :assembly_k)
@@ -1441,6 +1553,9 @@ function polish_fastq(;fastq, k=1)
     return (fastq = fastq_out * ".gz", k=assembly_k)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function build_directed_kmer_graph(;fastq, k=1, plot=false)
     if k == 1
         assembly_k = Mycelia.assess_dnamer_saturation([fastq])
@@ -1584,6 +1699,9 @@ function build_directed_kmer_graph(;fastq, k=1, plot=false)
 end
 
 # selected after trialing previous and next ks and finding those to be too unstable
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function iterative_polishing(fastq, max_k = 89, plot=false)
     # initial polishing
     polishing_results = [polish_fastq(fastq=fastq)]
@@ -1595,6 +1713,9 @@ function iterative_polishing(fastq, max_k = 89, plot=false)
     return polishing_results
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".seqid2taxid.txt.gz")
     Mycelia.add_bioconda_env("blast")
     if !isfile(outfile)
@@ -1606,6 +1727,9 @@ function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".se
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     return CSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ', header=["sequence_id", "taxid"], DataFrames.DataFrame)
     # data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
@@ -1613,7 +1737,12 @@ function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     # DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_xam_to_mapped_records_table(xam)
+# merge name conflicts, leaving breadcrumb for reference
+# function xam_records_to_dataframe(records)
     record_table = DataFrames.DataFrame(
         template = String[],
         flag = UInt16[],
@@ -1664,11 +1793,29 @@ function parse_xam_to_mapped_records_table(xam)
     return record_table
 end
 
-function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 11 <= x <= 53, Mycelia.ks()))
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
     results = DataFrames.DataFrame()
+    @show ks
     ProgressMeter.@showprogress for k in ks
-        observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
-        assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly)
+        @show k
+        @info "counting assembly kmers..."
+        # assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly)
+        assembled_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=assembly, k=k, canonical=true)
+        @info "loading assembly kmer counts..."
+        assembled_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(assembled_canonical_kmer_counts_file)
+        sort!(assembled_canonical_kmer_counts_table, "kmer")
+        assembled_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(assembled_canonical_kmer_counts_table))
+        
+        @info "counting observation kmers..."
+        # observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
+        observed_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=observations, k=k, canonical=true)
+        @info "loading observation kmer counts..."
+        observed_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(observed_canonical_kmer_counts_file)
+        sort!(observed_canonical_kmer_counts_table, "kmer")
+        observed_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(observed_canonical_kmer_counts_table))
         cosine_distance = kmer_counts_to_cosine_similarity(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
         js_divergence = kmer_counts_to_js_divergence(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
         qv = kmer_counts_to_merqury_qv(raw_data_counts=observed_canonical_kmer_counts, assembly_counts=assembled_canonical_kmer_counts)
@@ -1681,6 +1828,9 @@ end
 #     assess_assembly_quality(assembled_sequence=assembled_sequence, fastq=fastq, ks=[k])
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
     sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
     a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
@@ -1689,6 +1839,9 @@ function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
     return Distances.cosine_dist(a, b)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
     sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
     a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
@@ -1700,10 +1853,16 @@ function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
     return Distances.js_divergence(a_norm, b_norm)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function jaccard_similarity(set1, set2)
     return length(intersect(set1, set2)) / length(union(set1, set2))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function jaccard_distance(set1, set2)
     return 1.0 - jaccard_similarity(set1, set2)
 end
@@ -1718,6 +1877,9 @@ end
 #     return jaccard(collect(keys(kmer_counts_1)), collect(keys(kmer_counts_2)))
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}, assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}) where {k,N}
     # Ktotal = # of kmers found in assembly
     Ktotal = length(keys(assembly_counts))
@@ -1732,6 +1894,9 @@ function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{
     return QV
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function system_mem_to_minimap_index_size(;system_mem_gb, denominator=6)
     # smaller, higher diversity databases do better with >=5 as the denominator - w/ <=4 they run out of memory
     # denominator = 5 # produced OOM for NT on NERSC
@@ -1745,6 +1910,8 @@ end
 # system_mem_to_minimap_index_size(Mycelia.NERSC_MEM)
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Run this on the machine you intend to use to map the reads to confirm the index will fit
 """
 function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, denominator=6)
@@ -1761,17 +1928,19 @@ function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, d
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 aligning and compressing. No sorting or filtering.
 
 Use shell_only=true to get string command to submit to SLURM
 """
 function minimap_map(;
         fasta,
-        mem_gb,
-        mapping_type,
-        threads,
         fastq,
+        mapping_type,
         as_string=false,
+        mem_gb=(Int(Sys.free_memory()) / 1e9),
+        threads=Sys.CPU_THREADS,
         denominator=6
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
@@ -1797,9 +1966,7 @@ end
 
 
 """
-aligning and compressing. No sorting or filtering.
-
-Use shell_only=true to get string command to submit to SLURM
+$(DocStringExtensions.TYPEDSIGNATURES)
 """
 function minimap_map_with_index(;
         fasta,
@@ -1835,6 +2002,9 @@ function minimap_map_with_index(;
     return (;cmd, outfile)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     Mycelia.add_bioconda_env("samtools")
     bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
@@ -1848,6 +2018,9 @@ function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     return fastq
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function normalize_countmap(countmap)
     sum_total = sum(values(countmap))
     return Dict(k => v/sum_total for (k, v) in countmap)
@@ -1874,6 +2047,189 @@ function extract_pacbiosample_information(xml)
     return df
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function bandage_visualize(;gfa, img=gfa*".png")
+    # run(`$(bandage) image --helpall`)
+    bandage = Mycelia.download_bandage()
+    if !isfile(img)
+        run(`$(bandage) image $(gfa) $(img)`)
+    end
+    return img
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function xam_to_contig_mapping_stats(xam)
+    xam_results = Mycelia.parse_xam_to_summary_table(xam)
+    xam_results = xam_results[xam_results[!, "isprimary"] .& xam_results[!, "ismapped"], :]
+    # Calculate the percentage of mismatches
+    xam_results.percent_mismatches = xam_results.mismatches ./ xam_results.alignlength * 100
+    
+    # Group by the 'reference' column and calculate the summary statistics
+    contig_mapping_stats = DataFrames.combine(DataFrames.groupby(xam_results, :reference)) do subdf
+        mappingquality_stats = StatsBase.summarystats(subdf.mappingquality)
+        alignlength_stats = StatsBase.summarystats(subdf.alignlength)
+        alignment_score_stats = StatsBase.summarystats(subdf.alignment_score)
+        # mismatches_stats = StatsBase.summarystats(subdf.mismatches)
+        percent_mismatches_stats = StatsBase.summarystats(subdf.percent_mismatches)
+
+        (n_aligned_reads = length(subdf[!, "alignlength"]),
+         total_aligned_bases = sum(subdf[!, "alignlength"]),
+         total_alignment_score = sum(subdf[!, "alignment_score"]),
+         mappingquality_mean = mappingquality_stats.mean,
+         mappingquality_std = mappingquality_stats.sd,
+         # mappingquality_min = mappingquality_stats.min,
+         mappingquality_median = mappingquality_stats.median,
+         # mappingquality_max = mappingquality_stats.max,
+
+         alignlength_mean = alignlength_stats.mean,
+         alignlength_std = alignlength_stats.sd,
+         # alignlength_min = alignlength_stats.min,
+         alignlength_median = alignlength_stats.median,
+         # alignlength_max = alignlength_stats.max,
+
+         alignment_score_mean = alignment_score_stats.mean,
+         alignment_score_std = alignment_score_stats.sd,
+         # alignment_score_min = alignment_score_stats.min,
+         alignment_score_median = alignment_score_stats.median,
+         # alignment_score_max = alignment_score_stats.max,
+
+         # mismatches_mean = mismatches_stats.mean,
+         # mismatches_std = mismatches_stats.sd,
+         # mismatches_min = mismatches_stats.min,
+         # mismatches_median = mismatches_stats.median,
+         # mismatches_max = mismatches_stats.max,
+
+         percent_mismatches_mean = percent_mismatches_stats.mean,
+         percent_mismatches_std = percent_mismatches_stats.sd,
+         # percent_mismatches_min = percent_mismatches_stats.min,
+         percent_mismatches_median = percent_mismatches_stats.median,
+         # percent_mismatches_max = percent_mismatches_stats.max)
+        )
+    end
+    return contig_mapping_stats
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function fastx_to_contig_lengths(fastx)
+    OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function fasta_xam_mapping_stats(;fasta, xam)
+    fastx_contig_lengths = fastx_to_contig_lengths(fasta)
+    xam_stats = xam_to_contig_mapping_stats(xam)
+    fastx_contig_lengths = fastx_to_contig_lengths(fasta)
+    fastx_contig_lengths_table = DataFrames.DataFrame(contig = collect(keys(fastx_contig_lengths)), contig_length = collect(values(fastx_contig_lengths)))
+    fastx_contig_mapping_stats_table = DataFrames.innerjoin(fastx_contig_lengths_table, xam_stats, on="contig" => "reference")
+    mean_depth = fastx_contig_mapping_stats_table[!, "total_aligned_bases"] ./ fastx_contig_mapping_stats_table[!, "contig_length"]
+    DataFrames.insertcols!(fastx_contig_mapping_stats_table, 4, :mean_depth => mean_depth)
+    return fastx_contig_mapping_stats_table
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
+    if !isfile(samtools_flagstat)
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`, samtools_flagstat))
+    end
+    return samtools_flagstat
+end
+
+# not a very good function yet, but good enough for the pinches I need it for
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function parse_gfa(gfa)
+    segments = Vector{FASTX.FASTA.Record}()
+    links = Vector{Pair{String, String}}()
+    paths = Dict{String, Vector{String}}()
+    for l in eachline(open(gfa))
+        s = split(l, '\t')
+        if first(s) == "H"
+            # header line
+            continue
+        elseif first(s) == "S"
+            # segment
+            # push!(segments, string(s[2]))
+            identifier = string(s[2])
+            description = string(s[4])
+            sequence = string(s[3])
+            push!(segments, FASTX.FASTA.Record("$(identifier) $(description)", sequence))
+        elseif first(s) == "L"
+            # link
+            push!(links, string(s[2]) => string(s[4]))
+        elseif first(s) == "P"
+            # path
+            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
+        elseif first(s) == "A" # hifiasm https://hifiasm.readthedocs.io/en/latest/interpreting-output.html#output-file-formats
+            continue
+        else
+            println(l)
+            error("unexpected line encountered while parsing GFA")
+        end
+    end
+
+    g = MetaGraphs.MetaGraph(length(segments))
+
+    for link in links
+        (u, v) = link
+        ui = findfirst(FASTX.identifier.(segments) .== u)
+        vi = findfirst(FASTX.identifier.(segments) .== v)
+        Graphs.add_edge!(g, ui => vi)
+    end
+    for (i, segment) in enumerate(segments)
+        MetaGraphs.set_prop!(g, i, :id, FASTX.identifier(segment))
+    end
+    MetaGraphs.set_prop!(g, :records, segments)
+    return g
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function gfa_to_structure_table(gfa)
+    gfa_metagraph = parse_gfa(gfa)
+    contig_table = DataFrames.DataFrame()
+    records = MetaGraphs.get_prop(gfa_metagraph, :records)
+    contig_lengths = Dict(FASTX.identifier(record) => length(FASTX.sequence(record)) for record in records)
+    # @show String.(FASTX.description.(records))
+    # try
+    # contig_depths = Dict(FASTX.identifier(record) => first(match(r"^.*?dp:i:(\d+).*$", String(FASTX.description(record))).captures) for record in records)
+    for (i, connected_component) in enumerate(Graphs.connected_components(gfa_metagraph))
+        subgraph, node_map = Graphs.induced_subgraph(gfa_metagraph, connected_component)
+        # display(subgraph)
+        contigs = [MetaGraphs.get_prop(subgraph, v, :id) for v in Graphs.vertices(subgraph)]
+        row = (
+            connected_component = i,
+            contigs = join(contigs, ","),
+            is_circular = Graphs.is_cyclic(subgraph),
+            is_closed = (length(contigs) == 1) && Graphs.is_cyclic(subgraph),
+            lengths = join([contig_lengths[contig] for contig in contigs], ","),
+            # depths = join([contig_depths[contig] for contig in contigs], ","),
+            )
+        push!(contig_table, row)
+    end
+    
+    return (;contig_table, records)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function copy_with_unique_identifier(infile, out_directory, unique_identifier; force=true)
+    outfile = joinpath(out_directory, unique_identifier * "." * basename(infile))
+    cp(infile, outfile, force=force)
+    return outfile
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))

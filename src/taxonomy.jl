@@ -1,11 +1,12 @@
 # https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function setup_taxonkit_taxonomy()
     run(`wget -q ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
     Mycelia.tar_extract(tarchive="taxdump.tar.gz", directory=mkpath("$(homedir())/.taxonkit"))
 end
-
-
 
 # this is faster than NCBI version
 # run(pipeline(
@@ -13,6 +14,9 @@ end
 #         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
 #     )
 # )
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_full_taxonomy()
     Mycelia.add_bioconda_env("taxonkit")
     if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
@@ -51,6 +55,9 @@ function list_full_taxonomy()
     return table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_ranks(;synonyms=false)
     if !synonyms
         return [
@@ -79,6 +86,9 @@ function list_ranks(;synonyms=false)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_toplevel()
     return DataFrames.DataFrame(taxid=[0, 1], name=["unclassified", "root"])
 end
@@ -121,47 +131,83 @@ function list_rank(rank)
     end
 end
 
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_superkingdoms()
     return list_rank("superkingdom")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_kingdoms()
     return list_rank("kingdom")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_phylums()
     return list_rank("phylum")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_classes()
     return list_rank("class")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_orders()
     return list_rank("order")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_families()
     return list_rank("family")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_genera()
     return list_rank("genus")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_species()
     return list_rank("species")
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
 # function list_subtaxa(taxid)
 #     return parse.(Int, filter(!isempty, strip.(readlines(`conda run --no-capture-output -n taxonkit taxonkit list --ids 10239`))))
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_subtaxa(taxid)
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
     return parse.(Int, filter(!isempty, strip.(readlines(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function name2taxid(name)
     Mycelia.add_bioconda_env("taxonkit")
     if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
@@ -179,6 +225,9 @@ end
 # run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download taxonomy taxon 33554 --children`))
 
 # more useful
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
     Mycelia.add_bioconda_env("ncbi-datasets-cli")
     joint_table = DataFrames.DataFrame()
@@ -192,7 +241,11 @@ function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
 end
 
 # more complete
-function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
+# function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
     Mycelia.add_bioconda_env("taxonkit")
     if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
         setup_taxonkit_taxonomy()
@@ -243,6 +296,9 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     return taxids_to_lineage_table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function taxids2lca(ids::Vector{Int})
     Mycelia.add_bioconda_env("taxonkit")
     if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
@@ -261,6 +317,9 @@ function taxids2lca(ids::Vector{Int})
     return parse(Int, lca_id)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function names2taxids(names::AbstractVector{<:AbstractString})
     results = []
     ProgressMeter.@showprogress for name in names
@@ -296,6 +355,3 @@ end
 #     end
 #     return extracted_directory
 # end
-
-
-

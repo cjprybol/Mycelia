@@ -1,3 +1,6 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function trim_galore(;outdir="", identifier="")
     
     trim_galore_dir = joinpath(outdir, "trim_galore")
@@ -17,6 +20,9 @@ function trim_galore(;outdir="", identifier="")
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasterq_dump(;outdir="", srr_identifier="")
     
     forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
@@ -43,6 +49,9 @@ function fasterq_dump(;outdir="", srr_identifier="")
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function download_and_filter_sra_reads(;outdir="", srr_identifier="")
     forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
     reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
@@ -62,6 +71,9 @@ function download_and_filter_sra_reads(;outdir="", srr_identifier="")
     isfile(reverse_reads_gz) && rm(reverse_reads_gz)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function amino_acids_to_codons()
     amino_acid_to_codon_map = Dict(a => Kmers.DNACodon for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
     for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
@@ -71,13 +83,18 @@ function amino_acids_to_codons()
     return amino_acid_to_codon_map
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function codons_to_amino_acids()
     codons = Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
     codon_to_amino_acid_map = Dict(codon => BioSequences.translate(BioSequences.LongDNA{2}(codon)))
     return codon_to_amino_acid_map
 end
 
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function genbank_to_codon_frequencies(genbank; allow_all=true)
     # create an initial codon frequency table, where we initialize all possible codons with equal probability
     # this way, if we don't see the amino acid in the observed proteins we're optimizing, we can still produce an codon profile
@@ -130,6 +147,9 @@ function genbank_to_codon_frequencies(genbank; allow_all=true)
     return codon_frequencies
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function normalize_codon_frequencies(codon_frequencies)
     normalized_codon_frequencies = Dict{BioSymbols.AminoAcid, Dict{Kmers.DNACodon, Float64}}()
     for (amino_acid, amino_acid_codon_frequencies) in codon_frequencies
@@ -144,7 +164,9 @@ function normalize_codon_frequencies(codon_frequencies)
     return normalized_codon_frequencies
 end
 
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function reverse_translate(protein_sequence::BioSequences.LongAA)
     this_sequence = BioSequences.LongDNA{2}()
     codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}() for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
@@ -166,6 +188,9 @@ function reverse_translate(protein_sequence::BioSequences.LongAA)
     return this_sequence
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
     best_sequence = reverse_translate(protein_sequence)
     codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(best_sequence), 3)))
@@ -208,6 +233,9 @@ end
 
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
     kmer_counts_vector = zeros(length(kmer_to_index_map))
     for (kmer, count) in kmer_counts
@@ -222,11 +250,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
@@ -248,11 +271,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function generate_all_possible_canonical_kmers(k, alphabet)
     kmers = generate_all_possible_kmers(k, alphabet)
@@ -267,13 +285,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function get_kmer_index(kmers, kmer)
     index = searchsortedfirst(kmers, kmer)
@@ -284,78 +295,158 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create a dense kmer counts table (note, considers ALL POSSIBLE CANONICAL KMERS) for each fasta provided in a list.
+Create a dense kmer counts table (canonical for DNA, stranded for RNA & AA) for each fasta provided in a list.
 Scales very well for large numbers of organisms/fasta files, but not for k.
 Recommended for k <= 13, although 17 may still be possible
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet)
-    k > 13 && warn("consider using fasta_list_to_sparse_counts_table")
+    k > 13 && error("use fasta_list_to_sparse_counts_table")
     if alphabet == :AA
-        canonical_mers = generate_all_possible_canonical_kmers(k, AA_ALPHABET)
+        KMER_TYPE = BioSequences.AminoAcidAlphabet
+        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
+        COUNT = count_kmers
     elseif alphabet == :DNA
-        canonical_mers = generate_all_possible_canonical_kmers(k, DNA_ALPHABET)
+        KMER_TYPE = BioSequences.DNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
+        COUNT = count_canonical_kmers
     elseif alphabet == :RNA
-        canonical_mers = generate_all_possible_canonical_kmers(k, RNA_ALPHABET)
+        KMER_TYPE = BioSequences.RNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
+        COUNT = count_kmers
     else
         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
-    mer_counts_matrix = zeros(length(canonical_mers), length(fasta_list))
-    ProgressMeter.@showprogress for (entity_index, fasta_file) in enumerate(fasta_list)
-        if alphabet == :DNA
-            KMER_TYPE = BioSequences.DNAAlphabet{2}
-        elseif alphabet == :RNA
-            KMER_TYPE = BioSequences.RNAAlphabet{2}
-        elseif alphabet == :AA
-            KMER_TYPE = BioSequences.AminoAcidAlphabet
+    kmer_counts_matrix = zeros(length(sorted_kmers), length(fasta_list))
+    progress = ProgressMeter.Progress(length(fasta_list))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for (entity_index, fasta_file) in collect(enumerate(fasta_list))
+        # Acquire the lock before updating the progress
+        lock(reenrantlock) do
+            # Update the progress meter
+            ProgressMeter.next!(progress)
         end
-        entity_mer_counts = count_canonical_kmers(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
-        for (i, kmer) in enumerate(canonical_mers)
-            mer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
+        for (i, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
         end
     end
-    return canonical_mers, mer_counts_matrix
+    return (;sorted_kmers, kmer_counts_matrix)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function biosequences_to_dense_counts_table(;biosequences, k)
+    k > 13 && error("use fasta_list_to_sparse_counts_table")    
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = BioSequences.AminoAcidAlphabet
+        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = BioSequences.DNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = BioSequences.RNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+    end
+    kmer_counts_matrix = zeros(length(sorted_kmers), length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for (entity_index, biosequence) in collect(enumerate(biosequences))
+        # Acquire the lock before updating the progress
+        lock(reenrantlock) do
+            # Update the progress meter
+            ProgressMeter.next!(progress)
+        end
+        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, biosequence)
+        for (i, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        end
+    end
+    return (;sorted_kmers, kmer_counts_matrix)
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create a sparse kmer counts table in memory for each fasta provided in a list
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
-function fasta_list_to_sparse_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
+# function fasta_list_to_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
+#     if alphabet == :AA
+#         KMER_TYPE = Kmers.AAKmer{k}
+#         COUNT = count_kmers
+#     elseif alphabet == :DNA
+#         KMER_TYPE = Kmers.DNAKmer{k}
+#         COUNT = count_canonical_kmers
+#     elseif alphabet == :RNA
+#         KMER_TYPE = Kmers.RNAKmer{k}
+#         COUNT = count_kmers
+#     else
+#         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+#     end
     
-    if alphabet == :DNA
-        kmer_type = Kmers.Kmer{BioSequences.DNAAlphabet{4}, k}
-    elseif alphabet == :RNA
-        kmer_type = Kmers.Kmer{BioSequences.RNAAlphabet{4}, k}
-    elseif alphabet == :AA
-        kmer_type = Kmers.Kmer{BioSequences.AminoAcidAlphabet, k}
+#     fasta_kmer_counts_dict = Dict()
+#     progress = ProgressMeter.Progress(length(fasta_list))
+#     reenrantlock = ReentrantLock()
+#     Threads.@threads for fasta_file in fasta_list
+#         # Acquire the lock before updating the progress
+#         these_kmer_counts = COUNT(KMER_TYPE, fasta_file)
+#         lock(reenrantlock) do
+#             # Update the progress meter
+#             ProgressMeter.next!(progress)
+#             fasta_kmer_counts_dict[fasta_file] = these_kmer_counts
+#         end
+#     end
+#     sorted_kmers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
+#     kmer_counts_matrix = zeros(length(sorted_kmers), length(fasta_list))
+#     @info "populating sparse counts matrix..."
+#     for (col, fasta) in enumerate(fasta_list)
+#         for (row, kmer) in enumerate(sorted_kmers)
+#             kmer_counts_matrix[row, col] = get(fasta_kmer_counts_dict[fasta], kmer, 0)
+#         end
+#     end
+#     return (;sorted_kmers, kmer_counts_matrix)
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function biosequences_to_counts_table(;biosequences, k)
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = Kmers.AAKmer{k}
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
     
-    fasta_kmer_counts_dict = Dict()
-    @info "counting kmers..."
-    ProgressMeter.@showprogress for fasta_file in fasta_list
-        fasta_kmer_counts_dict[fasta_file] = count_canonical_kmers(kmer_type, fasta_file)         
+    kmer_counts = Vector{OrderedCollections.OrderedDict{KMER_TYPE, Int}}(undef, length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for i in eachindex(biosequences)
+        lock(reenrantlock) do
+            ProgressMeter.next!(progress)
+        end
+        kmer_counts[i] = COUNT(KMER_TYPE, biosequences[i])
     end
-    canonical_mers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
-    mer_counts_matrix = SparseArrays.spzeros(Int, length(canonical_mers), length(fasta_list))
-    
+    sorted_kmers = sort(collect(reduce(union, keys.(kmer_counts))))
+    kmer_counts_matrix = SparseArrays.spzeros(Int, length(mers), length(biosequences))
     @info "populating sparse counts matrix..."
-    for (col, fasta) in enumerate(fasta_list)
-        for (row, kmer) in enumerate(canonical_mers)
-            mer_counts_matrix[row, col] = fasta_kmer_counts_dict[fasta][kmer]
+    for (col, biosequence) in enumerate(biosequences)
+        for (row, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[row, col] = get(kmer_counts[col], kmer, 0)
         end
     end
-    canonical_mers, mer_counts_matrix
+    return (;sorted_kmers, kmer_counts_matrix)
 end
 
 """
@@ -363,11 +454,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function normalize_distance_matrix(distance_matrix)
     max_non_nan_value = maximum(filter(x -> !isnan(x) && !isnothing(x) && !ismissing(x), vec(distance_matrix)))
@@ -379,11 +465,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 # function count_matrix_to_probability_matrix(
 #         counts_matrix,
@@ -402,6 +483,9 @@ julia> 1 + 1
 #     return probability_matrix, probability_matrix_file
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function count_matrix_to_probability_matrix(counts_matrix)
     probability_matrix = zeros(size(counts_matrix))
     for (i, col) in enumerate(eachcol(counts_matrix))
@@ -415,11 +499,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function distance_matrix_to_newick(;distance_matrix, labels, outfile)
     # phage_names = phage_host_table[indices, :name]
@@ -448,52 +527,42 @@ function distance_matrix_to_newick(;distance_matrix, labels, outfile)
     return outfile
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-DEPRECATED: THIS WAS THE MEASURE WITH THE LEAST AGREEMENT TO EXISTING MEASURES LIKE BLAST AND % AVERAGE NUCLEOTIDE IDENTITY
-Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
-function counts_matrix_to_size_normalized_cosine_distance_matrix(counts_table)
-    n_entities = size(counts_table, 2)
-    distance_matrix = zeros(n_entities, n_entities)
-    for entity_1_index in 1:n_entities
-        for entity_2_index in entity_1_index+1:n_entities
-            a = counts_table[:, entity_1_index]
-            b = counts_table[:, entity_2_index]
-            sa = sum(a)
-            sb = sum(b)
-            size_dist = 1-(min(sa, sb)/max(sa, sb))
-            cosine_dist = Distances.cosine_dist(a, b)
-            distances = filter(x -> x > 0, (size_dist, cosine_dist))
-            if isempty(distances)
-                dist = 0.0
-            else
-                dist = reduce(*, distances)
-            end
-            distance_matrix[entity_1_index, entity_2_index] = 
-                distance_matrix[entity_2_index, entity_1_index] = dist
-        end
-    end
-    return distance_matrix
-end
+# DEPRECATED: THIS WAS THE MEASURE WITH THE LEAST AGREEMENT TO EXISTING MEASURES LIKE BLAST AND % AVERAGE NUCLEOTIDE IDENTITY
+# Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+# """
+# function counts_matrix_to_size_normalized_cosine_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             sa = sum(a)
+#             sb = sum(b)
+#             size_dist = 1-(min(sa, sb)/max(sa, sb))
+#             cosine_dist = Distances.cosine_dist(a, b)
+#             distances = filter(x -> x > 0, (size_dist, cosine_dist))
+#             if isempty(distances)
+#                 dist = 0.0
+#             else
+#                 dist = reduce(*, distances)
+#             end
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = dist
+#         end
+#     end
+#     return distance_matrix
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
@@ -515,11 +584,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create cosine distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to cosine similarity (relative frequency)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
     n_entities = size(probability_matrix, 2)
@@ -538,13 +602,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function kmer_path_to_sequence(kmer_path)
     sequence = BioSequences.LongDNA{2}(first(kmer_path))
@@ -561,13 +618,6 @@ end
     
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
-
-# A short description of the function
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
 # """
 # function observe(records::AbstractVector{R}; outfile = "", error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
 #     if isempty(outfile)
@@ -585,13 +635,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function random_fasta_record(;seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
     id = Random.randstring(Int(ceil(log(L + 1))))
@@ -601,13 +644,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     
@@ -618,6 +654,9 @@ function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Reco
     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where T
     
     if T <: BioSequences.DNAAlphabet
@@ -662,6 +701,9 @@ function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where
     return new_seq
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function observe(records::AbstractVector{R};
                 weights=ones(length(records)),
                 N = length(records),
@@ -686,6 +728,9 @@ function observe(records::AbstractVector{R};
 end
 
 # currently this is only for amino acid sequences, expand to include DNA and RNA via multiple dispatch
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function mutate_sequence(reference_sequence)
     i = rand(1:length(reference_sequence))
     mutation_type = rand([SequenceVariation.Substitution, SequenceVariation.Insertion, SequenceVariation.Deletion])
@@ -717,11 +762,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Return proportion of matched bases in alignment to total matches + edits.
 
 0-1, not %
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function assess_alignment_accuracy(alignment_result)
     return alignment_result.total_matches / (alignment_result.total_matches + alignment_result.total_edits)
@@ -731,11 +771,6 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Used to determine which orientation provides an optimal alignment for initiating path likelihood analyses in viterbi analysis
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function assess_optimal_kmer_alignment(kmer, observed_kmer)
 
@@ -760,13 +795,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function assess_alignment(a, b)
     pairwise_alignment = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(), a, b)
@@ -779,13 +807,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function canonicalize_kmer_counts!(kmer_counts)
     for (kmer, count) in kmer_counts
@@ -804,13 +825,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function canonicalize_kmer_counts(kmer_counts)
     return canonicalize_kmer_counts!(copy(kmer_counts))
@@ -818,13 +832,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
     kmer_counts = count_kmers(KMER_TYPE, sequences)
@@ -833,23 +840,30 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
     return sort(StatsBase.countmap([kmer for (index, kmer) in Kmers.EveryKmer{KMER_TYPE}(sequence)]))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     # TODO: need to figure out how to infer the sequence type
-    return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+    if eltype(KMER_TYPE) == BioSymbols.DNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.RNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongRNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.AminoAcid
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongAA, record))
+    else
+        @error KMER_TYPE
+    end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     kmer_counts = count_kmers(KMER_TYPE, first(records))
     for record in records[2:end]
@@ -859,10 +873,16 @@ function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_
     sort!(kmer_counts)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
     return count_kmers(KMER_TYPE, collect(sequences))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {KMER_TYPE, T <: AbstractString}
     kmer_counts = count_kmers(KMER_TYPE, first(fastx_files))
     for file in fastx_files[2:end]
@@ -872,6 +892,9 @@ function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {K
     return kmer_counts
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_TYPE}
     fastx_io = open_fastx(fastx_file)
     kmer_counts = count_kmers(KMER_TYPE, fastx_io)
@@ -881,13 +904,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function q_value_to_error_rate(q_value)
     error_rate = 10^(q_value/(-10))
@@ -896,13 +912,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function error_rate_to_q_value(error_rate)
     q_value = -10 * log10(error_rate)
@@ -911,13 +920,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function is_equivalent(a, b)
     a == b || a == BioSequences.reverse_complement(b)
@@ -925,13 +927,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function edge_path_to_sequence(kmer_graph, edge_path)
     edge = first(edge_path)
@@ -962,10 +957,6 @@ removes the length column, and converts it back into a FASTQ file.
 sorts longest to shortest!!
 
 http://thegenomefactory.blogspot.com/2012/11/sorting-fastq-files-by-sequence-length.html
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function sort_fastq(input_fastq, output_fastq="")
     
@@ -995,13 +986,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function count_records(fastx)
     n_records = 0
@@ -1013,13 +997,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function determine_read_lengths(fastq_file; total_reads = Inf)
     if total_reads == Inf
@@ -1038,13 +1015,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function determine_max_canonical_kmers(k, ALPHABET)
     max_possible_kmers = determine_max_possible_kmers(k, ALPHABET)
@@ -1058,13 +1028,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function determine_max_possible_kmers(k, ALPHABET)
     return length(ALPHABET)^k
@@ -1072,13 +1035,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 # Michaelis–Menten
 function calculate_v(s,p)
@@ -1090,13 +1046,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_file)
     open(fasta_amino_acid_file, "w") do io
@@ -1118,6 +1067,9 @@ function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_
     return fasta_amino_acid_file
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta_to_table(fasta)
     collected_fasta = collect(fasta)
     fasta_df = DataFrames.DataFrame(
@@ -1128,6 +1080,9 @@ function fasta_to_table(fasta)
     return fasta_df
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta_table_to_fasta(fasta_df)
     records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
     for (i, row) in enumerate(DataFrames.eachrow(fasta_df))
@@ -1137,6 +1092,9 @@ function fasta_table_to_fasta(fasta_df)
     return records
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function deduplicate_fasta_file(in_fasta, out_fasta)
     fasta_df = fasta_to_table(collect(open_fastx(in_fasta)))
     sort!(fasta_df, "identifier")

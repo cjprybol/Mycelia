@@ -1,3 +1,6 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function prefetch(;SRR, outdir=pwd())
     Mycelia.add_bioconda_env("sra-tools")
     run(`$(Mycelia.CONDA_RUNNERA) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
@@ -177,6 +180,9 @@ function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=fa
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function list_blastdbs()
     Mycelia.add_bioconda_env("blast")
     readlines(`$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall`)
@@ -211,6 +217,9 @@ function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="
     return "$(dbdir)/$(db)"
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).fasta.gz")
     p = pipeline(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
     if compressed
@@ -291,7 +300,9 @@ end
 #     run(cypher_cmd) 
 # end
 
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function upload_nodes_to_neo4j(;graph, address, username="neo4j", password, format="auto", database="neo4j", neo4j_import_directory)
     
     node_types = unique(MetaGraphs.props(graph, v)[:TYPE] for v in Graphs.vertices(graph))
@@ -310,6 +321,9 @@ function upload_nodes_to_neo4j(;graph, address, username="neo4j", password, form
     @info "done!"
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function node_type_to_dataframe(;node_type, graph)
     node_type_indices = filter(v -> MetaGraphs.props(graph, v)[:TYPE] == node_type, Graphs.vertices(graph))
     node_type_parameters = unique(reduce(vcat, map(v -> collect(keys(MetaGraphs.props(graph, v))), node_type_indices)))
@@ -330,6 +344,9 @@ function node_type_to_dataframe(;node_type, graph)
     return node_type_table
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function upload_node_table(;table, window_size=1000, address, password, username="neo4j", database="neo4j", neo4j_import_dir)
     nrows = DataFrames.nrow(table)
     windows = (i:min(i+window_size-1,nrows) for i in 1:window_size:nrows)
@@ -388,6 +405,9 @@ function upload_node_over_api(graph, v; ADDRESS, USERNAME="neo4j", PASSWORD, DAT
     run(cypher_cmd)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function upload_nodes_over_api(graph; ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j")
     ProgressMeter.@showprogress for v in Graphs.vertices(graph)
         upload_node_over_api(graph, v, ADDRESS=ADDRESS, USERNAME=USERNAME, PASSWORD=PASSWORD, DATABASE=DATABASE)
@@ -434,6 +454,9 @@ julia> 1 + 1
 #     return 
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function type_to_string(T)
     if T <: Kmers.Kmer
         return "Kmers.DNAKmer{$(T.parameters[2])}"
@@ -442,6 +465,9 @@ function type_to_string(T)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function type_to_string(T::AbstractString)
     return string(T)
 end
@@ -513,6 +539,9 @@ end
 #     end    
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function upload_node_type_over_url_from_graph(;node_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)
     node_type_params = Set{Symbol}()
     vertices_of_type = [v for v in Graphs.vertices(graph) if (graph.vprops[v][:TYPE] == node_type)]
@@ -536,6 +565,9 @@ function upload_node_type_over_url_from_graph(;node_type, graph, ADDRESS, USERNA
     end    
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function upload_edge_type_over_url_from_graph(;src_type, dst_type, edge_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)    
     src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
     dst_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == dst_type, Graphs.vertices(graph))
