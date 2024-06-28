@@ -40,6 +40,7 @@ import Statistics
 import StatsBase
 import StatsPlots
 import XAM
+import XMLDict
 import uCSV
 import Downloads
 import SparseArrays
