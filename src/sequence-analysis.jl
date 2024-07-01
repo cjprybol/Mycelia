@@ -439,7 +439,7 @@ function biosequences_to_counts_table(;biosequences, k)
         kmer_counts[i] = COUNT(KMER_TYPE, biosequences[i])
     end
     sorted_kmers = sort(collect(reduce(union, keys.(kmer_counts))))
-    kmer_counts_matrix = SparseArrays.spzeros(Int, length(mers), length(biosequences))
+    kmer_counts_matrix = SparseArrays.spzeros(Int, length(sorted_kmers), length(biosequences))
     @info "populating sparse counts matrix..."
     for (col, biosequence) in enumerate(biosequences)
         for (row, kmer) in enumerate(sorted_kmers)
@@ -567,7 +567,7 @@ where distance is a proportional to total feature count magnitude (size)
 function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
     distance_matrix = zeros(n_entities, n_entities)
-    for entity_1_index in 1:n_entities
+    ProgressMeter.@showprogress for entity_1_index in 1:n_entities
         for entity_2_index in entity_1_index+1:n_entities
             a = counts_table[:, entity_1_index]
             b = counts_table[:, entity_2_index]
@@ -578,6 +578,26 @@ function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     end
     return distance_matrix
 end
+# didn't work
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     progress = ProgressMeter.Progress(n_entities)
+#     reenrantlock = ReentrantLock()
+#     Threads.@threads for entity_1_index in 1:n_entities
+#         lock(reenrantlock) do
+#             ProgressMeter.next!(progress)
+#         end
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.euclidean(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
