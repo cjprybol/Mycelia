@@ -104,7 +104,6 @@ function parse_xam_to_summary_table(xam)
     return record_table
 end
 
-
 # # map reads to the assembly and run qualimap QC
 # bwt_index = "$(assembled_fasta).bwt"
 # if !isfile(bwt_index)

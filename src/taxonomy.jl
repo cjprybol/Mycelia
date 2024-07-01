@@ -241,6 +241,7 @@ function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
 end
 
 # more complete
+# function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
@@ -260,6 +261,39 @@ function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
     rm(f)
     header = ["taxid", "lineage", "lineage-taxids", "lineage-ranks"]
     return DataFrames.DataFrame(data, header)
+end
+
+function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
+    table = taxids2taxonkit_full_lineage_table(taxids)
+    taxid_to_lineage_ranks = Dict{Int, Dict{String, @NamedTuple{lineage::String, taxid::Int}}}()
+    for row in DataFrames.eachrow(table)
+        lineage_ranks = String.(split(row["lineage-ranks"], ';'))
+        lineage_taxids = parse.(Int, split(row["lineage-taxids"], ';'))
+        lineage = String.(split(row["lineage"], ';'))
+        row_dict = Dict(rank => (;lineage, taxid) for (lineage, rank, taxid) in zip(lineage, lineage_ranks, lineage_taxids))
+        delete!(row_dict, "no rank")
+        taxid_to_lineage_ranks[row["taxid"]] = row_dict
+    end
+    return taxid_to_lineage_ranks
+end
+
+function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
+    taxid_to_lineage_ranks = taxids2taxonkit_taxid2lineage_ranks(taxids)
+    taxids_to_lineage_table = DataFrames.DataFrame()
+    for (taxid, lineage_ranks) in taxid_to_lineage_ranks
+        # 
+        row = (
+            taxid = taxid,
+            species_taxid = haskey(lineage_ranks, "species") ? lineage_ranks["species"].taxid : missing,
+            species = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing,
+            genus_taxid = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing,
+            genus = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing,
+            superkingdom_taxid = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].taxid : missing,
+            superkingdom = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].lineage : missing,
+        )
+        push!(taxids_to_lineage_table, row, promote=true)
+    end
+    return taxids_to_lineage_table
 end
 
 """
