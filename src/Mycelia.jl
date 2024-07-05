@@ -2232,6 +2232,28 @@ function copy_with_unique_identifier(infile, out_directory, unique_identifier; f
     return outfile
 end
 
+"""
+Runs clustal omega on a fasta file
+
+valid outfmts include
+```
+["fasta", "clustal", "msf", "phylip", "selex", "stockholm", "vienna"]
+```
+"""
+function run_clustal_omega(;fasta, outfmt="clustal")
+    Mycelia.add_bioconda_env("clustalo")
+    outfile = "$(fasta).clustal-omega.$(outfmt)"
+    if !isfile(outfile)
+        try
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n clustalo clustalo -i $(fasta) --outfmt $(outfmt) -o $(outfile)`)
+        catch e
+            # FATAL: File '...' contains 1 sequence, nothing to align
+            return outfile
+        end
+    end
+    return outfile
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
