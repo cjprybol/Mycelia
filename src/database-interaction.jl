@@ -171,13 +171,16 @@ Download mmseqs databases
 function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=false, wait=true)
     Mycelia.add_bioconda_env("mmseqs2")
     mkpath(dbdir)
+    # sanitized_db = replace(db, "/" => "_")
     db_path = joinpath(dbdir, db)
+    mkpath(dirname(db_path))
     if !isfile(db_path) || force
         cmd = `$(CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(dbdir)/$(db) $(dbdir)/tmp`
         @time run(cmd, wait=wait)
     else
         @info "db $db @ $(db_path) already exists, set force=true to overwrite"
     end
+    return db_path
 end
 
 """
