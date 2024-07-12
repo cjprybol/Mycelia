@@ -8,10 +8,10 @@ julia> 1 + 1
 2
 ```
 """
-function fit_optimal_number_of_clusters(distance_matrix)
+function fit_optimal_number_of_clusters(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
-    N = size(distance_matrix, 1)
-    ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
+    # N = size(distance_matrix, 1)
+    # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
     
     # Int(round(size(distance_matrix, 1)/2))
     # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
@@ -181,10 +181,10 @@ julia> 1 + 1
 2
 ```
 """
-function fit_optimal_number_of_clusters_hclust(distance_matrix)
+function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
-    N = size(distance_matrix, 1)
-    ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
+    # N = size(distance_matrix, 1)
+    # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
     
     # Int(round(size(distance_matrix, 1)/2))
     # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
@@ -199,33 +199,37 @@ function fit_optimal_number_of_clusters_hclust(distance_matrix)
     # between_cluster_sum_of_squares = [missing, zeros(length(ks_to_try)-1)...]
     # silhouette_scores = Union{Float64, Missing}[]
     silhouette_scores = Float64[]
+    # wcss_scores = Float64[]
 
     @show "initial heirarchical clustering"
     @time hclust_result = Clustering.hclust(distance_matrix)
-    for k in ks_to_try[1:3]
+    # for k in ks_to_try[1:3]
+    for k in ks_to_try
         @show k
         this_clustering = Clustering.cutree(hclust_result, k=k)
         # push!(within_cluster_sum_of_squares, wcss(this_clustering))
         if k == 1
             this_silhouette_score = 0
+            # this_wcss = Inf
         else
             this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-            
+            # this_wcss = wcss(this_clustering)
         end
         push!(silhouette_scores, this_silhouette_score)
+        # push!(within_cluster_sum_of_squares, this_wcss)
         @show this_silhouette_score
     end      
     optimal_silhouette, optimal_index = findmax(silhouette_scores)
-    while (optimal_index == length(silhouette_scores)) && (optimal_index != length(ks_to_try))
-        k = ks_to_try[optimal_index+1]
-        @show k
-        this_clustering = Clustering.cutree(hclust_result, k=k)
-        # push!(within_cluster_sum_of_squares, wcss(this_clustering))
-        this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-        push!(silhouette_scores, this_silhouette_score)
-        @show this_silhouette_score
-        optimal_silhouette, optimal_index = findmax(silhouette_scores)
-    end
+    # while (optimal_index == length(silhouette_scores)) && (optimal_index != length(ks_to_try))
+    #     k = ks_to_try[optimal_index+1]
+    #     @show k
+    #     this_clustering = Clustering.cutree(hclust_result, k=k)
+    #     # push!(within_cluster_sum_of_squares, wcss(this_clustering))
+    #     this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+    #     push!(silhouette_scores, this_silhouette_score)
+    #     @show this_silhouette_score
+    #     optimal_silhouette, optimal_index = findmax(silhouette_scores)
+    # end
     previous_optimal_number_of_clusters = 0
     optimal_number_of_clusters = ks_to_try[optimal_index]
     done = false
@@ -256,6 +260,8 @@ function fit_optimal_number_of_clusters_hclust(distance_matrix)
                 this_clustering = Clustering.cutree(hclust_result, k=k)
                 this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
                 insert!(silhouette_scores, insertion_index, this_silhouette_score)
+                # this_wcss = wcss(this_clustering)
+                # insert!(within_cluster_sum_of_squares, insertion_index, this_wcss)
                 @show this_silhouette_score
             end
         end
