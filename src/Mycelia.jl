@@ -90,6 +90,8 @@ const CONDA_RUNNER = find_mamba()
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
+# none of this code currently supports CRAM
+const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
