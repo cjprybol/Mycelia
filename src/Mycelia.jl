@@ -90,6 +90,8 @@ const CONDA_RUNNER = find_mamba()
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
+# none of this code currently supports CRAM
+const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -494,6 +496,31 @@ function annotate_fasta(;
     return outdir
 end
 
+function annotate_aa_fasta(;
+        fasta,
+        identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+        basedir = pwd(),
+        mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
+        threads=Sys.CPU_THREADS
+    )
+    # @show basedir
+    outdir = joinpath(basedir, identifier)
+    @assert outdir != fasta
+    if !isdir(outdir)
+        @show isdir(outdir)
+        mkpath(outdir)
+        f = joinpath(outdir, basename(fasta))
+        # make this an rclone copy for portability
+        cp(fasta, f, force=true)
+        amino_acid_fasta = f
+
+        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+    else
+        @info "$(outdir) already present, skipping..."
+    end
+    return outdir
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
@@ -711,147 +738,78 @@ function simulate_nearly_perfect_long_reads()
     # | gzip > reads.fastq.gz
 end
 
+# Function to copy a file to a temporary directory with the same name
+function copy_to_tempdir(file_path::String)
+    # Create a temporary directory
+    temp_dir = mktempdir()
+
+    # Get the file name from the original file path
+    file_name = basename(file_path)
+
+    # Create the new file path within the temporary directory
+    temp_file_path = joinpath(temp_dir, file_name)
+
+    # Copy the original file to the new path
+    cp(file_path, temp_file_path)
+
+    # Return the path of the temporary file
+    return temp_file_path
+end
+
 # conda install -c bioconda kmer-jellyfish
 # count, bc, info, stats, histo, dump, merge, query, cite, mem, jf
 # cap at 4 threads, 8Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function jellyfish_count(;fastx, k, threads=Int(round(Sys.CPU_THREADS/2)), max_mem=Int(round(Sys.total_memory() / 2)), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
-    # @show fastx
-    # @show k
-    # @show threads
-    # @show max_mem
-    # @show canonical
-    # @show outfile
+function jellyfish_count(;fastx, k, threads=Sys.CPU_THREADS, max_mem=Int(Sys.free_memory()), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
     if conda_check
         Mycelia.add_bioconda_env("kmer-jellyfish")
     end
-    mem = Int(floor(max_mem))
+    mem = Int(floor(max_mem * 0.8))
     
-    # Usage: jellyfish mem [options] file:path+
-
-    # Give memory usage information
-
-    # The mem subcommand gives some information about the memory usage of
-    # Jellyfish when counting mers. If one replace 'count' by 'mem' in the
-    # command line, it displays the amount of memory needed. All the
-    # switches of the count subcommand are supported, although only the
-    # meaningful one for computing the memory usage are used.
-
-    # If the '--size' (-s) switch is omitted and the --mem switch is passed
-    # with an amount of memory in bytes, then the largest size that fit in
-    # that amount of memory is returned.
-
-    # The memory usage information only takes into account the hash to store
-    # the k-mers, not various buffers (e.g. in parsing the input files). But
-    # typically those will be small in comparison to the hash.
-
-    # Options (default value in (), *required):
-    #  -m, --mer-len=uint32                    *Length of mer
-    #  -s, --size=uint64                        Initial hash size
-    #  -c, --counter-len=Length in bits         Length bits of counting field (7)
-    #  -p, --reprobes=uint32                    Maximum number of reprobes (126)
-    #      --mem=uint64                         Return maximum size to fit within that memory
-    #      --bc=peath                           Ignored switch
-    #      --usage                              Usage
-    #  -h, --help                               This message
-    #      --full-help                          Detailed help
-    #  -V, --version                            Version
+    jellyfish_mem_output = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish mem --mer-len $(k) --mem $(mem)`, String)
+    # sample output = "68719476736 (68G)\n"
+    # this version grabs the exact number at the beginning
+    jellyfish_buffer_size = first(split(strip(jellyfish_mem_output)))
     
-    jellyfish_buffer_size = parse(Int, first(split(read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish mem --mer-len $(k) --mem $(mem)`, String))))
-    # @show jellyfish_buffer_size    
-    # Usage: jellyfish count [options] file:path+
-    # Count k-mers in fasta or fastq files
-    # Options (default value in (), *required):
-    #  -m, --mer-len=uint32                    *Length of mer
-    #  -s, --size=uint64                       *Initial hash size
-    #  -t, --threads=uint32                     Number of threads (1)
-    #      --sam=PATH                           SAM/BAM/CRAM formatted input file
-    #  -F, --Files=uint32                       Number files open simultaneously (1)
-    #  -g, --generator=path                     File of commands generating fast[aq]
-    #  -G, --Generators=uint32                  Number of generators run simultaneously (1)
-    #  -S, --shell=string                       Shell used to run generator commands ($SHELL or /bin/sh)
-    #  -o, --output=string                      Output file (mer_counts.jf)
-    #  -c, --counter-len=Length in bitsM         Length bits of counting field (7)
-    #      --out-counter-len=Length in bytes    Length in bytes of counter field in output (4)
-    #  -C, --canonical                          Count both strand, canonical representation (false)
-    #      --bc=peath                           Bloom counter to filter out singleton mers
-    #      --bf-size=uint64                     Use bloom filter to count high-frequency mers
-    #      --bf-fp=double                       False positive rate of bloom filter (0.01)
-    #      --if=path                            Count only k-mers in this files
-    #  -Q, --min-qual-char=string               Any base with quality below this character is changed to N
-    #      --quality-start=int32                ASCII for quality values (64)
-    #      --min-quality=int32                  Minimum quality. A base with lesser quality becomes an N
-    #  -p, --reprobes=uint32                    Maximum number of reprobes (126)
-    #      --text                               Dump in text format (false)
-    #      --disk                               Disk operation. Do not do size doubling (false)
-    #  -L, --lower-count=uint64                 Don't output k-mer with count < lower-count
-    #  -U, --upper-count=uint64                 Don't output k-mer with count > upper-count
-    #      --timing=Timing file                 Print timing information
-    #      --usage                              Usage
-    #  -h, --help                               This message
-    #      --full-help                          Detailed help
-    #  -V, --version                            Version
+    # this grabs the human readable version in parentheses
+    jellyfish_buffer_size = replace(split(strip(jellyfish_mem_output))[2], r"[\(\)]" => "")
+    @show jellyfish_buffer_size
+
+    @info "making a temporary copy of the input fastx"
+    temp_fastx = copy_to_tempdir(fastx)
+    if occursin(r"\.gz$", temp_fastx)
+        run(`gzip -d $(temp_fastx)`)
+        temp_fastx = replace(temp_fastx, r"\.gz$" => "")
+    end
+    @assert isfile(temp_fastx)
     if canonical
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --canonical --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile) /dev/fd/0`
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --canonical --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile) $(temp_fastx)`
     else
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile) /dev/fd/0`
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish count --size $(jellyfish_buffer_size) --threads $(threads) --mer-len $(k) --output $(outfile) $(temp_fastx)`
     end
-    if occursin(r"\.gz$", fastx)
-        open_cmd = `gzip -dc $(fastx)`
-    else
-        open_cmd = `cat $(fastx)`
-    end
+
     temp_tab = outfile * ".tsv"
     tabular_counts = temp_tab * ".gz"
-    
+
     if !isfile(tabular_counts)
         if !isfile(outfile)
-            run(pipeline(open_cmd, cmd))
+            @info "running kmer counts"
+            @show cmd
+            run(cmd)
+            @info "done counting kmers"
         end
         if !isfile(temp_tab)
+            @info "dumping counts to tab-delimited file"
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish dump --column --tab --output $(temp_tab) $(outfile)`)
+            @info "done dumping counts to tab-delimited file"
         end
         run(`gzip $(temp_tab)`)
     end
-    
-    # temp_fasta = outfile * ".fna"
-    # fna_counts = temp_fasta * ".gz"
-    # if !isfile(fna_counts)
-    #     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish dump --output $(temp_fasta) $(outfile)`)
-    #     run(`gzip $(temp_fasta)`)
-    # end
 
-    # Usage: jellyfish dump [options] db:path
-    # Dump k-mer counts
-    # By default, dump in a fasta format where the header is the count and
-    # the sequence is the sequence of the k-mer. The column format is a 2
-    # column output: k-mer count.
-    # Options (default value in (), *required):
-    #  -c, --column                             Column format (false)
-    #  -t, --tab                                Tab separator (false)
-    #  -L, --lower-count=uint64                 Don't output k-mer with count < lower-count
-    #  -U, --upper-count=uint64                 Don't output k-mer with count > upper-count
-    #  -o, --output=string                      Output file
-    #      --usage                              Usage
-    #  -h, --help                               This message
-    #  -V, --version                            Version
-
-    # Usage: jellyfish histo [options] db:path
-    #  -l, --low=uint64                         Low count value of histogram (1)
-    #  -h, --high=uint64                        High count value of histogram (10000)
-    #  -f, --full                               Full histo. Don't skip count 0. (false)
-    #  -o, --output=string                      Output file
-    # histogram = outfile * ".histogram"
-    # if !isfile(histogram)
-    #     # 10000000000
-    #     # ^ runs out of memory
-    #     # 10000
-    #     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kmer-jellyfish jellyfish histo --low 1 --high 10000 --output $(histogram) $(outfile)`)
-    # end
-    # return (;outfile, fna_counts, tabular_counts, histogram)
     isfile(outfile) && rm(outfile)
+    isfile(temp_fastx) && rm(temp_fastx)
     return tabular_counts
 end
 
@@ -1803,20 +1761,20 @@ function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter
     ProgressMeter.@showprogress for k in ks
         @show k
         @info "counting assembly kmers..."
-        # assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly)
-        assembled_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=assembly, k=k, canonical=true)
-        @info "loading assembly kmer counts..."
-        assembled_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(assembled_canonical_kmer_counts_file)
-        sort!(assembled_canonical_kmer_counts_table, "kmer")
-        assembled_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(assembled_canonical_kmer_counts_table))
+        assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly)
+        # assembled_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=assembly, k=k, canonical=true)
+        # @info "loading assembly kmer counts..."
+        # assembled_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(assembled_canonical_kmer_counts_file)
+        # sort!(assembled_canonical_kmer_counts_table, "kmer")
+        # assembled_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(assembled_canonical_kmer_counts_table))
         
         @info "counting observation kmers..."
-        # observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
-        observed_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=observations, k=k, canonical=true)
-        @info "loading observation kmer counts..."
-        observed_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(observed_canonical_kmer_counts_file)
-        sort!(observed_canonical_kmer_counts_table, "kmer")
-        observed_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(observed_canonical_kmer_counts_table))
+        observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
+        # observed_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=observations, k=k, canonical=true)
+        # @info "loading observation kmer counts..."
+        # observed_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(observed_canonical_kmer_counts_file)
+        # sort!(observed_canonical_kmer_counts_table, "kmer")
+        # observed_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(observed_canonical_kmer_counts_table))
         cosine_distance = kmer_counts_to_cosine_similarity(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
         js_divergence = kmer_counts_to_js_divergence(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
         qv = kmer_counts_to_merqury_qv(raw_data_counts=observed_canonical_kmer_counts, assembly_counts=assembled_canonical_kmer_counts)

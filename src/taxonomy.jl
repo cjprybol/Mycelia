@@ -241,11 +241,11 @@ function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
 end
 
 # more complete
-# function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
+# function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
+function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
     Mycelia.add_bioconda_env("taxonkit")
     if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
         setup_taxonkit_taxonomy()
@@ -264,12 +264,13 @@ function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
 end
 
 function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
-    table = taxids2taxonkit_lineage_table(taxids)
+    table = taxids2taxonkit_full_lineage_table(taxids)
+    # table = taxids2taxonkit_lineage_table(taxids)
     taxid_to_lineage_ranks = Dict{Int, Dict{String, @NamedTuple{lineage::String, taxid::Union{Int, Missing}}}}()
     for row in DataFrames.eachrow(table)
         lineage_ranks = String.(split(row["lineage-ranks"], ';'))
         lineage_taxids = [something(tryparse(Int, x), missing) for x in split(row["lineage-taxids"], ';')]
-        # lineage_taxids = parse.(Int, split(row["lineage-taxids"], ';'))
+        # lineage_taxids = something.(tryparse.(Int, split(row["lineage-taxids"], ';')), missing)
         lineage = String.(split(row["lineage"], ';'))
         row_dict = Dict(rank => (;lineage, taxid) for (lineage, rank, taxid) in zip(lineage, lineage_ranks, lineage_taxids))
         delete!(row_dict, "no rank")
