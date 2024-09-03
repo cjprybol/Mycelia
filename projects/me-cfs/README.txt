@@ -1,3 +1,32 @@
+New data - `/labs/mpsnyder/amir/ME-CFS-VCF/FASTQs/Shared-ME-CFS/`
+
+find /labs/mpsnyder/amir/ME-CFS-VCF/FASTQs/Shared-ME-CFS/ -type f -name "*.fq.gz" -exec ls -l {} \; | awk '{sum += $5} END {if (sum >= 1099511627776) {size = sum / 1099511627776; unit = "TB"} else if (sum >= 1073741824) {size = sum / 1073741824; unit = "GB"} else if (sum >= 1048576) {size = sum / 1048576; unit = "MB"} else if (sum >= 1024) {size = sum / 1024; unit = "KB"} else {size = sum; unit = "bytes"}; printf "%.2f %s\n", size, unit}'
+30.24 TB
+
+find $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA/ -type f -name "*.fq.gz" -exec ls -l {} \; | awk '{sum += $5} END {if (sum >= 1099511627776) {size = sum / 1099511627776; unit = "TB"} else if (sum >= 1073741824) {size = sum / 1073741824; unit = "GB"} else if (sum >= 1048576) {size = sum / 1048576; unit = "MB"} else if (sum >= 1024) {size = sum / 1024; unit = "KB"} else {size = sum; unit = "bytes"}; printf "%.2f %s\n", size, unit}'
+4.5 TB
+
+All charges incurred in past 18 months
+
+
+get_compute_charges -a mpsnyder -y 2023
+
+[-m month] [-v] [-p]
+
+
+$1.50 / CPU-day for batch partition usage ($0.0625 / CPU-hour)
+
+SRR6399459 4.33 Gb
+Assembly 
+Mapping
+Blast classification
+
+
+SRR7365485 9Gb
+
+
+
+
 14 Initial samples to try
 
 ME/CFS patients - blinded to the nature of the 14 samples

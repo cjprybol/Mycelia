@@ -202,7 +202,7 @@ function scg_sbatch(;
         ntasks::Int=1,
         time::String="1-00:00:00",
         cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 8,
+        mem_gb::Int=cpus_per_task * 32,
         cmd::String
     )
     submission = 
@@ -1741,7 +1741,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function parse_xam_to_mapped_records_table(xam)
+function parse_xam_to_mapped_records_table(xam, primary_only=false)
 # merge name conflicts, leaving breadcrumb for reference
 # function xam_records_to_dataframe(records)
     record_table = DataFrames.DataFrame(
@@ -1997,6 +1997,66 @@ function minimap_map_with_index(;
         """
     else
         map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = [map, compress]
+    end
+    return (;cmd, outfile)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function find_matching_prefix(filename1::String, filename2::String)
+    min_length = min(length(filename1), length(filename2))
+    matching_prefix = ""
+    
+    for i in 1:min_length
+        if filename1[i] == filename2[i]
+            matching_prefix *= filename1[i]
+        else
+            break
+        end
+    end
+    
+    return matching_prefix
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function minimap_map_paired_end_with_index(;
+        fasta,
+        forward,
+        reverse,
+        mem_gb,
+        threads,
+        outdir = dirname(forward),
+        as_string=false,
+        mapping_type="sr",
+        denominator=6
+    )
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    @show index_file
+    @assert isfile(index_file)
+    @assert isfile(forward)
+    @assert isfile(reverse)
+    fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
+    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
+    # outfile = temp_sam_outfile
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
         compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
         cmd = [map, compress]
     end
