@@ -290,6 +290,8 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
             species = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing,
             genus_taxid = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing,
             genus = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing,
+            family_taxid = haskey(lineage_ranks, "family") ? lineage_ranks["family"].taxid : missing,
+            family = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage : missing,
             superkingdom_taxid = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].taxid : missing,
             superkingdom = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].lineage : missing,
         )

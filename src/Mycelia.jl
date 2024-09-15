@@ -1755,6 +1755,42 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
+function parse_xam_to_primary_mapping_table(xam)
+    record_table = DataFrames.DataFrame(
+        template = String[],
+        reference = String[]
+    )
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+        io = open(xam)
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    # filter out header lines
+    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
+    # reader = MODULE.Reader(io)
+    for record in reader
+        if XAM.SAM.ismapped(record) && XAM.SAM.isprimary(record)
+            row = (
+                template = XAM.SAM.tempname(record),
+                reference = XAM.SAM.refname(record)
+                )
+            push!(record_table, row, promote=true)
+        end
+    end
+    close(io)
+    return record_table
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
     results = DataFrames.DataFrame()
     @show ks
