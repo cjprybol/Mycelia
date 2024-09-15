@@ -239,7 +239,9 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Returns bool indicating whether the contig is cleanly assembled
+Returns bool indicating whether the contig is cleanly assembled.
+
+By cleanly assembled we mean that the contig does not have other contigs attached in the same connected component.
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
@@ -250,25 +252,30 @@ julia> 1 + 1
 ```
 """
 function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
-    gfa_graph = Mycelia.parse_gfa(graph_file)
-    if !isempty(gfa_graph.gprops[:paths])
-        # probably spades
-        # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
-        segment_identifier = contig_name * "_1"
-        segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
-        nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
-        node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
-    else
-        # megahit
-        node_indices = [gfa_graph[contig_name, :identifier]]
-    end
-    connected_components = Graphs.connected_components(gfa_graph)
-    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
-    if (1 <= length(component_of_interest) <= 2)
-        return true
-    else
-        return false
-    end
+    contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
+    matching_connected_components = findfirst(contig_table[!, "contigs"] .== contig_name)
+    # contigs should be comma-seperated identifiers as strings, so if we get a hit then
+    # it must be cleanly assembled.
+    return !isnothing(matching_connected_components)
+    # gfa_graph = Mycelia.parse_gfa(graph_file)
+    # if !isempty(gfa_graph.gprops[:paths])
+    #     # probably spades
+    #     # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
+    #     segment_identifier = contig_name * "_1"
+    #     segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
+    #     nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
+    #     node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
+    # else
+    #     # megahit
+    #     node_indices = [gfa_graph[contig_name, :identifier]]
+    # end
+    # connected_components = Graphs.connected_components(gfa_graph)
+    # component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
+    # if (1 <= length(component_of_interest) <= 2)
+    #     return true
+    # else
+    #     return false
+    # end
 end
 
 """
@@ -285,26 +292,35 @@ julia> 1 + 1
 ```
 """
 function contig_is_circular(graph_file::String, contig_name::String)
-    gfa_graph = Mycelia.parse_gfa(graph_file)
-    if !isempty(gfa_graph.gprops[:paths])
-        # probably spades
-        # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
-        segment_identifier = contig_name * "_1"
-        segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
-        nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
-        node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
-    else
-        # megahit
-        node_indices = [gfa_graph[contig_name, :identifier]]
-    end
-    connected_components = Graphs.connected_components(gfa_graph)
-    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
-    subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
-    if Graphs.is_cyclic(subgraph)
-        return true
+    contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
+    # display(contig_name)
+    # display(contig_table)
+    matching_connected_components = findfirst(contig_table[!, "contigs"] .== contig_name)
+    if !isnothing(matching_connected_components)
+        return contig_table[matching_connected_components, "is_circular"] && contig_table[matching_connected_components, "is_closed"]
     else
         return false
     end
+    # gfa_graph = Mycelia.parse_gfa(graph_file)
+    # if !isempty(gfa_graph.gprops[:paths])
+    #     # probably spades
+    #     # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
+    #     segment_identifier = contig_name * "_1"
+    #     segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
+    #     nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
+    #     node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
+    # else
+    #     # megahit
+    #     node_indices = [gfa_graph[contig_name, :identifier]]
+    # end
+    # connected_components = Graphs.connected_components(gfa_graph)
+    # component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
+    # subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
+    # if Graphs.is_cyclic(subgraph)
+    #     return true
+    # else
+    #     return false
+    # end
 end
 
 """

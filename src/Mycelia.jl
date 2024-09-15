@@ -1202,10 +1202,35 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values, and remove those columns from the dataframe.
+
+Returns a modified copy of the dataframe.
+
+See also: drop_empty_columns!
 """
-function drop_empty_columns(table)
-    is_empty_column = map(col -> all(isempty.(col)), eachcol(table))
-    return table[!, .!is_empty_column]
+function drop_empty_columns(df::DataFrames.AbstractDataFrame)
+    # Filter the DataFrame columns by checking if not all values in the column are missing or empty
+    non_empty_columns = [!all(v -> ismissing(v) || isempty(v), col) for col in DataFrames.eachcol(df)]
+    filtered_df = df[:, non_empty_columns]
+    return filtered_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values, and remove those columns from the dataframe *in-place*.
+
+Returns a modified version of the original dataframe. 
+
+See also: drop_empty_columns
+"""
+function drop_empty_columns!(df::DataFrames.AbstractDataFrame)
+    # Filter the DataFrame columns by checking if not all values in the column are missing or empty
+    non_empty_columns = [!all(v -> ismissing(v) || isempty(v), col) for col in DataFrames.eachcol(df)]
+    # df = df[!, non_empty_columns]
+    DataFrames.select!(df, non_empty_columns)
+    return df
 end
 
 # # Need to add hashdeep & logging
@@ -2193,6 +2218,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
+    Mycelia.add_bioconda_env("samtools")
     if !isfile(samtools_flagstat)
         run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`, samtools_flagstat))
     end
