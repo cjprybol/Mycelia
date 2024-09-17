@@ -32,3 +32,4 @@ projects/viral-exposome-discovery/results/
 projects/ME_CFS/*
 deps/build.log
 *.jpg
+*Project.toml

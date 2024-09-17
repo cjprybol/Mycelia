@@ -204,7 +204,7 @@ function scg_sbatch(;
         ntasks::Int=1,
         time::String="1-00:00:00",
         cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 8,
+        mem_gb::Int=cpus_per_task * 32,
         cmd::String
     )
     submission = 
@@ -1202,10 +1202,35 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values, and remove those columns from the dataframe.
+
+Returns a modified copy of the dataframe.
+
+See also: drop_empty_columns!
 """
-function drop_empty_columns(table)
-    is_empty_column = map(col -> all(isempty.(col)), eachcol(table))
-    return table[!, .!is_empty_column]
+function drop_empty_columns(df::DataFrames.AbstractDataFrame)
+    # Filter the DataFrame columns by checking if not all values in the column are missing or empty
+    non_empty_columns = [!all(v -> ismissing(v) || isempty(v), col) for col in DataFrames.eachcol(df)]
+    filtered_df = df[:, non_empty_columns]
+    return filtered_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values, and remove those columns from the dataframe *in-place*.
+
+Returns a modified version of the original dataframe. 
+
+See also: drop_empty_columns
+"""
+function drop_empty_columns!(df::DataFrames.AbstractDataFrame)
+    # Filter the DataFrame columns by checking if not all values in the column are missing or empty
+    non_empty_columns = [!all(v -> ismissing(v) || isempty(v), col) for col in DataFrames.eachcol(df)]
+    # df = df[!, non_empty_columns]
+    DataFrames.select!(df, non_empty_columns)
+    return df
 end
 
 # # Need to add hashdeep & logging
@@ -1699,7 +1724,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function parse_xam_to_mapped_records_table(xam)
+function parse_xam_to_mapped_records_table(xam, primary_only=false)
 # merge name conflicts, leaving breadcrumb for reference
 # function xam_records_to_dataframe(records)
     record_table = DataFrames.DataFrame(
@@ -1744,6 +1769,42 @@ function parse_xam_to_mapped_records_table(xam)
                 isprimary = XAM.SAM.isprimary(record),
                 alignment_score = record["AS"],
                 mismatches = record["NM"]
+                )
+            push!(record_table, row, promote=true)
+        end
+    end
+    close(io)
+    return record_table
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function parse_xam_to_primary_mapping_table(xam)
+    record_table = DataFrames.DataFrame(
+        template = String[],
+        reference = String[]
+    )
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+        io = open(xam)
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    # filter out header lines
+    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
+    # reader = MODULE.Reader(io)
+    for record in reader
+        if XAM.SAM.ismapped(record) && XAM.SAM.isprimary(record)
+            row = (
+                template = XAM.SAM.tempname(record),
+                reference = XAM.SAM.refname(record)
                 )
             push!(record_table, row, promote=true)
         end
@@ -1964,6 +2025,66 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
+function find_matching_prefix(filename1::String, filename2::String)
+    min_length = min(length(filename1), length(filename2))
+    matching_prefix = ""
+    
+    for i in 1:min_length
+        if filename1[i] == filename2[i]
+            matching_prefix *= filename1[i]
+        else
+            break
+        end
+    end
+    
+    return matching_prefix
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function minimap_map_paired_end_with_index(;
+        fasta,
+        forward,
+        reverse,
+        mem_gb,
+        threads,
+        outdir = dirname(forward),
+        as_string=false,
+        mapping_type="sr",
+        denominator=6
+    )
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    @show index_file
+    @assert isfile(index_file)
+    @assert isfile(forward)
+    @assert isfile(reverse)
+    fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
+    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
+    # outfile = temp_sam_outfile
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = [map, compress]
+    end
+    return (;cmd, outfile)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     Mycelia.add_bioconda_env("samtools")
     bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
@@ -2097,6 +2218,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
+    Mycelia.add_bioconda_env("samtools")
     if !isfile(samtools_flagstat)
         run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`, samtools_flagstat))
     end

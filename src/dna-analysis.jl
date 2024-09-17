@@ -1,37 +1,37 @@
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
-    if occursin(r"\.bam$", xam)
-        MODULE = XAM.BAM
-        io = open(xam)
-    elseif occursin(r"\.sam$", xam)
-        MODULE = XAM.SAM
-        io = open(xam)
-    elseif occursin(r"\.sam.gz$", xam)
-        MODULE = XAM.SAM
-        io = CodecZlib.GzipDecompressorStream(open(xam))
-    else
-        error("unrecognized file extension in file: $xam")
-    end
-    # reader = open(MODULE.Reader, io)
-    reader = MODULE.Reader(io)
-    header = reader.header
-    record_iterator = Iterators.filter(record -> true, reader)
-    if filter_unmapped
-        record_iterator = Iterators.filter(record -> MODULE.ismapped(record), record_iterator)
-    end
-    if primary_only
-        record_iterator = Iterators.filter(record -> MODULE.isprimary(record), record_iterator)
-    end
-    record_iterator = Iterators.filter(record -> MODULE.mappingquality(record) >= min_mapping_quality, record_iterator)
-    record_iterator = Iterators.filter(record -> MODULE.alignlength(record) >= min_align_length, record_iterator)
-    records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
-    # reset header to specify sorted
-    header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
-    close(io)
-    return (;records, header)
-end
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
+#     if occursin(r"\.bam$", xam)
+#         MODULE = XAM.BAM
+#         io = open(xam)
+#     elseif occursin(r"\.sam$", xam)
+#         MODULE = XAM.SAM
+#         io = open(xam)
+#     elseif occursin(r"\.sam.gz$", xam)
+#         MODULE = XAM.SAM
+#         io = CodecZlib.GzipDecompressorStream(open(xam))
+#     else
+#         error("unrecognized file extension in file: $xam")
+#     end
+#     # reader = open(MODULE.Reader, io)
+#     reader = MODULE.Reader(io)
+#     header = reader.header
+#     record_iterator = Iterators.filter(record -> true, reader)
+#     if filter_unmapped
+#         record_iterator = Iterators.filter(record -> MODULE.ismapped(record), record_iterator)
+#     end
+#     if primary_only
+#         record_iterator = Iterators.filter(record -> MODULE.isprimary(record), record_iterator)
+#     end
+#     record_iterator = Iterators.filter(record -> MODULE.mappingquality(record) >= min_mapping_quality, record_iterator)
+#     record_iterator = Iterators.filter(record -> MODULE.alignlength(record) >= min_align_length, record_iterator)
+#     records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
+#     # reset header to specify sorted
+#     header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
+#     close(io)
+#     return (;records, header)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -239,7 +239,9 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Returns bool indicating whether the contig is cleanly assembled
+Returns bool indicating whether the contig is cleanly assembled.
+
+By cleanly assembled we mean that the contig does not have other contigs attached in the same connected component.
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
@@ -250,25 +252,30 @@ julia> 1 + 1
 ```
 """
 function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
-    gfa_graph = Mycelia.parse_gfa(graph_file)
-    if !isempty(gfa_graph.gprops[:paths])
-        # probably spades
-        # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
-        segment_identifier = contig_name * "_1"
-        segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
-        nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
-        node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
-    else
-        # megahit
-        node_indices = [gfa_graph[contig_name, :identifier]]
-    end
-    connected_components = Graphs.connected_components(gfa_graph)
-    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
-    if (1 <= length(component_of_interest) <= 2)
-        return true
-    else
-        return false
-    end
+    contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
+    matching_connected_components = findfirst(contig_table[!, "contigs"] .== contig_name)
+    # contigs should be comma-seperated identifiers as strings, so if we get a hit then
+    # it must be cleanly assembled.
+    return !isnothing(matching_connected_components)
+    # gfa_graph = Mycelia.parse_gfa(graph_file)
+    # if !isempty(gfa_graph.gprops[:paths])
+    #     # probably spades
+    #     # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
+    #     segment_identifier = contig_name * "_1"
+    #     segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
+    #     nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
+    #     node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
+    # else
+    #     # megahit
+    #     node_indices = [gfa_graph[contig_name, :identifier]]
+    # end
+    # connected_components = Graphs.connected_components(gfa_graph)
+    # component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
+    # if (1 <= length(component_of_interest) <= 2)
+    #     return true
+    # else
+    #     return false
+    # end
 end
 
 """
@@ -285,26 +292,35 @@ julia> 1 + 1
 ```
 """
 function contig_is_circular(graph_file::String, contig_name::String)
-    gfa_graph = Mycelia.parse_gfa(graph_file)
-    if !isempty(gfa_graph.gprops[:paths])
-        # probably spades
-        # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
-        segment_identifier = contig_name * "_1"
-        segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
-        nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
-        node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
-    else
-        # megahit
-        node_indices = [gfa_graph[contig_name, :identifier]]
-    end
-    connected_components = Graphs.connected_components(gfa_graph)
-    component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
-    subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
-    if Graphs.is_cyclic(subgraph)
-        return true
+    contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
+    # display(contig_name)
+    # display(contig_table)
+    matching_connected_components = findfirst(contig_table[!, "contigs"] .== contig_name)
+    if !isnothing(matching_connected_components)
+        return contig_table[matching_connected_components, "is_circular"] && contig_table[matching_connected_components, "is_closed"]
     else
         return false
     end
+    # gfa_graph = Mycelia.parse_gfa(graph_file)
+    # if !isempty(gfa_graph.gprops[:paths])
+    #     # probably spades
+    #     # gfa segment identifiers have _1 appended to fasta sequence identifiers for spades
+    #     segment_identifier = contig_name * "_1"
+    #     segment_node_string = gfa_graph.gprops[:paths][segment_identifier]["segments"]
+    #     nodes_in_segment = replace.(split(segment_node_string, ','), r"[^\d]" => "")
+    #     node_indices = [gfa_graph[n, :identifier] for n in nodes_in_segment]
+    # else
+    #     # megahit
+    #     node_indices = [gfa_graph[contig_name, :identifier]]
+    # end
+    # connected_components = Graphs.connected_components(gfa_graph)
+    # component_of_interest = first(filter(cc -> all(n -> n in cc, node_indices), connected_components))
+    # subgraph, vertex_map = Graphs.induced_subgraph(gfa_graph, component_of_interest)
+    # if Graphs.is_cyclic(subgraph)
+    #     return true
+    # else
+    #     return false
+    # end
 end
 
 """

@@ -265,10 +265,12 @@ end
 
 function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
     table = taxids2taxonkit_full_lineage_table(taxids)
+    # table = taxids2taxonkit_lineage_table(taxids)
     taxid_to_lineage_ranks = Dict{Int, Dict{String, @NamedTuple{lineage::String, taxid::Union{Int, Missing}}}}()
     for row in DataFrames.eachrow(table)
         lineage_ranks = String.(split(row["lineage-ranks"], ';'))
-        lineage_taxids = something.(tryparse.(Int, split(row["lineage-taxids"], ';')), missing)
+        lineage_taxids = [something(tryparse(Int, x), missing) for x in split(row["lineage-taxids"], ';')]
+        # lineage_taxids = something.(tryparse.(Int, split(row["lineage-taxids"], ';')), missing)
         lineage = String.(split(row["lineage"], ';'))
         row_dict = Dict(rank => (;lineage, taxid) for (lineage, rank, taxid) in zip(lineage, lineage_ranks, lineage_taxids))
         delete!(row_dict, "no rank")
@@ -288,6 +290,8 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
             species = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing,
             genus_taxid = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing,
             genus = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing,
+            family_taxid = haskey(lineage_ranks, "family") ? lineage_ranks["family"].taxid : missing,
+            family = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage : missing,
             superkingdom_taxid = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].taxid : missing,
             superkingdom = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].lineage : missing,
         )
