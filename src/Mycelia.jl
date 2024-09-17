@@ -1863,6 +1863,42 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
+function parse_xam_to_primary_mapping_table(xam)
+    record_table = DataFrames.DataFrame(
+        template = String[],
+        reference = String[]
+    )
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+        io = open(xam)
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    # filter out header lines
+    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
+    # reader = MODULE.Reader(io)
+    for record in reader
+        if XAM.SAM.ismapped(record) && XAM.SAM.isprimary(record)
+            row = (
+                template = XAM.SAM.tempname(record),
+                reference = XAM.SAM.refname(record)
+                )
+            push!(record_table, row, promote=true)
+        end
+    end
+    close(io)
+    return record_table
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
     results = DataFrames.DataFrame()
     @show ks
@@ -2383,6 +2419,33 @@ function run_clustal_omega(;fasta, outfmt="clustal")
         end
     end
     return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Gets the size of a file and returns it in a human-readable format.
+
+# Arguments
+- `f`: The path to the file, either as a `String` or an `AbstractString`.
+
+# Returns
+A string representing the file size in a human-readable format (e.g., "3.40 MB").
+
+# Details
+This function internally uses `filesize(f)` to get the file size in bytes, then leverages `Base.format_bytes` to convert it into a human-readable format with appropriate units (KB, MB, GB, etc.).
+
+# Examples
+```julia
+julia> filesize_human_readable("my_image.jpg")
+"2.15 MB"
+```
+See Also
+* filesize: Gets the size of a file in bytes.
+* Base.format_bytes: Converts a byte count into a human-readable string. 
+"""
+function filesize_human_readable(f)
+    return Base.format_bytes(filesize(f))
 end
 
 # dynamic import of files??
