@@ -2212,6 +2212,33 @@ function run_clustal_omega(;fasta, outfmt="clustal")
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Gets the size of a file and returns it in a human-readable format.
+
+# Arguments
+- `f`: The path to the file, either as a `String` or an `AbstractString`.
+
+# Returns
+A string representing the file size in a human-readable format (e.g., "3.40 MB").
+
+# Details
+This function internally uses `filesize(f)` to get the file size in bytes, then leverages `Base.format_bytes` to convert it into a human-readable format with appropriate units (KB, MB, GB, etc.).
+
+# Examples
+```julia
+julia> filesize_human_readable("my_image.jpg")
+"2.15 MB"
+```
+See Also
+* filesize: Gets the size of a file in bytes.
+* Base.format_bytes: Converts a byte count into a human-readable string. 
+"""
+function filesize_human_readable(f)
+    return Base.format_bytes(filesize(f))
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
