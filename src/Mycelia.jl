@@ -72,21 +72,32 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function find_mamba()
-    try
-        CONDA_RUNNER = strip(read(`which mamba`, String))
-        return CONDA_RUNNER
-    catch
-        CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
-        return CONDA_RUNNER
-    end
-end
+# function find_conda()
+#     try
+#         CONDA_RUNNER = strip(read(`which conda`, String))
+#         return CONDA_RUNNER
+#     catch
+#         CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+#         return CONDA_RUNNER
+#     end
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function find_mamba()
+#     try
+#         CONDA_RUNNER = strip(read(`which mamba`, String))
+#         return CONDA_RUNNER
+#     catch
+#         CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+#         return CONDA_RUNNER
+#     end
+# end
 
 # can add support for conda too if needed
-const CONDA_RUNNER = find_mamba()
+# const CONDA_RUNNER = find_mamba()
+const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
@@ -97,95 +108,141 @@ const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function add_bioconda_env(pkg; force=false)
-    try
-        current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
-        if !(pkg in current_environments) || force
-            @info "installing conda environment $(pkg)"
-            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-            run(`$(CONDA_RUNNER) clean --all -y`)
-        else
-            # @info "conda environment $(pkg) already present; set force=true to update/re-install"
-        end
-    catch
-        add_bioconda_envs()
-        current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
-        if !(pkg in current_environments) || force
-            @info "installing conda environment $(pkg)"
-            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-            run(`$(CONDA_RUNNER) clean --all -y`)
-        else
-            # @info "conda environment $(pkg) already present; set force=true to update/re-install"
-        end
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function add_bioconda_envs(;all=false, force=false)
     if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
         Conda.add("mamba")
     end
-    if !isfile(joinpath(Conda.BINDIR, "pigz"))
-        run(`$(CONDA_RUNNER) install pigz -y`)
-    end
+    # try
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
-    # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
-    if all
-        for pkg in [
-            "art",
-            # "bioconvert",
-            "badread",
-            "bcftools",
-            "bedtools",
-            "blast",
-            "clair3-illumina",
-            "clair3",    
-            # "bwa",
-            # "bwa-mem2",
-            # "deepvariant",
-            "emboss",
-            "filtlong",
-            # "freebayes",
-            "flye",
-            "gatk4",
-            # "gffread",
-            "htslib",
-            "megahit",
-            "medaka",
-            "minimap2",
-            "mmseqs2",
-            "nanocaller",
-            "nanovar",
-            # "nanoq",
-            # "nanosim",
-            # "nanosim-h",
-            "ncbi-datasets-cli",
-            "pggb",
-            "picard",
-            # "polypolish",
-            "prodigal",
-            "raven-assembler",
-            "rtg-tools",
-            "samtools",
-            "sniffles",
-            "sourmash",
-            "spades",
-            "tabix",
-            "transtermhp",
-            "trim-galore",
-            "vcftools",
-            "vg"
-            ]
-            if !(pkg in current_environments) || force
-                @info "installing conda environment $(pkg)"
-                add_bioconda_env(pkg)
-            else
-                @info "conda environment $(pkg) already present; set force=true to update/re-install"
-            end
-        end
+    if !(pkg in current_environments) || force
+        @info "installing conda environment $(pkg)"
+        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        run(`$(CONDA_RUNNER) clean --all -y`)
+    # else
+    #     # @info "conda environment $(pkg) already present; set force=true to update/re-install"
     end
-    run(`$(CONDA_RUNNER) clean --all -y`)
+    # catch
+    #     add_bioconda_envs()
+    #     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+    #     if !(pkg in current_environments) || force
+    #         @info "installing conda environment $(pkg)"
+    #         run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+    #         run(`$(CONDA_RUNNER) clean --all -y`)
+    #     else
+    #         # @info "conda environment $(pkg) already present; set force=true to update/re-install"
+    #     end
+    # end
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function add_bioconda_envs(;all=false, force=false)
+#     if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
+#         Conda.add("mamba")
+#     end
+#     if !isfile(joinpath(Conda.BINDIR, "pigz"))
+#         run(`$(CONDA_RUNNER) install pigz -y`)
+#     end
+#     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+#     # https://github.com/JuliaPy/Conda.jl/issues/185#issuecomment-1145149905
+#     if all
+#         for pkg in [
+#             "art",
+#             # "bioconvert",
+#             "badread",
+#             "bcftools",
+#             "bedtools",
+#             "blast",
+#             "clair3-illumina",
+#             "clair3",    
+#             # "bwa",
+#             # "bwa-mem2",
+#             # "deepvariant",
+#             "emboss",
+#             "filtlong",
+#             # "freebayes",
+#             "flye",
+#             "gatk4",
+#             # "gffread",
+#             "htslib",
+#             "megahit",
+#             "medaka",
+#             "minimap2",
+#             "mmseqs2",
+#             "nanocaller",
+#             "nanovar",
+#             # "nanoq",
+#             # "nanosim",
+#             # "nanosim-h",
+#             "ncbi-datasets-cli",
+#             "pggb",
+#             "picard",
+#             # "polypolish",
+#             "prodigal",
+#             "raven-assembler",
+#             "rtg-tools",
+#             "samtools",
+#             "sniffles",
+#             "sourmash",
+#             "spades",
+#             "tabix",
+#             "transtermhp",
+#             "trim-galore",
+#             "vcftools",
+#             "vg"
+#             ]
+#             if !(pkg in current_environments) || force
+#                 @info "installing conda environment $(pkg)"
+#                 add_bioconda_env(pkg)
+#             else
+#                 @info "conda environment $(pkg) already present; set force=true to update/re-install"
+#             end
+#         end
+#     end
+#     run(`$(CONDA_RUNNER) clean --all -y`)
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Submit a command to SLURM using sbatch
+"""
+function lawrencium_sbatch(;
+        job_name::String,
+        mail_user::String,
+        mail_type::String="ALL",
+        logdir::String=pwd(),
+        partition::String="lr3",
+        qos::String="lr_normal",
+        account::String,
+        nodes::Int=1,
+        ntasks::Int=1,
+        time::String="3-00:00:00",
+        cpus_per_task::Int=16,
+        mem_gb::Int=64,
+        cmd::String
+    )
+    submission = 
+    `sbatch
+    --job-name=$(job_name)
+    --mail-user=$(mail_user)
+    --mail-type=$(mail_type)
+    --error=$(logdir)/%j.%x.err
+    --output=$(logdir)/%j.%x.out
+    --partition=$(partition)
+    --qos=$(qos)
+    --account=$(account)
+    --nodes=$(nodes)
+    --ntasks=$(ntasks)
+    --time=$(time)   
+    --cpus-per-task=$(cpus_per_task)
+    --mem=$(mem_gb)G
+    --wrap $(cmd)
+    `
+    sleep(5)
+    run(submission)
+    sleep(5)
+    return true
 end
 
 """
@@ -686,9 +743,11 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Will write out reads as SAM and also write out an error free SAM. Choose the reads from the version you want
+
+See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_pacbio_reads`
 """
-# # ? art short read
 function simulate_short_reads()
+    @error "finish implementing me"
     # $(Mycelia.MAMBA) run --live-stream -n art \
     # art_illumina \
     # --samout \
@@ -706,12 +765,14 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-quantity is either fold coverage, or total bases sequenced - NOT TOTAL READS
+quantity should be either fold coverage (e.g. "50x"), or total bases sequenced (e.g. 1000000) - NOT TOTAL READS
 
-To go by total reads, do # reads * 15,000 = quantity
+Reads are ~ 15kb
+
+See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_short_reads`
 """
-function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.$(quantity).fq.gz"))
-    if !isfile(outfile)
+function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio2021.$(quantity).fq.gz"))
+    if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
         run(pipeline(p, outfile))
@@ -723,15 +784,32 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+quantity should be either fold coverage (e.g. "50x"), or total bases sequenced (e.g. 1000000) - NOT TOTAL READS
+
+See also: `simulate_pacbio_reads`, `simulate_nearly_perfect_long_reads`, `simulate_short_reads`
 """
-function simulate_nanopore_reads()
+function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore2023.$(quantity).fq.gz"))
 # badread simulate --reference ref.fasta --quantity 50x | gzip > reads.fastq.gz
+    if !isfile(outfile) || (filesize(outfile) == 0)
+        Mycelia.add_bioconda_env("badread")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2023 --qscore_model nanopore2023 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+quantity should be either fold coverage (e.g. "50x"), or total bases sequenced (e.g. 1000000) - NOT TOTAL READS
+
+See also: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_short_reads`
 """
 function simulate_nearly_perfect_long_reads()
+    @error "finish implementing me"
     # badread simulate --reference ref.fasta --quantity 50x --error_model random \
     # --qscore_model ideal --glitches 0,0,0 --junk_reads 0 --random_reads 0 --chimeras 0 \
     # --identity 30,3 --length 40000,20000 --start_adapter_seq "" --end_adapter_seq "" \
@@ -1017,9 +1095,13 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function download_genome_by_accession(;accession, outdir=pwd())
+function download_genome_by_accession(;accession, outdir=pwd(), compressed = true)
     temp_fasta = joinpath(outdir, accession * ".fna")
-    outfile = temp_fasta * ".gz"
+    if compressed
+        outfile = temp_fasta * ".gz"
+    else
+        outfile = temp_fasta
+    end
     if !isfile(outfile)
         try
             # pull the entire record so that if the download fails we don't leave an empty file
@@ -1030,12 +1112,13 @@ function download_genome_by_accession(;accession, outdir=pwd())
                     write(fastx_io, fasta_record)
                 end
                 close(fastx_io)
-                run(`gzip $(temp_fasta)`)
+                if compressed
+                    run(`gzip $(temp_fasta)`)
+                end
                 @assert isfile(outfile)
             end
         catch e
             println("An error occurred: ", e)
-            
         end
     end
     return outfile
@@ -1914,13 +1997,17 @@ function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{
     return QV
 end
 
+# smaller, higher diversity databases do better with >=5 as the denominator - w/ <=4 they run out of memory
+# denominator = 5 # produced OOM for NT on NERSC
+# denominator = 8 # produced OOM for NT on Lawrencium
+# denominator = 10 was only 56% efficient for NT on NERSC
+const DEFAULT_MINIMAP_DENOMINATOR=10
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function system_mem_to_minimap_index_size(;system_mem_gb, denominator=6)
-    # smaller, higher diversity databases do better with >=5 as the denominator - w/ <=4 they run out of memory
-    # denominator = 5 # produced OOM for NT on NERSC
-    # denominator = 10 was only 56% efficient for NT on NERSC
+function system_mem_to_minimap_index_size(;system_mem_gb, denominator=DEFAULT_MINIMAP_DENOMINATOR)
+
     value = Int(floor(system_mem_gb/denominator))
     # 4G is the default
     # this value should be larger for larger memory machines, and smaller for smaller ones
@@ -1934,7 +2021,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run this on the machine you intend to use to map the reads to confirm the index will fit
 """
-function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, denominator=6)
+function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
@@ -1961,7 +2048,7 @@ function minimap_map(;
         as_string=false,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
         threads=Sys.CPU_THREADS,
-        denominator=6
+        denominator=DEFAULT_MINIMAP_DENOMINATOR
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
@@ -1995,7 +2082,7 @@ function minimap_map_with_index(;
         threads,
         fastq,
         as_string=false,
-        denominator=6
+        denominator=DEFAULT_MINIMAP_DENOMINATOR
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
@@ -2052,7 +2139,7 @@ function minimap_map_paired_end_with_index(;
         outdir = dirname(forward),
         as_string=false,
         mapping_type="sr",
-        denominator=6
+        denominator=DEFAULT_MINIMAP_DENOMINATOR
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
