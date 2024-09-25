@@ -48,39 +48,57 @@ Andy's data location
 
 results back and forth
 ```bash
-rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results exposome:viral-exposome-discovery/data/results
-rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA exposome:viral-exposome-discovery/data/SRA
-rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/exposome_data exposome:viral-exposome-discovery/data/exposome_data
-# rclone copy --progress --verbose google_drive:Projects/viral-exposome-discovery/data/results $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/results
+rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome/data/results snyder-virome:viral-exposome/data/results
+rclone copy --progress --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA snyder-virome:viral-exposome/data/SRA
+# rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/viral-exposome/data/exposome_data snyder-virome:viral-exposome/data/exposome_data
+# rclone copy --progress --verbose google_drive:Projects/viral-exposome/data/results $HOME/workspace/Mycelia/projects/viral-exposome/data/results
 ```
 
+Run me to restore
+```bash
+rclone copy --progress snyder-virome:viral-exposome/data $HOME/workspace/Mycelia/projects/viral-exposome/data
+rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress snyder-virome:viral-exposome/data $HOME/workspace/Mycelia/projects/viral-exposome/data
+```
 
 Run me to backup (run the second version if we hit API throttling limits)
 ```bash
-rclone copy --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data google_drive:Projects/viral-exposome-discovery/data
-rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data google_drive:Projects/viral-exposome-discovery/data
+rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-exposome/data snyder-virome:viral-exposome/data
+
+rclone copy --progress --include=*{.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/blastdb snyder-virome:blastdb
+rclone copy --progress --include=*{.mmi} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/blastdb snyder-virome:blastdb
 ```
+
+
 copy from Google Drive back to local
 ```bash
 # --exclude=*.{fq.gz,bam,fastq.gz}
-# rclone copy --progress --exclude=*.{bam,fastq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
-rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome-discovery/data/SRA $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA
+# rclone copy --progress --exclude=*.{bam,fastq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome/data $HOME/workspace/Mycelia/projects/viral-exposome/data
+rclone copy --progress --include=*.{fq.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 google_drive:Projects/viral-exposome/data/SRA $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA
 
-rclone copy --progress --include=*.{fq.gz} --verbose google_drive:Projects/viral-exposome-discovery/data/SRA $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA
+rclone copy --progress --include=*.{fq.gz} --verbose google_drive:Projects/viral-exposome/data/SRA $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA
 
-rclone copy --progress google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
+rclone copy --progress google_drive:Projects/viral-exposome/data $HOME/workspace/Mycelia/projects/viral-exposome/data
 
 # --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1
-rclone copy --progress --include=*{final.contigs.fastg.gfa.fna.blastn.nt.megablast.txt} --verbose  google_drive:Projects/viral-exposome-discovery/data $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data
-
-
+rclone copy --progress --include=*{final.contigs.fastg.gfa.fna.blastn.nt.megablast.txt} --verbose  google_drive:Projects/viral-exposome/data $HOME/workspace/Mycelia/projects/viral-exposome/data
 ```
 
 
-```bash
-rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-exposome-discovery/data/SRA google_drive:Projects/viral-exposome-discovery/data/SRA
 
-# workspace/Mycelia/projects/viral-exposome-discovery/data/SRA
+
+
+
+
+
+rclone copy --progress --include=*.{gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA snyder-virome:viral-exposome/data/SRA
+
+rclone copy --progress --include=*.{sam.gz} --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA snyder-virome:viral-exposome/data/SRA
+
+
+```bash
+rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 --progress $HOME/workspace/Mycelia/projects/viral-exposome/data/SRA google_drive:Projects/viral-exposome/data/SRA
+
+# workspace/Mycelia/projects/viral-exposome/data/SRA
 ```
 
 copy Globus-JGI reference DB into cloud for shuffling back and forth to non-globus machines

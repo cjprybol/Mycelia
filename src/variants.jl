@@ -148,6 +148,9 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, ".vcf" => ".normalized.vcf.fna"))
+    add_bioconda_env("htslib")
+    add_bioconda_env("tabix")
+    add_bioconda_env("bcftools")
     isfile("$(vcf_file).gz") && rm("$(vcf_file).gz")
     isfile("$(vcf_file).gz.tbi") && rm("$(vcf_file).gz.tbi")
     normalized_vcf_file = replace(vcf_file, ".vcf" => ".normalized.vcf")
