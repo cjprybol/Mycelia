@@ -21,8 +21,8 @@ RUN ollama start & sleep 5 \
     && ollama pull mxbai-embed-large
 
 # 3B parameters, 4Gb RAM
-RUN jupyter lab --AiExtension.default_language_model=ollama:llama3.2
-RUN jupyter lab --AiExtension.default_embeddings_model=ollama:mxbai-embed-large
+# RUN jupyter lab --AiExtension.default_language_model=ollama:llama3.2
+# RUN jupyter lab --AiExtension.default_embeddings_model=ollama:mxbai-embed-large
 
 RUN mamba install \
     -c conda-forge \
