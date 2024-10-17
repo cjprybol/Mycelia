@@ -2154,10 +2154,10 @@ function minimap_map_paired_end_with_index(;
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
-    @show index_file
-    @assert isfile(index_file)
-    @assert isfile(forward)
-    @assert isfile(reverse)
+    # @show index_file
+    @assert isfile(index_file) "$(index_file) not found!!"
+    @assert isfile(forward) "$(forward) not found!!"
+    @assert isfile(reverse) "$(reverse) not found!!"
     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
     temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
     # outfile = temp_sam_outfile
