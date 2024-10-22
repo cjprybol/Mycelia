@@ -113,9 +113,19 @@ function add_bioconda_env(pkg; force=false)
     end
     # try
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+    channel = nothing
+    if occursin("::", pkg)
+        println("splitting $(pkg)")
+        channel, pkg = split(pkg, "::")
+        println("into channel:$(channel) pkg:$(pkg)")
+    end
     if !(pkg in current_environments) || force
         @info "installing conda environment $(pkg)"
-        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        if isnothing(channel)
+            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        else
+            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+        end
         run(`$(CONDA_RUNNER) clean --all -y`)
     # else
     #     # @info "conda environment $(pkg) already present; set force=true to update/re-install"
@@ -634,24 +644,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function filter_long_reads(;
-        in_fastq,
-        out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
-        min_mean_q = 20,
-        keep_percent = 95
-    )
-    Mycelia.add_bioconda_env("filtlong")
-    p1 = pipeline(
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
-        `pigz`
-    )
-    p2 = pipeline(p1, out_fastq)
-    return p2
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
 function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
     Mycelia.add_bioconda_env("blast")
     if !isfile(fasta)
@@ -742,24 +734,37 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Will write out reads as SAM and also write out an error free SAM. Choose the reads from the version you want
-
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_pacbio_reads`
 """
-function simulate_short_reads()
-    @error "finish implementing me"
-    # $(Mycelia.MAMBA) run --live-stream -n art \
-    # art_illumina \
-    # --samout \
-    # --errfree \
-    # --paired \
-    # --seqSys HS25 \
-    # --len 150 \
-    # --mflen 500 \
-    # --sdev 10 \
-    # --in $(fasta_file) \
-    # --out $(fasta_file).art.$(coverage)x. \
-    # --rcount
+function simulate_short_reads(;in_fasta, coverage, outbase = "$(in_fasta).art.$(coverage)x.")
+    # -c --rcount
+    # total number of reads/read pairs to be generated [per amplicon if for amplicon simulation](not be used together with -f/--fcov)
+    # -d --id
+    # the prefix identification tag for read ID
+    # -ef --errfree
+    # indicate to generate the zero sequencing errors SAM file as well the regular one
+    # NOTE: the reads in the zero-error SAM file have the same alignment positions as those in the regular SAM file, but have no sequencing errors
+    # -f --fcov
+    # the fold of read coverage to be simulated or number of reads/read pairs generated for each amplicon
+    # --samout
+    Mycelia.add_bioconda_env("art")
+    p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina --noALN --paired --seqSys HS25 --len 150 --mflen 500 --sdev 10 --in $(in_fasta) --out $(outbase) --fcov $(coverage)`)
+    @time run(p)
+    out_forward = "$(outbase)1.fq"
+    target_forward = out_forward * ".gz"
+    @assert isfile(out_forward)
+    run(`gzip $(out_forward)`)
+    @assert isfile(target_forward)
+
+    out_reverse = "$(outbase)2.fq"
+    target_reverse = out_reverse * ".gz"
+    @assert isfile(out_reverse)
+    run(`gzip $(out_reverse)`)
+    @assert isfile(target_reverse)
+
+    # isfile("$(outbase)1.aln") && rm("$(outbase)1.aln")
+    # isfile("$(outbase)2.aln") && rm("$(outbase)2.aln")
+    # isfile("$(outbase).sam") && rm("$(outbase).sam")
 end
 
 """
@@ -989,6 +994,36 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Filter and process long reads from a FASTQ file using Filtlong.
+
+This function filters long sequencing reads based on quality and length criteria, 
+then compresses the output using pigz.
+
+# Arguments
+- `in_fastq::String`: Path to the input FASTQ file.
+- `out_fastq::String`: Path to the output filtered and compressed FASTQ file. 
+   Defaults to the input filename with ".filtlong.fq.gz" appended.
+- `min_mean_q::Int`: Minimum mean quality score for reads to be kept. Default is 20.
+- `keep_percent::Int`: Percentage of reads to keep after filtering. Default is 95.
+
+# Returns
+- `Cmd`: A pipeline command that can be run to execute the filtering and compression.
+
+# Details
+This function uses Filtlong to filter long reads and pigz for compression. It requires
+the Bioconda environment for Filtlong to be set up, which is handled internally.
+
+# Example
+```julia
+filter_cmd = filter_long_reads(
+    in_fastq = "input.fastq.gz",
+    out_fastq = "filtered_output.fq.gz",
+    min_mean_q = 25,
+    keep_percent = 90
+)
+run(filter_cmd)
+```
 """
 function filter_long_reads(;
         in_fastq,
@@ -2446,6 +2481,30 @@ See Also
 """
 function filesize_human_readable(f)
     return Base.format_bytes(filesize(f))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run the 'padloc' tool from the 'padlocbio' conda environment on a given FASTA file.
+
+https://doi.org/10.1093/nar/gkab883
+https://github.com/padlocbio/padloc
+
+This function first ensures that the 'padloc' environment is available via Bioconda. 
+It then attempts to update the 'padloc' database. 
+If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
+it runs 'padloc' with the specified FASTA file as input.
+"""
+function run_padloc(fasta_file)
+    Mycelia.add_bioconda_env("padlocbio::padloc")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
+    padloc_outfile = replace(fasta_file, ".fna" => "") * "_padloc.csv"
+    if !isfile(padloc_outfile)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file)`)
+    else
+        @info "$(padloc_outfile) already present"
+    end
 end
 
 # dynamic import of files??

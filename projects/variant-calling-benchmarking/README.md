@@ -1,5 +1,10 @@
 # variant-calling-benchmarking
 
+run me to backup
+```
+rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/variant-calling-benchmarking/data variant_calling_benchmarking:data
+```
+
 The goal of this work is:
 1. get my probabilistic assembler up and running again
 2. Compare the accuracy of graph-based variant calling directly from assemblies against short and long read variant callers
