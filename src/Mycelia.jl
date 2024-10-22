@@ -113,9 +113,19 @@ function add_bioconda_env(pkg; force=false)
     end
     # try
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+    channel = nothing
+    if occursin("::", pkg)
+        println("splitting $(pkg)")
+        channel, pkg = split(pkg, "::")
+        println("into channel:$(channel) pkg:$(pkg)")
+    end
     if !(pkg in current_environments) || force
         @info "installing conda environment $(pkg)"
-        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        if isnothing(channel)
+            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+        else
+            run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+        end
         run(`$(CONDA_RUNNER) clean --all -y`)
     # else
     #     # @info "conda environment $(pkg) already present; set force=true to update/re-install"
@@ -2169,10 +2179,10 @@ function minimap_map_paired_end_with_index(;
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
-    @show index_file
-    @assert isfile(index_file)
-    @assert isfile(forward)
-    @assert isfile(reverse)
+    # @show index_file
+    @assert isfile(index_file) "$(index_file) not found!!"
+    @assert isfile(forward) "$(forward) not found!!"
+    @assert isfile(reverse) "$(reverse) not found!!"
     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
     temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
     # outfile = temp_sam_outfile
@@ -2471,6 +2481,30 @@ See Also
 """
 function filesize_human_readable(f)
     return Base.format_bytes(filesize(f))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run the 'padloc' tool from the 'padlocbio' conda environment on a given FASTA file.
+
+https://doi.org/10.1093/nar/gkab883
+https://github.com/padlocbio/padloc
+
+This function first ensures that the 'padloc' environment is available via Bioconda. 
+It then attempts to update the 'padloc' database. 
+If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
+it runs 'padloc' with the specified FASTA file as input.
+"""
+function run_padloc(fasta_file)
+    Mycelia.add_bioconda_env("padlocbio::padloc")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
+    padloc_outfile = replace(fasta_file, ".fna" => "") * "_padloc.csv"
+    if !isfile(padloc_outfile)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file)`)
+    else
+        @info "$(padloc_outfile) already present"
+    end
 end
 
 # dynamic import of files??
