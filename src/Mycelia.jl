@@ -1321,6 +1321,20 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Identify all columns that have only missing or empty values
+
+Returns as a bit array
+
+See also: drop_empty_columns, drop_empty_columns!
+"""
+function find_nonempty_columns(df)
+    non_empty_columns = [eltype(col) != Missing || !all(v -> isnothing(v) || ismissing(v) || (!isa(v, Date) && isempty(v)), col) for col in DataFrames.eachcol(df)]
+    return non_empty_columns
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Identify all columns that have only missing or empty values, and remove those columns from the dataframe.
 
 Returns a modified copy of the dataframe.
@@ -1329,7 +1343,7 @@ See also: drop_empty_columns!
 """
 function drop_empty_columns(df::DataFrames.AbstractDataFrame)
     # Filter the DataFrame columns by checking if not all values in the column are missing or empty
-    non_empty_columns = [!all(v -> ismissing(v) || isempty(v), col) for col in DataFrames.eachcol(df)]
+    non_empty_columns = find_nonempty_columns(df)
     filtered_df = df[:, non_empty_columns]
     return filtered_df
 end
@@ -1345,7 +1359,7 @@ See also: drop_empty_columns
 """
 function drop_empty_columns!(df::DataFrames.AbstractDataFrame)
     # Filter the DataFrame columns by checking if not all values in the column are missing or empty
-    non_empty_columns = [!all(v -> ismissing(v) || isempty(v), col) for col in DataFrames.eachcol(df)]
+    non_empty_columns = find_nonempty_columns(df)
     # df = df[!, non_empty_columns]
     DataFrames.select!(df, non_empty_columns)
     return df
