@@ -2147,7 +2147,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function find_matching_prefix(filename1::String, filename2::String)
+function find_matching_prefix(filename1::String, filename2::String; strip_trailing_delimiters=true)
     min_length = min(length(filename1), length(filename2))
     matching_prefix = ""
     
@@ -2157,6 +2157,9 @@ function find_matching_prefix(filename1::String, filename2::String)
         else
             break
         end
+    end
+    if strip_trailing_delimiters
+        matching_prefix = replace(matching_prefix, r"[\.\-_]+$" => "")
     end
     
     return matching_prefix
