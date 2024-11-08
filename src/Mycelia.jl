@@ -221,7 +221,7 @@ function lawrencium_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
         partition::String="lr3",
         qos::String="lr_normal",
         account::String,
@@ -264,7 +264,7 @@ function scg_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
         partition::String,
         account::String,
         nodes::Int=1,
@@ -319,11 +319,11 @@ function nersc_sbatch_shared(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
         qos::String="shared",
         nodes::Int=1,
         ntasks::Int=1,
-        time::String="1-00:00:00",
+        time::String="2-00:00:00",
         cpus_per_task::Int=1,
         mem_gb::Int=cpus_per_task * 2,
         cmd::String,
@@ -368,94 +368,103 @@ use
 
 https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
 """
-function nersc_sbatch_regular(;
+function nersc_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
+        scriptdir::String=mkpath("$(homedir())/workspace/slurm"),
         qos::String="regular",
         nodes::Int=1,
         ntasks::Int=1,
-        time::String="1-00:00:00",
+        time::String="2-00:00:00",
         cpus_per_task::Int=Mycelia.NERSC_CPU,
-        mem_gb::Int=Int(floor(Mycelia.NERSC_MEM * .9)),
-        cmd::String,
+        mem_gb::Int=Mycelia.NERSC_MEM,
+        cmd::Union{String, Vector{String}},
         constraint::String="cpu"
     )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --qos=$(qos)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --constraint=cpu
-    --wrap $(cmd)
-    `
+        
+    # Generate timestamp
+    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
+    
+    # Create script filename
+    script_name = "$(timestamp)-$(job_name).sh"
+    script_path = joinpath(scriptdir, script_name)
+    
+    # Process commands
+    cmd_block = if isa(cmd, String)
+        cmd  # Single command as is
+    else
+        join(cmd, "\n")  # Multiple commands joined with newlines
+    end
+    
+    # Create script content
+    script_content = """
+    #!/bin/bash
+    #SBATCH --job-name=$(job_name)
+    #SBATCH --mail-user=$(mail_user)
+    #SBATCH --mail-type=$(mail_type)
+    #SBATCH --error=$(logdir)/%j.%x.err
+    #SBATCH --output=$(logdir)/%j.%x.out
+    #SBATCH --qos=$(qos)
+    #SBATCH --nodes=$(nodes)
+    #SBATCH --ntasks=$(ntasks)
+    #SBATCH --time=$(time)
+    #SBATCH --cpus-per-task=$(cpus_per_task)
+    #SBATCH --mem=$(mem_gb)G
+    #SBATCH --constraint=$(constraint)
+
+    $cmd_block
+    """
+    
+    # Write script to file
+    write(script_path, script_content)
+    
+    # Make script executable
+    chmod(script_path, 0o755)
+    
+    # Submit the job
     sleep(5)
-    run(submission)
+    run(`sbatch $script_path`)
     sleep(5)
+    
     return true
 end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Submit a command to SLURM using sbatch
-
-https://docs.nersc.gov/jobs/policy/
-https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
-
-default is to use shared qos
-
-use
-- regular
-- preempt (reduced credit usage but not guaranteed to finish)
-- premium (priorty runs limited to 5x throughput)
-
-https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
-"""
-function nersc_sbatch_premium(;
-        job_name::String,
-        mail_user::String,
-        mail_type::String="ALL",
-        logdir::String=pwd(),
-        qos::String="premium",
-        nodes::Int=1,
-        ntasks::Int=1,
-        time::String="1-00:00:00",
-        cpus_per_task::Int=Mycelia.NERSC_CPU,
-        mem_gb::Int=Int(floor(Mycelia.NERSC_MEM * .9)),
-        cmd::String,
-        constraint::String="cpu"
-    )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --qos=$(qos)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --constraint=cpu
-    --wrap $(cmd)
-    `
-    sleep(5)
-    run(submission)
-    sleep(5)
-    return true
-end
+# function nersc_sbatch_regular(;
+#         job_name::String,
+#         mail_user::String,
+#         mail_type::String="ALL",
+#         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
+#         qos::String="regular",
+#         nodes::Int=1,
+#         ntasks::Int=1,
+#         time::String="2-00:00:00",
+#         cpus_per_task::Int=Mycelia.NERSC_CPU,
+#         mem_gb::Int=Mycelia.NERSC_MEM,
+#         cmd::String,
+#         constraint::String="cpu"
+#     )
+#     submission = 
+#     `sbatch
+#     --job-name=$(job_name)
+#     --mail-user=$(mail_user)
+#     --mail-type=$(mail_type)
+#     --error=$(logdir)/%j.%x.err
+#     --output=$(logdir)/%j.%x.out
+#     --qos=$(qos)
+#     --nodes=$(nodes)
+#     --ntasks=$(ntasks)
+#     --time=$(time)   
+#     --cpus-per-task=$(cpus_per_task)
+#     --mem=$(mem_gb)G
+#     --constraint=cpu
+#     --wrap $(cmd)
+#     `
+#     sleep(5)
+#     run(submission)
+#     sleep(5)
+#     return true
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
