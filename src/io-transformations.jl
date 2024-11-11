@@ -873,19 +873,36 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+Writes FASTA records to a file, optionally gzipped.
+
+# Arguments
+- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true.
+- `records::Vector{FASTX.FASTA.Record}`: A vector of FASTA records.
+- `gzip::Bool=false`: Whether to compress the output with gzip.
+
+# Returns
+- `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
 """
-function write_fasta(;outfile=tempname()*".fna", records, gzipped=false)
+function write_fasta(;outfile::AbstractString=tempname()*".fna", records::Vector{FASTX.FASTA.Record}, gzip::Bool=false)
+    # Determine if gzip compression should be used based on both the filename and the gzip argument
+    gzip = occursin(r"\.gz$", outfile) || gzip
+
+    # Append ".gz" to the filename if gzip is true and the extension isn't already present
+    outfile = gzip && !occursin(r"\.gz$", outfile) ? outfile * ".gz" : outfile  # More concise way to handle filename modification
+
+    # Use open with do block for automatic resource management (closing the file)
     open(outfile, "w") do io
-        if gzipped
-            @assert occursin(r"\.gz$", outfile)
-            io = CodecZlib.GzipCompressorStream(io)
+        if gzip
+            io = CodecZlib.GzipCompressorStream(io)  # Wrap the io stream for gzip compression
         end
-        fastx_io = FASTX.FASTA.Writer(io)
-        for record in records
-            write(fastx_io, record)
-        end
-        close(fastx_io)
-    end
+
+        FASTX.FASTA.Writer(io) do fastx_io  # Use do block for automatic closing of the FASTA writer
+            for record in records
+                write(fastx_io, record)
+            end
+        end # fastx_io automatically closed here
+    end # io automatically closed here
+
     return outfile
 end
 

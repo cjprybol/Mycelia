@@ -532,34 +532,34 @@ function annotate_fasta(;
     # @show basedir
     outdir = joinpath(basedir, identifier)
     @assert outdir != fasta
-    if !isdir(outdir)
-        @show isdir(outdir)
-        mkpath(outdir)
-        f = joinpath(outdir, basename(fasta))
-        # make this an rclone copy for portability
-        cp(fasta, f, force=true)
+    # if !isdir(outdir)
+    #     @show isdir(outdir)
+    mkpath(outdir)
+    f = joinpath(outdir, basename(fasta))
+    # make this an rclone copy for portability
+    !isfile(f) && cp(fasta, f)
+    nucleic_acid_fasta = f * ".prodigal.fna"
+    amino_acid_fasta = f * ".prodigal.faa"
+    gff_file = f * ".prodigal.gff"
+    if !isfile(nucleic_acid_fasta) || !isfile(amino_acid_fasta) || !isfile(gff_file)
         Mycelia.run_prodigal(fasta_file=f)
-        nucleic_acid_fasta = f * ".prodigal.fna"
-        amino_acid_fasta = f * ".prodigal.faa"
-        gff_file = f * ".prodigal.gff"
-
-        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
-        mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
-        transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-
-        joint_gff = Mycelia.write_gff(
-            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
-            outfile=f * ".gff")
-        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
-
-        transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-        joint_gff_raw_fasta = Mycelia.write_gff(
-            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
-            outfile=f * ".transterm_raw.gff")
-        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
-    else
-        @info "$(outdir) already present, skipping..."
     end
+    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
+    transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+    joint_gff = Mycelia.write_gff(
+        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
+        outfile=f * ".gff")
+    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
+
+    transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+    joint_gff_raw_fasta = Mycelia.write_gff(
+        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
+        outfile=f * ".transterm_raw.gff")
+    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
+    # else
+    #     @info "$(outdir) already present, skipping..."
+    # end
     return outdir
 end
 
@@ -2522,6 +2522,71 @@ function run_padloc(fasta_file)
     else
         @info "$(padloc_outfile) already present"
     end
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function run_mlst(fasta_file)
+    Mycelia.add_bioconda_env("mlst")    
+    mlst_outfile = "$(fasta_file).mlst.out"
+    @show mlst_outfile
+    if !isfile(mlst_outfile)
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mlst mlst $(fasta_file)`, mlst_outfile))
+    else
+        @info "$(mlst_outfile) already present"
+    end
+    return mlst_outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function run_ectyper(fasta_file)
+    Mycelia.add_bioconda_env("ectyper")
+    outdir = fasta_file * "_ectyper"
+    if !isdir(outdir)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ectyper ectyper -i $(fasta_file) -o $(outdir)`)
+    else
+        @info "$(outdir) already present"
+    end
+    return outdir
+end
+
+ # -i ecoliA.fasta -o output_dir
+
+
+
+# function run_mlst(ID, OUT_DIR, normalized_fasta_file)
+#     mlst_dir="$(OUT_DIR)/mlst"
+#     if !isdir(mlst_dir)
+#         mkdir(mlst_dir)
+#     end
+#     p = pipeline(
+#             `mlst $(normalized_fasta_file)`,
+#             stdout="$(mlst_dir)/$(ID).mlst.out")
+#     run(p)
+#     return mlst_dir
+# end
+
+function parse_jsonl(filepath::String)
+    # Count the lines first
+    num_lines = countlines(filepath)
+
+    # Pre-allocate the array
+    json_objects = Vector{Dict{String, Any}}(undef, num_lines)
+
+    # Progress meter setup
+    p = ProgressMeter.Progress(num_lines; desc="Parsing JSONL: ", showspeed=true)
+    
+    open(filepath, "r") do file
+        for (i, line) in enumerate(eachline(file))
+            json_objects[i] = JSON.parse(line)
+            ProgressMeter.next!(p) # Update the progress meter
+        end
+    end
+    return json_objects
 end
 
 # dynamic import of files??
