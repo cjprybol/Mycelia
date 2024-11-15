@@ -143,6 +143,11 @@ function add_bioconda_env(pkg; force=false)
     # end
 end
 
+function update_bioconda_env(pkg)
+    run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
+    # conda update --all -n <env_name>
+end
+
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 # """

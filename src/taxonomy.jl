@@ -121,9 +121,9 @@ function list_rank(rank)
         )
         shorthand = ranks_to_shorthand[rank]
         p = pipeline(
-            `conda run --no-capture-output -n taxonkit taxonkit list --ids 1`,
-            `conda run --no-capture-output -n taxonkit taxonkit filter --equal-to "$(rank)"`,
-            `conda run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --format "{$(shorthand)}"`
+            `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids 1`,
+            `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit filter --equal-to "$(rank)"`,
+            `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --format "{$(shorthand)}"`
         )
         data, header = uCSV.read(open(p), delim='\t')
         header = ["taxid", "name"]
@@ -213,7 +213,7 @@ function name2taxid(name)
     if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
         setup_taxonkit_taxonomy()
     end
-    p = pipeline(`echo $(name)`, `conda run --no-capture-output -n taxonkit taxonkit name2taxid --show-rank`)
+    p = pipeline(`echo $(name)`, `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit name2taxid --show-rank`)
     data, header = uCSV.read(open(p), delim='\t')
     header = ["name", "taxid", "rank"]
     return DataFrames.DataFrame(data, header)
