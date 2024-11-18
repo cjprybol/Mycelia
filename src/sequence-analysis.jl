@@ -669,24 +669,53 @@ end
 #     return distance_matrix
 # end
 
+# """
+
+
+# Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size)
+# """
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     ProgressMeter.@showprogress for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.euclidean(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to total feature count magnitude (size)
+Create a Euclidean distance matrix from a column-major counts matrix
+(features as rows and entities as columns), where distance is proportional
+to total feature count magnitude (size).
 """
 function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
     distance_matrix = zeros(n_entities, n_entities)
-    ProgressMeter.@showprogress for entity_1_index in 1:n_entities
+
+    # Initialize a thread-safe progress meter
+    progress = ProgressMeter.Progress(n_entities * (n_entities - 1) ÷ 2, desc = "Computing distances", dt = 0.1)
+
+    Threads.@threads for entity_1_index in 1:n_entities
         for entity_2_index in entity_1_index+1:n_entities
             a = counts_table[:, entity_1_index]
             b = counts_table[:, entity_2_index]
-            distance_matrix[entity_1_index, entity_2_index] = 
-                distance_matrix[entity_2_index, entity_1_index] = 
-                Distances.euclidean(a, b)
+            dist = Distances.euclidean(a, b)
+            distance_matrix[entity_1_index, entity_2_index] = dist
+            distance_matrix[entity_2_index, entity_1_index] = dist
+            ProgressMeter.next!(progress)  # Update the progress meter
         end
     end
+
+    ProgressMeter.finish!(progress)  # Ensure the progress meter completes
     return distance_matrix
 end
 # didn't work
