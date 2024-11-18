@@ -1,3 +1,19 @@
+# Save the distance matrix to a JLD2 file
+function save_matrix_jld2(;matrix, filename)
+    if !isfile(filename) || (filesize(filename) == 0)
+        JLD2.@save filename matrix
+    else
+        @warn "$(filename) already exists and is non-empty, skipping..."
+    end
+    return filename
+end
+
+# Load the distance matrix from a JLD2 file
+function load_matrix_jld2(filename)
+    return JLD2.load(filename, "matrix")
+end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
