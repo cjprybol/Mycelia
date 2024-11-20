@@ -13,6 +13,9 @@ function load_matrix_jld2(filename)
     return JLD2.load(filename, "matrix")
 end
 
+function load_jld2(filename)
+    return JLD2.load(filename)
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
