@@ -2606,6 +2606,15 @@ function parse_jsonl(filepath::String)
     return json_objects
 end
 
+function system_overview()
+    # total_system_memory = Sys.total_memory()
+    system_memory = Base.format_bytes(Sys.total_memory())
+    # free_system_memory = Sys.free_memory()
+    free_system_memory = Base.format_bytes(Sys.free_memory())
+    threads = Sys.CPU_THREADS
+    return (;system_memory, free_system_memory, threads)
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
