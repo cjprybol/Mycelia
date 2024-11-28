@@ -2587,6 +2587,9 @@ end
 #     return mlst_dir
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function parse_jsonl(filepath::String)
     # Count the lines first
     num_lines = countlines(filepath)
@@ -2606,13 +2609,25 @@ function parse_jsonl(filepath::String)
     return json_objects
 end
 
-function system_overview()
-    # total_system_memory = Sys.total_memory()
-    system_memory = Base.format_bytes(Sys.total_memory())
-    # free_system_memory = Sys.free_memory()
-    free_system_memory = Base.format_bytes(Sys.free_memory())
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function system_overview(;path="/")
+    total_memory = Base.format_bytes(Sys.total_memory())
+    available_memory = Base.format_bytes(Sys.free_memory())
+    occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
     threads = Sys.CPU_THREADS
-    return (;system_memory, free_system_memory, threads)
+    available_storage = Base.format_bytes(Base.diskstat(path).available)
+    total_storage = Base.format_bytes(Base.diskstat(path).total)
+    occupied_storage = Base.format_bytes(Base.diskstat(path).used)
+    return (;
+            threads,
+            total_memory,
+            available_memory,
+            occupied_memory,
+            total_storage,
+            available_storage,
+            occupied_storage)
 end
 
 # dynamic import of files??
