@@ -2,12 +2,16 @@ module Mycelia
 
 __precompile__(false)
 
-# import ArgParse
+import AlgebraOfGraphics
+import ArgParse
+import Arrow
 import BioAlignments
 import BioSequences
 import BioSymbols
-# import CairoMakie
+import CairoMakie
 import Clustering
+import CodecBase
+import CodecBzip2
 import CodecZlib
 import Conda
 import CSV
@@ -18,17 +22,22 @@ import DelimitedFiles
 import Distances
 import Distributions
 import DocStringExtensions
+import Downloads
 import FASTX
 import FileIO
 import GenomicAnnotations
+import GeoMakie
 import GFF3
-# import GraphRecipes
-import Graphs
 import GLM
+import GraphMakie
+import Graphs
+import HDF5
 import HTTP
+import JLD2
 import JSON
 import Kmers
 import LsqFit
+import Makie
 import MetaGraphs
 import Mmap
 import OrderedCollections
@@ -36,17 +45,17 @@ import Plots
 import Primes
 import ProgressMeter
 import Random
+import SHA
+import SparseArrays
 import Statistics
 import StatsBase
 import StatsPlots
+import Tar
+import TopoPlots
+import TranscodingStreams
+import uCSV
 import XAM
 import XMLDict
-import uCSV
-import Downloads
-import SparseArrays
-import HDF5
-import JLD2
-import Arrow
 
 import Pkg
 
@@ -2649,6 +2658,34 @@ function vcat_with_missing(dfs::Vararg{DataFrames.AbstractDataFrame})
     # Now you can safely vcat the DataFrames
     return vcat(dfs...)
 end
+
+# always interpret as strings to ensure changes in underlying biosequence representation don't change results
+# results in 64 character string
+# a = "TTANC"
+# b = "ttANc"
+# c = "ttanc"
+# dna_a = BioSequences.LongDNA{4}(a)
+# dna_b = BioSequences.LongDNA{4}(b)
+# dna_c = BioSequences.LongDNA{4}(c)
+# seq2sha256(a) == seq2sha256(dna_a)
+# seq2sha256(b) == seq2sha256(dna_b)
+# seq2sha256(c) == seq2sha256(dna_c)
+# seq2sha256(BioSequences.LongDNA{2}("AAA")) == seq2sha256(BioSequences.LongDNA{4}("AAA"))
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function seq2sha256(seq::AbstractString)
+    return SHA.bytes2hex(SHA.sha256(uppercase(seq)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function seq2sha256(seq::BioSequences.BioSequence)
+    return seq2sha256(string(seq))
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
