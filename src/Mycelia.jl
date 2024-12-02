@@ -2630,6 +2630,26 @@ function system_overview(;path="/")
             occupied_storage)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function vcat_with_missing(dfs::Vararg{DataFrames.AbstractDataFrame})
+    # Get all unique column names across all DataFrames
+    all_columns = unique(reduce(vcat, [names(df) for df in dfs]))
+
+    # Add missing columns to each DataFrame and fill with missing
+    for df in dfs
+        for col in all_columns
+            if !(col in names(df))
+                df[!, col] .= missing
+            end
+        end
+    end
+
+    # Now you can safely vcat the DataFrames
+    return vcat(dfs...)
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
