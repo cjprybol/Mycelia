@@ -2686,6 +2686,32 @@ function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function fasta2normalized_table(fasta_file)
+    sequence_sha256s = String[]
+    sequence_identifiers = String[]
+    sequence_descriptions = String[]
+    sequences = String[]
+    for record in Mycelia.open_fastx(fasta_file)
+        push!(sequence_identifiers, FASTX.identifier(record))
+        push!(sequence_descriptions, FASTX.description(record))
+        push!(sequences, FASTX.sequence(record))
+        push!(sequence_sha256s, Mycelia.seq2sha256(FASTX.sequence(record)))
+    end
+    fasta_sha256 = SHA.bytes2hex(SHA.sha256(join(sort(sequence_sha256s))))
+    normalized_fasta_table = DataFrames.DataFrame(
+        fasta_sha256 = fasta_sha256,
+        fasta_identifier = basename(fasta_file),
+        sequence_sha256 = sequence_sha256s,
+        sequence_identifier = sequence_identifiers,
+        sequence_description = sequence_descriptions,
+        sequence = sequences
+    )
+    return normalized_fasta_table
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
