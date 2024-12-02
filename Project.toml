@@ -63,9 +63,6 @@ XAM = "d759349c-bcba-11e9-07c2-5b90f8f05f7c"
 XMLDict = "228000da-037f-5747-90a9-8195ccbf91a5"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 
-[compat]
-Automa = "0.7 - 0.8.3"
-
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
