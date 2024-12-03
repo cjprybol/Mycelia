@@ -2694,39 +2694,97 @@ function metasha256(vector_of_sha256s)
     return SHA.bytes2hex(SHA.digest!(ctx))
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function fasta2normalized_table(fasta_file)
+#     @assert isfile(fasta_file) && filesize(fasta_file) > 0
+#     n_records = Mycelia.count_records(fasta_file)
+
+#     # Pre-allocate arrays
+#     sequence_sha256s = Vector{String}(undef, n_records)
+#     sequence_identifiers = Vector{String}(undef, n_records)
+#     sequence_descriptions = Vector{String}(undef, n_records)
+#     sequences = Vector{String}(undef, n_records)
+
+#     # Progress meter
+#     p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ", color=:blue)
+
+#     for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
+#         sequence_identifiers[i] = FASTX.identifier(record)
+#         sequence_descriptions[i] = FASTX.description(record)
+#         sequences[i] = FASTX.sequence(record)
+#         sequence_sha256s[i] = Mycelia.seq2sha256(FASTX.sequence(record))
+#         ProgressMeter.next!(p)
+#     end
+
+#     normalized_fasta_table = DataFrames.DataFrame(
+#         fasta_sha256 = metasha256(sequence_sha256s),
+#         fasta_identifier = basename(fasta_file),
+#         sequence_sha256 = sequence_sha256s,
+#         sequence_identifier = sequence_identifiers,
+#         sequence_description = sequence_descriptions,
+#         sequence = sequences
+#     )
+#     return normalized_fasta_table
+# end
+
+function get_base_extension(filename::String)
+  parts = split(filename, "."; limit=3)  # Limit to 3 to handle 2-part extensions
+  extension = parts[end]  # Get the last part
+  
+  if extension == "gz" && length(parts) > 2  # Check for .gz and more parts
+    extension = parts[end - 1]  # Get the part before .gz
+  end
+  
+  return extension
+end
+
 function fasta2normalized_table(fasta_file)
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
-    n_records = Mycelia.count_records(fasta_file)
 
-    # Pre-allocate arrays
-    sequence_sha256s = Vector{String}(undef, n_records)
-    sequence_identifiers = Vector{String}(undef, n_records)
-    sequence_descriptions = Vector{String}(undef, n_records)
-    sequences = Vector{String}(undef, n_records)
+    # Temporary output file
+    tmp_outfile = tempname() * ".tsv.gz"
+
+    # Open the output file for writing
+    outfile_io = CodecZlib.GZipCompressorStream(open(tmp_outfile, "w"))
+
+    # Write the header
+    header = "fasta_identifier\tsequence_sha256\tsequence_identifier\tsequence_description\tsequence"
+    println(outfile_io, header)
+
+    # Vector to store SHAs
+    sequence_sha256s = String[]
 
     # Progress meter
+    n_records = Mycelia.count_records(fasta_file)
     p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ", color=:blue)
 
-    for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
-        sequence_identifiers[i] = FASTX.identifier(record)
-        sequence_descriptions[i] = FASTX.description(record)
-        sequences[i] = FASTX.sequence(record)
-        sequence_sha256s[i] = Mycelia.seq2sha256(FASTX.sequence(record))
+    # Streaming processing
+    for record in Mycelia.open_fastx(fasta_file)
+        seq_id = FASTX.identifier(record)
+        seq_desc = FASTX.description(record)
+        seq = FASTX.sequence(record)
+        sha256 = Mycelia.seq2sha256(seq)
+
+        # Write to the temporary file
+        
+        println(outfile_io, join([basename(fasta_file), sha256, seq_id, seq_desc, seq], '\t'))
+
+        push!(sequence_sha256s, sha256)
         ProgressMeter.next!(p)
     end
 
-    normalized_fasta_table = DataFrames.DataFrame(
-        fasta_sha256 = metasha256(sequence_sha256s),
-        fasta_identifier = basename(fasta_file),
-        sequence_sha256 = sequence_sha256s,
-        sequence_identifier = sequence_identifiers,
-        sequence_description = sequence_descriptions,
-        sequence = sequences
-    )
-    return normalized_fasta_table
+    # Close the output file
+    close(outfile_io)
+
+
+
+    # Rename the temporary file
+    final_outfile = Mycelia.metasha256(sequence_sha256s) * "." * get_base_extension(fasta_file) * ".tsv.gz"
+    mv(tmp_outfile, final_outfile; force=true)
+
+    return final_outfile
 end
 
 
