@@ -2686,23 +2686,40 @@ function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
+function metasha256(vector_of_sha256s)
+    ctx = SHA.SHA2_256_CTX()
+    for sha_hash in sort(vector_of_sha256s)
+        SHA.update!(ctx, collect(codeunits(sha_hash)))
+    end
+    return SHA.bytes2hex(SHA.digest!(ctx))
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function fasta2normalized_table(fasta_file)
-    sequence_sha256s = String[]
-    sequence_identifiers = String[]
-    sequence_descriptions = String[]
-    sequences = String[]
-    for record in Mycelia.open_fastx(fasta_file)
-        push!(sequence_identifiers, FASTX.identifier(record))
-        push!(sequence_descriptions, FASTX.description(record))
-        push!(sequences, FASTX.sequence(record))
-        push!(sequence_sha256s, Mycelia.seq2sha256(FASTX.sequence(record)))
+    @assert isfile(fasta_file) && filesize(fasta_file) > 0
+    n_records = Mycelia.count_records(fasta_file)
+
+    # Pre-allocate arrays
+    sequence_sha256s = Vector{String}(undef, n_records)
+    sequence_identifiers = Vector{String}(undef, n_records)
+    sequence_descriptions = Vector{String}(undef, n_records)
+    sequences = Vector{String}(undef, n_records)
+
+    # Progress meter
+    p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ", color=:blue)
+
+    for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
+        sequence_identifiers[i] = FASTX.identifier(record)
+        sequence_descriptions[i] = FASTX.description(record)
+        sequences[i] = FASTX.sequence(record)
+        sequence_sha256s[i] = Mycelia.seq2sha256(FASTX.sequence(record))
+        ProgressMeter.next!(p)
     end
-    fasta_sha256 = SHA.bytes2hex(SHA.sha256(join(sort(sequence_sha256s))))
+
     normalized_fasta_table = DataFrames.DataFrame(
-        fasta_sha256 = fasta_sha256,
+        fasta_sha256 = metasha256(sequence_sha256s),
         fasta_identifier = basename(fasta_file),
         sequence_sha256 = sequence_sha256s,
         sequence_identifier = sequence_identifiers,
