@@ -2743,42 +2743,40 @@ end
 function fasta2normalized_table(fasta_file)
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
 
+    # Progress meter
+    n_records = Mycelia.count_records(fasta_file)
+    p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ")
+
     # Temporary output file
-    tmp_outfile = tempname() * ".tsv.gz"
+    tmp_outfile = fasta_file * ".tsv.gz"
 
     # Open the output file for writing
-    outfile_io = CodecZlib.GZipCompressorStream(open(tmp_outfile, "w"))
+    outfile_io = CodecZlib.GzipCompressorStream(open(tmp_outfile, "w"))
 
     # Write the header
     header = "fasta_identifier\tsequence_sha256\tsequence_identifier\tsequence_description\tsequence"
     println(outfile_io, header)
 
     # Vector to store SHAs
-    sequence_sha256s = String[]
-
-    # Progress meter
-    n_records = Mycelia.count_records(fasta_file)
-    p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ", color=:blue)
+    sequence_sha256s = Vector{String}(undef, n_records)
 
     # Streaming processing
-    for record in Mycelia.open_fastx(fasta_file)
+    for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
         seq_id = FASTX.identifier(record)
         seq_desc = FASTX.description(record)
         seq = FASTX.sequence(record)
         sha256 = Mycelia.seq2sha256(seq)
 
         # Write to the temporary file
-        
-        println(outfile_io, join([basename(fasta_file), sha256, seq_id, seq_desc, seq], '\t'))
+        line = join([basename(fasta_file), sha256, seq_id, seq_desc, seq], '\t')
+        println(outfile_io, line)
 
-        push!(sequence_sha256s, sha256)
+        sequence_sha256s[i] = sha256
         ProgressMeter.next!(p)
     end
 
     # Close the output file
     close(outfile_io)
-
-
 
     # Rename the temporary file
     final_outfile = Mycelia.metasha256(sequence_sha256s) * "." * get_base_extension(fasta_file) * ".tsv.gz"
