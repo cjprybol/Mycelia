@@ -2740,18 +2740,19 @@ function get_base_extension(filename::String)
   return extension
 end
 
-function fasta2normalized_table(fasta_file)
+function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz")
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
+    if isfile(outfile) && filesize(outfile) > 0
+        @warn "$(outfile) already present and non-empty"
+        return outfile
+    end
 
     # Progress meter
     n_records = Mycelia.count_records(fasta_file)
     p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ")
 
-    # Temporary output file
-    tmp_outfile = fasta_file * ".tsv.gz"
-
     # Open the output file for writing
-    outfile_io = CodecZlib.GzipCompressorStream(open(tmp_outfile, "w"))
+    outfile_io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
 
     # Write the header
     header = "fasta_identifier\tsequence_sha256\tsequence_identifier\tsequence_description\tsequence"
@@ -2779,10 +2780,10 @@ function fasta2normalized_table(fasta_file)
     close(outfile_io)
 
     # Rename the temporary file
-    final_outfile = Mycelia.metasha256(sequence_sha256s) * "." * get_base_extension(fasta_file) * ".tsv.gz"
-    mv(tmp_outfile, final_outfile; force=true)
+    # final_outfile = joinpath(dirname(fasta_file), Mycelia.metasha256(sequence_sha256s) * basename(tmp_outfile))
+    # mv(tmp_outfile, final_outfile; force=true)
 
-    return final_outfile
+    return outfile
 end
 
 
