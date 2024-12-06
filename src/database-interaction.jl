@@ -3,7 +3,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function prefetch(;SRR, outdir=pwd())
     Mycelia.add_bioconda_env("sra-tools")
-    run(`$(Mycelia.CONDA_RUNNERA) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
 end
 
 # function fastq_dump(SRR, outdir=SRR)
@@ -186,9 +186,26 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function list_blastdbs()
-    Mycelia.add_bioconda_env("blast")
-    readlines(`$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall`)
+function list_blastdbs(;source="ncbi")
+    # Mycelia.add_bioconda_env("blast")
+    # readlines(`$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall`)
+    try
+        run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
+    catch
+        run(`apt-get install ncbi-blast+ perl-doc -y`)
+    end
+    readlines(`update_blastdb --source $(source) --showall`)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function showall_blastdbs(;source="ncbi")
+    blast_table_header = filter(!isempty, split(readlines(`update_blastdb --source $(source) --showall pretty`)[2], "  "))
+    data, header = uCSV.read(IOBuffer(join(readlines(`update_blastdb --source $(source) --showall tsv`)[2:end], "\n")), delim="\t")
+    df = sort(DataFrames.DataFrame(data, blast_table_header), "SIZE (GB)", rev=true)
+    df[!, "LAST_UPDATED"] = map(dt -> Dates.Date(Dates.DateTime(first(split(dt, '.')), "yyyy-mm-ddTHH:MM:SS")), df[!, "LAST_UPDATED"])
+    return df
 end
 
 """
@@ -199,20 +216,29 @@ Smart downloading of blast dbs depending on interactive, non interactive context
 For a list of all available databases, run: `Mycelia.list_blastdbs()`
 """
 function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="", wait=true)
-    Mycelia.add_bioconda_env("blast")
+    # Mycelia.add_bioconda_env("blast")
+    try
+        run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
+    catch
+        run(`apt-get install ncbi-blast+ perl-doc -y`)
+    end
     @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(dbdir)
     current_directory = pwd()
     cd(dbdir)
     if isempty(source)
         @info "source not provided, letting blast auto-detect fastest download option"
-        cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
+        # cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
+        cmd = `update_blastdb --decompress $(db)`
     else
         @info "downloading from source $(source)"
         if source == "ncbi"
-            cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+            # --timeout 360 --passive no 
+            # cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+            cmd = `update_blastdb --timeout 360 --passive no --decompress --source $(source) $(db)`
         else
-            cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
+            # cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
+            cmd = `update_blastdb --decompress --source $(source) $(db)`
         end
     end
     run(cmd, wait=wait)
@@ -223,8 +249,20 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).fasta.gz")
-    p = pipeline(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
+function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).$(string(Dates.today())).fasta.gz")
+    # todo add more
+    if db == "nr"
+        outfile = replace(outfile, r"\.fasta\.gz" => ".faa.gz" )
+    elseif db == "nt"
+        outfile = replace(outfile, r"\.fasta\.gz" => ".fna.gz" )
+    end
+    try
+        run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
+    catch
+        run(`apt-get install ncbi-blast+ perl-doc -y`)
+    end
+    # p = pipeline(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
+    p = pipeline(`blastdbcmd -db $(dbdir)/$(db) -entry all -outfmt %f`)
     if compressed
         p = pipeline(p, `gzip`)
     end
