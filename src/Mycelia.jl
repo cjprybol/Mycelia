@@ -2621,7 +2621,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function system_overview(;path="/")
+function system_overview(;path=pwd())
     total_memory = Base.format_bytes(Sys.total_memory())
     available_memory = Base.format_bytes(Sys.free_memory())
     occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
