@@ -210,6 +210,113 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function local_blast_database_info(;blastdbs_dir="$(homedir())/workspace/blastdb")
+    # %f means the BLAST database absolute file name path
+    # %p means the BLAST database molecule type
+    # %t means the BLAST database title
+    # %d means the date of last update of the BLAST database
+    # %l means the number of bases/residues in the BLAST database
+    # %n means the number of sequences in the BLAST database
+    # %U means the number of bytes used by the BLAST database
+    # %v means the BLAST database format version
+    symbol_header_map = OrderedCollections.OrderedDict(
+        "%f" => "BLAST database path",
+        "%p" => "BLAST database molecule type",
+        "%t" => "BLAST database title",
+        "%d" => "date of last update",
+        "%l" => "number of bases/residues",
+        "%n" => "number of sequences",
+        "%U" => "number of bytes",
+        "%v" => "BLAST database format version"
+    )
+    outfmt_string = join(collect(keys(symbol_header_map)), "\t")
+    data, header = uCSV.read(open(`blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`), delim='\t')
+    header = collect(values(symbol_header_map))
+    df = DataFrames.DataFrame(data, header)
+    # remove numbered database fragments from summary results
+    df = df[map(x -> !occursin(r"\.\d+$", x), df[!, "BLAST database path"]), :]
+    df[!, "human readable size"] = Base.format_bytes.(df[!, "number of bytes"])
+    return df
+end
+
+function blastdb2table(;blastdb, outfile="", force=false)
+    blast_db_info = Mycelia.local_blast_database_info()
+    # @info "local blast databases found"
+    # display(blast_db_info)
+    # @show blastdb
+    filtered_blast_db_table = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+    @assert DataFrames.nrow(filtered_blast_db_table) == 1
+    blast_db_info = filtered_blast_db_table[1, :]
+    n_sequences = blast_db_info["number of sequences"]
+    if blast_db_info["BLAST database molecule type"] == "Protein"
+        extension = ".faa"
+    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+        extension = ".fna"
+    else
+        @show blast_db_info["BLAST database molecule type"]
+        error("unexpected blast database molecule type")
+    end
+    if outfile == ""
+        outfile = blastdb * extension * ".tsv.gz"
+    end
+    lets_go = false
+    if !isfile(outfile)
+        lets_go = true
+    elseif filesize(outfile) == 0
+        lets_go = true
+    elseif force
+        lets_go = true
+    else
+        @show isfile(outfile)
+        @show Mycelia.filesize_human_readable(outfile)
+    end
+    !lets_go && return outfile
+    
+    symbol_header_map = OrderedCollections.OrderedDict(
+        "%s" => "sequence",
+        "%a" => "accession",
+        "%g" => "gi",
+        "%o" => "ordinal id",
+        "%i" => "sequence id",
+        "%t" => "sequence title",
+        "%l" => "sequence length",
+        "%h" => "sequence hash",
+        "%T" => "taxid",
+        "%X" => "leaf-node taxids",
+        "%e" => "membership integer",
+        "%L" => "common taxonomic name",
+        "%C" => "common taxonomic names for leaf-node taxids",
+        "%S" => "scientific name",
+        "%N" => "scientific names for leaf-node taxids",
+        "%B" => "BLAST name",
+        "%K" => "taxonomic super kingdom",
+        "%P" => "PIG"
+    )
+    outfmt_string = join(collect(keys(symbol_header_map)), "\t")
+    # @show outfmt_string
+    outfile_io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
+    
+    header = collect(values(symbol_header_map))
+    header = ["sequence SHA256", header...]
+    println(outfile_io, join(header, '\t'))
+    p = ProgressMeter.Progress(n_sequences, desc="Processing $(n_sequences) records from Blast DB $(blastdb): ")
+    # io = open(pipeline(`blastdbcmd -entry 'all' -db $(blastdb) -outfmt $(outfmt_string)`, `head`))
+    io = `blastdbcmd -entry 'all' -db $(blastdb) -outfmt $(outfmt_string)`
+    for line in eachline(io)
+        split_line = split(line, '\t')
+        seq = split_line[1]
+        seq_sha256 = Mycelia.seq2sha256(seq)
+        updated_line = join([seq_sha256, split_line...], "\t")
+        println(outfile_io, updated_line)
+        ProgressMeter.next!(p)
+    end
+    close(outfile_io)
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Smart downloading of blast dbs depending on interactive, non interactive context
 
