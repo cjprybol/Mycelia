@@ -201,6 +201,11 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function showall_blastdbs(;source="ncbi")
+    try
+        run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
+    catch
+        run(`apt-get install ncbi-blast+ perl-doc -y`)
+    end
     blast_table_header = filter(!isempty, split(readlines(`update_blastdb --source $(source) --showall pretty`)[2], "  "))
     data, header = uCSV.read(IOBuffer(join(readlines(`update_blastdb --source $(source) --showall tsv`)[2:end], "\n")), delim="\t")
     df = sort(DataFrames.DataFrame(data, blast_table_header), "SIZE (GB)", rev=true)
@@ -212,6 +217,11 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function local_blast_database_info(;blastdbs_dir="$(homedir())/workspace/blastdb")
+    try
+        run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
+    catch
+        run(`apt-get install ncbi-blast+ perl-doc -y`)
+    end
     # %f means the BLAST database absolute file name path
     # %p means the BLAST database molecule type
     # %t means the BLAST database title
@@ -241,6 +251,11 @@ function local_blast_database_info(;blastdbs_dir="$(homedir())/workspace/blastdb
 end
 
 function blastdb2table(;blastdb, outfile="", force=false)
+    try
+        run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
+    catch
+        run(`apt-get install ncbi-blast+ perl-doc -y`)
+    end
     blast_db_info = Mycelia.local_blast_database_info()
     # @info "local blast databases found"
     # display(blast_db_info)
