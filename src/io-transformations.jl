@@ -25,6 +25,7 @@ function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
     if !isfile(fasta) || force
         run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
     end
+    return fasta
 end
 
 

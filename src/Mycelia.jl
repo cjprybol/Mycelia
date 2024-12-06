@@ -87,31 +87,7 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
-# function find_conda()
-#     try
-#         CONDA_RUNNER = strip(read(`which conda`, String))
-#         return CONDA_RUNNER
-#     catch
-#         CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
-#         return CONDA_RUNNER
-#     end
-# end
-
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-# """
-# function find_mamba()
-#     try
-#         CONDA_RUNNER = strip(read(`which mamba`, String))
-#         return CONDA_RUNNER
-#     catch
-#         CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
-#         return CONDA_RUNNER
-#     end
-# end
-
 # can add support for conda too if needed
-# const CONDA_RUNNER = find_mamba()
 # const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
 const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
@@ -124,8 +100,13 @@ const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function add_bioconda_env(pkg; force=false)
-    if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
-        Conda.add("mamba")
+    # ensure conda environment is available
+    if !isfile(CONDA_RUNNER)
+        if (basename(CONDA_RUNNER) == "mamba")
+            Conda.add("mamba")
+        elseif (basename(CONDA_RUNNER) == "conda")
+            Conda.update()
+        end
     end
     # try
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
