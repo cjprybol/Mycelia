@@ -71,6 +71,9 @@ const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
 
+# fix new error
+# ENV["MAMBA_ROOT_PREFIX"] = joinpath(DEPOT_PATH[1], "conda", "3", "x86_64")
+
 # Mycelia.NERSC_MEM * .95
 # const NERSC_MEM=512
 # const NERSC_MEM=480
@@ -109,7 +112,8 @@ const AA_ALPHABET = filter(
 
 # can add support for conda too if needed
 # const CONDA_RUNNER = find_mamba()
-const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+# const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
