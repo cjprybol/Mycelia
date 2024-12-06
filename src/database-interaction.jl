@@ -1042,3 +1042,110 @@ function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
 end
 
 # function ncbi_datasets_download_by_taxon_id
+
+function load_ncbi_taxonomy(;
+        path_to_taxdump="$(homedir())/workspace/blastdb/taxdump"
+        # path_to_prebuilt_graph="$(path_to_taxdump)/ncbi_taxonomy.jld2"
+    )
+    taxdump_url = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
+    taxdump_local_tarball = joinpath(dirname(path_to_taxdump), basename(taxdump_url))
+    taxdump_out = replace(taxdump_local_tarball, ".tar.gz" => "")
+    # if isfile(path_to_prebuilt_graph) && filesize(path_to_prebuilt_graph) > 0
+    #     println("Using prebuilt graph"
+    #     ncbi_taxonomy = JLD2.load(path_to_prebuilt_graph, "ncbi_taxonomy")
+    #     return (;ncbi_taxonomy, path_to_prebuilt_graph)
+    # end
+    if !isdir(taxdump_out)
+        mkpath(taxdump_out)
+        if !isfile(taxdump_local_tarball)
+            download(taxdump_url, taxdump_local_tarball)
+        end
+        run(`tar -xf $(taxdump_local_tarball) -C $(taxdump_out)`)
+    end
+
+    names_dmp = DataFrames.DataFrame(
+        tax_id = Int[],
+        name_txt = String[],
+        unique_name = String[],
+        name_class = String[]
+    )
+    ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/names.dmp"), String), "\t|\n")
+        if isempty(line)
+            continue
+        else
+            (tax_id_string, name_txt, unique_name, name_class) = split(line, "\t|\t")
+            tax_id = parse(Int, tax_id_string)
+            row = (;tax_id, name_txt, unique_name, name_class)
+            push!(names_dmp, row)
+        end
+    end
+    unique_tax_ids = sort(unique(names_dmp[!, "tax_id"]))
+
+    ncbi_taxonomy = MetaGraphs.MetaDiGraph(length(unique_tax_ids))
+    ProgressMeter.@showprogress for (index, group) in enumerate(collect(DataFrames.groupby(names_dmp, "tax_id")))
+        MetaGraphs.set_prop!(ncbi_taxonomy, index, :tax_id, group[1, "tax_id"])
+        for row in DataFrames.eachrow(group)
+            unique_name = isempty(row["unique_name"]) ? row["name_txt"] : row["unique_name"]
+            # remove quotes since neo4j doesn't like them
+            unique_name = replace(unique_name, '"' => "")
+            # replace spaces and dashes with underscores
+            name_class = Symbol(replace(replace(row["name_class"], r"\s+" => "-"), "-" => "_"))
+    #         name_class = Symbol(row["name_class"])
+            if haskey(MetaGraphs.props(ncbi_taxonomy, index), name_class)
+                current_value = MetaGraphs.get_prop(ncbi_taxonomy, index, name_class)
+                if (current_value isa Array) && !(unique_name in current_value)
+                    new_value = [current_value..., unique_name]
+                    MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, new_value)
+                elseif !(current_value isa Array) && (current_value != unique_name)
+                    new_value = [current_value, unique_name]
+                    MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, new_value)
+                else
+                    continue
+                end
+            else
+                MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, unique_name)
+            end
+        end
+    end
+    divisions = Dict()
+    for line in split(read(open("$(taxdump_out)/division.dmp"), String), "\t|\n")
+        if !isempty(line)
+            (id_string, shorthand, full_name, notes) = split(line, "\t|\t")
+            id = parse(Int, id_string)
+            divisions[id] = Dict(:division_cde => shorthand, :division_name => full_name)
+        end
+    end
+    divisions
+
+    node_2_taxid_map = map(index -> ncbi_taxonomy.vprops[index][:tax_id], Graphs.vertices(ncbi_taxonomy))
+    ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/nodes.dmp"), String), "\t|\n")
+        if isempty(line)
+            continue
+        else
+            (tax_id_string, parent_tax_id_string, rank, embl_code, division_id_string) = split(line, "\t|\t")
+
+            division_id = parse(Int, division_id_string)
+
+            tax_id = parse(Int, tax_id_string)
+            lightgraphs_tax_ids = searchsorted(node_2_taxid_map, tax_id)
+            @assert length(lightgraphs_tax_ids) == 1
+            lightgraphs_tax_id = first(lightgraphs_tax_ids)
+
+            parent_tax_id = parse(Int, parent_tax_id_string)
+            lightgraphs_parent_tax_ids = searchsorted(node_2_taxid_map, parent_tax_id)
+            @assert length(lightgraphs_parent_tax_ids) == 1
+            lightgraphs_parent_tax_id = first(lightgraphs_parent_tax_ids)
+
+            Graphs.add_edge!(ncbi_taxonomy, lightgraphs_tax_id, lightgraphs_parent_tax_id)
+            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :rank, rank)
+            # these should probably be broken out as independent nodes!
+            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_id, division_id)
+            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_cde, divisions[division_id][:division_cde])
+            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_name, divisions[division_id][:division_name])
+        end
+    end
+    # JLD2 graph killed a colab instance after 200Gb of size!
+    # JLD2.save("$(homedir())/workspace/blastdb/taxdump/ncbi_taxonomy.jld2", "ncbi_taxonomy", ncbi_taxonomy)
+    # return (;ncbi_taxonomy, path_to_prebuilt_graph)
+    return ncbi_taxonomy
+end
