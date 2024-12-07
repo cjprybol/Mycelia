@@ -2771,6 +2771,17 @@ function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz")
     return outfile
 end
 
+function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    result = DataFrames.combine(gdf) do sdf
+        sdf[StatsBase.sample(1:DataFrames.nrow(sdf), 1), :]
+    end
+    return result
+end
+
+function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    return DataFrames.combine(gdf, first)
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
