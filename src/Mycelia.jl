@@ -2780,6 +2780,21 @@ function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFram
     return result
 end
 
+function random_symmetric_distance_matrix(n)
+  # Generate a random matrix
+  matrix = rand(n, n)
+
+  # Make the matrix symmetric
+  matrix = (matrix + matrix') / 2
+
+  # Ensure the diagonal is zero
+  for i in 1:n
+    matrix[i, i] = 0.0
+  end
+
+  return matrix
+end
+
 function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
     return DataFrames.combine(gdf, first)
 end
