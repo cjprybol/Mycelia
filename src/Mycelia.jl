@@ -13,6 +13,8 @@ import Clustering
 import CodecBase
 import CodecBzip2
 import CodecZlib
+import Colors
+import ColorSchemes
 import Conda
 import CSV
 import DataFrames
@@ -2780,6 +2782,10 @@ end
 
 function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
     return DataFrames.combine(gdf, first)
+end
+
+function n_maximally_distinguishable_colors(n)
+    return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
 end
 
 
