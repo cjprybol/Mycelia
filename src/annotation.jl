@@ -729,6 +729,85 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
 end
 
+function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
+    # https://pyrodigal.readthedocs.io/en/stable/guide/cli.html#command-line-interface
+
+    # -a trans_file         Write protein translations to the selected file.
+    # -c                    Closed ends. Do not allow genes to run off edges.
+    # -d nuc_file           Write nucleotide sequences of genes to the selected file.
+    # -f output_type        Select output format.
+    # -g tr_table           Specify a translation table to use.
+    # -i input_file         Specify FASTA input file.
+    # -m                    Treat runs of N as masked sequence and don't build genes across them.
+    # -n                    Bypass Shine-Dalgarno trainer and force a full motif scan.
+    # -o output_file        Specify output file.
+    # -p mode               Select procedure.
+    # -s start_file         Write all potential genes (with scores) to the selected file.
+    # -t training_file      Write a training file (if none exists); otherwise, read and use the specified training file.
+    # -j jobs, --jobs jobs           The number of threads to use if input contains multiple sequences.
+    # --min-gene MIN_GENE            The minimum gene length.
+    # --min-edge-gene MIN_EDGE_GENE  The minimum edge gene length.
+    # --max-overlap MAX_OVERLAP      The maximum number of nucleotides that can overlap between two genes on the same strand.
+    #                             This must be lower or equal to the minimum gene length.
+    # --no-stop-codon                Disables translation of stop codons into star characters (*) for complete genes.
+    # --pool {thread,process}        The sort of pool to use to process genomes in parallel. Processes may be faster than
+    #                             threads on some machines, refer to documentation. (default: thread)
+
+    # Usage:  prodigal [-a trans_file] [-c] [-d nuc_file] [-f output_type]
+    #                  [-g tr_table] [-h] [-i input_file] [-m] [-n] [-o output_file]
+    #                  [-p mode] [-q] [-s start_file] [-t training_file] [-v]
+
+    #          -a:  Write protein translations to the selected file.
+    #          -c:  Closed ends.  Do not allow genes to run off edges.
+    #          -d:  Write nucleotide sequences of genes to the selected file.
+    #          -f:  Select output format (gbk, gff, or sco).  Default is gbk.
+    #          -g:  Specify a translation table to use (default 11).
+    #          -h:  Print help menu and exit.
+    #          -i:  Specify FASTA/Genbank input file (default reads from stdin).
+    #          -m:  Treat runs of N as masked sequence; don't build genes across them.
+    #          -n:  Bypass Shine-Dalgarno trainer and force a full motif scan.
+    #          -o:  Specify output file (default writes to stdout).
+    #          -p:  Select procedure (single or meta).  Default is single.
+    #          -q:  Run quietly (suppress normal stderr output).
+    #          -s:  Write all potential genes (with scores) to the selected file.
+    #          -t:  Write a training file (if none exists); otherwise, read and use
+    #               the specified training file.
+    #          -v:  Print version number and exit.
+    gff = "$(out_dir)/$(basename(fasta_file)).prodigal.gff"
+    faa = "$(out_dir)/$(basename(fasta_file)).prodigal.faa"
+    fna = "$(out_dir)/$(basename(fasta_file)).prodigal.fna"
+    # -s $(gene_scores)
+    # gene_scores = "$(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt"
+    std_out = "$(out_dir)/$(basename(fasta_file)).prodigal.out"
+    std_err = "$(out_dir)/$(basename(fasta_file)).prodigal.err"
+    mkpath(out_dir)
+    
+    # I usually delete the rest, so don't reprocess if outputs of interest are present
+    # `max_overlap` must be lower than `min_gene`
+    if (!isfile(gff) || !isfile(faa))
+        Mycelia.add_bioconda_env("pyrodigal")
+        cmd = 
+        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n pyrodigal pyrodigal
+        -f gff
+        -m
+        -p meta
+        -o $(gff)
+        -i $(fasta_file)
+        -a $(faa)
+        -d $(fna)
+        --min-gene 33
+        --max-overlap 31
+        `
+        p = pipeline(cmd, stdout=std_out, stderr=std_err)
+        run(p)
+        cp(fasta_file, "$(out_dir)/$(basename(fasta_file))", force=true)
+        (filesize(std_out) == 0) && rm(std_out)
+        (filesize(std_err) == 0) && rm(std_err)
+    end
+    # return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
+    return (;fasta_file, out_dir, gff, faa, fna)
+end
+
 # ```
 # https://learn.gencore.bio.nyu.edu/ngs-file-formats/gff3-format/
 
