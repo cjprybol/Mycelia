@@ -2612,12 +2612,14 @@ function system_overview(;path=pwd())
     total_memory = Base.format_bytes(Sys.total_memory())
     available_memory = Base.format_bytes(Sys.free_memory())
     occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
-    threads = Sys.CPU_THREADS
+    system_threads = Sys.CPU_THREADS
+    julia_threads = Threads.nthreads()
     available_storage = Base.format_bytes(Base.diskstat(path).available)
     total_storage = Base.format_bytes(Base.diskstat(path).total)
     occupied_storage = Base.format_bytes(Base.diskstat(path).used)
     return (;
-            threads,
+            system_threads,
+            julia_threads,
             total_memory,
             available_memory,
             occupied_memory,
