@@ -13,6 +13,8 @@ import Clustering
 import CodecBase
 import CodecBzip2
 import CodecZlib
+import Colors
+import ColorSchemes
 import Conda
 import CSV
 import DataFrames
@@ -2769,6 +2771,36 @@ function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz")
     # mv(tmp_outfile, final_outfile; force=true)
 
     return outfile
+end
+
+function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    result = DataFrames.combine(gdf) do sdf
+        sdf[StatsBase.sample(1:DataFrames.nrow(sdf), 1), :]
+    end
+    return result
+end
+
+function random_symmetric_distance_matrix(n)
+  # Generate a random matrix
+  matrix = rand(n, n)
+
+  # Make the matrix symmetric
+  matrix = (matrix + matrix') / 2
+
+  # Ensure the diagonal is zero
+  for i in 1:n
+    matrix[i, i] = 0.0
+  end
+
+  return matrix
+end
+
+function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    return DataFrames.combine(gdf, first)
+end
+
+function n_maximally_distinguishable_colors(n)
+    return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
 end
 
 
