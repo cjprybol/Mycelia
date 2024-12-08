@@ -773,13 +773,13 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
     #          -t:  Write a training file (if none exists); otherwise, read and use
     #               the specified training file.
     #          -v:  Print version number and exit.
-    gff = "$(out_dir)/$(basename(fasta_file)).prodigal.gff"
-    faa = "$(out_dir)/$(basename(fasta_file)).prodigal.faa"
-    fna = "$(out_dir)/$(basename(fasta_file)).prodigal.fna"
+    gff = "$(out_dir)/$(basename(fasta_file)).pyrodigal.gff"
+    faa = "$(out_dir)/$(basename(fasta_file)).pyrodigal.faa"
+    fna = "$(out_dir)/$(basename(fasta_file)).pyrodigal.fna"
     # -s $(gene_scores)
-    # gene_scores = "$(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt"
-    std_out = "$(out_dir)/$(basename(fasta_file)).prodigal.out"
-    std_err = "$(out_dir)/$(basename(fasta_file)).prodigal.err"
+    # gene_scores = "$(out_dir)/$(basename(fasta_file)).pyrodigal.all_potential_gene_scores.txt"
+    std_out = "$(out_dir)/$(basename(fasta_file)).pyrodigal.out"
+    std_err = "$(out_dir)/$(basename(fasta_file)).pyrodigal.err"
     mkpath(out_dir)
     
     # I usually delete the rest, so don't reprocess if outputs of interest are present
