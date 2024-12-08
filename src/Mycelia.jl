@@ -2671,7 +2671,7 @@ function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
-function metasha256(vector_of_sha256s)
+function metasha256(vector_of_sha256s::Vector{AbstractString})
     ctx = SHA.SHA2_256_CTX()
     for sha_hash in sort(vector_of_sha256s)
         SHA.update!(ctx, collect(codeunits(sha_hash)))

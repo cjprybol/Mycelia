@@ -240,6 +240,14 @@ function local_blast_database_info(;blastdbs_dir="$(homedir())/workspace/blastdb
     return df
 end
 
+# function remove_non_ascii(input::String)
+#     return String(filter(x -> x <= '\x7f', input))
+# end
+
+# function sanitize_string(input::String)
+#     return String(filter(x -> isvalid(Char, x), input))
+# end
+
 function blastdb2table(;blastdb, outfile="", force=false)
     blast_db_info = Mycelia.local_blast_database_info()
     # @info "local blast databases found"
@@ -305,7 +313,8 @@ function blastdb2table(;blastdb, outfile="", force=false)
     io = `blastdbcmd -entry 'all' -db $(blastdb) -outfmt $(outfmt_string)`
     for line in eachline(io)
         split_line = split(line, '\t')
-        seq = split_line[1]
+        # remove invalid characters
+        seq = uppercase(String(filter(x -> isvalid(Char, x), split_line[1])))
         seq_sha256 = Mycelia.seq2sha256(seq)
         updated_line = join([seq_sha256, split_line...], "\t")
         println(outfile_io, updated_line)
