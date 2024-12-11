@@ -331,19 +331,27 @@ function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
     return DataFrames.DataFrame(data, header)
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function read_mmseqs_easy_search(mmseqs_file; top_hit_only=false)
+#     mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
+#     if top_hit_only
+#         gdf = DataFrames.groupby(mmseqs_results, "query")
+#         for g in gdf
+#             @assert issorted(g[!, "evalue"])
+#         end
+#         top_hits = DataFrames.combine(gdf, first)
+#         mmseqs_results = top_hits
+#     end
+#     return mmseqs_results
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function read_mmseqs_easy_search(mmseqs_file; top_hit_only=false)
-    mmseqs_results = DataFrames.DataFrame(uCSV.read(mmseqs_file, header=1, delim='\t')...)
-    if top_hit_only
-        gdf = DataFrames.groupby(mmseqs_results, "query")
-        for g in gdf
-            @assert issorted(g[!, "evalue"])
-        end
-        top_hits = DataFrames.combine(gdf, first)
-        mmseqs_results = top_hits
-    end
+function read_mmseqs_easy_search(mmseqs_file)
+    mmseqs_results = CSV.read(mmseqs_file, DataFrames.DataFrame, header=1, delim='\t')
     return mmseqs_results
 end
 
@@ -423,6 +431,40 @@ function read_gff(gff_io)
         String
     ]
     DataFrames.DataFrame(data, header)
+end
+
+function split_gff_attributes_into_columns(gff_df)
+    # 1. Extract unique keys from the attribute column
+    all_keys = Set{String}()
+    for row in DataFrames.eachrow(gff_df)
+        attributes = split(row["attributes"], ';')
+        for attribute in attributes
+            if !isempty(attribute)
+                key = split(attribute, '=')[1]
+                push!(all_keys, key)
+            end
+        end
+    end
+
+  # 2. Create new columns for each key
+    for key in all_keys
+        gff_df[!, key] = Vector{Union{Missing, String}}(missing, size(gff_df, 1))
+    end
+
+    # 3. Populate the new columns with values
+    for (i, row) in enumerate(DataFrames.eachrow(gff_df))
+        attributes = split(row["attributes"], ';')
+        for attribute in attributes
+            if !isempty(attribute)
+            key_value = split(attribute, '=')
+                if length(key_value) == 2
+                    key, value = key_value
+                    gff_df[i, key] = value
+                end
+            end
+        end
+    end
+    return gff_df
 end
 
 """
