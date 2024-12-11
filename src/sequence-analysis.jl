@@ -1,3 +1,114 @@
+# function observed_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
+#     kmer_count_dict = BioSequences.kmercounts(seq, k)
+#     total_kmers = sum(values(kmer_count_dict))
+#     return Dict(kmer => count / total_kmers for (kmer, count) in kmer_count_dict)
+# end
+
+# function expected_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
+#     k_minus_1_mer_counts = Dict{BioSequences.BioSequence{A}, Int}()
+#     for i in 1:(length(seq) - k + 1)
+#         k_minus_1_mer = seq[i:(i + k - 2)]
+#         k_minus_1_mer_counts[k_minus_1_mer] = get(k_minus_1_mer_counts, k_minus_1_mer, 0) + 1
+#     end
+
+#     nucleotide_counts = Dict{BioSequences.BioSequence{A}, Int}()
+#     for nucleotide in seq
+#         nucleotide_seq = BioSequences.BioSequence{A}([nucleotide])
+#         nucleotide_counts[nucleotide_seq] = get(nucleotide_counts, nucleotide_seq, 0) + 1
+#     end
+
+#     total_k_minus_1_mers = sum(values(k_minus_1_mer_counts))
+#     expected_frequencies = Dict{BioSequences.BioSequence{A}, Float64}()
+#     for (k_minus_1_mer, count) in k_minus_1_mer_counts
+#         last_nucleotide = k_minus_1_mer[end]
+#         last_nucleotide_seq = BioSequences.BioSequence{A}([last_nucleotide])
+#         expected_frequencies[k_minus_1_mer] = (count / total_k_minus_1_mers) * (nucleotide_counts[last_nucleotide_seq] / length(seq))
+#     end
+
+#     return expected_frequencies
+# end
+
+# function precompute_expected_frequencies(sequences::Vector{BioSequences.BioSequence{A}}, k::Int) where A<:BioSequences.Alphabet
+#     expected_freqs = Vector{Dict{BioSequences.BioSequence{A}, Float64}}(undef, length(sequences))
+#     for (i, seq) in enumerate(sequences)
+#         expected_freqs[i] = expected_kmer_frequencies(seq, k)
+#     end
+#     return expected_freqs
+# end
+
+# function D2_star(obs_freq1::Dict{BioSequences.BioSequence{A}, Float64},
+#                  obs_freq2::Dict{BioSequences.BioSequence{A}, Float64},
+#                  exp_freq::Dict{BioSequences.BioSequence{A}, Float64}) where A<:BioSequences.Alphabet
+#     numerator = sum((obs_freq1[kmer] - exp_freq[kmer]) * (obs_freq2[kmer] - exp_freq[kmer]) for kmer in keys(exp_freq))
+#     denominator = sqrt(sum((obs_freq1[kmer] - exp_freq[kmer])^2 for kmer in keys(exp_freq)) *
+#                        sum((obs_freq2[kmer] - exp_freq[kmer])^2 for kmer in keys(exp_freq)))
+#     return numerator / denominator
+# end
+
+# function d2_star_normalized(obs_freq1::Dict{BioSequences.BioSequence{A}, Float64},
+#                             obs_freq2::Dict{BioSequences.BioSequence{A}, Float64},
+#                             exp_freq::Dict{BioSequences.BioSequence{A}, Float64}) where A<:BioSequences.Alphabet
+#     numerator = sum((obs_freq1[kmer] - exp_freq[kmer]) * (obs_freq2[kmer] - exp_freq[kmer]) for kmer in keys(exp_freq))
+#     var1 = sum((obs_freq1[kmer] - exp_freq[kmer])^2 for kmer in keys(exp_freq))
+#     var2 = sum((obs_freq2[kmer] - exp_freq[kmer])^2 for kmer in keys(exp_freq))
+#     denominator = sqrt(var1 * var2)
+#     return numerator / denominator
+# end
+
+# function compute_observed_frequencies(sequences::Vector{BioSequences.BioSequence{A}}, k::Int) where A<:BioSequences.Alphabet
+#     observed_freqs = Vector{Dict{BioSequences.BioSequence{A}, Float64}}(undef, length(sequences))
+#     for (i, seq) in enumerate(sequences)
+#         observed_freqs[i] = observed_kmer_frequencies(seq, k)
+#     end
+#     return observed_freqs
+# end
+
+# function compute_pairwise_statistics(observed_freqs::Vector{Dict{BioSequences.BioSequence{A}, Float64}},
+#                                      expected_freqs::Vector{Dict{BioSequences.BioSequence{A}, Float64}}) where A<:BioSequences.Alphabet
+#     n = length(observed_freqs)
+#     d2_star_matrix = Matrix{Float64}(undef, n, n)
+#     d2_star_norm_matrix = Matrix{Float64}(undef, n, n)
+#     for i in 1:n
+#         for j in i:n
+#             d2_star_value = D2_star(observed_freqs[i], observed_freqs[j], expected_freqs[i])
+#             d2_star_norm_value = d2_star_normalized(observed_freqs[i], observed_freqs[j], expected_freqs[i])
+#             d2_star_matrix[i, j] = d2_star_value
+#             d2_star_matrix[j, i] = d2_star_value
+#             d2_star_norm_matrix[i, j] = d2_star_norm_value
+#             d2_star_norm_matrix[j, i] = d2_star_norm_value
+#         end
+#     end
+#     return d2_star_matrix, d2_star_norm_matrix
+# end
+
+
+# # Example sequences
+# sequences = [
+#     BioSequences.LongSequence{BioSymbols.DNAAlphabet{4}}("ACGTACGTGACG"),
+#     BioSequences.LongSequence{BioSymbols.DNAAlphabet{4}}("TGCATGCATGCA"),
+#     # Add more sequences as needed
+# ]
+
+# # k-mer length
+# k = 3
+
+# # Precompute expected k-mer frequencies
+# expected_freqs = precompute_expected_frequencies(sequences, k)
+
+# # Compute observed k-mer frequencies
+# observed_freqs = compute_observed_frequencies(sequences, k)
+
+# # Compute pairwise D2* and d2* statistics
+# d2_star_matrix, d2_star_norm_matrix = compute_pairwise_statistics(observed_freqs, expected_freqs)
+
+# println("D2* Matrix:")
+# println(d2_star_matrix)
+
+# println("Normalized d2* Matrix:")
+# println(d2_star_norm_matrix)
+
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
@@ -558,24 +669,53 @@ end
 #     return distance_matrix
 # end
 
+# """
+
+
+# Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size)
+# """
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     ProgressMeter.@showprogress for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.euclidean(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to total feature count magnitude (size)
+Create a Euclidean distance matrix from a column-major counts matrix
+(features as rows and entities as columns), where distance is proportional
+to total feature count magnitude (size).
 """
 function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
     distance_matrix = zeros(n_entities, n_entities)
-    ProgressMeter.@showprogress for entity_1_index in 1:n_entities
+
+    # Initialize a thread-safe progress meter
+    progress = ProgressMeter.Progress(n_entities * (n_entities - 1) ÷ 2, desc = "Computing distances", dt = 0.1)
+
+    Threads.@threads for entity_1_index in 1:n_entities
         for entity_2_index in entity_1_index+1:n_entities
             a = counts_table[:, entity_1_index]
             b = counts_table[:, entity_2_index]
-            distance_matrix[entity_1_index, entity_2_index] = 
-                distance_matrix[entity_2_index, entity_1_index] = 
-                Distances.euclidean(a, b)
+            dist = Distances.euclidean(a, b)
+            distance_matrix[entity_1_index, entity_2_index] = dist
+            distance_matrix[entity_2_index, entity_1_index] = dist
+            ProgressMeter.next!(progress)  # Update the progress meter
         end
     end
+
+    ProgressMeter.finish!(progress)  # Ensure the progress meter completes
     return distance_matrix
 end
 # didn't work

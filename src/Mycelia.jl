@@ -2,13 +2,19 @@ module Mycelia
 
 __precompile__(false)
 
-# import ArgParse
+import AlgebraOfGraphics
+import ArgParse
+import Arrow
 import BioAlignments
 import BioSequences
 import BioSymbols
-# import CairoMakie
+import CairoMakie
 import Clustering
+import CodecBase
+import CodecBzip2
 import CodecZlib
+import Colors
+import ColorSchemes
 import Conda
 import CSV
 import DataFrames
@@ -18,17 +24,22 @@ import DelimitedFiles
 import Distances
 import Distributions
 import DocStringExtensions
+import Downloads
 import FASTX
 import FileIO
 import GenomicAnnotations
+import GeoMakie
 import GFF3
-# import GraphRecipes
-import Graphs
 import GLM
+import GraphMakie
+import Graphs
+import HDF5
 import HTTP
+import JLD2
 import JSON
 import Kmers
 import LsqFit
+import Makie
 import MetaGraphs
 import Mmap
 import OrderedCollections
@@ -36,14 +47,17 @@ import Plots
 import Primes
 import ProgressMeter
 import Random
+import SHA
+import SparseArrays
 import Statistics
 import StatsBase
 import StatsPlots
+import Tar
+import TopoPlots
+import TranscodingStreams
+import uCSV
 import XAM
 import XMLDict
-import uCSV
-import Downloads
-import SparseArrays
 
 import Pkg
 
@@ -59,6 +73,9 @@ const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
 
+# fix new error
+# ENV["MAMBA_ROOT_PREFIX"] = joinpath(DEPOT_PATH[1], "conda", "3", "x86_64")
+
 # Mycelia.NERSC_MEM * .95
 # const NERSC_MEM=512
 # const NERSC_MEM=480
@@ -72,32 +89,9 @@ const AA_ALPHABET = filter(
     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
-# function find_conda()
-#     try
-#         CONDA_RUNNER = strip(read(`which conda`, String))
-#         return CONDA_RUNNER
-#     catch
-#         CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
-#         return CONDA_RUNNER
-#     end
-# end
-
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-# """
-# function find_mamba()
-#     try
-#         CONDA_RUNNER = strip(read(`which mamba`, String))
-#         return CONDA_RUNNER
-#     catch
-#         CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
-#         return CONDA_RUNNER
-#     end
-# end
-
 # can add support for conda too if needed
-# const CONDA_RUNNER = find_mamba()
-const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+# const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
+const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
 const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
 const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
@@ -108,8 +102,13 @@ const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function add_bioconda_env(pkg; force=false)
-    if !isfile(CONDA_RUNNER) && (basename(CONDA_RUNNER) == "mamba")
-        Conda.add("mamba")
+    # ensure conda environment is available
+    if !isfile(CONDA_RUNNER)
+        if (basename(CONDA_RUNNER) == "mamba")
+            Conda.add("mamba")
+        elseif (basename(CONDA_RUNNER) == "conda")
+            Conda.update()
+        end
     end
     # try
     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
@@ -141,6 +140,11 @@ function add_bioconda_env(pkg; force=false)
     #         # @info "conda environment $(pkg) already present; set force=true to update/re-install"
     #     end
     # end
+end
+
+function update_bioconda_env(pkg)
+    run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
+    # conda update --all -n <env_name>
 end
 
 # """
@@ -221,7 +225,7 @@ function lawrencium_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
         partition::String="lr3",
         qos::String="lr_normal",
         account::String,
@@ -264,7 +268,7 @@ function scg_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
         partition::String,
         account::String,
         nodes::Int=1,
@@ -319,11 +323,11 @@ function nersc_sbatch_shared(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
         qos::String="shared",
         nodes::Int=1,
         ntasks::Int=1,
-        time::String="1-00:00:00",
+        time::String="2-00:00:00",
         cpus_per_task::Int=1,
         mem_gb::Int=cpus_per_task * 2,
         cmd::String,
@@ -368,94 +372,103 @@ use
 
 https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
 """
-function nersc_sbatch_regular(;
+function nersc_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=pwd(),
+        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
+        scriptdir::String=mkpath("$(homedir())/workspace/slurm"),
         qos::String="regular",
         nodes::Int=1,
         ntasks::Int=1,
-        time::String="1-00:00:00",
+        time::String="2-00:00:00",
         cpus_per_task::Int=Mycelia.NERSC_CPU,
-        mem_gb::Int=Int(floor(Mycelia.NERSC_MEM * .9)),
-        cmd::String,
+        mem_gb::Int=Mycelia.NERSC_MEM,
+        cmd::Union{String, Vector{String}},
         constraint::String="cpu"
     )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --qos=$(qos)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --constraint=cpu
-    --wrap $(cmd)
-    `
+        
+    # Generate timestamp
+    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
+    
+    # Create script filename
+    script_name = "$(timestamp)-$(job_name).sh"
+    script_path = joinpath(scriptdir, script_name)
+    
+    # Process commands
+    cmd_block = if isa(cmd, String)
+        cmd  # Single command as is
+    else
+        join(cmd, "\n")  # Multiple commands joined with newlines
+    end
+    
+    # Create script content
+    script_content = """
+    #!/bin/bash
+    #SBATCH --job-name=$(job_name)
+    #SBATCH --mail-user=$(mail_user)
+    #SBATCH --mail-type=$(mail_type)
+    #SBATCH --error=$(logdir)/%j.%x.err
+    #SBATCH --output=$(logdir)/%j.%x.out
+    #SBATCH --qos=$(qos)
+    #SBATCH --nodes=$(nodes)
+    #SBATCH --ntasks=$(ntasks)
+    #SBATCH --time=$(time)
+    #SBATCH --cpus-per-task=$(cpus_per_task)
+    #SBATCH --mem=$(mem_gb)G
+    #SBATCH --constraint=$(constraint)
+
+    $cmd_block
+    """
+    
+    # Write script to file
+    write(script_path, script_content)
+    
+    # Make script executable
+    chmod(script_path, 0o755)
+    
+    # Submit the job
     sleep(5)
-    run(submission)
+    run(`sbatch $script_path`)
     sleep(5)
+    
     return true
 end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Submit a command to SLURM using sbatch
-
-https://docs.nersc.gov/jobs/policy/
-https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
-
-default is to use shared qos
-
-use
-- regular
-- preempt (reduced credit usage but not guaranteed to finish)
-- premium (priorty runs limited to 5x throughput)
-
-https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
-"""
-function nersc_sbatch_premium(;
-        job_name::String,
-        mail_user::String,
-        mail_type::String="ALL",
-        logdir::String=pwd(),
-        qos::String="premium",
-        nodes::Int=1,
-        ntasks::Int=1,
-        time::String="1-00:00:00",
-        cpus_per_task::Int=Mycelia.NERSC_CPU,
-        mem_gb::Int=Int(floor(Mycelia.NERSC_MEM * .9)),
-        cmd::String,
-        constraint::String="cpu"
-    )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --qos=$(qos)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --constraint=cpu
-    --wrap $(cmd)
-    `
-    sleep(5)
-    run(submission)
-    sleep(5)
-    return true
-end
+# function nersc_sbatch_regular(;
+#         job_name::String,
+#         mail_user::String,
+#         mail_type::String="ALL",
+#         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
+#         qos::String="regular",
+#         nodes::Int=1,
+#         ntasks::Int=1,
+#         time::String="2-00:00:00",
+#         cpus_per_task::Int=Mycelia.NERSC_CPU,
+#         mem_gb::Int=Mycelia.NERSC_MEM,
+#         cmd::String,
+#         constraint::String="cpu"
+#     )
+#     submission = 
+#     `sbatch
+#     --job-name=$(job_name)
+#     --mail-user=$(mail_user)
+#     --mail-type=$(mail_type)
+#     --error=$(logdir)/%j.%x.err
+#     --output=$(logdir)/%j.%x.out
+#     --qos=$(qos)
+#     --nodes=$(nodes)
+#     --ntasks=$(ntasks)
+#     --time=$(time)   
+#     --cpus-per-task=$(cpus_per_task)
+#     --mem=$(mem_gb)G
+#     --constraint=cpu
+#     --wrap $(cmd)
+#     `
+#     sleep(5)
+#     run(submission)
+#     sleep(5)
+#     return true
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -532,34 +545,34 @@ function annotate_fasta(;
     # @show basedir
     outdir = joinpath(basedir, identifier)
     @assert outdir != fasta
-    if !isdir(outdir)
-        @show isdir(outdir)
-        mkpath(outdir)
-        f = joinpath(outdir, basename(fasta))
-        # make this an rclone copy for portability
-        cp(fasta, f, force=true)
+    # if !isdir(outdir)
+    #     @show isdir(outdir)
+    mkpath(outdir)
+    f = joinpath(outdir, basename(fasta))
+    # make this an rclone copy for portability
+    !isfile(f) && cp(fasta, f)
+    nucleic_acid_fasta = f * ".prodigal.fna"
+    amino_acid_fasta = f * ".prodigal.faa"
+    gff_file = f * ".prodigal.gff"
+    if !isfile(nucleic_acid_fasta) || !isfile(amino_acid_fasta) || !isfile(gff_file)
         Mycelia.run_prodigal(fasta_file=f)
-        nucleic_acid_fasta = f * ".prodigal.fna"
-        amino_acid_fasta = f * ".prodigal.faa"
-        gff_file = f * ".prodigal.gff"
-
-        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
-        mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
-        transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-
-        joint_gff = Mycelia.write_gff(
-            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
-            outfile=f * ".gff")
-        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
-
-        transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-        joint_gff_raw_fasta = Mycelia.write_gff(
-            gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
-            outfile=f * ".transterm_raw.gff")
-        annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
-    else
-        @info "$(outdir) already present, skipping..."
     end
+    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
+    transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+    joint_gff = Mycelia.write_gff(
+        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
+        outfile=f * ".gff")
+    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
+
+    transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+    joint_gff_raw_fasta = Mycelia.write_gff(
+        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
+        outfile=f * ".transterm_raw.gff")
+    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
+    # else
+    #     @info "$(outdir) already present, skipping..."
+    # end
     return outdir
 end
 
@@ -2580,6 +2593,275 @@ function run_padloc(fasta_file)
         @info "$(padloc_outfile) already present"
     end
 end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function run_mlst(fasta_file)
+    Mycelia.add_bioconda_env("mlst")    
+    mlst_outfile = "$(fasta_file).mlst.out"
+    @show mlst_outfile
+    if !isfile(mlst_outfile)
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mlst mlst $(fasta_file)`, mlst_outfile))
+    else
+        @info "$(mlst_outfile) already present"
+    end
+    return mlst_outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function run_ectyper(fasta_file)
+    Mycelia.add_bioconda_env("ectyper")
+    outdir = fasta_file * "_ectyper"
+    if !isdir(outdir)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ectyper ectyper -i $(fasta_file) -o $(outdir)`)
+    else
+        @info "$(outdir) already present"
+    end
+    return outdir
+end
+
+ # -i ecoliA.fasta -o output_dir
+
+
+
+# function run_mlst(ID, OUT_DIR, normalized_fasta_file)
+#     mlst_dir="$(OUT_DIR)/mlst"
+#     if !isdir(mlst_dir)
+#         mkdir(mlst_dir)
+#     end
+#     p = pipeline(
+#             `mlst $(normalized_fasta_file)`,
+#             stdout="$(mlst_dir)/$(ID).mlst.out")
+#     run(p)
+#     return mlst_dir
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function parse_jsonl(filepath::String)
+    # Count the lines first
+    num_lines = countlines(filepath)
+
+    # Pre-allocate the array
+    json_objects = Vector{Dict{String, Any}}(undef, num_lines)
+
+    # Progress meter setup
+    p = ProgressMeter.Progress(num_lines; desc="Parsing JSONL: ", showspeed=true)
+    
+    open(filepath, "r") do file
+        for (i, line) in enumerate(eachline(file))
+            json_objects[i] = JSON.parse(line)
+            ProgressMeter.next!(p) # Update the progress meter
+        end
+    end
+    return json_objects
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function system_overview(;path=pwd())
+    total_memory = Base.format_bytes(Sys.total_memory())
+    available_memory = Base.format_bytes(Sys.free_memory())
+    occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
+    system_threads = Sys.CPU_THREADS
+    julia_threads = Threads.nthreads()
+    available_storage = Base.format_bytes(Base.diskstat(path).available)
+    total_storage = Base.format_bytes(Base.diskstat(path).total)
+    occupied_storage = Base.format_bytes(Base.diskstat(path).used)
+    return (;
+            system_threads,
+            julia_threads,
+            total_memory,
+            available_memory,
+            occupied_memory,
+            total_storage,
+            available_storage,
+            occupied_storage)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function vcat_with_missing(dfs::Vararg{DataFrames.AbstractDataFrame})
+    # Get all unique column names across all DataFrames
+    all_columns = unique(reduce(vcat, [names(df) for df in dfs]))
+
+    # Add missing columns to each DataFrame and fill with missing
+    for df in dfs
+        for col in all_columns
+            if !(col in names(df))
+                df[!, col] .= missing
+            end
+        end
+    end
+
+    # Now you can safely vcat the DataFrames
+    return vcat(dfs...)
+end
+
+# always interpret as strings to ensure changes in underlying biosequence representation don't change results
+# results in 64 character string
+# a = "TTANC"
+# b = "ttANc"
+# c = "ttanc"
+# dna_a = BioSequences.LongDNA{4}(a)
+# dna_b = BioSequences.LongDNA{4}(b)
+# dna_c = BioSequences.LongDNA{4}(c)
+# seq2sha256(a) == seq2sha256(dna_a)
+# seq2sha256(b) == seq2sha256(dna_b)
+# seq2sha256(c) == seq2sha256(dna_c)
+# seq2sha256(BioSequences.LongDNA{2}("AAA")) == seq2sha256(BioSequences.LongDNA{4}("AAA"))
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function seq2sha256(seq::AbstractString)
+    return SHA.bytes2hex(SHA.sha256(uppercase(seq)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function seq2sha256(seq::BioSequences.BioSequence)
+    return seq2sha256(string(seq))
+end
+
+function metasha256(vector_of_sha256s::Vector{AbstractString})
+    ctx = SHA.SHA2_256_CTX()
+    for sha_hash in sort(vector_of_sha256s)
+        SHA.update!(ctx, collect(codeunits(sha_hash)))
+    end
+    return SHA.bytes2hex(SHA.digest!(ctx))
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function fasta2normalized_table(fasta_file)
+#     @assert isfile(fasta_file) && filesize(fasta_file) > 0
+#     n_records = Mycelia.count_records(fasta_file)
+
+#     # Pre-allocate arrays
+#     sequence_sha256s = Vector{String}(undef, n_records)
+#     sequence_identifiers = Vector{String}(undef, n_records)
+#     sequence_descriptions = Vector{String}(undef, n_records)
+#     sequences = Vector{String}(undef, n_records)
+
+#     # Progress meter
+#     p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ", color=:blue)
+
+#     for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
+#         sequence_identifiers[i] = FASTX.identifier(record)
+#         sequence_descriptions[i] = FASTX.description(record)
+#         sequences[i] = FASTX.sequence(record)
+#         sequence_sha256s[i] = Mycelia.seq2sha256(FASTX.sequence(record))
+#         ProgressMeter.next!(p)
+#     end
+
+#     normalized_fasta_table = DataFrames.DataFrame(
+#         fasta_sha256 = metasha256(sequence_sha256s),
+#         fasta_identifier = basename(fasta_file),
+#         sequence_sha256 = sequence_sha256s,
+#         sequence_identifier = sequence_identifiers,
+#         sequence_description = sequence_descriptions,
+#         sequence = sequences
+#     )
+#     return normalized_fasta_table
+# end
+
+function get_base_extension(filename::String)
+  parts = split(filename, "."; limit=3)  # Limit to 3 to handle 2-part extensions
+  extension = parts[end]  # Get the last part
+  
+  if extension == "gz" && length(parts) > 2  # Check for .gz and more parts
+    extension = parts[end - 1]  # Get the part before .gz
+  end
+  
+  return extension
+end
+
+function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz")
+    @assert isfile(fasta_file) && filesize(fasta_file) > 0
+    if isfile(outfile) && filesize(outfile) > 0
+        @warn "$(outfile) already present and non-empty"
+        return outfile
+    end
+
+    # Progress meter
+    n_records = Mycelia.count_records(fasta_file)
+    p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ")
+
+    # Open the output file for writing
+    outfile_io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
+
+    # Write the header
+    header = "fasta_identifier\tsequence_sha256\tsequence_identifier\tsequence_description\tsequence"
+    println(outfile_io, header)
+
+    # Vector to store SHAs
+    sequence_sha256s = Vector{String}(undef, n_records)
+
+    # Streaming processing
+    for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
+        seq_id = FASTX.identifier(record)
+        seq_desc = FASTX.description(record)
+        seq = FASTX.sequence(record)
+        sha256 = Mycelia.seq2sha256(seq)
+
+        # Write to the temporary file
+        line = join([basename(fasta_file), sha256, seq_id, seq_desc, seq], '\t')
+        println(outfile_io, line)
+
+        sequence_sha256s[i] = sha256
+        ProgressMeter.next!(p)
+    end
+
+    # Close the output file
+    close(outfile_io)
+
+    # Rename the temporary file
+    # final_outfile = joinpath(dirname(fasta_file), Mycelia.metasha256(sequence_sha256s) * basename(tmp_outfile))
+    # mv(tmp_outfile, final_outfile; force=true)
+
+    return outfile
+end
+
+function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    result = DataFrames.combine(gdf) do sdf
+        sdf[StatsBase.sample(1:DataFrames.nrow(sdf), 1), :]
+    end
+    return result
+end
+
+function random_symmetric_distance_matrix(n)
+  # Generate a random matrix
+  matrix = rand(n, n)
+
+  # Make the matrix symmetric
+  matrix = (matrix + matrix') / 2
+
+  # Ensure the diagonal is zero
+  for i in 1:n
+    matrix[i, i] = 0.0
+  end
+
+  return matrix
+end
+
+function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    return DataFrames.combine(gdf, first)
+end
+
+function n_maximally_distinguishable_colors(n)
+    return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))

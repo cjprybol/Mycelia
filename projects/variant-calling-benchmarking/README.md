@@ -1,8 +1,13 @@
 # variant-calling-benchmarking
 
-run me to backup
-```
+Run me to backup
+```bash
 rclone copy --progress --verbose $HOME/workspace/Mycelia/projects/variant-calling-benchmarking/data variant_calling_benchmarking:data
+```
+
+Run me to repopulate locally
+```bash
+rclone copy --progress --verbose variant_calling_benchmarking:data $HOME/workspace/Mycelia/projects/variant-calling-benchmarking/data
 ```
 
 The goal of this work is:
@@ -43,6 +48,7 @@ From here, reads take two paths:
     - Mycelia
     - MegaHIT
     - spades --isolate
+    - SKESA
 - [x] long read only assembly
     - Mycelia
     - metaflye

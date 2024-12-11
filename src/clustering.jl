@@ -201,8 +201,10 @@ function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2,
     silhouette_scores = Float64[]
     # wcss_scores = Float64[]
 
+
+
     @show "initial heirarchical clustering"
-    @time hclust_result = Clustering.hclust(distance_matrix)
+    @time hclust_result = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
     # for k in ks_to_try[1:3]
     for k in ks_to_try
         @show k
