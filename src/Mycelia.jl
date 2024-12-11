@@ -1948,6 +1948,63 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
+function parse_xam_to_taxonomic_mapping_quality(xam, primary_only=false)
+# merge name conflicts, leaving breadcrumb for reference
+# function xam_records_to_dataframe(records)
+    record_table = DataFrames.DataFrame(
+        template = String[],
+        flag = UInt16[],
+        reference = String[],
+        position = UnitRange{Int}[],
+        mappingquality = UInt8[],
+        tlen = Int[],
+        alignlength = Int[],
+        ismapped = Bool[],
+        isprimary = Bool[],
+        alignment_score = Int[],
+        mismatches = Int[]
+    )
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+        io = open(xam)
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    # filter out header lines
+    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
+    # reader = MODULE.Reader(io)
+    for record in reader
+        if XAM.SAM.ismapped(record)
+            row = (
+                template = XAM.SAM.tempname(record),
+                flag = XAM.flag(record),
+                reference = XAM.SAM.refname(record),
+                position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
+                mappingquality = XAM.SAM.mappingquality(record),
+                tlen = XAM.SAM.templength(record),
+                alignlength = XAM.SAM.alignlength(record),
+                ismapped = XAM.SAM.ismapped(record),
+                isprimary = XAM.SAM.isprimary(record),
+                alignment_score = record["AS"],
+                mismatches = record["NM"]
+                )
+            push!(record_table, row, promote=true)
+        end
+    end
+    close(io)
+    return record_table
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
     results = DataFrames.DataFrame()
     @show ks

@@ -43,18 +43,18 @@ function parse_xam_to_summary_table(xam)
         reference = String[],
         position = UnitRange{Int}[],
         mappingquality = UInt8[],
+        alignment_score = Int[],
+        isprimary = Bool[]
         # cigar = String[],
         # rnext = String[],
         # pnext = Int[],
-        tlen = Int[],
+        # tlen = Int[],
         # sequence = BioSequences.LongDNA{4}[],
         # quality = UInt8[],
-        alignlength = Int[],
-        ismapped = Bool[],
-        isprimary = Bool[],
+        # alignlength = Int[],
+        # ismapped = Bool[],
         # alignment = BioAlignments.Alignment[],
-        alignment_score = Int[],
-        mismatches = Int[]
+        # mismatches = Int[]
     )
     if occursin(r"\.bam$", xam)
         MODULE = XAM.BAM
