@@ -198,6 +198,36 @@ end
 #     return trnascan_dir
 # end
 
+function run_trnascan(;fna_file, outdir=fna_file * "_trnascan")
+    Mycelia.add_bioconda_env("trnascan-se")
+    # trnascan doesn't like to overwrite existing things
+    if !isdir(outdir)
+        mkdir(outdir)
+    else
+        @info "$(outdir) already exists"
+    end
+    ID = basename(fna_file)
+    if isempty(readdir(outdir))
+        # -G : use general tRNA model (cytoslic tRNAs from all 3 domains included)
+        #     -B for using Bacterial
+        trnascan_cmd =
+        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n trnascan-se tRNAscan-SE
+            -G
+            --output $(outdir)/$(ID).trnascan.out
+            --bed $(outdir)/$(ID).trnascan.bed
+            --fasta $(outdir)/$(ID).trnascan.fasta
+            --struct $(outdir)/$(ID).trnascan.struct
+            --stats $(outdir)/$(ID).trnascan.stats
+            --log $(outdir)/$(ID).trnascan.log
+            --prefix
+            --progress
+            $(fna_file)`
+        # run(pipeline(trnascan_cmd, stdout="$(outdir)/$(ID).trnascan.out", stderr="$(outdir)/$(ID).trnascan.out"))
+        run(trnascan_cmd)
+    end
+    return outdir
+end
+
 # function run_counterselection_spacer_detection(strain, out_dir, normalized_fasta_file)
 #     counter_selection_dir = "$(out_dir)/counter-selection"
 #     if !isdir(counter_selection_dir)
