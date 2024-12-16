@@ -37,8 +37,10 @@ import HDF5
 import HTTP
 import JLD2
 import JSON
+import Karnak
 import Kmers
 import LsqFit
+import Luxor
 import Makie
 import MetaGraphs
 import Mmap
@@ -3066,6 +3068,27 @@ function draw_radial_tree(
     # Finish the drawing and save the file
     Luxor.finish()
     Luxor.preview()
+end
+
+function identify_optimal_number_of_clusters(hcl)
+    ks = 2:Int(ceil(sqrt(length(hcl.labels))))
+    silhouette_scores = Float64[]
+    ProgressMeter.@showprogress for k in ks
+        v = sum(Clustering.silhouettes(Clustering.cutree(hcl, k=k), distance_matrix))
+        push!(silhouette_scores, v)
+    end
+    optimal_number_of_clusters = ks[last(findmin(silhouette_scores))]
+    p = StatsPlots.scatter(
+        ks,
+        silhouette_scores,
+        title = "Clustering Performance vs. Number of Clusters\n(lower is better)",
+        xlabel = "Number of Clusters",
+        ylabel = "Silhouette Score",
+        label = "",
+        ylims=(0, maximum(silhouette_scores) * 1.1)
+    )
+    p = StatsPlots.vline!([optimal_number_of_clusters], color=:red, label="inferred optimum = $(optimal_number_of_clusters)")
+    return optimal_number_of_clusters
 end
 
 
