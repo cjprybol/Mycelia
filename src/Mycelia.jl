@@ -3070,7 +3070,21 @@ function draw_radial_tree(
     Luxor.preview()
 end
 
-function identify_optimal_number_of_clusters(hcl)
+function heirarchically_cluster_distance_matrix(distance_matrix)
+    # Perform hierarchical clustering using Ward's method.
+    # Ward's method minimizes the total within-cluster variance, which tends to
+    # produce compact, spherical clusters. This can be beneficial for visualization,
+    # especially in radial layouts, as it can prevent branches from being overly long
+    # and overlapping.  Other linkage methods like 'average' and 'complete' are also
+    # common choices, however 'single' linkage is prone to chaining effects.
+    hcl = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
+    # this is equivalent to UPGMA
+    # hcl = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
+    return hcl
+end
+
+function identify_optimal_number_of_clusters(distance_matrix)
+    hcl = heirarchically_cluster_distance_matrix(distance_matrix)
     ks = 2:Int(ceil(sqrt(length(hcl.labels))))
     silhouette_scores = Float64[]
     ProgressMeter.@showprogress for k in ks
@@ -3088,9 +3102,23 @@ function identify_optimal_number_of_clusters(hcl)
         ylims=(0, maximum(silhouette_scores) * 1.1)
     )
     p = StatsPlots.vline!([optimal_number_of_clusters], color=:red, label="inferred optimum = $(optimal_number_of_clusters)")
-    return optimal_number_of_clusters
+    return (hcl, optimal_number_of_clusters)
 end
 
+function merge_colors(c1, c2)
+    if c1 == c2
+        return c1
+    else
+        mix_a = c1 - c2
+        mix_b = c2 - c1
+        mix_a_sum = mix_a.r + mix_a.g + mix_a.b
+        mix_b_sum = mix_b.r + mix_b.g + mix_b.b
+        min_value, min_index = findmin([mix_a_sum, mix_b_sum])
+        mixed_color = [mix_a, mix_b][min_index]
+        # return Colors.color_names["black"]
+        return mixed_color
+    end
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
