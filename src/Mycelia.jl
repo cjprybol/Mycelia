@@ -501,6 +501,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function determine_fasta_coverage(bam)
+    Mycelia.add_bioconda_env("bedtools")
     genome_coverage_file = bam * ".coverage.txt"
     if !isfile(genome_coverage_file)
         run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
