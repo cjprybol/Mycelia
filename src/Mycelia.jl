@@ -3210,19 +3210,10 @@ function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
 end
 
 function visualize_genome_coverage(coverage_table)
-    # 3. Determine the layout for the meta-figure
     num_plots = length(unique(coverage_table[!, "chromosome"]))
-    if num_plots <= 3
-        layout_val = (num_plots, 1)
-    elseif num_plots <= 6
-        layout_val = (2, ceil(num_plots / 2))
-    else
-        layout_val = (ceil(num_plots / 3), 3)
-    end
-    # 4. Combine the plots into a meta-figure
     meta_figure = StatsPlots.plot(
         [chromosome_coverage_table_to_plot(cdf) for cdf in DataFrames.groupby(coverage_table, "chromosome")]...,
-        layout = layout_val,
+        layout = (num_plots, 1),
         size = (800, 600 * num_plots)) # Adjust size as needed
     return meta_figure
 end
