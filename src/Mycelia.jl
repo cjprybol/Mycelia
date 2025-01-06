@@ -3132,6 +3132,101 @@ function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     return (;outdir, hifiasm_outprefix)
 end
 
+function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
+    indices = findall(bool_vec)  # Get indices of true values
+    if isempty(indices)
+    return []  # Handle the case of no true values
+    end
+    diffs = diff(indices)
+    breakpoints = findall(>(1), diffs)  # Find where the difference is greater than 1
+    starts = [first(indices); indices[breakpoints .+ 1]]
+    ends = [indices[breakpoints]; last(indices)]
+    # true_ranges_table = DataFrames.DataFrame(starts = starts, ends = ends, lengths = ends .- starts)
+    return collect(Iterators.filter(x -> (x[2] - x[1]) >= min_length, zip(starts, ends)))
+end
+function equally_spaced_samples(vector, n)
+    indices = round.(Int, range(1, length(vector), length=n))
+    return vector[indices]
+end
+function chromosome_coverage_table_to_plot(cdf)
+    p = StatsPlots.plot(
+        xlims = extrema(cdf[!, "index"]),
+        ylims=(1, maximum(cdf[!, "depth"]) * 1.1),
+        title = cdf[1, "chromosome"],
+        xlabel = "chromosome index",
+        ylabel = "depth"
+    )
+    for r in find_true_ranges(cdf[!, "3σ"]; min_length=1000)
+        range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
+        StatsPlots.vline!(p,
+            [r[1], r[2]],
+            # [range_mean, range_mean],
+            seriestype = :path,
+            label="",
+            c=:red,
+            linewidth=3,
+            alpha=0.1
+        )
+    end
+    for r in find_true_ranges(cdf[!, "-3σ"]; min_length=1000)
+        range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
+        StatsPlots.vline!(p,
+            [r[1], r[2]],
+            # [range_mean, range_mean],
+            seriestype = :path,
+            label="",
+            c=:red,
+            linewidth=3,
+            alpha=1/3
+        )
+    end
+
+    color_vec = StatsPlots.cgrad(ColorSchemes.rainbow, 7, categorical = true)
+    
+    
+    
+    StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(cdf[!, "depth"], 10_000), label="coverage", c=:black)
+    # StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(rolling_centered_avg(cdf[!, "depth"], window_size=1001), 10_000), label="101bp sliding window mean", c=:gray)
+    mean_coverage = first(unique(cdf[!, "mean_coverage"]))
+    stddev_coverage = first(unique(cdf[!, "std_coverage"]))
+    StatsPlots.hline!(p, [mean_coverage + 3 * stddev_coverage], label="+3σ", c=color_vec[7])
+    StatsPlots.hline!(p, [mean_coverage + 2 * stddev_coverage], label="+2σ", c=color_vec[6])
+    StatsPlots.hline!(p, [mean_coverage + 1 * stddev_coverage], label="+σ", c=color_vec[5])
+    StatsPlots.hline!(p, unique(cdf[!, "mean_coverage"]), label="mean_coverage", c=color_vec[4])
+    StatsPlots.hline!(p, [mean_coverage + -1 * stddev_coverage], label="-σ", c=color_vec[3])
+    StatsPlots.hline!(p, [mean_coverage + -2 * stddev_coverage], label="-2σ", c=color_vec[2])
+    StatsPlots.hline!(p, [mean_coverage + -3 * stddev_coverage], label="-3σ", c=color_vec[1])
+    return p
+end
+function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
+    half_window = Int(floor(window_size / 2))
+    result = Vector{Float64}(undef, length(data))
+    for i in eachindex(data)
+        start_idx = max(1, i - half_window)
+        end_idx = min(length(data), i + half_window)
+        result[i] = Statistics.mean(data[start_idx:end_idx])
+    end
+    return result
+end
+
+function visualize_genome_coverage(coverage_table)
+    # 3. Determine the layout for the meta-figure
+    num_plots = length(unique(coverage_table[!, "chromosome"]))
+    if num_plots <= 3
+        layout_val = (num_plots, 1)
+    elseif num_plots <= 6
+        layout_val = (2, ceil(num_plots / 2))
+    else
+        layout_val = (ceil(num_plots / 3), 3)
+    end
+    # 4. Combine the plots into a meta-figure
+    meta_figure = StatsPlots.plot(
+        [chromosome_coverage_table_to_plot(cdf) for cdf in DataFrames.groupby(coverage_table, "chromosome")]...,
+        layout = layout_val,
+        size = (800, 600 * num_plots)) # Adjust size as needed
+    return meta_figure
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
