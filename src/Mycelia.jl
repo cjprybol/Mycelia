@@ -37,8 +37,10 @@ import HDF5
 import HTTP
 import JLD2
 import JSON
+import Karnak
 import Kmers
 import LsqFit
+import Luxor
 import Makie
 import MetaGraphs
 import Mmap
@@ -2863,6 +2865,261 @@ function n_maximally_distinguishable_colors(n)
     return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
 end
 
+function hclust_to_metagraph(hcl::Clustering.Hclust)
+    total_nodes = length(hcl.order) + size(hcl.merges, 1)
+    mg = MetaGraphs.MetaDiGraph(total_nodes)
+    MetaGraphs.set_prop!(mg, :hcl, hcl)
+    for leaf_node in hcl.labels
+        MetaGraphs.set_prop!(mg, leaf_node, :hclust_id, string(-leaf_node))
+        MetaGraphs.set_prop!(mg, leaf_node, :height, 0.0)
+    end
+    for (i, ordered_leaf_node) in enumerate(hcl.order)
+        x = i / (length(hcl.order) + 1)
+        MetaGraphs.set_prop!(mg, ordered_leaf_node, :x, x)
+    end
+    for (i, (left, right)) in enumerate(eachrow(hcl.merges))
+        graph_i = length(hcl.order) + i
+        hclust_id = string(i)
+        MetaGraphs.set_prop!(mg, graph_i, :hclust_id, hclust_id)
+    end
+    MetaGraphs.set_indexing_prop!(mg, :hclust_id)
+
+    for (i, ((left, right), height)) in enumerate(zip(eachrow(hcl.merges), hcl.heights))
+        parent_vertex = mg[string(i), :hclust_id]
+        MetaGraphs.set_prop!(mg, parent_vertex, :height, height)
+        
+        left_child_vertex = mg[string(left), :hclust_id]
+        right_child_vertex = mg[string(right), :hclust_id]
+
+        x = Statistics.middle(mg.vprops[left_child_vertex][:x], mg.vprops[right_child_vertex][:x])
+        MetaGraphs.set_prop!(mg, parent_vertex, :x, x)
+
+        e1 = Graphs.Edge(parent_vertex, left_child_vertex)
+        e2 = Graphs.Edge(parent_vertex, right_child_vertex)
+        Graphs.add_edge!(mg, e1)
+        Graphs.add_edge!(mg, e2)
+    end
+
+    max_height = maximum(get.(values(mg.vprops), :height, missing))
+    for v in Graphs.vertices(mg)
+        relative_height = (max_height - mg.vprops[v][:height]) / max_height
+        # y = 1 - relative_height
+        MetaGraphs.set_prop!(mg, v, :y, relative_height)
+    end
+
+    return mg
+end
+
+# https://www.giantfocal.com/toolkit/font-size-converter
+function pixels_to_points(pixels)
+    return pixels / 4 * 3
+end
+function points_to_pixels(points)
+    return points / 3 * 4
+end
+
+function draw_dendrogram_tree(
+        mg::MetaGraphs.MetaDiGraph;
+        width=500,
+        height=500,
+        fontsize=12,
+        # margins=min(width, height)/25,
+        margins=min(width, height)/20,
+        # margins=20,
+        mergenodesize=1,
+        lineweight=1,
+        filename=Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".dendrogram.png"
+    )
+
+    fontsizebuffer = points_to_pixels(fontsize) / 3
+    available_width = width - 2 * margins
+    available_height = height - 2 * margins
+
+    leaf_nodes = mg.gprops[:hcl].labels
+
+    # Create a new drawing
+    Luxor.Drawing(width, height, filename)
+    # Luxor.origin()  # Set the origin to the center of the drawing
+    # Luxor.background("white")
+    Luxor.sethue("black")
+    Luxor.fontsize(fontsize)
+    Luxor.setline(lineweight)
+
+    for ordered_leaf_node in mg.gprops[:hcl].order
+        x = mg.vprops[ordered_leaf_node][:x] * available_width + margins
+        y = mg.vprops[ordered_leaf_node][:y] * available_height + margins
+        Luxor.circle(x, y, mergenodesize, :fill)
+        # Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y), halign=:center, valign=:middle)
+        Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y + fontsizebuffer), halign=:center, valign=:top)
+    end
+    for (i, (left, right)) in enumerate(eachrow(mg.gprops[:hcl].merges))
+        parent_vertex = mg[string(i), :hclust_id]
+                                        
+        x = mg.vprops[parent_vertex][:x] * available_width + margins
+        y = mg.vprops[parent_vertex][:y] * available_height + margins
+        # Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y), halign=:center, valign=:middle)
+        Luxor.circle(x, y, mergenodesize, :fill)
+
+        left_child_vertex = mg[string(left), :hclust_id]
+        left_child_x = mg.vprops[left_child_vertex][:x] * available_width + margins
+        left_child_y = mg.vprops[left_child_vertex][:y] * available_height + margins
+        # draw horizontal bar
+        Luxor.line(Luxor.Point(left_child_x, y), Luxor.Point(x, y), action=:stroke)
+        # draw vertical bar
+        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(left_child_x, y), action=:stroke)
+
+        right_child_vertex = mg[string(right), :hclust_id]
+        right_child_x = mg.vprops[right_child_vertex][:x] * available_width + margins
+        right_child_y = mg.vprops[right_child_vertex][:y] * available_height + margins
+        # draw horizontal bar
+        Luxor.line(Luxor.Point(x, y), Luxor.Point(right_child_x, y), action=:stroke)
+        # draw vertical bar
+        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(right_child_x, y), action=:stroke)
+    end
+
+    # Finish the drawing and save the file
+    Luxor.finish()
+    Luxor.preview()
+end
+
+function draw_radial_tree(
+        mg::MetaGraphs.MetaDiGraph;
+        width=500,
+        height=500,
+        fontsize=12,
+        # margins=min(width, height)/25,
+        margins=min(width, height)/20,
+        # margins=20,
+        mergenodesize=1,
+        lineweight=1,
+        filename=Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".radial.png"
+    )
+
+    # check max label size against margin and update as necessary
+    max_radius = (min(width, height) - (margins * 2)) / 2
+
+    # fontsizebuffer = points_to_pixels(fontsize) / 3
+    available_width = width - 2 * margins
+    available_height = height - 2 * margins
+    leaf_nodes = mg.gprops[:hcl].labels
+
+    # Create a new drawing
+    Luxor.Drawing(width, height, filename)
+    Luxor.origin()  # Set the origin to the center of the drawing
+    # Luxor.background("white")
+    Luxor.sethue("black")
+    Luxor.fontsize(fontsize)
+    Luxor.setline(lineweight)
+
+    for ordered_leaf_node in mg.gprops[:hcl].order
+        original_x = mg.vprops[ordered_leaf_node][:x]
+        original_y = mg.vprops[ordered_leaf_node][:y]
+        polar_radian = original_x * 2 * MathConstants.pi
+        adjusted_radius = original_y * max_radius
+        x = cos(polar_radian) * adjusted_radius
+        y = sin(polar_radian) * adjusted_radius
+        Luxor.circle(x, y, mergenodesize, :fill)
+        text_x = cos(polar_radian) * (max_radius + 10)
+        text_y = sin(polar_radian) * (max_radius + 10)
+        Luxor.text(string(ordered_leaf_node), Luxor.Point(text_x, text_y), angle=polar_radian, halign=:left, valign=:middle)
+    end
+    for (i, (left, right)) in enumerate(eachrow(mg.gprops[:hcl].merges))
+        parent_vertex = mg[string(i), :hclust_id]
+
+        original_x = mg.vprops[parent_vertex][:x]
+        original_y = mg.vprops[parent_vertex][:y]
+
+        polar_radian = original_x * 2 * MathConstants.pi
+        adjusted_radius = original_y * max_radius
+        x = cos(polar_radian) * adjusted_radius
+        y = sin(polar_radian) * adjusted_radius
+        Luxor.circle(x, y, mergenodesize, :fill)
+
+        # left child
+        left_child_vertex = mg[string(left), :hclust_id]
+        left_child_original_x = mg.vprops[left_child_vertex][:x]
+        left_child_original_y = mg.vprops[left_child_vertex][:y]
+        left_child_polar_radian = left_child_original_x * 2 * MathConstants.pi
+        left_child_adjusted_radius = left_child_original_y * max_radius
+        left_child_x = cos(left_child_polar_radian) * left_child_adjusted_radius
+        left_child_y = sin(left_child_polar_radian) * left_child_adjusted_radius
+        # # draw horizontal bar
+        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, left_child_polar_radian, polar_radian, action=:stroke)
+        # draw vertical bar
+        join_x = cos(left_child_polar_radian) * adjusted_radius
+        join_y = sin(left_child_polar_radian) * adjusted_radius
+        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(join_x, join_y), action=:stroke)
+
+        # right child
+        right_child_vertex = mg[string(right), :hclust_id]
+        right_child_original_x = mg.vprops[right_child_vertex][:x]
+        right_child_original_y = mg.vprops[right_child_vertex][:y]
+        right_child_polar_radian = right_child_original_x * 2 * MathConstants.pi
+        right_child_adjusted_radius = right_child_original_y * max_radius
+        right_child_x = cos(right_child_polar_radian) * right_child_adjusted_radius
+        right_child_y = sin(right_child_polar_radian) * right_child_adjusted_radius
+        # # draw horizontal bar
+        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, polar_radian, right_child_polar_radian, action=:stroke)
+        # draw vertical bar
+        join_x = cos(right_child_polar_radian) * adjusted_radius
+        join_y = sin(right_child_polar_radian) * adjusted_radius
+        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(join_x, join_y), action=:stroke)
+    end
+
+    # Finish the drawing and save the file
+    Luxor.finish()
+    Luxor.preview()
+end
+
+function heirarchically_cluster_distance_matrix(distance_matrix)
+    # Perform hierarchical clustering using Ward's method.
+    # Ward's method minimizes the total within-cluster variance, which tends to
+    # produce compact, spherical clusters. This can be beneficial for visualization,
+    # especially in radial layouts, as it can prevent branches from being overly long
+    # and overlapping.  Other linkage methods like 'average' and 'complete' are also
+    # common choices, however 'single' linkage is prone to chaining effects.
+    hcl = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
+    # this is equivalent to UPGMA
+    # hcl = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
+    return hcl
+end
+
+function identify_optimal_number_of_clusters(distance_matrix)
+    hcl = heirarchically_cluster_distance_matrix(distance_matrix)
+    ks = 2:Int(ceil(sqrt(length(hcl.labels))))
+    silhouette_scores = Float64[]
+    ProgressMeter.@showprogress for k in ks
+        v = sum(Clustering.silhouettes(Clustering.cutree(hcl, k=k), distance_matrix))
+        push!(silhouette_scores, v)
+    end
+    optimal_number_of_clusters = ks[last(findmin(silhouette_scores))]
+    p = StatsPlots.scatter(
+        ks,
+        silhouette_scores,
+        title = "Clustering Performance vs. Number of Clusters\n(lower is better)",
+        xlabel = "Number of Clusters",
+        ylabel = "Silhouette Score",
+        label = "",
+        ylims=(0, maximum(silhouette_scores) * 1.1)
+    )
+    p = StatsPlots.vline!([optimal_number_of_clusters], color=:red, label="inferred optimum = $(optimal_number_of_clusters)")
+    return (hcl, optimal_number_of_clusters)
+end
+
+function merge_colors(c1, c2)
+    if c1 == c2
+        return c1
+    else
+        mix_a = c1 - c2
+        mix_b = c2 - c1
+        mix_a_sum = mix_a.r + mix_a.g + mix_a.b
+        mix_b_sum = mix_b.r + mix_b.g + mix_b.b
+        min_value, min_index = findmin([mix_a_sum, mix_b_sum])
+        mixed_color = [mix_a, mix_b][min_index]
+        # return Colors.color_names["black"]
+        return mixed_color
+    end
+end
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))

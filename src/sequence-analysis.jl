@@ -1001,10 +1001,28 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function count_kmers(::Type{KMER_TYPE}, sequence::BioSequences.LongSequence) where KMER_TYPE
-    return sort(StatsBase.countmap([kmer for (index, kmer) in Kmers.EveryKmer{KMER_TYPE}(sequence)]))
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.DNAAlphabet, K}
+    # return sort(StatsBase.countmap(Kmers.FwDNAMers{K}(sequence)))
+    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousDNAMers{K}(sequence)]))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
+    # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
+    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousRNAMers{K}(sequence)]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.AminoAcidAlphabet, K}
+    return sort(StatsBase.countmap(Kmers.FwAAMers{K}(sequence)))
+end
+
+# TODO add a way to handle ambiguity or not
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
