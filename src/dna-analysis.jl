@@ -44,17 +44,17 @@ function parse_xam_to_summary_table(xam)
         position = UnitRange{Int}[],
         mappingquality = UInt8[],
         alignment_score = Int[],
-        isprimary = Bool[]
+        isprimary = Bool[],
         # cigar = String[],
         # rnext = String[],
         # pnext = Int[],
         # tlen = Int[],
         # sequence = BioSequences.LongDNA{4}[],
         # quality = UInt8[],
-        # alignlength = Int[],
-        # ismapped = Bool[],
+        alignlength = Int[],
+        ismapped = Bool[],
         # alignment = BioAlignments.Alignment[],
-        # mismatches = Int[]
+        mismatches = Int[]
     )
     if occursin(r"\.bam$", xam)
         MODULE = XAM.BAM
@@ -83,7 +83,7 @@ function parse_xam_to_summary_table(xam)
                 # cigar = XAM.SAM.cigar(record),
                 # rnext = XAM.SAM.nextrefname(record),
                 # pnext = XAM.SAM.nextposition(record),
-                tlen = XAM.SAM.templength(record),
+                # tlen = XAM.SAM.templength(record),
                 # sequence = XAM.SAM.sequence(record),
                 # quality = XAM.SAM.quality(record),
                 alignlength = XAM.SAM.alignlength(record),

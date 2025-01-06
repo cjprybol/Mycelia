@@ -3121,6 +3121,17 @@ function merge_colors(c1, c2)
     end
 end
 
+function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
+    Mycelia.add_bioconda_env("hifiasm")
+    hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
+    hifiasm_outputs = filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true))
+    # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
+    if isempty(hifiasm_outputs)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm --primary -l0 -o $(hifiasm_outprefix) -t $(Sys.CPU_THREADS) $(fastq)`)
+    end
+    return (;outdir, hifiasm_outprefix)
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
