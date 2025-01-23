@@ -1,0 +1,8 @@
+{
+    "recommendations": [
+        "github.copilot",
+        "github.copilot-chat",
+        "ms-azuretools.vscode-docker",
+        "julialang.language-julia"
+    ]
+}

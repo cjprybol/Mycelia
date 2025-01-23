@@ -9,7 +9,14 @@
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
 		"ghcr.io/julialang/devcontainer-features/julia:1": {
-			"channel": "lts"
+			"channel": "release"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"julialang.language-julia"
+			]
 		}
 	}
 
