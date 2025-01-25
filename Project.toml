@@ -27,6 +27,7 @@ DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 Distances = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 FASTX = "c2308a5c-f048-11e8-3e8a-31650f418d12"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
@@ -69,6 +70,7 @@ uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 
 [compat]
 Automa = "0.7 - 0.8.3"
+Documenter = "1.8.0"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
