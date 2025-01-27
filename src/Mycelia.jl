@@ -2297,6 +2297,45 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
+function minimap_map_paired_end(;
+        fasta,
+        forward,
+        reverse,
+        mem_gb,
+        threads,
+        outdir = dirname(forward),
+        as_string=false,
+        mapping_type="sr",
+        denominator=Mycelia.DEFAULT_MINIMAP_DENOMINATOR
+    )
+    index_size = Mycelia.system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    @assert isfile(forward) "$(forward) not found!!"
+    @assert isfile(reverse) "$(reverse) not found!!"
+    fastq_prefix = Mycelia.find_matching_prefix(basename(forward), basename(reverse))
+    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * "minimap2.sam"
+    # outfile = temp_sam_outfile
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        fasta,
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_size) -ax $(mapping_type) $(fasta) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_size) -ax $(mapping_type) $(fasta) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = [map, compress]
+    end
+    return (;cmd, outfile)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     Mycelia.add_bioconda_env("samtools")
     bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
