@@ -65,6 +65,132 @@ end
 @testset "Data ingestion & normalization" begin
 end
 
+# assembly modules
+@testset "assembly modules" begin
+    @testset "1. Pre‐processing & Read QC" begin
+    end
+    @testset "2. k‑mer Analysis" begin
+    end
+    @testset "3. Hybrid Assembly (Mutual Support Strategy)" begin
+    end
+    @testset "4. Assembly merging" begin
+    end
+    @testset "5. Polishing & Error Correction" begin
+    end
+    @testset "6. Strain resolution" begin
+    end
+    @testset "7. Validation & Quality Control" begin
+    end
+end
+
+# PRE-PROCESSING & READ QC Tests
+@testset "Preprocessing" begin
+    @testset "Read Quality Control" begin
+        # Example: test that adapter trimming and quality filtering work.
+        # result = MyceliaAssembly.preprocess_reads("test_data/reads.fastq")
+        # @test length(result.filtered_reads) > 0
+        # @test result.mean_quality ≥ 30
+        @test true  # placeholder
+    end
+    @testset "Read Statistics" begin
+        # Example: test that estimated community composition is within expected bounds.
+        # comp = MyceliaAssembly.analyze_community("test_data/reads.fastq")
+        # @test 0.8 <= comp["expected_coverage"] <= 1.2
+        @test true  # placeholder
+    end
+end
+
+# PANGENOME/PANPROTEOME AND K-MER ANALYSIS Tests
+@testset "Reference Graph and K-mer Analysis" begin
+    @testset "Pangenome Construction" begin
+        # Example: verify that a reference pangenome graph is built
+        # pg_graph = MyceliaAssembly.build_pangenome(["ref1.fasta", "ref2.fasta"])
+        # @test typeof(pg_graph) <: AbstractGraph
+        @test true  # placeholder
+    end
+    @testset "Optimal K-mer Selection" begin
+        # Example: determine the best k-mer length from given reads
+        # best_k = MyceliaAssembly.select_optimal_k("test_data/reads.fastq")
+        # @test best_k isa Int
+        # @test 21 ≤ best_k ≤ 127
+        @test true  # placeholder
+    end
+end
+
+# HYBRID ASSEMBLY Tests
+@testset "Hybrid Assembly" begin
+    @testset "Assembly Core" begin
+        # Example: run hybrid assembly on a small simulated dataset.
+        # assembly = MyceliaAssembly.hybrid_assemble("test_data/reads.fastq"; long_read="test_data/long.fastq")
+        # @test length(assembly.contigs) > 0
+        # @test assembly.N50 > 5000
+        @test true  # placeholder
+    end
+    @testset "Contig Overlap Graph Integrity" begin
+        # Example: check that the overlap graph correctly represents strain variants.
+        # graph = MyceliaAssembly.get_overlap_graph(assembly)
+        # @test MyceliaAssembly.validate_overlap_graph(graph) == true
+        @test true  # placeholder
+    end
+end
+
+# ASSEMBLY MERGE Tests
+@testset "Assembly Merging" begin
+    @testset "Contig Merging" begin
+        # Example: test that QuickMerge improves contiguity compared to input assemblies.
+        # merged = MyceliaAssembly.quick_merge("assembly1.fasta", "assembly2.fasta")
+        # @test merged.N50 > max(assembly1.N50, assembly2.N50)
+        @test true  # placeholder
+    end
+end
+
+# POLISHING Tests
+@testset "Assembly Polishing" begin
+    @testset "Error Correction" begin
+        # Example: simulate a polishing step and verify base accuracy improvement.
+        # polished = MyceliaAssembly.polish_assembly("raw_assembly.fasta", reads="test_data/reads.fastq")
+        # accuracy_before = MyceliaAssembly.evaluate_accuracy("raw_assembly.fasta", "reference.fasta")
+        # accuracy_after = MyceliaAssembly.evaluate_accuracy(polished, "reference.fasta")
+        # @test accuracy_after > accuracy_before
+        @test true  # placeholder
+    end
+end
+
+# STRAIN RESOLUTION Tests
+@testset "Strain Resolution" begin
+    @testset "Strain-aware Reassembly" begin
+        # Example: test that strain-specific contigs or haplotigs are generated.
+        # strains = MyceliaAssembly.resolve_strains("polished_assembly.fasta", reads="test_data/long.fastq")
+        # @test length(strains) >= 2  # expect at least two strains in a mixed sample
+        @test true  # placeholder
+    end
+end
+
+# VALIDATION & QUALITY ASSESSMENT Tests
+@testset "Assembly Validation" begin
+    @testset "Reference-Free Validation" begin
+        # merqury
+        # ALE
+        # CGAL
+        # read mapping stats
+        # Example: run QUAST analysis and ensure basic quality metric
+        @test true  # placeholder
+    end
+    @testset "Reference-Based Validation" begin
+        # Example: run MetaQUAST analysis and ensure basic quality metrics.
+        # stats = MyceliaAssembly.validate_with_metaquast("final_assembly.fasta", reference="ref_genome.fasta")
+        # @test stats.NGA50 > 10000
+        @test true  # placeholder
+    end
+    @testset "Marker Gene Completeness" begin
+        # Example: check completeness with CheckM.
+        # quality = MyceliaAssembly.check_assembly_quality("final_assembly.fasta")
+        # @test quality.completeness >= 90
+        # @test quality.contamination <= 5
+        @test true  # placeholder
+    end
+end
+
 # Assembly & consensus generation: for combining reads under diverse coverage patterns.
 # Assembly & Consensus Generation
 # - Combining reads under diverse coverage patterns
