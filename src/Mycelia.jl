@@ -2774,7 +2774,7 @@ function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
-function metasha256(vector_of_sha256s::Vector{AbstractString})
+function metasha256(vector_of_sha256s::Vector{<:AbstractString})
     ctx = SHA.SHA2_256_CTX()
     for sha_hash in sort(vector_of_sha256s)
         SHA.update!(ctx, collect(codeunits(sha_hash)))
@@ -2828,9 +2828,9 @@ function get_base_extension(filename::String)
   return extension
 end
 
-function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz")
+function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; force=false)
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
-    if isfile(outfile) && filesize(outfile) > 0
+    if isfile(outfile) && (filesize(outfile) > 0) && !force
         @warn "$(outfile) already present and non-empty"
         return outfile
     end
