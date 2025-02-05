@@ -23,7 +23,7 @@ jobs:
       - name: Run tests
         run: julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
       - name: Submit coverage
-        run: julia -e 'using Coverage; Codecov.submit(process_folder())'
+        run: julia --project=. -e 'using Coverage; Codecov.submit(process_folder())'
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload coverage reports to Codecov
