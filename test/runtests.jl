@@ -1,4 +1,5 @@
 using Test
+import Mycelia
 
 # Simulation: for multi-omics data generation for benchmarking or testing.
 @testset "FASTA simulation" begin
@@ -86,6 +87,11 @@ end
 # PRE-PROCESSING & READ QC Tests
 @testset "Preprocessing" begin
     @testset "Read Quality Control" begin
+        @test true # https://github.com/OpenGene/fastp
+        @test true # https://github.com/FelixKrueger/TrimGalore
+        @test true # https://github.com/rrwick/Filtlong
+        @test true # https://github.com/OpenGene/fastplong
+        @test true # https://github.com/wdecoster/chopper
         # Example: test that adapter trimming and quality filtering work.
         # result = MyceliaAssembly.preprocess_reads("test_data/reads.fastq")
         # @test length(result.filtered_reads) > 0
