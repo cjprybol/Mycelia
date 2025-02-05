@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: julia -e 'using Pkg; Pkg.instantiate()'
       - name: Run tests
-        run: julia -e 'using Pkg; Pkg.test(coverage=true)'
+        run: julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
       - name: Submit coverage
         run: julia -e 'using Coverage; Codecov.submit(process_folder())'
         env:
