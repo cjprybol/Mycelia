@@ -12,7 +12,7 @@ makedocs(
     modules = [Mycelia],
     authors="Cameron Prybol <cameron.prybol@gmail.com> and contributors",
     repo="https://github.com/cjprybol/Mycelia/blob/{commit}{path}#L{line}",
-    format = Documenter.HTMLWriter.HTML(size_threshold = 300_000),  # Increase the size threshold
+    format = Documenter.HTMLWriter.HTML(size_threshold = 1_000_000),  # Increase the size threshold
     pages = [
         "Home" => "index.md",
         # Add other pages here
