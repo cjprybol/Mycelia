@@ -60,6 +60,8 @@ import TranscodingStreams
 import uCSV
 import XAM
 import XMLDict
+import UUIDs
+import StableRNGs
 
 import Pkg
 
@@ -10416,7 +10418,7 @@ Generates a random FASTA record with a specified molecular type and sequence len
 
 # Returns
 - A `FASTX.FASTA.Record` containing:
-  - A SHA-256 hash-based identifier derived from the generated sequence.
+  - A randomly generated UUID identifier.
   - A randomly generated sequence of the specified type.
 
 # Errors
@@ -10425,102 +10427,294 @@ Generates a random FASTA record with a specified molecular type and sequence len
 function random_fasta_record(;moltype::Symbol=:DNA, seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
     Random.seed!(seed)
     if moltype == :DNA
-        seq = BioSequences.randdnaseq(L)
+        seq = BioSequences.randdnaseq(StableRNGs.StableRNG(seed), L)
     elseif moltype == :RNA
-        seq = BioSequences.randrnaseq(L)
+        seq = BioSequences.randrnaseq(StableRNGs.StableRNG(seed), L)
     elseif moltype == :AA
-        seq = BioSequences.randaaseq(L)
+        seq = BioSequences.randaaseq(StableRNGs.StableRNG(seed), L)
     else
         error("unrecognized molecule type: $(moltype) ! found in [:DNA, :RNA, :AA]")
     end
-    id = Mycelia.seq2sha256(seq)
+    # id = Mycelia.seq2sha256(seq)
+    id = string(UUIDs.uuid4())
     return FASTX.FASTA.Record(id, seq)
 end
 
 """
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    
-    new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
-    new_seq_id = string(hash(new_seq)) * "-" * Random.randstring(32)
-    new_seq_description = FASTX.identifier(record)
-    quality = fill(UInt8(60), length(new_seq))
-    return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
-end
+    observe(sequence::BioSequences.LongSequence{T}; error_rate=nothing, tech::Symbol=:illumina) where T
 
+Simulates the “observation” of a biological polymer (DNA, RNA, or protein) by introducing realistic errors along with base‐quality scores.
+The simulation takes into account both random and systematic error components. In particular, for technologies:
+  
+- **illumina**: (mostly substitution errors) the per‐base quality decays along the read (from ~Q40 at the start to ~Q20 at the end);
+- **nanopore**: errors are more frequent and include both substitutions and indels (with overall lower quality scores, and an extra “homopolymer” penalty);
+- **pacbio**: errors are dominated by indels (with quality scores typical of raw reads);
+- **ultima**: (UG 100/ppmSeq™) correct bases are assigned very high quality (~Q60) while errors are extremely rare and, if they occur, are given a modest quality.
+
+An error is introduced at each position with a (possibly position‐dependent) probability. For Illumina, the error probability increases along the read; additionally, if a base is part of a homopolymer run (length ≥ 3) and the chosen technology is one that struggles with homopolymers (nanopore, pacbio, ultima), then the local error probability is multiplied by a constant factor.
+
+Returns a tuple `(new_seq, quality_scores)` where:
+- `new_seq` is a `BioSequences.LongSequence{T}` containing the “observed” sequence (which may be longer or shorter than the input if insertions or deletions occur), and 
+- `quality_scores` is a vector of integers representing the Phred quality scores (using the Sanger convention) for each base in the output sequence.
 """
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function observe(sequence::BioSequences.LongSequence{T}; error_rate = 0.0) where T
-    
+function observe(sequence::BioSequences.LongSequence{T}; error_rate=nothing, tech::Symbol=:illumina) where T
+    # Determine the appropriate alphabet based on the type T.
     if T <: BioSequences.DNAAlphabet
-        alphabet = DNA_ALPHABET
+        alphabet = Mycelia.DNA_ALPHABET
     elseif T <: BioSequences.RNAAlphabet
-        alphabet = RNA_ALPHABET
+        alphabet = Mycelia.RNA_ALPHABET
     else
-        @assert T <: BioSequences.AminoAcidAlphabet
-        alphabet = AA_ALPHABET
+        @assert T <: BioSequences.AminoAcidAlphabet "For amino acid sequences, T must be a subtype of BioSequences.AminoAcidAlphabet."
+        alphabet = Mycelia.AA_ALPHABET
     end
-    
+
+    # Set a default baseline error rate if not provided.
+    base_error_rate = isnothing(error_rate) ?
+         (tech == :illumina  ? 0.005 :
+          tech == :nanopore  ? 0.10  :
+          tech == :pacbio    ? 0.11  :
+          tech == :ultima    ? 1e-6  : error("Unknown technology")) : error_rate
+
+    # Define error type probabilities (mismatch, insertion, deletion) for each technology.
+    error_probs = Dict{Symbol, Float64}()
+    if tech == :illumina
+        error_probs[:mismatch]  = 0.90
+        error_probs[:insertion] = 0.05
+        error_probs[:deletion]  = 0.05
+    elseif tech == :nanopore
+        error_probs[:mismatch]  = 0.40
+        error_probs[:insertion] = 0.30
+        error_probs[:deletion]  = 0.30
+    elseif tech == :pacbio
+        error_probs[:mismatch]  = 0.20
+        error_probs[:insertion] = 0.40
+        error_probs[:deletion]  = 0.40
+    elseif tech == :ultima
+        error_probs[:mismatch]  = 0.95
+        error_probs[:insertion] = 0.025
+        error_probs[:deletion]  = 0.025
+    end
+
+    # Parameters for boosting error probability in homopolymer regions.
+    homopolymer_threshold = 3    # If the homopolymer run length is ≥ 3, boost error probability.
+    homopolymer_factor    = 2.0
+
     new_seq = BioSequences.LongSequence{T}()
-    for character in sequence
-        if rand() > error_rate
-            # match
-            push!(new_seq, character)
+    quality_scores = Int[]
+    n = length(sequence)
+    pos = 1
+
+    while pos <= n
+        base = sequence[pos]
+        # For Illumina, increase error probability along the read; otherwise use a constant baseline.
+        pos_error_rate = (tech == :illumina) ?
+            base_error_rate * (1 + (pos - 1) / (n - 1)) : base_error_rate
+
+        # Check for a homopolymer run by looking backwards.
+        run_length = 1
+        if pos > 1 && sequence[pos] == sequence[pos - 1]
+            run_length = 2
+            j = pos - 2
+            while j ≥ 1 && sequence[j] == base
+                run_length += 1
+                j -= 1
+            end
+        end
+        if run_length ≥ homopolymer_threshold && (tech in (:nanopore, :pacbio, :ultima))
+            pos_error_rate *= homopolymer_factor
+        end
+
+        # Decide whether to observe the base correctly or introduce an error.
+        if rand() > pos_error_rate
+            # No error: add the correct base.
+            push!(new_seq, base)
+            push!(quality_scores, get_correct_quality(tech, pos, n))
+            pos += 1
         else
-            error_type = rand(1:3)
-            if error_type == 1
-                # mismatch
-                new_character = rand(alphabet)
-                while new_character == character
-                    new_character = rand(alphabet)
+            # An error occurs; choose the error type by sampling.
+            r = rand()
+            if r < error_probs[:mismatch]
+                # Mismatch: choose a random base different from the true base.
+                new_base = rand(filter(x -> x != base, alphabet))
+                push!(new_seq, new_base)
+                push!(quality_scores, get_error_quality(tech))
+                pos += 1
+            elseif r < (error_probs[:mismatch] + error_probs[:insertion])
+                # Insertion: insert one or more random bases (simulate an extra insertion error),
+                # then add the correct base.
+                num_insertions = 1 + rand(Distributions.Poisson(pos_error_rate))
+                for _ in 1:num_insertions
+                    ins_base = rand(alphabet)
+                    push!(new_seq, ins_base)
+                    push!(quality_scores, get_error_quality(tech))
                 end
-                push!(new_seq, new_character)
-            elseif error_type == 2
-                # insertion
-                total_insertions = 1 + rand(Distributions.Poisson(error_rate))
-                for i in 1:total_insertions
-                    push!(new_seq, rand(alphabet))
-                end
-                push!(new_seq, character)
+                # Append the original base as a correct base.
+                push!(new_seq, base)
+                push!(quality_scores, get_correct_quality(tech, pos, n))
+                pos += 1
             else
-                # deletion
-                continue
+                # Deletion: skip adding the base (simulate a deletion).
+                pos += 1
             end
         end
     end
-    if (T <: BioSequences.DNAAlphabet || T <: BioSequences.RNAAlphabet) && rand(Bool)
-        BioSequences.reverse_complement!(new_seq)
+    return new_seq, quality_scores
+end
+
+"""
+    get_correct_quality(tech::Symbol, pos::Int, read_length::Int) -> Int
+
+Simulates a Phred quality score (using the Sanger convention) for a correctly observed base.
+For Illumina, the quality score is modeled to decay linearly from ~40 at the start to ~20 at the end of the read.
+For other technologies, the score is sampled from a normal distribution with parameters typical for that platform.
+
+Returns an integer quality score.
+"""
+function get_correct_quality(tech::Symbol, pos::Int, read_length::Int)
+    if tech == :illumina
+        q = 40 - 20 * (pos - 1) / (read_length - 1)
+        q = clamp(round(Int, rand(Distributions.Normal(q, 2))), 20, 40)
+        return q
+    elseif tech == :nanopore
+        q = clamp(round(Int, rand(Distributions.Normal(12, 2))), 10, 15)
+        return q
+    elseif tech == :pacbio
+        q = clamp(round(Int, rand(Distributions.Normal(15, 2))), 12, 18)
+        return q
+    elseif tech == :ultima
+        q = clamp(round(Int, rand(Distributions.Normal(60, 3))), 55, 65)
+        return q
+    else
+        return 30
     end
-    return new_seq
+end
+
+"""
+    get_error_quality(tech::Symbol) -> Int
+
+Simulates a Phred quality score (using the Sanger convention) for a base observed with an error.
+Error bases are assigned lower quality scores than correctly observed bases.
+For Illumina, scores typically range between 5 and 15; for nanopore and pacbio, slightly lower values are used;
+and for ultima, a modest quality score is assigned.
+
+Returns an integer quality score.
+"""
+function get_error_quality(tech::Symbol)
+    if tech == :illumina
+        q = clamp(round(Int, rand(Distributions.Normal(10, 2))), 5, 15)
+        return q
+    elseif tech == :nanopore
+        q = clamp(round(Int, rand(Distributions.Normal(7, 2))), 5, 10)
+        return q
+    elseif tech == :pacbio
+        q = clamp(round(Int, rand(Distributions.Normal(7, 2))), 5, 10)
+        return q
+    elseif tech == :ultima
+        q = clamp(round(Int, rand(Distributions.Normal(20, 3))), 15, 25)
+        return q
+    else
+        return 10
+    end
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
 """
-function observe(records::AbstractVector{R};
-                weights=ones(length(records)),
-                N = length(records),
-                outfile = "",
-                error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    if isempty(outfile)
-        error("no file name supplied")
-    end
-    io = open(outfile, "w")
-    fastx_io = FASTX.FASTA.Writer(io)
-    for i in 1:N
-        record = StatsBase.sample(records, StatsBase.weights(weights))
-        new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
-        new_seq_id = Random.randstring(Int(ceil(log(length(new_seq) + 1))))
-        new_seq_description = FASTX.identifier(record)
-        observed_record = FASTX.FASTA.Record(new_seq_id, new_seq_description, new_seq)
-        write(fastx_io, observed_record)
-    end
-    close(fastx_io)
-    close(io)
-    return outfile
+function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    converted_sequence = convert_sequence(FASTX.sequence(record))
+    new_seq, quality_scores = observe(converted_sequence, error_rate=error_rate)
+    new_seq_id = UUIDs.uuid4()
+    new_seq_description = FASTX.identifier(record)
+    return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality_scores)
 end
+
+"""
+    detect_alphabet(seq::AbstractString) -> Symbol
+
+Determines the alphabet of a sequence. The function scans through `seq` only once:
+- If a 'T' or 't' is found (and no 'U/u'), the sequence is classified as DNA.
+- If a 'U' or 'u' is found (and no 'T/t'), it is classified as RNA.
+- If both T and U occur, an error is thrown.
+- If a character outside the canonical nucleotide and ambiguity codes is encountered,
+  the sequence is assumed to be protein.
+- If neither T nor U are found, the sequence is assumed to be DNA.
+"""
+function detect_alphabet(seq::AbstractString)::Symbol
+    hasT = false
+    hasU = false
+    # Define allowed nucleotide characters (both for DNA and RNA, including common ambiguity codes)
+    # TODO: define this by merging the alphabets from BioSymbols
+    valid_nucleotides = "ACGTacgtACGUacguNRYSWKMBDHnryswkmbdh"
+    for c in seq
+        if c == 'T' || c == 't'
+            hasT = true
+        elseif c == 'U' || c == 'u'
+            hasU = true
+        elseif !(c in valid_nucleotides)
+            # If an unexpected character is encountered, assume it's a protein sequence.
+            return :AA
+        end
+        if hasT && hasU
+            throw(ArgumentError("Sequence contains both T and U, ambiguous alphabet"))
+        end
+    end
+    if hasT
+        return :DNA
+    elseif hasU
+        return :RNA
+    else
+        # In the absence of explicit T or U, default to DNA.
+        return :DNA
+    end
+end
+
+"""
+    convert_sequence(seq::AbstractString)
+
+Converts the given sequence (output from FASTX.sequence) into the appropriate BioSequence type:
+- DNA sequences are converted using `BioSequences.LongDNA`
+- RNA sequences are converted using `BioSequences.LongRNA`
+- AA sequences are converted using `BioSequences.LongAA`
+"""
+function convert_sequence(seq::AbstractString)
+    alphabet = detect_alphabet(seq)
+    if alphabet == :DNA
+        return BioSequences.LongDNA{4}(seq)
+    elseif alphabet == :RNA
+        return BioSequences.LongRNA{4}(seq)
+    elseif alphabet == :AA
+        return BioSequences.LongAA(seq)
+    else
+        throw(ArgumentError("Unrecognized alphabet type"))
+    end
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function observe(records::AbstractVector{R};
+#                 weights=ones(length(records)),
+#                 N = length(records),
+#                 outfile = "",
+#                 error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+#     if isempty(outfile)
+#         error("no file name supplied")
+#     end
+#     io = open(outfile, "w")
+#     fastx_io = FASTX.FASTA.Writer(io)
+#     for i in 1:N
+#         record = StatsBase.sample(records, StatsBase.weights(weights))
+#         new_seq = observe(FASTX.sequence(record), error_rate=error_rate)
+#         new_seq_id = Random.randstring(Int(ceil(log(length(new_seq) + 1))))
+#         new_seq_description = FASTX.identifier(record)
+#         observed_record = FASTX.FASTA.Record(new_seq_id, new_seq_description, new_seq)
+#         write(fastx_io, observed_record)
+#     end
+#     close(fastx_io)
+#     close(io)
+#     return outfile
+# end
 
 # currently this is only for amino acid sequences, expand to include DNA and RNA via multiple dispatch
 """
