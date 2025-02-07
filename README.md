@@ -6,4 +6,4 @@
 
 [![Documentation](https://github.com/cjprybol/Mycelia/actions/workflows/documentation.yml/badge.svg)](https://cjprybol.github.io/Mycelia/dev/)
 
-![](banner-logo.jpg)
+![Banner Logo](banner-logo.jpg)

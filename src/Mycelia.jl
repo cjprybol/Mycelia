@@ -104,6 +104,36 @@ const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a new Conda environment with a specified Bioconda package.
+
+# Arguments
+- `pkg::String`: Package name to install. Can include channel specification using 
+  the format "channel::package"
+
+# Keywords
+- `force::Bool=false`: If true, recreates the environment even if it already exists
+
+# Details
+The function creates a new Conda environment named after the package and installs
+the package into it. It uses channel priority: conda-forge > bioconda > defaults.
+If CONDA_RUNNER is set to 'mamba', it will ensure mamba is installed first.
+
+# Examples
+```julia
+# Install basic package
+add_bioconda_env("blast")
+
+# Install from specific channel
+add_bioconda_env("bioconda::blast")
+
+# Force reinstallation
+add_bioconda_env("blast", force=true)
+```
+# Notes
+- Requires Conda.jl to be installed and configured
+- Uses CONDA_RUNNER global variable to determine whether to use conda or mamba
+- Cleans conda cache after installation
 """
 function add_bioconda_env(pkg; force=false)
     # ensure conda environment is available
@@ -146,6 +176,14 @@ function add_bioconda_env(pkg; force=false)
     # end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Update a package and its dependencies in its dedicated Conda environment.
+
+# Arguments
+- `pkg::String`: Name of the package/environment to update
+"""
 function update_bioconda_env(pkg)
     run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
     # conda update --all -n <env_name>
@@ -223,13 +261,34 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a command to SLURM using sbatch
+Submit a job to SLURM scheduler on Lawrence Berkeley Lab's Lawrencium cluster.
+
+# Arguments
+- `job_name`: Name identifier for the SLURM job
+- `mail_user`: Email address for job notifications
+- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", or "NONE")
+- `logdir`: Directory for SLURM output and error logs
+- `partition`: Lawrencium compute partition
+- `qos`: Quality of Service level
+- `account`: Project account for billing
+- `nodes`: Number of nodes to allocate
+- `ntasks`: Number of tasks to spawn
+- `time`: Wall time limit in format "days-hours:minutes:seconds"
+- `cpus_per_task`: CPU cores per task
+- `mem_gb`: Memory per node in GB
+- `cmd`: Shell command to execute
+
+# Returns
+- `true` if submission was successful
+
+# Note
+Function includes 5-second delays before and after submission for queue stability.
 """
 function lawrencium_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
+        logdir::String=mkpath(joinpath(homedir(), "workspace/slurmlogs")),
         partition::String="lr3",
         qos::String="lr_normal",
         account::String,
@@ -266,7 +325,29 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a command to SLURM using sbatch
+Submit a job to SLURM using sbatch with specified parameters.
+
+# Arguments
+- `job_name::String`: Name identifier for the SLURM job
+- `mail_user::String`: Email address for job notifications
+- `mail_type::String`: Type of mail notifications (default: "ALL")
+- `logdir::String`: Directory for error and output logs (default: "~/workspace/slurmlogs")
+- `partition::String`: SLURM partition to submit job to
+- `account::String`: Account to charge for compute resources
+- `nodes::Int`: Number of nodes to allocate (default: 1)
+- `ntasks::Int`: Number of tasks to run (default: 1)
+- `time::String`: Maximum wall time in format "days-hours:minutes:seconds" (default: "1-00:00:00")
+- `cpus_per_task::Int`: CPUs per task (default: 1)
+- `mem_gb::Int`: Memory in GB, defaults to 32GB per CPU
+- `cmd::String`: Command to execute
+
+# Returns
+- `Bool`: Returns true if submission succeeds
+
+# Notes
+- Function includes 5-second delays before and after submission
+- Memory is automatically scaled with CPU count
+- Log files are named with job ID (%j) and job name (%x)
 """
 function scg_sbatch(;
         job_name::String,
@@ -307,7 +388,36 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a command to SLURM using sbatch
+Submit a job to NERSC's SLURM scheduler using the shared QOS (Quality of Service).
+
+# Arguments
+- `job_name`: Identifier for the job
+- `mail_user`: Email address for job notifications
+- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", "REQUEUE", "STAGE_OUT")
+- `logdir`: Directory for storing job output and error logs
+- `qos`: Quality of Service level ("shared", "regular", "preempt", "premium")
+- `nodes`: Number of nodes to allocate
+- `ntasks`: Number of tasks to run
+- `time`: Maximum wall time in format "days-hours:minutes:seconds"
+- `cpus_per_task`: Number of CPUs per task
+- `mem_gb`: Memory per node in GB (default: 2GB per CPU)
+- `cmd`: Command to execute
+- `constraint`: Node type constraint ("cpu" or "gpu")
+
+# Resource Limits
+- Maximum memory per node: 512GB
+- Maximum cores per node: 128
+- Default memory allocation: 2GB per CPU requested
+
+# QOS Options
+- shared: Default QOS for shared node usage
+- regular: Standard priority
+- preempt: Reduced credit usage but preemptible
+- premium: 5x throughput priority (limited usage)
+
+# Returns
+`true` if job submission succeeds
+
 
 https://docs.nersc.gov/jobs/policy/
 https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
@@ -317,7 +427,7 @@ default is to use shared qos
 use
 - regular
 - preempt (reduced credit usage but not guaranteed to finish)
-- premium (priorty runs limited to 5x throughput)
+- premium (priority runs limited to 5x throughput)
 
 max request is 512Gb memory and 128 cores per node
 
@@ -362,7 +472,32 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a command to SLURM using sbatch
+Submit a batch job to NERSC's SLURM workload manager.
+
+# Arguments
+- `job_name`: Identifier for the SLURM job
+- `mail_user`: Email address for job notifications
+- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", or "NONE")
+- `logdir`: Directory for storing job output/error logs
+- `scriptdir`: Directory for storing generated SLURM scripts
+- `qos`: Quality of Service level ("regular", "premium", or "preempt")
+- `nodes`: Number of nodes to allocate
+- `ntasks`: Number of tasks to run
+- `time`: Maximum wall time in format "days-HH:MM:SS"
+- `cpus_per_task`: CPU cores per task
+- `mem_gb`: Memory per node in GB
+- `cmd`: Command(s) to execute (String or Vector{String})
+- `constraint`: Node type constraint ("cpu" or "gpu")
+
+# Returns
+- `true` if job submission succeeds
+- `false` if submission fails
+
+# QoS Options
+- regular: Standard priority queue
+- premium: High priority queue (5x throughput limit)
+- preempt: Reduced credit usage but jobs may be interrupted
+
 
 https://docs.nersc.gov/jobs/policy/
 https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
@@ -380,8 +515,8 @@ function nersc_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String="ALL",
-        logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
-        scriptdir::String=mkpath("$(homedir())/workspace/slurm"),
+        logdir::String=mkpath(joinpath(homedir(), "workspace/slurmlogs")),
+        scriptdir::String=mkpath(joinpath(homedir(), "workspace/slurm")),
         qos::String="regular",
         nodes::Int=1,
         ntasks::Int=1,
@@ -433,7 +568,12 @@ function nersc_sbatch(;
     
     # Submit the job
     sleep(5)
-    run(`sbatch $script_path`)
+    try
+        run(`sbatch $script_path`)
+    catch e
+        @error "Failed to submit job with sbatch: $e"
+        return false
+    end
     sleep(5)
     
     return true
@@ -476,6 +616,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the total size (in bases) of all sequences in a FASTA file.
+
+# Arguments
+- `fasta_file::AbstractString`: Path to the FASTA file
+
+# Returns
+- `Int`: Sum of lengths of all sequences in the FASTA file
 """
 function fasta_genome_size(fasta_file)
     return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
@@ -483,6 +631,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GFA (Graphical Fragment Assembly) file to FASTA format.
+
+# Arguments
+- `gfa::String`: Path to input GFA file
+- `fasta::String=gfa * ".fna"`: Path for output FASTA file. Defaults to input filename with ".fna" extension
+
+# Returns
+- `String`: Path to the generated FASTA file
+
+# Details
+Uses gfatools (via Conda) to perform the conversion. The function will:
+1. Ensure gfatools is available in the Conda environment
+2. Execute the conversion using gfatools gfa2fa
+3. Write sequences to the specified FASTA file
 """
 function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
     Mycelia.add_bioconda_env("gfatools")
@@ -503,6 +666,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate per-base genomic coverage from a BAM file using bedtools.
+
+# Arguments
+- `bam::String`: Path to input BAM file
+
+# Returns
+- `String`: Path to the generated coverage file (`.coverage.txt`)
+
+# Details
+Uses bedtools genomecov to compute per-base coverage. Creates a coverage file 
+with the format: <chromosome> <position> <coverage_depth>. 
+If the coverage file already exists, returns the existing file path.
+
+# Dependencies
+Requires bedtools (automatically installed in conda environment)
 """
 function determine_fasta_coverage(bam)
     Mycelia.add_bioconda_env("bedtools")
@@ -518,6 +697,23 @@ end
 # can make a bandage_jll to fix this longer term
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads and installs Bandage, a bioinformatics visualization tool for genome assembly graphs.
+
+# Arguments
+- `outdir="/usr/local/bin"`: Target installation directory for the Bandage executable
+
+# Returns
+- Path to the installed Bandage executable
+
+# Details
+- Downloads Bandage v0.8.1 for Ubuntu
+- Installs required system dependencies (libxcb-glx0, libx11-xcb-dev, libfontconfig, libgl1-mesa-glx)
+- Attempts installation with sudo, falls back to root if sudo fails
+- Skips download if Bandage is already installed at target location
+
+# Dependencies
+Requires system commands: wget, unzip, apt
 """
 function download_bandage(outdir="/usr/local/bin")
     bandage_executable = joinpath(outdir, "Bandage")
@@ -539,6 +735,34 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform comprehensive annotation of a FASTA file including gene prediction, protein homology search,
+and terminator prediction.
+
+# Arguments
+- `fasta::String`: Path to input FASTA file
+- `identifier::String`: Unique identifier for output directory (default: FASTA filename without extension)
+- `basedir::String`: Base directory for output (default: current working directory)
+- `mmseqsdb::String`: Path to MMseqs2 UniRef50 database (default: "~/workspace/mmseqs/UniRef50")
+- `threads::Int`: Number of CPU threads to use (default: all available)
+
+# Processing Steps
+1. Creates output directory and copies input FASTA
+2. Runs Prodigal for gene prediction (nucleotide, amino acid, and GFF output)
+3. Performs MMseqs2 homology search against UniRef50
+4. Predicts terminators using TransTerm
+5. Combines annotations into a unified GFF file
+6. Generates GenBank format output
+
+# Returns
+- `String`: Path to the output directory containing all generated files
+
+# Files Generated
+- `.prodigal.fna`: Predicted genes (nucleotide)
+- `.prodigal.faa`: Predicted proteins
+- `.prodigal.gff`: Prodigal GFF annotations
+- `.gff`: Combined annotations
+- `.gff.genbank`: Final GenBank format
 """
 function annotate_fasta(;
         fasta,
@@ -581,6 +805,25 @@ function annotate_fasta(;
     return outdir
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Annotate amino acid sequences in a FASTA file using MMseqs2 search against UniRef50 database.
+
+# Arguments
+- `fasta`: Path to input FASTA file containing amino acid sequences
+- `identifier`: Name for the output directory (defaults to FASTA filename without extension)
+- `basedir`: Base directory for output (defaults to current directory)
+- `mmseqsdb`: Path to MMseqs2 formatted UniRef50 database (defaults to ~/workspace/mmseqs/UniRef50)
+- `threads`: Number of CPU threads to use (defaults to system thread count)
+
+# Returns
+- Path to the output directory containing MMseqs2 search results
+
+The function creates a new directory named by `identifier` under `basedir`, copies the input FASTA file,
+and runs MMseqs2 easy-search against the specified database. If the output directory already exists,
+the function skips processing and returns the directory path.
+"""
 function annotate_aa_fasta(;
         fasta,
         identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
@@ -608,6 +851,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+List all directories at the specified rclone path.
+
+# Arguments
+- `path::String`: Remote path to list directories from (e.g. "remote:/path/to/dir")
+
+# Returns
+- `Vector{String}`: Full paths to all directories found at the specified location
 """
 function rclone_list_directories(path)
     directories = [join(split(line)[5:end], " ") for line in eachline(open(`rclone lsd $(path)`))]
@@ -617,6 +868,33 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform all-vs-all sequence search using MMseqs2's easy-search command.
+
+# Arguments
+- `fasta::String`: Path to input FASTA file containing sequences to compare
+- `output::String`: Output directory path (default: input filename + ".mmseqs_easy_search_pairwise")
+
+# Returns
+- `String`: Path to the output directory
+
+# Details
+Executes MMseqs2 with sensitive search parameters (7 sensitivity steps) and outputs results in 
+tabular format with the following columns:
+- query, qheader: Query sequence ID and header
+- target, theader: Target sequence ID and header  
+- pident: Percentage sequence identity
+- fident: Fraction of identical matches
+- nident: Number of identical matches
+- alnlen: Alignment length
+- mismatch: Number of mismatches
+- gapopen: Number of gap openings
+- qstart, qend, qlen: Query sequence coordinates and length
+- tstart, tend, tlen: Target sequence coordinates and length
+- evalue: Expected value
+- bits: Bit score
+
+Requires MMseqs2 to be available through Bioconda.
 """
 function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwise")
     Mycelia.add_bioconda_env("mmseqs2")
