@@ -923,6 +923,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Cluster protein or nucleotide sequences using MMseqs2 easy-cluster workflow.
+
+# Arguments
+- `fasta::String`: Path to input FASTA file containing sequences to cluster
+- `output::String`: Base path for output files (default: input path + ".mmseqs_easy_cluster")
+- `tmp::String`: Path to temporary directory (default: auto-generated temp dir)
+
+# Returns
+- `String`: Path to the output cluster TSV file containing cluster assignments
+
+# Details
+Uses MMseqs2 with minimum sequence identity threshold of 50% (-min-seq-id 0.5) and 
+minimum coverage threshold of 80% (-c 0.8). The output TSV file format contains 
+tab-separated cluster representative and member sequences.
 """
 # --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
 function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mktempdir())
@@ -939,6 +954,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Export sequences from a BLAST database to a gzipped FASTA file.
+
+# Arguments
+- `path_to_db`: Path to the BLAST database
+- `fasta`: Output path for the gzipped FASTA file (default: `path_to_db * ".fna.gz"`)
+
+# Details
+Uses conda's BLAST environment to extract sequences using `blastdbcmd`.
+The output is automatically compressed using `pigz`.
+If the output file already exists, the function will skip extraction.
+
 """
 function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
     Mycelia.add_bioconda_env("blast")
@@ -952,6 +979,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate basic statistics for FASTQ/FASTA sequence files using seqkit.
+
+# Arguments
+- `fastq::String`: Path to input FASTQ/FASTA file
+
+# Details
+Automatically installs and uses seqkit from Bioconda to compute sequence statistics
+including number of sequences, total bases, GC content, average length, etc.
+
+# Dependencies
+- Requires Conda and Bioconda channel
+- Installs seqkit package if not present
+
+# Returns
+Prints statistics to standard output in tabular format
 """
 function fastx_stats(fastq)
     Mycelia.add_bioconda_env("seqkit")
@@ -960,6 +1003,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Subsample reads from a FASTQ file using seqkit.
+
+# Arguments
+- `in_fastq::String`: Path to input FASTQ file
+- `out_fastq::String=""`: Path to output FASTQ file. If empty, auto-generated based on input filename
+- `n_reads::Union{Missing,Int}=missing`: Number of reads to sample
+- `proportion_reads::Union{Missing,Float64}=missing`: Proportion of reads to sample (0.0-1.0)
+
+# Returns
+- `String`: Path to the output FASTQ file
 """
 function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
     Mycelia.add_bioconda_env("seqkit")
@@ -987,6 +1041,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse RTG evaluation output from a gzipped tab-separated file.
+
+# Arguments
+- `f`: Path to a gzipped TSV file containing RTG evaluation output
+
+# Format
+Expected file format:
+- Header line starting with '#' and tab-separated column names
+- Data rows in tab-separated format
+- Empty files return a DataFrame with empty columns matching header
+
+# Returns
+A DataFrame where:
+- Column names are taken from the header line (stripped of '#')
+- Data is parsed as Float64 values
+- Empty files result in empty columns preserving header structure
 """
 function parse_rtg_eval_output(f)
     # import CodecZlib
@@ -1030,6 +1101,27 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Simulate Illumina paired-end short reads from a FASTA file using ART simulator.
+
+# Arguments
+- `in_fasta::String`: Input FASTA file path
+- `coverage::Number`: Desired read coverage/depth
+- `outbase::String`: Prefix for output files (default: "\${in_fasta}.art.\${coverage}x.")
+
+# Outputs
+Generates two gzipped FASTQ files:
+- `\${outbase}1.fq.gz`: Forward reads
+- `\${outbase}2.fq.gz`: Reverse reads
+
+# Details
+Uses ART Illumina with the following parameters:
+- Read length: 150bp
+- Fragment length: 500bp (SD: 10bp)
+- Sequencing system: HiSeq 2500 (HS25)
+
+# Dependencies
+Requires ART simulator (automatically installed via Bioconda)
+
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_pacbio_reads`
 """
 function simulate_short_reads(;in_fasta, coverage, outbase = "$(in_fasta).art.$(coverage)x.")
@@ -1066,9 +1158,21 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-quantity should be either fold coverage (e.g. "50x"), or total bases sequenced (e.g. 1000000) - NOT TOTAL READS
+Simulate PacBio HiFi reads using the Badread error model.
 
-Reads are ~ 15kb
+# Arguments
+- `fasta::String`: Path to input FASTA file containing reference sequence
+- `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000") - NOT TOTAL READS
+- `outfile::String`: Output filepath for simulated reads. Defaults to input filename with ".badread.pacbio2021.\${quantity}.fq.gz" suffix
+
+# Returns
+- `String`: Path to the generated output file
+
+# Notes
+- Requires Badread tool from Bioconda
+- Uses PacBio 2021 error and quality score models
+- Average read length ~15kb
+- Output is gzipped FASTQ format
 
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_short_reads`
 """
@@ -1086,7 +1190,15 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-quantity should be either fold coverage (e.g. "50x"), or total bases sequenced (e.g. 1000000) - NOT TOTAL READS
+Simulate Oxford Nanopore sequencing reads using the Badread tool with 2023 error models.
+
+# Arguments
+- `fasta::String`: Path to input reference FASTA file
+- `quantity::String`: Either fold coverage (e.g. "50x") or total bases to sequence (e.g. "1000000")
+- `outfile::String`: Output path for gzipped FASTQ file. Defaults to input filename with modified extension
+
+# Returns
+- `String`: Path to the generated output FASTQ file
 
 See also: `simulate_pacbio_reads`, `simulate_nearly_perfect_long_reads`, `simulate_short_reads`
 """
@@ -1105,7 +1217,20 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-quantity should be either fold coverage (e.g. "50x"), or total bases sequenced (e.g. 1000000) - NOT TOTAL READS
+Simulate high-quality long reads with minimal errors using Badread.
+
+# Arguments
+- `reference::String`: Path to reference FASTA file
+- `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000")
+- `length_mean::Int=40000`: Mean read length
+- `length_sd::Int=20000`: Standard deviation of read length
+
+# Returns
+Vector of simulated reads in FASTQ format
+
+# Details
+Generates nearly perfect long reads by setting error rates and artifacts to minimum values.
+Uses ideal quality scores and disables common sequencing artifacts like chimeras and adapters.
 
 See also: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_short_reads`
 """
@@ -1117,7 +1242,17 @@ function simulate_nearly_perfect_long_reads()
     # | gzip > reads.fastq.gz
 end
 
-# Function to copy a file to a temporary directory with the same name
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a copy of a file in a temporary directory while preserving the original filename.
+
+# Arguments
+- `file_path::String`: Path to the source file to be copied
+
+# Returns
+- `String`: Path to the newly created temporary file
+"""
 function copy_to_tempdir(file_path::String)
     # Create a temporary directory
     temp_dir = mktempdir()
@@ -1140,6 +1275,20 @@ end
 # cap at 4 threads, 8Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers in a FASTA/FASTQ file using Jellyfish.
+
+# Arguments
+- `fastx::String`: Path to input FASTA/FASTQ file (can be gzipped)
+- `k::Integer`: k-mer length
+- `threads::Integer=Sys.CPU_THREADS`: Number of threads to use
+- `max_mem::Integer=Int(Sys.free_memory())`: Maximum memory in bytes (defaults to system free memory)
+- `canonical::Bool=false`: Whether to count canonical k-mers (both strands combined)
+- `outfile::String=auto`: Output filename (auto-generated based on input and parameters)
+- `conda_check::Bool=true`: Whether to verify Jellyfish conda installation
+
+# Returns
+- `String`: Path to gzipped TSV file containing k-mer counts
 """
 function jellyfish_count(;fastx, k, threads=Sys.CPU_THREADS, max_mem=Int(Sys.free_memory()), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
     if conda_check
@@ -1203,6 +1352,27 @@ end
 # 412.670050 seconds (529.86 k allocations: 37.007 MiB, 0.03% compilation time)
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a Jellyfish k-mer count file into a frequency histogram.
+
+# Arguments
+- `jellyfish_counts_file::String`: Path to the gzipped TSV file containing Jellyfish k-mer counts
+- `outfile::String=replace(jellyfish_counts_file, r"\\.tsv\\.gz\$" => ".count_histogram.tsv")`: Optional output file path
+
+# Returns
+- `String`: Path to the generated histogram file
+
+# Description
+Processes a Jellyfish k-mer count file to create a frequency histogram where:
+- Column 1: Number of k-mers that share the same count
+- Column 2: The count they share
+
+Uses system sorting with LC_ALL=C for optimal performance on large files.
+
+Notes
+- Requires gzip, sort, uniq, and sed command line tools
+- Uses intermediate disk storage for sorting large files
+- Skips processing if output file already exists
 """
 function jellyfish_counts_to_kmer_frequency_histogram(jellyfish_counts_file, outfile=replace(jellyfish_counts_file, r"\.tsv\.gz$" => ".count_histogram.tsv"))
     # sorting with LC_ALL=C is the biggest speed up here of anything I've found
@@ -1225,6 +1395,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Load k-mer counts from a Jellyfish output file into a DataFrame.
+
+# Arguments
+- `jellyfish_counts::String`: Path to a gzipped TSV file (*.jf.tsv.gz) containing Jellyfish k-mer counts
+
+# Returns
+- `DataFrame`: Table with columns:
+  - `kmer`: Biologically encoded k-mers as `DNAKmer{k}` objects
+  - `count`: Integer count of each k-mer's occurrences
+
+# Notes
+- Input file must be a gzipped TSV with exactly two columns (k-mer sequences and counts)
+- K-mer length is automatically detected from the first entry
+- Filename must end with '.jf.tsv.gz'
 """
 function load_jellyfish_counts(jellyfish_counts)
     @assert occursin(r"\.jf\.tsv\.gz$", jellyfish_counts)
@@ -1268,6 +1453,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Add random noise to create a vector of jittered values.
+
+Generates `n` values by adding random noise to the input value `x`. 
+The noise is uniformly distributed between -1/3 and 1/3.
+
+# Arguments
+- `x`: Base value to add jitter to
+- `n`: Number of jittered values to generate
+
+# Returns
+- Vector of length `n` containing jittered values around `x`
 """
 function jitter(x, n)
     return [x + rand() / 3 * (ifelse(rand(Bool), 1, -1)) for i in 1:n]
@@ -1275,6 +1472,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts k-mer occurrences in a FASTA file, considering both forward and reverse complement sequences.
+
+# Arguments
+- `kmer_type`: Type specification for k-mers (e.g., `DNAKmer{21}`)
+- `fasta`: Path to FASTA file containing reference sequences
+
+# Returns
+- `Dict{kmer_type, Int}`: Dictionary mapping each k-mer to its total count across all sequences
 """
 function fasta_to_reference_kmer_counts(;kmer_type, fasta)
     kmer_counts = Dict{kmer_type, Int}()
@@ -1425,6 +1631,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads a genomic sequence from NCBI's nucleotide database by its accession number.
+
+# Arguments
+- `accession::String`: NCBI nucleotide accession number (e.g. "NC_045512")
+- `outdir::String`: Output directory path. Defaults to current directory
+- `compressed::Bool`: If true, compresses output file with gzip. Defaults to true
+
+# Returns
+- `String`: Path to the downloaded file (.fna or .fna.gz)
 """
 function download_genome_by_accession(;accession, outdir=pwd(), compressed = true)
     temp_fasta = joinpath(outdir, accession * ".fna")
@@ -1457,6 +1673,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads a genome file from NCBI FTP server to the specified directory.
+
+# Arguments
+- `ftp::String`: NCBI FTP path for the genome (e.g. "ftp://ftp.ncbi.nlm.nih.gov/.../")
+- `outdir::String`: Output directory path. Defaults to current working directory.
+
+# Returns
+- `String`: Path to the downloaded file
+
+# Notes
+- If the target file already exists, returns the existing file path without re-downloading
+- Downloads the genomic.fna.gz version of the genome
 """
 function download_genome_by_ftp(;ftp, outdir=pwd())
     url = Mycelia.ncbi_ftp_path_to_url(ftp_path=ftp, extension="genomic.fna.gz")
@@ -1470,6 +1699,11 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the current date and time as a normalized string with all non-word characters removed.
+
+The output format is based on ISO datetime (YYYYMMDDThhmmss) but strips any special characters
+like hyphens, colons or dots.
 """
 function normalized_current_datetime()
     return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
@@ -1477,6 +1711,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the current git commit hash of the repository.
+
+# Arguments
+- `short::Bool=false`: If true, returns abbreviated 8-character hash
+
+# Returns
+A string containing the git commit hash (full 40 characters by default)
 """
 function githash(;short=false)
     git_hash = rstrip(read(`git rev-parse HEAD`, String))
@@ -1525,6 +1767,14 @@ end
 # https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/taxonomy/
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Retrieve taxonomic information for a given NCBI taxonomy ID.
+
+# Arguments
+- `taxa_id`: NCBI taxonomy identifier (integer)
+
+# Returns
+- `DataFrame`: Taxonomy summary containing fields like tax_id, rank, species, etc.
 """
 function ncbi_taxon_summary(taxa_id)
     Mycelia.add_bioconda_env("ncbi-datasets")
@@ -1537,6 +1787,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the closest prime number to the given integer `n`.
+
+Returns the nearest prime number to `n`. If two prime numbers are equally distant 
+from `n`, returns the smaller one.
+
+# Arguments
+- `n::Int`: The input integer to find the nearest prime for
+
+# Returns
+- `Int`: The closest prime number to `n`
 """
 function nearest_prime(n::Int)
     if n < 2
@@ -1553,6 +1814,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a sequence of Fibonacci numbers strictly less than the input value.
+
+# Arguments
+- `n::Int`: Upper bound (exclusive) for the Fibonacci sequence
+
+# Returns
+- `Vector{Int}`: Array containing Fibonacci numbers less than n
 """
 function fibonacci_numbers_less_than(n::Int)
     if n <= 0
@@ -1572,6 +1841,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generates a specialized sequence of prime numbers combining:
+- Odd primes up to 23 (flip_point)
+- Primes nearest to Fibonacci numbers above 23 up to max
+
+# Arguments
+- `min::Int=0`: Lower bound for the sequence
+- `max::Int=10_000`: Upper bound for the sequence
+
+# Returns
+Vector of Int containing the specialized prime sequence
 """
 function ks(;min=0, max=10_000)
     # flip from all odd primes to only nearest to fibonnaci primes
@@ -1584,6 +1864,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Copy files between local and remote storage using rclone with automated retry logic.
+
+# Arguments
+- `source::String`: Source path or remote (e.g. "local/path" or "gdrive:folder")
+- `dest::String`: Destination path or remote (e.g. "gdrive:folder" or "local/path")
+
+# Keywords
+- `config::String=""`: Optional path to rclone config file
+- `max_attempts::Int=3`: Maximum number of retry attempts
+- `sleep_timer::Int=60`: Initial sleep duration between retries in seconds (doubles after each attempt)
+
+# Details
+Uses optimized rclone settings for large files:
+- 2GB chunk size
+- 1TB upload cutoff
+- Rate limited to 1 transaction per second
 """
 function rclone_copy(source, dest; config="", max_attempts=3, sleep_timer=60)
     done = false
@@ -1669,6 +1966,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Ensures the hashdeep utility is installed on the system.
+
+Checks if hashdeep is available in PATH and attempts to install it via apt package manager
+if not found. Will try with sudo privileges first, then without sudo if that fails.
+
+# Details
+- Checks PATH for existing hashdeep executable
+- Attempts installation using apt package manager
+- Requires a Debian-based Linux distribution
+
+# Returns
+- Nothing, but prints status messages during execution
 """
 function install_hashdeep()
     if Sys.which("hashdeep") !== nothing
@@ -1686,6 +1996,20 @@ end
 # Need to add hashdeep & logging
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a gzipped tar archive of the specified directory along with verification files.
+
+# Arguments
+- `directory`: Source directory path to archive
+- `tarchive`: Optional output archive path (defaults to directory name with .tar.gz extension)
+
+# Generated Files
+- `{tarchive}`: The compressed tar archive
+- `{tarchive}.log`: Contents listing of the archive
+- `{tarchive}.hashdeep.dfxml`: Cryptographic hashes (MD5, SHA1, SHA256) of the archive
+
+# Returns
+- Path to the created tar archive file
 """
 function create_tarchive(;directory, tarchive=directory * ".tar.gz")
     directory = normpath(directory)
@@ -1724,6 +2048,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract contents of a gzipped tar archive file to a specified directory.
+
+# Arguments
+- `tarchive::AbstractString`: Path to the .tar.gz file to extract
+- `directory::AbstractString=dirname(tarchive)`: Target directory for extraction (defaults to the archive's directory)
+
+# Returns
+- `AbstractString`: Path to the directory where contents were extracted
 """
 function tar_extract(;tarchive, directory=dirname(tarchive))
     run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
@@ -1732,6 +2065,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates an index file (.fai) for a FASTA reference sequence using samtools.
+
+The FASTA index allows efficient random access to the reference sequence. This is 
+required by many bioinformatics tools that need to quickly fetch subsequences 
+from the reference.
+
+# Arguments
+- `fasta`: Path to the input FASTA file
+
+# Side Effects
+- Creates a `{fasta}.fai` index file in the same directory as input
+- Installs samtools via conda if not already present
 """
 function samtools_index_fasta(;fasta)
     Mycelia.add_bioconda_env("samtools")
@@ -1740,6 +2086,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Identifies sequence regions that require resampling based on kmer solidity patterns.
+
+# Arguments
+- `record_kmer_solidity::BitVector`: Boolean array where `true` indicates solid kmers
+- `solid_branching_kmer_indices::Vector{Int}`: Indices of solid branching kmers
+
+# Returns
+- `Vector{UnitRange{Int64}}`: Array of ranges (start:stop) indicating stretches that need resampling
+
+# Details
+Finds continuous stretches of non-solid kmers and extends them to the nearest solid branching
+kmers on either side. These stretches represent regions that need resampling.
+
+If a stretch doesn't have solid branching kmers on both sides, it is excluded from the result.
+Duplicate ranges are removed from the final output.
 """
 function find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_indices)
     indices = findall(.!record_kmer_solidity)  # Find the indices of false values
@@ -1784,6 +2146,25 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Construct a FASTX FASTQ record from its components.
+
+# Arguments
+- `identifier::String`: The sequence identifier without the '@' prefix
+- `sequence::String`: The nucleotide sequence
+- `quality_scores::Vector{Int}`: Quality scores (0-93) as raw integers
+
+# Returns
+- `FASTX.FASTQRecord`: A parsed FASTQ record
+
+# Notes
+- Quality scores are automatically capped at 93 to ensure FASTQ compatibility
+- Quality scores are converted to ASCII by adding 33 (Phred+33 encoding)
+- The record is constructed in standard FASTQ format with four lines:
+  1. Header line (@ + identifier)
+  2. Sequence
+  3. Plus line
+  4. Quality scores (ASCII encoded)
 """
 function fastq_record(;identifier, sequence, quality_scores)
     # Fastx wont parse anything higher than 93
@@ -1794,6 +2175,38 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Process and error-correct a FASTQ sequence record using a kmer graph and path resampling.
+
+# Arguments
+- `record`: FASTQ record containing the sequence to process
+- `kmer_graph`: MetaGraph containing the kmer network and associated properties
+- `yen_k_shortest_paths_and_weights`: Cache of pre-computed k-shortest paths between nodes
+- `yen_k`: Number of alternative paths to consider during resampling (default: 3)
+
+# Description
+Performs error correction by:
+1. Trimming low-quality sequence ends
+2. Identifying stretches requiring resampling between solid branching kmers
+3. Selecting alternative paths through the kmer graph based on:
+   - Path quality scores
+   - Transition likelihoods
+   - Path length similarity to original sequence
+
+# Returns
+- Modified FASTQ record with error-corrected sequence and updated quality scores
+- Original record if no error correction was needed
+
+# Required Graph Properties
+The kmer_graph must contain the following properties:
+- :ordered_kmers
+- :likely_valid_kmer_indices  
+- :kmer_indices
+- :branching_nodes
+- :assembly_k
+- :transition_likelihoods
+- :kmer_mean_quality
+- :kmer_total_quality
 """
 function process_fastq_record(;record, kmer_graph, yen_k_shortest_paths_and_weights, yen_k=3)
     ordered_kmers = MetaGraphs.get_prop(kmer_graph, :ordered_kmers)
@@ -1941,6 +2354,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Polish FASTQ reads using a k-mer graph-based approach to correct potential sequencing errors.
+
+# Arguments
+- `fastq::String`: Path to input FASTQ file
+- `k::Int=1`: Initial k-mer size parameter. Final assembly k-mer size may differ.
+
+# Process
+1. Builds a directed k-mer graph from input reads
+2. Processes each read through the graph to find optimal paths
+3. Writes corrected reads to a new FASTQ file
+4. Automatically compresses output with gzip
+
+# Returns
+Named tuple with:
+- `fastq::String`: Path to output gzipped FASTQ file
+- `k::Int`: Final assembly k-mer size used
 """
 function polish_fastq(;fastq, k=1)
     kmer_graph = build_directed_kmer_graph(fastq=fastq, k=k)
@@ -1967,6 +2397,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Constructs a directed graph representation of k-mer transitions from FASTQ sequencing data.
+
+# Arguments
+- `fastq`: Path to input FASTQ file
+- `k`: K-mer size (default: 1). Must be odd and prime. If k=1, optimal size is auto-determined
+- `plot`: Boolean to display quality distribution plot (default: false)
+
+# Returns
+MetaDiGraph with properties:
+- assembly_k: k-mer size used
+- kmer_counts: frequency of each k-mer
+- transition_likelihoods: edge weights between k-mers
+- kmer_mean_quality, kmer_total_quality: quality metrics
+- branching_nodes, unbranching_nodes: topological classification
+- likely_valid_kmer_indices: k-mers above mean quality threshold
+- likely_sequencing_artifact_indices: potential erroneous k-mers
+
+# Note
+For DNA assembly, quality scores are normalized across both strands.
 """
 function build_directed_kmer_graph(;fastq, k=1, plot=false)
     if k == 1
@@ -2113,6 +2563,21 @@ end
 # selected after trialing previous and next ks and finding those to be too unstable
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Performs iterative error correction on FASTQ sequences using progressively larger k-mer sizes.
+
+Starting with the default k-mer size, this function repeatedly applies polishing steps,
+incrementing the k-mer size until either reaching max_k or encountering instability.
+
+# Arguments
+- `fastq`: Path to input FASTQ file or FastqRecord object
+- `max_k`: Maximum k-mer size to attempt (default: 89)
+- `plot`: Whether to generate diagnostic plots (default: false)
+
+# Returns
+Vector of polishing results, where each element contains:
+- k: k-mer size used
+- fastq: resulting polished sequences
 """
 function iterative_polishing(fastq, max_k = 89, plot=false)
     # initial polishing
@@ -2127,6 +2592,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Exports a taxonomy mapping table from a BLAST database in seqid2taxid format.
+
+# Arguments
+- `path_to_db::String`: Path to the BLAST database
+- `outfile::String`: Output file path (defaults to input path + ".seqid2taxid.txt.gz")
+
+# Returns
+- `String`: Path to the created output file
+
+# Details
+Creates a compressed tab-delimited file mapping sequence IDs to taxonomy IDs.
+Uses blastdbcmd without GI identifiers for better cross-referencing compatibility.
+If the output file already exists, returns the path without regenerating.
+
+# Dependencies
+Requires BLAST+ tools installed via Bioconda.
 """
 function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".seqid2taxid.txt.gz")
     Mycelia.add_bioconda_env("blast")
@@ -2141,6 +2623,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Loads a BLAST database taxonomy mapping table from a gzipped file into a DataFrame.
+
+# Arguments
+- `compressed_blast_db_taxonomy_table_file::String`: Path to a gzipped file containing BLAST taxonomy mappings
+
+# Returns
+- `DataFrame`: A DataFrame with columns `:sequence_id` and `:taxid` containing the sequence-to-taxonomy mappings
+
+# Format
+Input file should be a space-delimited text file (gzipped) with two columns:
+1. sequence identifier
+2. taxonomy identifier (taxid)
 """
 function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     return CSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ', header=["sequence_id", "taxid"], DataFrames.DataFrame)
@@ -2151,6 +2646,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse SAM/BAM files into a DataFrame containing mapped read alignments.
+
+# Arguments
+- `xam::String`: Path to input SAM/BAM file (supports .sam, .bam, or .sam.gz)
+- `primary_only::Bool=false`: Flag to filter for primary alignments only (currently unused)
+
+# Returns
+DataFrame with columns:
+- `template`: Read template name
+- `flag`: SAM flag
+- `reference`: Reference sequence name
+- `position`: Alignment position range
+- `mappingquality`: Mapping quality score
+- `tlen`: Template length
+- `alignlength`: Alignment length
+- `ismapped`: Boolean indicating if read is mapped
+- `isprimary`: Boolean indicating if alignment is primary
+- `alignment_score`: Alignment score (AS tag)
+- `mismatches`: Number of mismatches (NM tag)
 """
 function parse_xam_to_mapped_records_table(xam, primary_only=false)
 # merge name conflicts, leaving breadcrumb for reference
@@ -2207,6 +2722,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a SAM/BAM alignment file and extract template-to-reference mapping information.
+
+# Arguments
+- `xam::String`: Path to input alignment file (.sam, .sam.gz, or .bam format)
+
+# Returns
+- `DataFrame`: Table with columns:
+  - `template`: Read template names
+  - `reference`: Reference sequence names
+
+Only includes primary alignments (not secondary/supplementary) that are mapped to references.
+Skips header lines starting with '@'.
 """
 function parse_xam_to_primary_mapping_table(xam)
     record_table = DataFrames.DataFrame(
@@ -2243,6 +2771,31 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse alignment data from SAM/BAM files into a structured DataFrame containing mapping quality
+and taxonomic information.
+
+# Arguments
+- `xam::String`: Path to input file (.sam, .bam, or .sam.gz)
+- `primary_only::Bool=false`: When true, include only primary alignments (currently not implemented)
+
+# Returns
+DataFrames.DataFrame with columns:
+- `template`: Read name
+- `flag`: SAM flag
+- `reference`: Reference sequence name  
+- `position`: Alignment position range
+- `mappingquality`: Mapping quality score
+- `tlen`: Template length
+- `alignlength`: Alignment length
+- `ismapped`: Boolean indicating if read is mapped
+- `isprimary`: Boolean indicating if alignment is primary
+- `alignment_score`: Alignment score (AS tag)
+- `mismatches`: Number of mismatches (NM tag)
+
+# Notes
+- Skips unmapped reads
+- Automatically detects and handles SAM/BAM/compressed SAM formats
 """
 function parse_xam_to_taxonomic_mapping_quality(xam, primary_only=false)
 # merge name conflicts, leaving breadcrumb for reference
@@ -2297,9 +2850,22 @@ function parse_xam_to_taxonomic_mapping_quality(xam, primary_only=false)
     return record_table
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Evaluate genome assembly quality by comparing k-mer distributions between assembled sequences and raw observations.
+
+# Arguments
+- `assembly`: Input assembled sequences to evaluate
+- `observations`: Raw sequencing data for comparison
+- `ks::Vector{Int}`: Vector of k-mer sizes to analyze (default: k=17 to 23)
+
+# Returns
+DataFrame containing quality metrics for each k-mer size:
+- `k`: K-mer length used
+- `cosine_distance`: Cosine similarity between k-mer distributions
+- `js_divergence`: Jensen-Shannon divergence between distributions  
+- `qv`: MerQury-style quality value score
 """
 function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
     results = DataFrames.DataFrame()
@@ -2335,6 +2901,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the cosine similarity between two k-mer count dictionaries.
+
+# Arguments
+- `kmer_counts_1::Dict{String,Int}`: First dictionary mapping k-mer sequences to their counts
+- `kmer_counts_2::Dict{String,Int}`: Second dictionary mapping k-mer sequences to their counts
+
+# Returns
+- `Float64`: Cosine distance between the two k-mer count vectors, in range [0,1]
+  where 0 indicates identical distributions and 1 indicates maximum dissimilarity
+
+# Details
+Converts k-mer count dictionaries into vectors using a unified set of keys,
+then computes cosine distance. Missing k-mers are treated as count 0.
+Result is invariant to input order and total counts (normalized internally).
 """
 function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
     sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
@@ -2346,6 +2927,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the Jensen-Shannon divergence between two k-mer frequency distributions.
+
+# Arguments
+- `kmer_counts_1`: Dictionary mapping k-mers to their counts in first sequence
+- `kmer_counts_2`: Dictionary mapping k-mers to their counts in second sequence
+
+# Returns
+- Normalized Jensen-Shannon divergence score between 0 and 1, where:
+  - 0 indicates identical distributions
+  - 1 indicates maximally different distributions
+
+# Notes
+- The measure is symmetric: JS(P||Q) = JS(Q||P)
+- Counts are automatically normalized to probability distributions
 """
 function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
     sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
@@ -2360,6 +2956,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the Jaccard similarity coefficient between two sets.
+
+The Jaccard similarity is defined as the size of the intersection divided by the size
+of the union of two sets:
+
+    J(A,B) = |A ∩ B| / |A ∪ B|
+
+# Arguments
+- `set1`: First set for comparison
+- `set2`: Second set for comparison
+
+# Returns
+- `Float64`: A value between 0.0 and 1.0, where:
+  * 1.0 indicates identical sets
+  * 0.0 indicates completely disjoint sets
 """
 function jaccard_similarity(set1, set2)
     return length(intersect(set1, set2)) / length(union(set1, set2))
@@ -2367,6 +2979,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the Jaccard distance between two sets, which is the complement of the Jaccard similarity.
+
+The Jaccard distance is defined as:
+``J_d(A,B) = 1 - J_s(A,B) = 1 - \\frac{|A ∩ B|}{|A ∪ B|}``
+
+# Arguments
+- `set1`: First set to compare
+- `set2`: Second set to compare
+
+# Returns
+- `Float64`: A value in [0,1] where 0 indicates identical sets and 1 indicates disjoint sets
 """
 function jaccard_distance(set1, set2)
     return 1.0 - jaccard_similarity(set1, set2)
@@ -2384,6 +3008,29 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate assembly Quality Value (QV) score using the Merqury method.
+
+Estimates base-level accuracy by comparing k-mer distributions between raw sequencing
+data and assembly. Higher QV scores indicate better assembly quality.
+
+# Arguments
+- `raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}`: K-mer counts from raw sequencing data
+- `assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}`: K-mer counts from assembly
+
+# Returns
+- `Float64`: Quality Value score in Phred scale (-10log₁₀(error rate))
+
+# Method
+QV is calculated using:
+1. Ktotal = number of unique kmers in assembly
+2. Kshared = number of kmers shared between raw data and assembly
+3. P = (Kshared/Ktotal)^(1/k) = estimated base-level accuracy
+4. QV = -10log₁₀(1-P)
+
+# Reference
+Rhie et al. "Merqury: reference-free quality, completeness, and phasing assessment
+for genome assemblies" Genome Biology (2020)
 """
 function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}, assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}) where {k,N}
     # Ktotal = # of kmers found in assembly
@@ -2407,6 +3054,18 @@ const DEFAULT_MINIMAP_DENOMINATOR=10
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate appropriate minimap index size based on available system memory.
+
+Converts total system memory to a recommended minimap index size by dividing the available
+memory by a denominator factor. Returns the size as a string with 'G' suffix.
+
+# Arguments
+- `system_mem_gb::Number`: Total system memory in gigabytes
+- `denominator::Number=DEFAULT_MINIMAP_DENOMINATOR`: Divisor to scale down memory allocation
+
+# Returns
+- `String`: Formatted memory size string (e.g. "4G")
 """
 function system_mem_to_minimap_index_size(;system_mem_gb, denominator=DEFAULT_MINIMAP_DENOMINATOR)
 
@@ -2421,7 +3080,27 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run this on the machine you intend to use to map the reads to confirm the index will fit
+Generate a minimap2 index command and output file path for mapping DNA sequencing reads.
+
+Run this on the machine you intend to use to map the reads to confirm the index will fit.
+
+# Arguments
+- `fasta`: Path to the reference FASTA file to be indexed
+- `mem_gb`: Available system memory in gigabytes for indexing
+- `mapping_type`: Sequencing technology preset. One of:
+  * "map-hifi": PacBio HiFi reads
+  * "map-ont": Oxford Nanopore reads
+  * "map-pb": PacBio CLR reads
+  * "sr": Short reads
+  * "lr:hq": High-quality long reads
+- `threads`: Number of threads to use for indexing
+- `as_string`: Return command as String instead of Cmd (default: false)
+- `denominator`: Divisor for calculating index size (default: $(DEFAULT_MINIMAP_DENOMINATOR))
+
+# Returns
+Named tuple containing:
+- `cmd`: The minimap2 indexing command (as String or Cmd)
+- `outfile`: Path to the output index file (.mmi)
 """
 function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
@@ -2439,9 +3118,28 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Generate minimap2 alignment commands for sequence mapping.
+
 aligning and compressing. No sorting or filtering.
 
 Use shell_only=true to get string command to submit to SLURM
+
+Creates a command to align reads in FASTQ format to a reference FASTA using minimap2, 
+followed by SAM compression with pigz. Handles resource allocation and conda environment setup.
+
+# Arguments
+- `fasta`: Path to reference FASTA file
+- `fastq`: Path to query FASTQ file
+- `mapping_type`: Alignment preset ("map-hifi", "map-ont", "map-pb", "sr", or "lr:hq")
+- `as_string`: If true, returns shell command as string; if false, returns command array
+- `mem_gb`: Available memory in GB for indexing (defaults to system free memory)
+- `threads`: Number of CPU threads to use (defaults to system threads)
+- `denominator`: Divisor for calculating minimap2 index size
+
+# Returns
+Named tuple containing:
+- `cmd`: Shell command (as string or array)
+- `outfile`: Path to compressed output SAM file
 """
 function minimap_map(;
         fasta,
@@ -2473,9 +3171,29 @@ function minimap_map(;
     return (;cmd, outfile)
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate minimap2 mapping commands with a pre-built index file.
+
+# Arguments
+- `fasta`: Path to the reference FASTA file
+- `mem_gb`: Available system memory in gigabytes for index generation
+- `mapping_type`: Mapping preset. Must be one of: "map-hifi", "map-ont", "map-pb", "sr", or "lr:hq"
+- `threads`: Number of threads to use for mapping and compression
+- `fastq`: Path to input FASTQ file
+- `as_string`: If true, returns command as a string; if false, returns as command array
+- `denominator`: Divisor for index size calculation (default: $(DEFAULT_MINIMAP_DENOMINATOR))
+
+# Returns
+Named tuple containing:
+- `cmd`: The minimap2 mapping command (string or array)
+- `outfile`: Path to the output compressed SAM file
+
+# Notes
+- Requires pre-built index file with pattern: `\${fasta}.x\${mapping_type}.I\${index_size}.mmi`
+- Automatically installs required conda environments (minimap2, samtools, pigz)
+- Output is automatically compressed with pigz
 """
 function minimap_map_with_index(;
         fasta,
@@ -2513,6 +3231,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the longest common prefix between two filenames.
+
+# Arguments
+- `filename1::String`: First filename to compare
+- `filename2::String`: Second filename to compare
+
+# Keywords
+- `strip_trailing_delimiters::Bool=true`: If true, removes trailing dots, hyphens, and underscores from the result
+
+# Returns
+- `String`: The longest common prefix found between the filenames
 """
 function find_matching_prefix(filename1::String, filename2::String; strip_trailing_delimiters=true)
     min_length = min(length(filename1), length(filename2))
@@ -2534,6 +3264,29 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Map paired-end reads to a reference sequence using minimap2.
+
+# Arguments
+- `fasta::String`: Path to reference FASTA file
+- `forward::String`: Path to forward reads FASTQ file
+- `reverse::String`: Path to reverse reads FASTQ file
+- `mem_gb::Integer`: Available system memory in GB
+- `threads::Integer`: Number of threads to use
+- `outdir::String`: Output directory (defaults to forward reads directory)
+- `as_string::Bool=false`: Return command as string instead of Cmd array
+- `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+- `denominator::Float64`: Memory scaling factor for index size
+
+# Returns
+Named tuple containing:
+- `cmd`: Command(s) to execute (String or Array{Cmd})
+- `outfile`: Path to compressed output SAM file (*.sam.gz)
+
+# Notes
+- Requires minimap2, samtools, and pigz conda environments
+- Automatically compresses output using pigz
+- Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
 """
 function minimap_map_paired_end_with_index(;
         fasta,
@@ -2576,6 +3329,27 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Maps paired-end reads to a reference genome using minimap2 and compresses the output.
+
+# Arguments
+- `fasta::String`: Path to reference genome FASTA file
+- `forward::String`: Path to forward reads FASTQ file
+- `reverse::String`: Path to reverse reads FASTQ file  
+- `mem_gb::Integer`: Available system memory in GB
+- `threads::Integer`: Number of threads to use
+- `outdir::String`: Output directory (defaults to forward reads directory)
+- `as_string::Bool`: Return command as string instead of Cmd array
+- `mapping_type::String`: Mapping preset, e.g. "sr" for short reads (default)
+- `denominator::Float64`: Memory scaling factor for minimap2 index
+
+# Returns
+Named tuple containing:
+- `cmd`: Command(s) to execute (String or Vector{Cmd})
+- `outfile`: Path to compressed output SAM file (*.sam.gz)
+
+# Dependencies
+Requires bioconda packages: minimap2, samtools, pigz
 """
 function minimap_map_paired_end(;
         fasta,
@@ -2615,6 +3389,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a BAM file to FASTQ format with gzip compression.
+
+# Arguments
+- `bam`: Path to input BAM file
+- `fastq`: Optional output path. Defaults to input path with ".fq.gz" extension
+
+# Returns
+- Path to the generated FASTQ file
+
+# Details
+- Uses samtools through conda environment
+- Automatically skips if output file exists
+- Output is gzip compressed
+- Requires samtools to be available via conda
+
 """
 function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     Mycelia.add_bioconda_env("samtools")
@@ -2631,12 +3421,33 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a dictionary of counts into a probability distribution where values sum to 1.0.
+
+# Arguments
+- `countmap::Dict`: Dictionary mapping keys to count values
+
+# Returns
+- `Dict`: New dictionary with same keys but values normalized by total sum
 """
 function normalize_countmap(countmap)
     sum_total = sum(values(countmap))
     return Dict(k => v/sum_total for (k, v) in countmap)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract biosample and barcode information from a PacBio XML metadata file.
+
+# Arguments
+- `xml`: Path to PacBio XML metadata file
+
+# Returns
+DataFrame with two columns:
+- `BioSampleName`: Name of the biological sample
+- `BarcodeName`: Associated DNA barcode identifier
+"""
 function extract_pacbiosample_information(xml)
     xml_dict = XMLDict.parse_xml(read(xml, String))
     wellsample = xml_dict["ExperimentContainer"]["Runs"]["Run"]["Outputs"]["SubreadSets"]["SubreadSet"]["DataSetMetadata"]["Collections"]["CollectionMetadata"]["WellSample"]
@@ -2660,6 +3471,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a visualization of a genome assembly graph using Bandage.
+
+# Arguments
+- `gfa`: Path to input GFA (Graphical Fragment Assembly) file
+- `img`: Optional output image path. Defaults to GFA filename with .png extension
+
+# Returns
+- Path to the generated image file
 """
 function bandage_visualize(;gfa, img=gfa*".png")
     # run(`$(bandage) image --helpall`)
