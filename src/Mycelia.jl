@@ -10395,12 +10395,45 @@ end
 #     return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality)
 # end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function random_fasta_record(;seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
+#     id = Random.randstring(Int(ceil(log(L + 1))))
+#     seq = BioSequences.randdnaseq(Random.seed!(seed), L)
+#     return FASTX.FASTA.Record(id, seq)
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generates a random FASTA record with a specified molecular type and sequence length.
+
+# Arguments
+- `moltype::Symbol=:DNA`: The type of molecule to generate (`:DNA`, `:RNA`, or `:AA` for amino acids).
+- `seed`: The random seed used for sequence generation (default: a random integer).
+- `L`: The length of the sequence (default: a random integer up to `typemax(UInt16)`).
+
+# Returns
+- A `FASTX.FASTA.Record` containing:
+  - A SHA-256 hash-based identifier derived from the generated sequence.
+  - A randomly generated sequence of the specified type.
+
+# Errors
+- Throws an error if `moltype` is not one of `:DNA`, `:RNA`, or `:AA`.
 """
-function random_fasta_record(;seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
-    id = Random.randstring(Int(ceil(log(L + 1))))
-    seq = BioSequences.randdnaseq(Random.seed!(seed), L)
+function random_fasta_record(;moltype::Symbol=:DNA, seed=rand(0:typemax(Int)), L = rand(0:Int(typemax(UInt16))))
+    Random.seed!(seed)
+    if moltype == :DNA
+        seq = BioSequences.randdnaseq(L)
+    elseif moltype == :RNA
+        seq = BioSequences.randrnaseq(L)
+    elseif moltype == :AA
+        seq = BioSequences.randaaseq(L)
+    else
+        error("unrecognized molecule type: $(moltype) ! found in [:DNA, :RNA, :AA]")
+    end
+    id = Mycelia.seq2sha256(seq)
     return FASTX.FASTA.Record(id, seq)
 end
 

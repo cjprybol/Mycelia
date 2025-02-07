@@ -33,3 +33,4 @@ projects/ME_CFS/*
 deps/build.log
 *.jpg
 *Project.toml
+*.ipynb

@@ -1,8 +1,32 @@
 using Test
 import Mycelia
 
+import FASTX
+import DocStringExtensions
+import BioSequences
+import Dates
+import Random
+
 # Simulation: for multi-omics data generation for benchmarking or testing.
 @testset "FASTA simulation" begin
+    @testset "dna record" begin
+        dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=42, L = 10)
+        @test FASTX.identifier(dna_record) == "e6614e938383857305089158322604fb9c07d0aac05567844d01f1517ce82ddc"
+        @test FASTX.sequence(dna_record) == "ATTAGGCACC"
+    end
+
+    @testset "rna record" begin
+        rna_record = Mycelia.random_fasta_record(moltype=:RNA, seed=42, L = 10)
+        @test FASTX.identifier(rna_record) == "a4ebfc1dd4051dd9db816c42c5fb8f528ae0b5387d7a8ccad67995e2c31ee48d"
+        @test FASTX.sequence(rna_record) == "AUUAGGCACC"
+    end
+
+    @testset "aa record" begin
+        aa_record = Mycelia.random_fasta_record(moltype=:AA, seed=42, L = 10)
+        @test FASTX.identifier(aa_record) == "cdb40a05b841c44e3757de6a54a1fd011536fce187c7e8c9c1ed36c415db8344"
+        @test FASTX.sequence(aa_record) == "PLLRQEPQLG"
+    end
+    
     @testset "virus-like" begin
         @test 1 + 1 == 2
     end
