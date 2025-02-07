@@ -3492,6 +3492,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate detailed mapping statistics for each reference sequence/contig in a XAM (SAM/BAM/CRAM) file.
+
+# Arguments
+- `xam`: Path to XAM file or XAM object
+
+# Returns
+A DataFrame with per-contig statistics including:
+- `n_aligned_reads`: Number of aligned reads
+- `total_aligned_bases`: Sum of alignment lengths
+- `total_alignment_score`: Sum of alignment scores
+- Mapping quality statistics (mean, std, median)
+- Alignment length statistics (mean, std, median)
+- Alignment score statistics (mean, std, median)
+- Percent mismatches statistics (mean, std, median)
+
+Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) are considered.
 """
 function xam_to_contig_mapping_stats(xam)
     xam_results = Mycelia.parse_xam_to_summary_table(xam)
@@ -3546,6 +3563,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate detailed mapping statistics for each reference sequence/contig in a XAM (SAM/BAM/CRAM) file.
+
+# Arguments
+- `xam`: Path to XAM file or XAM object
+
+# Returns
+A DataFrame with per-contig statistics including:
+- `n_aligned_reads`: Number of aligned reads
+- `total_aligned_bases`: Sum of alignment lengths
+- `total_alignment_score`: Sum of alignment scores
+- Mapping quality statistics (mean, std, median)
+- Alignment length statistics (mean, std, median)
+- Alignment score statistics (mean, std, median)
+- Percent mismatches statistics (mean, std, median)
+
+Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) are considered.
 """
 function fastx_to_contig_lengths(fastx)
     OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
@@ -3553,6 +3587,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate mapping statistics by comparing sequence alignments (BAM/SAM) to a reference FASTA.
+
+# Arguments
+- `fasta::String`: Path to reference FASTA file
+- `xam::String`: Path to alignment file (BAM or SAM format)
+
+# Returns
+DataFrame with columns:
+- `contig`: Reference sequence name
+- `contig_length`: Length of reference sequence
+- `total_aligned_bases`: Total number of bases aligned to reference
+- `mean_depth`: Average depth of coverage (total_aligned_bases/contig_length)
 """
 function fasta_xam_mapping_stats(;fasta, xam)
     fastx_contig_lengths = fastx_to_contig_lengths(fasta)
@@ -3567,6 +3614,29 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate alignment statistics for a SAM/BAM/CRAM file using samtools flagstat.
+
+# Arguments
+- `xam::AbstractString`: Path to input SAM/BAM/CRAM alignment file
+- `samtools_flagstat::AbstractString`: Output path for flagstat results (default: input_path.samtools-flagstat.txt)
+
+# Returns
+- `String`: Path to the generated flagstat output file
+
+# Details
+Runs samtools flagstat to calculate statistics on the alignment file, including:
+- Total reads
+- Secondary alignments
+- Supplementary alignments  
+- Duplicates
+- Mapped/unmapped reads
+- Proper pairs
+- Read 1/2 counts
+
+# Requirements
+- Requires samtools to be available via Bioconda
+- Input file must be in SAM, BAM or CRAM format
 """
 function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
     Mycelia.add_bioconda_env("samtools")
@@ -3579,6 +3649,26 @@ end
 # not a very good function yet, but good enough for the pinches I need it for
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a GFA (Graphical Fragment Assembly) file into a MetaGraph representation.
+
+# Arguments
+- `gfa`: Path to GFA format file
+
+# Returns
+A `MetaGraph` where:
+- Vertices represent segments (contigs)
+- Edges represent links between segments
+- Vertex properties include `:id` with segment identifiers
+- Graph property `:records` contains the original FASTA records
+
+# Format Support
+Handles standard GFA v1 lines:
+- `H`: Header lines (skipped)
+- `S`: Segments (stored as nodes with FASTA records)
+- `L`: Links (stored as edges)
+- `P`: Paths (stored in paths dictionary)
+- `A`: HiFiAsm specific lines (skipped)
 """
 function parse_gfa(gfa)
     segments = Vector{FASTX.FASTA.Record}()
@@ -3627,6 +3717,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GFA (Graphical Fragment Assembly) file into a structured representation.
+
+# Arguments
+- `gfa`: Path to GFA file or GFA content as string
+
+# Returns
+Named tuple containing:
+- `contig_table`: DataFrame with columns:
+  - `connected_component`: Integer ID for each component
+  - `contigs`: Comma-separated list of contig IDs
+  - `is_circular`: Boolean indicating if component forms a cycle
+  - `is_closed`: Boolean indicating if single contig forms a cycle
+  - `lengths`: Comma-separated list of contig lengths
+- `records`: FASTA records from the GFA
 """
 function gfa_to_structure_table(gfa)
     gfa_metagraph = parse_gfa(gfa)
@@ -3656,6 +3761,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Copy a file to a new location with a unique identifier prepended to the filename.
+
+# Arguments
+- `infile::AbstractString`: Path to the source file to copy
+- `out_directory::AbstractString`: Destination directory for the copied file
+- `unique_identifier::AbstractString`: String to prepend to the filename
+- `force::Bool=true`: If true, overwrite existing files
+
+# Returns
+- `String`: Path to the newly created file
 """
 function copy_with_unique_identifier(infile, out_directory, unique_identifier; force=true)
     outfile = joinpath(out_directory, unique_identifier * "." * basename(infile))
@@ -3664,12 +3780,30 @@ function copy_with_unique_identifier(infile, out_directory, unique_identifier; f
 end
 
 """
-Runs clustal omega on a fasta file
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-valid outfmts include
-```
-["fasta", "clustal", "msf", "phylip", "selex", "stockholm", "vienna"]
-```
+Run Clustal Omega multiple sequence alignment on a FASTA file.
+
+# Arguments
+- `fasta::String`: Path to input FASTA file
+- `outfmt::String="clustal"`: Output format for the alignment
+
+# Returns
+- `String`: Path to the output alignment file
+
+# Supported Output Formats
+- `"fasta"`: FASTA format
+- `"clustal"`: Clustal format
+- `"msf"`: MSF format  
+- `"phylip"`: PHYLIP format
+- `"selex"`: SELEX format
+- `"stockholm"`: Stockholm format
+- `"vienna"`: Vienna format
+
+# Notes
+- Uses Bioconda to manage the Clustal Omega installation
+- Caches results - will return existing output file if already generated
+- Handles single sequence files gracefully by returning output path without error
 """
 function run_clustal_omega(;fasta, outfmt="clustal")
     Mycelia.add_bioconda_env("clustalo")
@@ -3736,9 +3870,24 @@ function run_padloc(fasta_file)
     end
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Multi-Locus Sequence Typing (MLST) analysis on a genome assembly.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing the genome assembly
+
+# Returns
+- Path to the output file containing MLST results (`<input>.mlst.out`)
+
+# Details
+Uses the `mlst` tool from PubMLST to identify sequence types by comparing allelic 
+profiles of housekeeping genes against curated MLST schemes.
+
+# Dependencies
+- Requires Bioconda and the `mlst` package
+- Automatically sets up conda environment if not present
 """
 function run_mlst(fasta_file)
     Mycelia.add_bioconda_env("mlst")    
@@ -3754,6 +3903,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run ECTyper for serotyping E. coli genome assemblies.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing assembled genome(s)
+
+# Returns
+- `String`: Path to output directory containing ECTyper results
 """
 function run_ectyper(fasta_file)
     Mycelia.add_bioconda_env("ectyper")
@@ -3767,8 +3924,6 @@ function run_ectyper(fasta_file)
 end
 
  # -i ecoliA.fasta -o output_dir
-
-
 
 # function run_mlst(ID, OUT_DIR, normalized_fasta_file)
 #     mlst_dir="$(OUT_DIR)/mlst"
@@ -3784,6 +3939,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a JSONL (JSON Lines) file into a vector of dictionaries.
+
+# Arguments
+- `filepath::String`: Path to the JSONL file to parse
+
+# Returns
+- `Vector{Dict{String, Any}}`: Vector containing parsed JSON objects, one per line
+
+# Description
+Reads a JSONL file line by line, parsing each line as a separate JSON object.
+Uses pre-allocation and progress tracking for efficient processing of large files.
 """
 function parse_jsonl(filepath::String)
     # Count the lines first
@@ -3806,6 +3973,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a JSONL (JSON Lines) file into a vector of dictionaries.
+
+# Arguments
+- `filepath::String`: Path to the JSONL file to parse
+
+# Returns
+- `Vector{Dict{String, Any}}`: Vector containing parsed JSON objects, one per line
+
+# Description
+Reads a JSONL file line by line, parsing each line as a separate JSON object.
+Uses pre-allocation and progress tracking for efficient processing of large files.
 """
 function system_overview(;path=pwd())
     total_memory = Base.format_bytes(Sys.total_memory())
@@ -3829,6 +4008,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Vertically concatenate DataFrames with different column structures by automatically handling missing values.
+
+# Arguments
+- `dfs`: Variable number of DataFrames to concatenate vertically
+
+# Returns
+- `DataFrame`: Combined DataFrame containing all rows and columns from input DataFrames, 
+  with `missing` values where columns didn't exist in original DataFrames
 """
 function vcat_with_missing(dfs::Vararg{DataFrames.AbstractDataFrame})
     # Get all unique column names across all DataFrames
@@ -3862,6 +4050,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the SHA-256 hash of a sequence string.
+
+# Arguments
+- `seq::AbstractString`: Input sequence to be hashed
+
+# Returns
+- `String`: Hexadecimal representation of the SHA-256 hash
+
+# Details
+The input sequence is converted to uppercase before hashing.
 """
 function seq2sha256(seq::AbstractString)
     return SHA.bytes2hex(SHA.sha256(uppercase(seq)))
@@ -3869,11 +4068,38 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a biological sequence to its SHA256 hash value.
+
+Calculates a cryptographic hash of the sequence by first converting it to a string representation.
+This method dispatches to the string version of `seq2sha256`.
+
+# Arguments
+- `seq::BioSequences.BioSequence`: The biological sequence to hash
+
+# Returns
+- `String`: A 64-character hexadecimal string representing the SHA256 hash
 """
 function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute a single SHA256 hash from multiple SHA256 hashes.
+
+Takes a vector of hex-encoded SHA256 hashes and produces a new SHA256 hash by:
+1. Sorting the input hashes lexicographically
+2. Concatenating them in sorted order
+3. Computing a new SHA256 hash over the concatenated data
+
+# Arguments
+- `vector_of_sha256s`: Vector of hex-encoded SHA256 hash strings
+
+# Returns
+- A hex-encoded string representing the computed meta-hash
+"""
 function metasha256(vector_of_sha256s::Vector{<:AbstractString})
     ctx = SHA.SHA2_256_CTX()
     for sha_hash in sort(vector_of_sha256s)
@@ -3917,6 +4143,9 @@ end
 #     return normalized_fasta_table
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function get_base_extension(filename::String)
   parts = split(filename, "."; limit=3)  # Limit to 3 to handle 2-part extensions
   extension = parts[end]  # Get the last part
@@ -3928,6 +4157,9 @@ function get_base_extension(filename::String)
   return extension
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; force=false)
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
     if isfile(outfile) && (filesize(outfile) > 0) && !force
@@ -3974,6 +4206,9 @@ function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; forc
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
     result = DataFrames.combine(gdf) do sdf
         sdf[StatsBase.sample(1:DataFrames.nrow(sdf), 1), :]
@@ -3981,6 +4216,9 @@ function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFram
     return result
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function random_symmetric_distance_matrix(n)
   # Generate a random matrix
   matrix = rand(n, n)
@@ -3996,14 +4234,23 @@ function random_symmetric_distance_matrix(n)
   return matrix
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
     return DataFrames.combine(gdf, first)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function n_maximally_distinguishable_colors(n)
     return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function hclust_to_metagraph(hcl::Clustering.Hclust)
     total_nodes = length(hcl.order) + size(hcl.merges, 1)
     mg = MetaGraphs.MetaDiGraph(total_nodes)
@@ -4050,13 +4297,23 @@ function hclust_to_metagraph(hcl::Clustering.Hclust)
 end
 
 # https://www.giantfocal.com/toolkit/font-size-converter
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function pixels_to_points(pixels)
     return pixels / 4 * 3
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function points_to_pixels(points)
     return points / 3 * 4
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function draw_dendrogram_tree(
         mg::MetaGraphs.MetaDiGraph;
         width=500,
@@ -4121,6 +4378,9 @@ function draw_dendrogram_tree(
     Luxor.preview()
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function draw_radial_tree(
         mg::MetaGraphs.MetaDiGraph;
         width=500,
@@ -4210,6 +4470,9 @@ function draw_radial_tree(
     Luxor.preview()
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function heirarchically_cluster_distance_matrix(distance_matrix)
     # Perform hierarchical clustering using Ward's method.
     # Ward's method minimizes the total within-cluster variance, which tends to
@@ -4223,6 +4486,9 @@ function heirarchically_cluster_distance_matrix(distance_matrix)
     return hcl
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function identify_optimal_number_of_clusters(distance_matrix)
     hcl = heirarchically_cluster_distance_matrix(distance_matrix)
     ks = 2:Int(ceil(sqrt(length(hcl.labels))))
@@ -4245,6 +4511,9 @@ function identify_optimal_number_of_clusters(distance_matrix)
     return (hcl, optimal_number_of_clusters)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function merge_colors(c1, c2)
     if c1 == c2
         return c1
@@ -4260,6 +4529,9 @@ function merge_colors(c1, c2)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
@@ -4271,6 +4543,9 @@ function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     return (;outdir, hifiasm_outprefix)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
     indices = findall(bool_vec)  # Get indices of true values
     if isempty(indices)
@@ -4283,10 +4558,18 @@ function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
     # true_ranges_table = DataFrames.DataFrame(starts = starts, ends = ends, lengths = ends .- starts)
     return collect(Iterators.filter(x -> (x[2] - x[1]) >= min_length, zip(starts, ends)))
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function equally_spaced_samples(vector, n)
     indices = round.(Int, range(1, length(vector), length=n))
     return vector[indices]
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function chromosome_coverage_table_to_plot(cdf)
     p = StatsPlots.plot(
         xlims = extrema(cdf[!, "index"]),
@@ -4337,6 +4620,10 @@ function chromosome_coverage_table_to_plot(cdf)
     StatsPlots.hline!(p, [mean_coverage + -3 * stddev_coverage], label="-3σ", c=color_vec[1])
     return p
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
     half_window = Int(floor(window_size / 2))
     result = Vector{Float64}(undef, length(data))
@@ -4348,6 +4635,9 @@ function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
     return result
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function visualize_genome_coverage(coverage_table)
     num_plots = length(unique(coverage_table[!, "chromosome"]))
     meta_figure = StatsPlots.plot(
@@ -4557,6 +4847,9 @@ end
 #     return trnascan_dir
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function run_trnascan(;fna_file, outdir=fna_file * "_trnascan")
     Mycelia.add_bioconda_env("trnascan-se")
     # trnascan doesn't like to overwrite existing things
@@ -4857,11 +5150,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function run_mmseqs_easy_search(;
         query_fasta,
@@ -4903,11 +5191,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true)
     blast_dir = mkpath(joinpath(out_dir, "blastn"))
@@ -4996,11 +5279,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
     blast_dir = mkpath(joinpath(out_dir, blast_command))
@@ -5050,11 +5328,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     
@@ -5118,6 +5391,9 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
     # https://pyrodigal.readthedocs.io/en/stable/guide/cli.html#command-line-interface
 
@@ -5258,13 +5534,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function fit_optimal_number_of_clusters(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
@@ -5355,13 +5624,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function plot_optimal_cluster_assessment_results(clustering_results)
     p1 = StatsPlots.plot(
@@ -5390,13 +5652,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function document_frequency(documents)
     document_tokens = Set(split(strip(first(documents))))
@@ -5411,13 +5666,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function wcss(clustering_result)
     n_clusters = length(clustering_result.counts)
@@ -5431,13 +5679,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
@@ -5795,6 +6036,9 @@ end
 #     return String(filter(x -> isvalid(Char, x), input))
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function blastdb2table(;blastdb, outfile="", force=false)
     try
         run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
@@ -6087,13 +6331,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function upload_node_over_api(graph, v; ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j")
     node_type = MetaGraphs.props(graph, v)[:TYPE]
@@ -6125,13 +6362,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function create_node_constraints(graph; address, username="neo4j", password, database="neo4j")
     node_types = unique(MetaGraphs.props(graph, v)[:TYPE] for v in Graphs.vertices(graph))
@@ -6148,16 +6378,6 @@ function create_node_constraints(graph; address, username="neo4j", password, dat
     end
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
-"""
 # function type_to_string(T::KMER_TYPE) where {KMER_TYPE <: Kmers.Kmer}
 #     @show "here"
 #     return 
@@ -6322,13 +6542,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function cypher(cmd;
     address="neo4j://localhost:7687",
@@ -6345,13 +6558,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function list_databases(;address, username="neo4j", password)
     cmd = "show databases"
@@ -6362,13 +6568,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function create_database(;database, address, username="neo4j", password)
     current_databases = list_databases(;address, username, password)
@@ -6399,13 +6598,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function load_ncbi_metadata(db)
     if !(db in ["genbank", "refseq"])
@@ -6450,13 +6642,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME="neo4j", PASSWORD)
     DATABASE = "neo4j"
@@ -6475,13 +6660,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function load_refseq_metadata()
     return load_ncbi_metadata("refseq")
@@ -6489,13 +6667,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function load_genbank_metadata()
     return load_ncbi_metadata("genbank")
@@ -6516,12 +6687,7 @@ Extensions include:
 - genomic.gbff.gz
 - genomic.gtf.gz
 - protein.gpff.gz
-- translated_cds.faa.gz 
-
-```jldoctest
-julia> 1 + 1
-2
-```
+- translated_cds.faa.gz
 """
 function ncbi_ftp_path_to_url(;ftp_path, extension)
     # genomic.fna.gz
@@ -6543,13 +6709,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-Description
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function countmap_columns(table)
     for n in names(refseq_metadata)
@@ -6563,11 +6722,6 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
 or get fasta directly from FTP site
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
@@ -6588,7 +6742,9 @@ function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
 end
 
 # function ncbi_datasets_download_by_taxon_id
-
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function load_ncbi_taxonomy(;
         path_to_taxdump="$(homedir())/workspace/blastdb/taxdump"
         # path_to_prebuilt_graph="$(path_to_taxdump)/ncbi_taxonomy.jld2"
@@ -6843,11 +6999,6 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run fastani with a query and reference list
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function fastani_list(;query_list="", reference_list="", outfile="", threads=Sys.CPU_THREADS, force=false)
     Mycelia.add_bioconda_env("fastani")
@@ -6885,11 +7036,6 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Determines the contig with the greatest number of total bases mapping to it
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function determine_primary_contig(qualimap_results)
     primary_contig_index = last(findmax(qualimap_results[!, "Mapped bases"]))
@@ -6943,11 +7089,6 @@ By cleanly assembled we mean that the contig does not have other contigs attache
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
     contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
@@ -6983,11 +7124,6 @@ Returns bool indicating whether the contig is a circle
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function contig_is_circular(graph_file::String, contig_name::String)
     contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
@@ -7023,13 +7159,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 # uses minimap
 function determine_percent_identity(reference_fasta, query_fasta)
@@ -7127,13 +7256,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
 function analyze_kmer_spectra(;out_directory, forward_reads="", reverse_reads="", k=17, target_coverage=0, plot_size=(600,400))
@@ -7225,16 +7347,8 @@ function analyze_kmer_spectra(;out_directory, forward_reads="", reverse_reads=""
     end
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer_type; kmers_to_assess=Inf, power=10, min_count = 1)
     # canonical_kmers = Set{kmer_type}()
@@ -7408,11 +7522,6 @@ Create an in-memory kmer-graph that records:
 - all *observed* edges between kmers
 - edge orientations
 - edge counts
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
     
@@ -7445,10 +7554,16 @@ function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString}
     return graph
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function fastx_to_kmer_graph(KMER_TYPE, fastx::AbstractString)
     return fastx_to_kmer_graph(KMER_TYPE, [fastx])
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function add_fastx_records_to_graph!(graph, fastxs)
     record_dict = Dict(String(FASTX.description(record)) => record for record in Mycelia.open_fastx(first(fastxs)))
     for fastx in fastxs[2:end]
@@ -7462,13 +7577,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function add_record_edgemers_to_graph!(graph)
     edgemer_size = graph.gprops[:k] + 1
@@ -7491,13 +7599,6 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-
-A short description of the function
-
-```jldoctest
-julia> 1 + 1
-2
-```
 """
 function add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
     # observed_orientation = BioSequences.iscanonical(observed_edgemer)
@@ -7526,9 +7627,6 @@ function add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer
     end
     return graph
 end
-
-
-
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -9555,6 +9653,9 @@ end
 # end
 
 # Save the distance matrix to a JLD2 file
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function save_matrix_jld2(;matrix, filename)
     if !isfile(filename) || (filesize(filename) == 0)
         JLD2.@save filename matrix
@@ -9565,10 +9666,16 @@ function save_matrix_jld2(;matrix, filename)
 end
 
 # Load the distance matrix from a JLD2 file
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function load_matrix_jld2(filename)
     return JLD2.load(filename, "matrix")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function load_jld2(filename)
     return JLD2.load(filename)
 end
@@ -9623,7 +9730,6 @@ function ncbi_genome_download_accession(;
     isfile(outpath) && rm(outpath)
     return final_outfolder
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -9989,6 +10095,9 @@ function read_gff(gff_io)
     DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function split_gff_attributes_into_columns(gff_df)
     # 1. Extract unique keys from the attribute column
     all_keys = Set{String}()
@@ -11936,7 +12045,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
     # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
     return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousRNAMers{K}(sequence)]))
@@ -12567,6 +12675,9 @@ function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
     return DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
     table = taxids2taxonkit_full_lineage_table(taxids)
     # table = taxids2taxonkit_lineage_table(taxids)
@@ -12583,6 +12694,9 @@ function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
     return taxid_to_lineage_ranks
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
 function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     taxid_to_lineage_ranks = taxids2taxonkit_taxid2lineage_ranks(taxids)
     taxids_to_lineage_table = DataFrames.DataFrame()
