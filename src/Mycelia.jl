@@ -4145,6 +4145,11 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract the base file extension from a filename, handling compressed files.
+
+For regular files, returns the last extension. For gzipped files, returns the extension
+before .gz.
 """
 function get_base_extension(filename::String)
   parts = split(filename, "."; limit=3)  # Limit to 3 to handle 2-part extensions
@@ -4159,6 +4164,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a FASTA file into a normalized tab-separated table format with standardized sequence identifiers.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file
+- `outfile::String`: Path to output compressed TSV file (defaults to input filename + ".tsv.gz")
+- `force::Bool=false`: If true, overwrites existing output file
+
+# Returns
+- `String`: Path to the created output file
+
+# Output Format
+Creates a gzipped TSV file with the following columns:
+- fasta_identifier: Original FASTA filename
+- sequence_sha256: SHA256 hash of the sequence
+- sequence_identifier: Original sequence ID from FASTA
+- sequence_description: Full sequence description from FASTA
+- sequence: The actual sequence
 """
 function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; force=false)
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
@@ -4208,6 +4231,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Select one random row from each group in a grouped DataFrame.
+
+# Arguments
+- `gdf::GroupedDataFrame`: A grouped DataFrame created using `groupby`
+
+# Returns
+- `DataFrame`: A new DataFrame containing exactly one randomly sampled row from each group
 """
 function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
     result = DataFrames.combine(gdf) do sdf
@@ -4218,6 +4249,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a random symmetric distance matrix of size n×n with zeros on the diagonal.
+
+# Arguments
+- `n`: Positive integer specifying the matrix dimensions
+
+# Returns
+- A symmetric n×n matrix with random values in [0,1), zeros on the diagonal
+
+# Details
+- The matrix is symmetric, meaning M[i,j] = M[j,i]
+- Diagonal elements M[i,i] are set to 0.0
+- Off-diagonal elements are uniformly distributed random values
 """
 function random_symmetric_distance_matrix(n)
   # Generate a random matrix
@@ -4236,6 +4280,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Return a DataFrame containing the first row from each group in a GroupedDataFrame.
+
+# Arguments
+- `gdf::GroupedDataFrame`: A grouped DataFrame created using `groupby`
+
+# Returns
+- `DataFrame`: A new DataFrame containing first row from each group
 """
 function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
     return DataFrames.combine(gdf, first)
@@ -4243,6 +4295,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate `n` colors that are maximally distinguishable from each other.
+
+# Arguments
+- `n::Integer`: The number of distinct colors to generate
+
+# Returns
+A vector of `n` RGB colors that are optimized for maximum perceptual distinction,
+using white (RGB(1,1,1)) and black (RGB(0,0,0)) as anchor colors.
 """
 function n_maximally_distinguishable_colors(n)
     return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
@@ -4250,6 +4311,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a hierarchical clustering tree into a directed metagraph representation.
+
+# Arguments
+- `hcl::Clustering.Hclust`: Hierarchical clustering result object
+
+# Returns
+- `MetaGraphs.MetaDiGraph`: Directed graph with metadata representing the clustering hierarchy
+
+# Graph Properties
+The resulting graph contains the following vertex properties:
+- `:hclust_id`: String identifier for each node
+- `:height`: Height/distance at each merge point (0.0 for leaves)
+- `:x`: Horizontal position for visualization (0-1 range)
+- `:y`: Vertical position based on normalized height
+- `:hcl`: Original clustering object (stored as graph property)
 """
 function hclust_to_metagraph(hcl::Clustering.Hclust)
     total_nodes = length(hcl.order) + size(hcl.merges, 1)
@@ -4299,6 +4376,18 @@ end
 # https://www.giantfocal.com/toolkit/font-size-converter
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert pixel measurements to point measurements using the standard 4:3 ratio.
+
+Points are the standard unit for typography (1 point = 1/72 inch), while pixels are 
+used for screen measurements. This conversion uses the conventional 4:3 ratio where 
+3 points equal 4 pixels.
+
+# Arguments
+- `pixels`: The number of pixels to convert
+
+# Returns
+- The equivalent measurement in points
 """
 function pixels_to_points(pixels)
     return pixels / 4 * 3
@@ -4306,6 +4395,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert typographic points to pixels using a 4:3 ratio (1 point = 4/3 pixels).
+
+# Arguments
+- `points`: Size in typographic points (pt)
+
+# Returns
+- Size in pixels (px)
 """
 function points_to_pixels(points)
     return points / 3 * 4
@@ -4313,6 +4410,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Draw a dendrogram visualization of hierarchical clustering results stored in a MetaDiGraph.
+
+# Arguments
+- `mg::MetaGraphs.MetaDiGraph`: Graph containing hierarchical clustering results. Must have
+  `:hcl` in graph properties with clustering data and vertex properties containing `:x`, `:y` coordinates.
+
+# Keywords
+- `width::Integer=500`: Width of output image in pixels
+- `height::Integer=500`: Height of output image in pixels 
+- `fontsize::Integer=12`: Font size for node labels in points
+- `margins::Float64`: Margin size in pixels, defaults to min(width,height)/20
+- `mergenodesize::Float64=1`: Size of circular nodes at merge points
+- `lineweight::Float64=1`: Thickness of dendrogram lines
+- `filename::String`: Output filename, defaults to timestamp with .dendrogram.png extension
+
+# Returns
+Nothing, but saves dendrogram image to disk and displays preview.
 """
 function draw_dendrogram_tree(
         mg::MetaGraphs.MetaDiGraph;
@@ -4380,6 +4495,37 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Draw a radial hierarchical clustering tree visualization and save it as an image file.
+
+# Arguments
+- `mg::MetaGraphs.MetaDiGraph`: A meta directed graph containing hierarchical clustering data
+  with required graph properties `:hcl` containing clustering information.
+
+# Keywords
+- `width::Int=500`: Width of the output image in pixels
+- `height::Int=500`: Height of the output image in pixels
+- `fontsize::Int=12`: Font size for node labels
+- `margins::Float64`: Margin size (automatically calculated as min(width,height)/20)
+- `mergenodesize::Float64=1`: Size of the merge point nodes
+- `lineweight::Float64=1`: Thickness of the connecting lines
+- `filename::String`: Output filename (defaults to timestamp with ".radial.png" suffix)
+
+# Details
+The function creates a radial visualization of hierarchical clustering results where:
+- Leaf nodes are arranged in a circle with labels
+- Internal nodes represent merge points
+- Connections show the hierarchical structure through arcs and lines
+
+The visualization is saved as a PNG file and automatically previewed.
+
+# Required Graph Properties
+The input graph must have:
+- `mg.gprops[:hcl].labels`: Vector of leaf node labels
+- `mg.gprops[:hcl].order`: Vector of ordered leaf nodes
+- `mg.gprops[:hcl].merges`: Matrix of merge operations
+- `mg.vprops[v][:x]`: X coordinate for each vertex
+- `mg.vprops[v][:y]`: Y coordinate for each vertex
 """
 function draw_radial_tree(
         mg::MetaGraphs.MetaDiGraph;
@@ -4472,6 +4618,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Performs hierarchical clustering on a distance matrix using Ward's linkage method.
+
+# Arguments
+- `distance_matrix::Matrix{<:Real}`: A symmetric distance/dissimilarity matrix
+
+# Returns
+- `HierarchicalCluster`: A hierarchical clustering object from Clustering.jl
+
+# Details
+Uses Ward's method (minimum variance) for clustering, which:
+- Minimizes total within-cluster variance
+- Produces compact, spherical clusters
+- Works well for visualization in radial layouts
 """
 function heirarchically_cluster_distance_matrix(distance_matrix)
     # Perform hierarchical clustering using Ward's method.
@@ -4488,6 +4648,31 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Determine the optimal number of clusters for a dataset using hierarchical clustering
+and silhouette score analysis.
+
+# Arguments
+- `distance_matrix`: A symmetric matrix of pairwise distances between data points
+
+# Returns
+A tuple containing:
+- `hcl`: The fitted hierarchical clustering object
+- `optimal_number_of_clusters`: Integer indicating the optimal number of clusters
+
+# Details
+The function:
+1. Performs hierarchical clustering on the distance matrix
+2. Tests cluster counts from 2 to √n (where n is dataset size)
+3. Evaluates each clustering using silhouette scores
+4. Generates a diagnostic plot showing silhouette scores vs cluster counts
+5. Selects the number of clusters that minimizes the silhouette score
+
+The diagnostic plot is displayed automatically during execution.
+
+# See Also
+- `heirarchically_cluster_distance_matrix`
+- `Clustering.silhouettes`
 """
 function identify_optimal_number_of_clusters(distance_matrix)
     hcl = heirarchically_cluster_distance_matrix(distance_matrix)
@@ -4513,6 +4698,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Merge two colors by calculating their minimal color difference vector.
+
+# Arguments
+- `c1::Color`: First color input
+- `c2::Color`: Second color input 
+
+# Returns
+- If colors are equal, returns the input color
+- Otherwise returns the color difference vector (c1-c2 or c2-c1) with minimal RGB sum
+
+# Details
+Calculates two difference vectors:
+- mix_a = c1 - c2 
+- mix_b = c2 - c1
+Returns the difference vector with the smallest sum of RGB components.
 """
 function merge_colors(c1, c2)
     if c1 == c2
@@ -4531,6 +4732,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run the hifiasm genome assembler on PacBio HiFi reads.
+
+# Arguments
+- `fastq::String`: Path to input FASTQ file containing HiFi reads
+- `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `hifiasm_outprefix::String`: Prefix used for hifiasm output files
+
+# Details
+- Automatically creates and uses a conda environment with hifiasm
+- Uses primary assembly mode (--primary) optimized for inbred samples
+- Skips assembly if output files already exist at the specified prefix
+- Utilizes all available CPU threads
 """
 function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     Mycelia.add_bioconda_env("hifiasm")
@@ -4545,6 +4763,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Finds contiguous ranges of `true` values in a boolean vector.
+
+# Arguments
+- `bool_vec::AbstractVector{Bool}`: Input boolean vector to analyze
+- `min_length=1`: Minimum length requirement for a range to be included
+
+# Returns
+Vector of tuples `(start, end)` where each tuple represents the indices of a
+contiguous range of `true` values meeting the minimum length requirement.
 """
 function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
     indices = findall(bool_vec)  # Get indices of true values
