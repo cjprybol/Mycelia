@@ -3,28 +3,51 @@ name: CI
 on:
   push:
     branches:
-      - master # Update to match your development branch
+      - master  # Update to match your primary development branch
     tags: '*'
   pull_request:
     branches:
-      - master # Update to match your development branch
+      - master  # Update to match your primary development branch
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         julia-version: ['release', 'lts']
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v2.6.1
         with:
           version: ${{ matrix.julia-version }}
-      - name: Run tests with coverage
-        run: julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+
+      - name: Cache Julia packages
+        uses: actions/cache@v3
         with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
+          path: ~/.julia/artifacts
+          key: ${{ runner.os }}-julia-${{ matrix.julia-version }}-artifacts-${{ hashFiles('**/Project.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-julia-${{ matrix.julia-version }}-artifacts-
+
+      - name: Run tests with coverage
+        run: |
+          julia --project=. -e '
+            using Pkg;
+            Pkg.instantiate();
+            Pkg.build();
+            Pkg.test(coverage=true);
+          '
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage/*.lcov
+          flags: unittests
+          name: codecov-umbrella
           fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
