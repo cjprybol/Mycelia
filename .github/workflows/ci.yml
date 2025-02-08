@@ -3,30 +3,28 @@ name: CI
 on:
   push:
     branches:
-      - master # update to match your development branch (master, main, dev, trunk, ...)
+      - master # Update to match your development branch
     tags: '*'
   pull_request:
     branches:
-      - master # update to match your development branch (master, main, dev, trunk, ...)
+      - master # Update to match your development branch
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        julia-version: ['release', 'lts']
     steps:
-      - uses: actions/checkout@v2
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.6'
-      - name: Install dependencies
-        run: julia -e 'using Pkg; Pkg.instantiate()'
-      - name: Run tests
+          version: ${{ matrix.julia-version }}
+      - name: Run tests with coverage
         run: julia --project=. -e 'using Pkg; Pkg.test(coverage=true)'
-      - name: Submit coverage
-        run: julia --project=. -e 'using Coverage; Codecov.submit(process_folder())'
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
+          files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
