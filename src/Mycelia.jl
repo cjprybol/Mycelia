@@ -4789,6 +4789,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Sample `n` equally spaced elements from `vector`.
+
+# Arguments
+- `vector`: Input vector to sample from
+- `n`: Number of samples to return (must be positive)
+
+# Returns
+A vector containing `n` equally spaced elements from the input vector.
 """
 function equally_spaced_samples(vector, n)
     indices = round.(Int, range(1, length(vector), length=n))
@@ -4797,6 +4806,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a visualization of chromosome coverage data with statistical thresholds.
+
+# Arguments
+- `cdf::DataFrame`: Coverage data frame containing columns:
+  - `index`: Chromosome position indices
+  - `depth`: Coverage depth values
+  - `chromosome`: Chromosome identifier
+  - `mean_coverage`: Mean coverage value
+  - `std_coverage`: Standard deviation of coverage
+  - `3σ`: Boolean vector indicating +3 sigma regions
+  - `-3σ`: Boolean vector indicating -3 sigma regions
+
+# Returns
+- A StatsPlots plot object showing:
+  - Raw coverage data (black line)
+  - Mean coverage and ±1,2,3σ thresholds (rainbow colors)
+  - Highlighted regions exceeding ±3σ thresholds (red vertical lines)
 """
 function chromosome_coverage_table_to_plot(cdf)
     p = StatsPlots.plot(
@@ -4851,6 +4878,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute a centered moving average over a vector using a sliding window.
+
+# Arguments
+- `data::AbstractVector{T}`: Input vector to be averaged
+- `window_size::Int`: Size of the sliding window (odd number recommended)
+
+# Returns
+- `Vector{Float64}`: Vector of same length as input containing moving averages
+
+# Details
+- For points near the edges, the window is truncated to available data
+- Window is centered on each point, using floor(window_size/2) points on each side
+- Result type is always Float64 regardless of input type T
 """
 function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
     half_window = Int(floor(window_size / 2))
@@ -4865,6 +4906,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# Arguments
+- `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# Returns
+- `Plots.Figure`: A composite figure with coverage plots for each chromosome
+
+# Details
+Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+distribution across genomic positions for that chromosome.
 """
 function visualize_genome_coverage(coverage_table)
     num_plots = length(unique(coverage_table[!, "chromosome"]))
@@ -4877,6 +4930,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run TransTermHP to predict rho-independent transcription terminators in DNA sequences.
+
+# Arguments
+- `fasta`: Path to input FASTA file containing DNA sequences
+- `gff`: Optional path to GFF annotation file. If provided, improves prediction accuracy
+
+# Returns
+- `String`: Path to output file containing TransTermHP predictions
+
+# Details
+- Uses Conda environment 'transtermhp' for execution
+- Automatically generates coordinate file from FASTA or GFF input
+- Removes temporary coordinate file after completion
+- Requires Mycelia's Conda setup
 """
 function run_transterm(;fasta, gff="")
     # note in my one test with phage genomes, calling without gff yeilds more hits but average confidence is a bit lower
@@ -4904,6 +4972,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate minimal coordinate files required for TransTermHP analysis from FASTA sequences.
+
+Creates artificial gene annotations at sequence boundaries to enable TransTermHP to run
+without real gene annotations. For each sequence in the FASTA file, generates two
+single-base-pair "genes" at positions 1-2 and (L-1)-L, where L is sequence length.
+
+# Arguments
+- `fasta`: Path to input FASTA file containing sequences to analyze
+
+# Returns
+- Path to generated coordinate file (original path with ".coords" extension)
+
+# Format
+Generated coordinate file follows TransTermHP format:
+gene_id start stop chromosome
+
+where chromosome matches FASTA sequence identifiers.
+
+See also: [`run_transterm`](@ref)
 """
 function generate_transterm_coordinates_from_fasta(fasta)
     # 10. USING TRANSTERM WITHOUT GENOME ANNOTATIONS
@@ -4971,6 +5059,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GFF file to a coordinates file compatible with TransTermHP format.
+
+# Arguments
+- `gff_file::String`: Path to input GFF file
+
+# Processing
+- Converts 1-based to 0-based coordinates
+- Extracts gene IDs from the attributes field
+- Retains columns: gene_id, start, end, seqid
+
+# Returns
+- Path to the generated coordinates file (original filename with '.coords' suffix)
+
+# Output Format
+Space-delimited file with columns: gene_id, start, end, seqid
 """
 function generate_transterm_coordinates_from_gff(gff_file)
     raw_gff = Mycelia.read_gff(gff_file)
@@ -5077,6 +5181,29 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run tRNAscan-SE to identify and annotate transfer RNA genes in the provided sequence file.
+
+# Arguments
+- `fna_file::String`: Path to input FASTA nucleotide file
+- `outdir::String`: Output directory path (default: input_file_path + "_trnascan")
+
+# Returns
+- `String`: Path to the output directory containing tRNAscan-SE results
+
+# Output Files
+Creates the following files in `outdir`:
+- `*.trnascan.out`: Main output with tRNA predictions
+- `*.trnascan.bed`: BED format coordinates
+- `*.trnascan.fasta`: FASTA sequences of predicted tRNAs
+- `*.trnascan.struct`: Secondary structure predictions
+- `*.trnascan.stats`: Summary statistics
+- `*.trnascan.log`: Program execution log
+
+# Notes
+- Uses the general tRNA model (-G flag) suitable for all domains of life
+- Automatically sets up tRNAscan-SE via Bioconda
+- Skips processing if output directory contains files
 """
 function run_trnascan(;fna_file, outdir=fna_file * "_trnascan")
     Mycelia.add_bioconda_env("trnascan-se")
@@ -5378,6 +5505,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Runs the MMseqs2 easy-search command on the given query FASTA file against the target database.
+
+# Arguments
+- `query_fasta::String`: Path to the query FASTA file.
+- `target_database::String`: Path to the target database.
+- `out_dir::String`: Directory to store the output file. Defaults to the directory of the query FASTA file.
+- `outfile::String`: Name of the output file. Defaults to a combination of the query FASTA and target database filenames.
+- `format_output::String`: Format of the output. Defaults to a predefined set of fields.
+- `threads::Int`: Number of CPU threads to use. Defaults to the number of CPU threads available.
+- `force::Bool`: If true, forces the re-generation of the output file even if it already exists. Defaults to false.
+
+# Returns
+- `outfile_path::String`: Path to the generated output file.
+
+# Notes
+- Adds the `mmseqs2` environment using Bioconda if not already present.
+- Removes temporary files created during the process.
 """
 function run_mmseqs_easy_search(;
         query_fasta,
@@ -5419,6 +5564,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+
+Run the BLASTN (Basic Local Alignment Search Tool for Nucleotides) command with specified parameters.
+
+# Arguments
+- `out_dir::String`: The output directory where the BLASTN results will be saved.
+- `fasta::String`: The path to the input FASTA file containing the query sequences.
+- `blast_db::String`: The path to the BLAST database to search against.
+- `task::String`: The BLASTN task to perform. Default is "megablast".
+- `force::Bool`: If true, forces the BLASTN command to run even if the output file already exists. Default is false.
+- `remote::Bool`: If true, runs the BLASTN command remotely. Default is false.
+- `wait::Bool`: If true, waits for the BLASTN command to complete before returning. Default is true.
+
+# Returns
+- `outfile::String`: The path to the output file containing the BLASTN results.
+
+# Description
+This function constructs and runs a BLASTN command based on the provided parameters.
+It creates an output directory if it doesn't exist, constructs the output file path, and checks if the BLASTN command needs to be run based on the existence and size of the output file.
+The function supports running the BLASTN command locally or remotely, with options to force re-running and to wait for completion.
 """
 function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true)
     blast_dir = mkpath(joinpath(out_dir, "blastn"))
@@ -5507,6 +5672,25 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run a BLAST (Basic Local Alignment Search Tool) command with the specified parameters.
+
+# Arguments
+- `out_dir::String`: The output directory where the BLAST results will be stored.
+- `fasta::String`: The path to the input FASTA file.
+- `blast_db::String`: The path to the BLAST database.
+- `blast_command::String`: The BLAST command to be executed (e.g., `blastn`, `blastp`).
+- `force::Bool`: If `true`, forces the BLAST command to run even if the output file already exists. Default is `false`.
+- `remote::Bool`: If `true`, runs the BLAST command remotely. Default is `false`.
+- `wait::Bool`: If `true`, waits for the BLAST command to complete before returning. Default is `true`.
+
+# Returns
+- `outfile::String`: The path to the output file containing the BLAST results.
+
+# Description
+This function constructs and runs a BLAST command based on the provided parameters. It creates the necessary output directory, constructs the output file name, and determines whether the BLAST command needs to be run based on the existence and size of the output file. The function supports both local and remote execution of the BLAST command.
+
+If `force` is set to `true` or the output file does not exist or is empty, the BLAST command is executed. The function logs the command being run and measures the time taken for execution. The output file path is returned upon completion.
 """
 function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
     blast_dir = mkpath(joinpath(out_dir, blast_command))
@@ -5556,6 +5740,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Prodigal gene prediction software on input FASTA file to identify protein-coding genes
+in metagenomes or single genomes.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing genomic sequences
+- `out_dir::String=dirname(fasta_file)`: Directory for output files. Defaults to input file's directory
+
+# Returns
+Named tuple containing paths to all output files:
+- `fasta_file`: Input FASTA file path
+- `out_dir`: Output directory path  
+- `gff`: Path to GFF format gene predictions
+- `gene_scores`: Path to all potential genes and their scores
+- `fna`: Path to nucleotide sequences of predicted genes
+- `faa`: Path to protein translations of predicted genes
+- `std_out`: Path to captured stdout
+- `std_err`: Path to captured stderr
 """
 function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     
@@ -5621,6 +5823,30 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Pyrodigal gene prediction on a FASTA file using the meta procedure optimized for metagenomic sequences.
+
+Pyrodigal is a reimplementation of the Prodigal gene finder, which identifies protein-coding sequences in bacterial and archaeal genomes.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing genomic sequences
+- `out_dir::String`: Output directory path (default: input filename + "_pyrodigal")
+
+# Returns
+Named tuple containing:
+- `fasta_file`: Input FASTA file path
+- `out_dir`: Output directory path
+- `gff`: Path to GFF output file with gene predictions
+- `faa`: Path to FASTA file with predicted protein sequences 
+- `fna`: Path to FASTA file with nucleotide sequences
+
+# Notes
+- Uses metagenomic mode (`-p meta`) optimized for mixed communities
+- Masks runs of N nucleotides (`-m` flag)
+- Minimum gene length set to 33bp
+- Maximum overlap between genes set to 31bp
+- Requires Pyrodigal to be available in a Conda environment
+- Skips processing if output files already exist
 """
 function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
     # https://pyrodigal.readthedocs.io/en/stable/guide/cli.html#command-line-interface
@@ -5762,6 +5988,25 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Determines the optimal number of clusters for k-means clustering by maximizing the silhouette score.
+
+# Algorithm
+- Starts by evaluating the first 5 k values
+- Continues evaluation if optimal k is at the edge of evaluated range
+- Refines search by evaluating midpoints between k values around the current optimum
+- Iterates until convergence (optimal k remains stable)
+
+# Arguments
+- `distance_matrix::Matrix`: Square matrix of pairwise distances between points
+- `ks_to_try::Vector{Int}`: Vector of k values to evaluate. Defaults to [1, 2, ...] up to matrix size
+
+# Returns
+Named tuple containing:
+- `optimal_number_of_clusters::Int`: The k value giving highest silhouette score
+- `ks_assessed::Vector{Int}`: All k values that were evaluated
+- `within_cluster_sum_of_squares::Vector{Float64}`: WCSS for each k assessed
+- `silhouette_scores::Vector{Float64}`: Silhouette scores for each k assessed
 """
 function fit_optimal_number_of_clusters(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
@@ -5852,6 +6097,27 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Visualizes cluster assessment metrics and saves the resulting plots.
+
+# Arguments
+- `clustering_results`: A named tuple containing:
+    * `ks_assessed`: Vector of k values tested
+    * `within_cluster_sum_of_squares`: Vector of WCSS scores
+    * `silhouette_scores`: Vector of silhouette scores
+    * `optimal_number_of_clusters`: Integer indicating optimal k
+
+# Details
+Creates two plots:
+1. Within-cluster sum of squares (WCSS) vs number of clusters
+2. Silhouette scores vs number of clusters
+
+Both plots include a vertical line indicating the optimal number of clusters.
+
+# Outputs
+Saves two SVG files in the project directory:
+- `wcss.svg`: WCSS plot
+- `silhouette.svg`: Silhouette scores plot
 """
 function plot_optimal_cluster_assessment_results(clustering_results)
     p1 = StatsPlots.plot(
@@ -5880,6 +6146,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the document frequency of tokens across a collection of documents.
+
+# Arguments
+- `documents`: Collection of text documents where each document is a string
+
+# Returns
+- Dictionary mapping each unique token to the number of documents it appears in
+
+# Description
+Computes how many documents contain each unique token. Each document is tokenized 
+by splitting on whitespace. Tokens are counted only once per document, regardless 
+of how many times they appear within that document.
 """
 function document_frequency(documents)
     document_tokens = Set(split(strip(first(documents))))
@@ -5894,6 +6173,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the Within-Cluster Sum of Squares (WCSS) for a clustering result.
+
+# Arguments
+- `clustering_result`: A clustering result object containing:
+  - `counts`: Vector with number of points in each cluster
+  - `assignments`: Vector of cluster assignments for each point
+  - `costs`: Vector of distances/costs from each point to its cluster center
+
+# Returns
+- `Float64`: The total within-cluster sum of squared distances
+
+# Description
+WCSS measures the compactness of clusters by summing the squared distances 
+between each data point and its assigned cluster center.
 """
 function wcss(clustering_result)
     n_clusters = length(clustering_result.counts)
@@ -5907,6 +6201,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Determine the optimal number of clusters using hierarchical clustering with iterative refinement.
+
+# Arguments
+- `distance_matrix::Matrix`: Square matrix of pairwise distances between observations
+- `ks_to_try::Vector{Int}`: Vector of cluster counts to evaluate (default: 1, 2, and sequence from `Mycelia.ks()`)
+
+# Returns
+Named tuple containing:
+- `optimal_number_of_clusters::Int`: Best number of clusters found
+- `ks_assessed::Vector{Int}`: All cluster counts that were evaluated
+- `silhouette_scores::Vector{Float64}`: Silhouette scores for each k assessed
+- `hclust_result`: Hierarchical clustering result object
+
+# Details
+Uses Ward's linkage method and silhouette scores to evaluate cluster quality. 
+Implements an adaptive search that focuses on promising regions between initially tested k values.
+For k=1, silhouette score is set to 0 as a special case.
 """
 function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
@@ -6006,6 +6318,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads Sequence Read Archive (SRA) data using the prefetch tool from sra-tools.
+
+# Arguments
+- `SRR`: SRA accession number (e.g., "SRR12345678")
+- `outdir`: Directory where the downloaded data will be saved. Defaults to current directory.
+
+# Notes
+- Requires sra-tools which will be installed in a Conda environment
+- Downloads are saved in .sra format
+- Internet connection required
 """
 function prefetch(;SRR, outdir=pwd())
     Mycelia.add_bioconda_env("sra-tools")
@@ -6147,7 +6470,31 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Download mmseqs databases
+Downloads and sets up MMseqs2 reference databases for sequence searching and analysis.
+
+# Arguments
+- `db::String`: Name of database to download (see table below)
+- `dbdir::String`: Directory to store the downloaded database (default: "~/workspace/mmseqs")
+- `force::Bool`: If true, force re-download even if database exists (default: false)
+- `wait::Bool`: If true, wait for download to complete (default: true)
+
+# Returns 
+- Path to the downloaded database as a String
+
+# Available Databases
+
+| Database           | Type       | Taxonomy | Description                               |
+|-------------------|------------|----------|-------------------------------------------|
+| UniRef100         | Aminoacid  | Yes      | UniProt Reference Clusters - 100% identity|
+| UniRef90          | Aminoacid  | Yes      | UniProt Reference Clusters - 90% identity |
+| UniRef50          | Aminoacid  | Yes      | UniProt Reference Clusters - 50% identity |
+| UniProtKB         | Aminoacid  | Yes      | Universal Protein Knowledge Base          |
+| NR               | Aminoacid  | Yes      | NCBI Non-redundant proteins              |
+| NT               | Nucleotide | No       | NCBI Nucleotide collection               |
+| GTDB             | Aminoacid  | Yes      | Genome Taxonomy Database                  |
+| PDB              | Aminoacid  | No       | Protein Data Bank structures             |
+| Pfam-A.full      | Profile    | No       | Protein family alignments                |
+| SILVA            | Nucleotide | Yes      | Ribosomal RNA database                   |
 
 ```
   Name                  Type            Taxonomy        Url                                                           
@@ -6191,6 +6538,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Lists available BLAST databases from the specified source.
+
+# Arguments
+- `source::String="ncbi"`: Source of BLAST databases, defaults to "ncbi"
+
+# Returns
+- `Vector{String}`: Array of available BLAST database names
+
+# Notes
+- Requires sudo/root privileges to install BLAST+ tools if not already present
+- Internet connection required to fetch database listings
 """
 function list_blastdbs(;source="ncbi")
     # Mycelia.add_bioconda_env("blast")
@@ -6205,6 +6564,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Display available BLAST databases from specified source.
+
+# Arguments
+- `source::String="ncbi"`: Database source (default: "ncbi")
+
+# Returns
+- `DataFrame`: Table of available BLAST databases with columns:
+  - NAME: Database name
+  - SIZE (GB): Database size
+  - LAST_UPDATED: Update date
+  - and other metadata fields
 """
 function showall_blastdbs(;source="ncbi")
     try
@@ -6221,6 +6592,30 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Query information about local BLAST databases and return a formatted summary.
+
+# Arguments
+- `blastdbs_dir::String`: Directory containing BLAST databases (default: "~/workspace/blastdb")
+
+# Returns
+- `DataFrame` with columns:
+  - BLAST database path
+  - BLAST database molecule type
+  - BLAST database title
+  - date of last update
+  - number of bases/residues
+  - number of sequences
+  - number of bytes
+  - BLAST database format version
+  - human readable size
+
+# Dependencies
+Requires NCBI BLAST+ tools. Will attempt to install via apt-get if not present.
+
+# Side Effects
+- May install system packages (ncbi-blast+, perl-doc) using sudo/apt-get
+- Filters out numbered database fragments from results
 """
 function local_blast_database_info(;blastdbs_dir="$(homedir())/workspace/blastdb")
     try
