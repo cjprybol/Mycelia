@@ -3,11 +3,11 @@ name: CI
 on:
   push:
     branches:
-      - master  # Update to match your primary development branch
+      - master
     tags: '*'
   pull_request:
     branches:
-      - master  # Update to match your primary development branch
+      - master
 
 jobs:
   test:
@@ -26,12 +26,17 @@ jobs:
           version: ${{ matrix.julia-version }}
 
       - name: Cache Julia packages
+        id: cache-artifacts
         uses: actions/cache@v3
         with:
           path: ~/.julia/artifacts
           key: ${{ runner.os }}-julia-${{ matrix.julia-version }}-artifacts-${{ hashFiles('**/Project.toml') }}
           restore-keys: |
             ${{ runner.os }}-julia-${{ matrix.julia-version }}-artifacts-
+
+      - name: Install dependencies
+        if: steps.cache-artifacts.outputs.cache-hit != 'true'
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate();'
 
       - name: Run tests with coverage
         run: |
