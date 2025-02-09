@@ -6661,6 +6661,41 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a BLAST database to a tabular format with sequence and taxonomy information.
+
+# Arguments
+- `blastdb::String`: Path to the BLAST database
+- `outfile::String=""`: Output file path. If empty, generates name based on input database
+- `force::Bool=false`: Whether to overwrite existing output file
+
+# Returns
+- `String`: Path to the generated output file (.tsv.gz)
+
+# Output Format
+Tab-separated file containing columns:
+- sequence SHA256
+- sequence
+- accession
+- gi
+- ordinal id
+- sequence id
+- sequence title
+- sequence length
+- sequence hash
+- taxid
+- leaf-node taxids
+- membership integer
+- common taxonomic name
+- common taxonomic names for leaf-node taxids
+- scientific name
+- scientific names for leaf-node taxids
+- BLAST name
+- taxonomic super kingdom
+- PIG
+
+# Dependencies
+Requires NCBI BLAST+ and perl-doc packages. May need sudo privileges for installation.
 """
 function blastdb2table(;blastdb, outfile="", force=false)
     try
@@ -6749,6 +6784,17 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Smart downloading of blast dbs depending on interactive, non interactive context
 
 For a list of all available databases, run: `Mycelia.list_blastdbs()`
+
+Downloads and sets up BLAST databases from various sources.
+
+# Arguments
+- `db`: Name of the BLAST database to download
+- `dbdir`: Directory to store the downloaded database (default: "~/workspace/blastdb")
+- `source`: Download source - one of ["", "aws", "gcp", "ncbi"]. Empty string auto-detects fastest source
+- `wait`: Whether to wait for download completion (default: true)
+
+# Returns
+- String path to the downloaded database directory
 """
 function download_blast_db(;db, dbdir="$(homedir())/workspace/blastdb", source="", wait=true)
     # Mycelia.add_bioconda_env("blast")
@@ -6783,6 +6829,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a BLAST database to FASTA format.
+
+# Arguments
+- `db::String`: Name of the BLAST database to convert (e.g. "nr", "nt")
+- `dbdir::String`: Directory containing the BLAST database files
+- `compressed::Bool`: Whether to gzip compress the output file
+- `outfile::String`: Path for the output FASTA file
+
+# Returns
+- Path to the generated FASTA file as String
+
+# Notes
+- For "nr" database, output extension will be .faa.gz (protein)
+- For "nt" database, output extension will be .fna.gz (nucleotide)
+- Requires ncbi-blast+ and perl-doc packages to be installed
 """
 function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compressed=true, outfile="$(dbdir)/$(db).$(string(Dates.today())).fasta.gz")
     # todo add more
@@ -6878,6 +6940,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Upload all nodes from a MetaGraph to a Neo4j database, processing each unique node type separately.
+
+# Arguments
+- `graph`: A MetaGraph containing nodes to be uploaded
+- `address`: Neo4j server address (e.g., "bolt://localhost:7687")
+- `username`: Neo4j authentication username (default: "neo4j")
+- `password`: Neo4j authentication password
+- `format`: Data format for upload (default: "auto")
+- `database`: Target Neo4j database name (default: "neo4j")
+- `neo4j_import_directory`: Path to Neo4j's import directory for bulk loading
 """
 function upload_nodes_to_neo4j(;graph, address, username="neo4j", password, format="auto", database="neo4j", neo4j_import_directory)
     
@@ -6899,6 +6972,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert all nodes of a specific type in a MetaGraph to a DataFrame representation.
+
+# Arguments
+- `node_type`: The type of nodes to extract from the graph
+- `graph`: A MetaGraph containing the nodes
+
+# Returns
+A DataFrame where:
+- Each row represents a node of the specified type
+- Columns correspond to all unique properties found across nodes
+- Values are JSON-serialized strings for consistency
+
+# Notes
+- All values are normalized through JSON serialization
+- Dictionary values receive double JSON encoding
+- The TYPE column is converted using `type_to_string`
 """
 function node_type_to_dataframe(;node_type, graph)
     node_type_indices = filter(v -> MetaGraphs.props(graph, v)[:TYPE] == node_type, Graphs.vertices(graph))
@@ -6922,6 +7012,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Upload a DataFrame to Neo4j as nodes in batched windows.
+
+# Arguments
+- `table::DataFrame`: Input DataFrame where each row becomes a node. Must contain a "TYPE" column.
+- `address::String`: Neo4j server address (e.g. "bolt://localhost:7687")
+- `password::String`: Neo4j database password
+- `neo4j_import_dir::String`: Directory path accessible to Neo4j for importing files
+- `window_size::Int=1000`: Number of rows to process in each batch
+- `username::String="neo4j"`: Neo4j database username
+- `database::String="neo4j"`: Target Neo4j database name
+
+# Notes
+- All rows must have the same node type (specified in "TYPE" column)
+- Column names become node properties
+- Requires write permissions on neo4j_import_dir
+- Large tables are processed in batches of size window_size
 """
 function upload_node_table(;table, window_size=1000, address, password, username="neo4j", database="neo4j", neo4j_import_dir)
     nrows = DataFrames.nrow(table)
@@ -6951,9 +7058,23 @@ function upload_node_table(;table, window_size=1000, address, password, username
     end
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Upload a single node from a MetaGraph to a Neo4j database using the HTTP API.
+
+# Arguments
+- `graph`: MetaGraph containing the node to be uploaded
+- `v`: Vertex identifier in the graph
+- `ADDRESS`: Neo4j server address (e.g. "http://localhost:7474")
+- `USERNAME`: Neo4j authentication username (default: "neo4j")
+- `PASSWORD`: Neo4j authentication password
+- `DATABASE`: Target Neo4j database name (default: "neo4j")
+
+# Details
+Generates and executes a Cypher MERGE command using the node's properties. The node's :TYPE 
+and :identifier properties are used for node labeling, while other non-empty properties 
+are added as node properties.
 """
 function upload_node_over_api(graph, v; ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j")
     node_type = MetaGraphs.props(graph, v)[:TYPE]
@@ -6976,6 +7097,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Uploads all nodes from the given graph to a specified API endpoint.
+
+# Arguments
+- `graph`: The graph containing the nodes to be uploaded.
+- `ADDRESS`: The API endpoint address.
+- `USERNAME`: The username for authentication (default: "neo4j").
+- `PASSWORD`: The password for authentication.
+- `DATABASE`: The database name (default: "neo4j").
 """
 function upload_nodes_over_api(graph; ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j")
     ProgressMeter.@showprogress for v in Graphs.vertices(graph)
@@ -6985,6 +7115,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates unique identifier constraints for each node type in a Neo4j database.
+
+# Arguments
+- `graph`: A MetaGraph containing nodes with TYPE properties
+- `address`: Neo4j server address
+- `username`: Neo4j username (default: "neo4j")
+- `password`: Neo4j password
+- `database`: Neo4j database name (default: "neo4j")
+
+# Details
+Extracts unique node types from the graph and creates Neo4j constraints ensuring
+each node of a given type has a unique identifier property.
+
+Failed constraint creation attempts are silently skipped.
 """
 function create_node_constraints(graph; address, username="neo4j", password, database="neo4j")
     node_types = unique(MetaGraphs.props(graph, v)[:TYPE] for v in Graphs.vertices(graph))
@@ -7008,6 +7153,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a type to its string representation, with special handling for Kmer types.
+
+# Arguments
+- `T`: The type to convert to string
+
+# Returns
+- String representation of the type
+  - For Kmer types: Returns "Kmers.DNAKmer{K}" where K is the kmer length
+  - For other types: Returns the standard string representation
 """
 function type_to_string(T)
     if T <: Kmers.Kmer
@@ -7019,11 +7174,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Converts an AbstractString type to its string representation.
+
+# Arguments
+- `T::AbstractString`: The string type to convert
+
+# Returns
+A string representation of the input type
 """
 function type_to_string(T::AbstractString)
     return string(T)
 end
-
 
 # function batch_upload_edge_type_over_url_from_graph(src_type, dst_type, edge_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE; window_size=100)    
 #     src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
@@ -7093,6 +7255,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Upload nodes of a specific type from a graph to a Neo4j database using MERGE operations.
+
+# Arguments
+- `node_type`: The type label for the nodes to upload
+- `graph`: Source MetaGraph containing the nodes
+- `ADDRESS`: Neo4j server address (e.g. "bolt://localhost:7687")
+- `PASSWORD`: Neo4j database password
+- `USERNAME="neo4j"`: Neo4j username (defaults to "neo4j")
+- `DATABASE="neo4j"`: Target Neo4j database name (defaults to "neo4j")
+- `window_size=100`: Number of nodes to upload in each batch (defaults to 100)
+
+# Details
+Performs batched uploads of nodes using Neo4j MERGE operations. Node properties are 
+automatically extracted from the graph vertex properties, excluding the 'TYPE' property.
 """
 function upload_node_type_over_url_from_graph(;node_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)
     node_type_params = Set{Symbol}()
@@ -7119,6 +7296,29 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Upload edges of a specific type from a MetaGraph to a Neo4j database, batching uploads in windows.
+
+# Arguments
+- `src_type`: Type of source nodes to filter
+- `dst_type`: Type of destination nodes to filter  
+- `edge_type`: Type of edges to upload
+- `graph`: MetaGraph containing the nodes and edges
+- `ADDRESS`: Neo4j server URL
+- `USERNAME`: Neo4j username (default: "neo4j")
+- `PASSWORD`: Neo4j password
+- `DATABASE`: Neo4j database name (default: "neo4j")
+- `window_size`: Number of edges to upload in each batch (default: 100)
+
+# Details
+- Filters edges based on source, destination and edge types
+- Preserves all edge properties except :TYPE when uploading
+- Uses MERGE operations to avoid duplicate nodes/relationships
+- Uploads are performed in batches for better performance
+- Progress is shown via ProgressMeter
+
+# Returns
+Nothing
 """
 function upload_edge_type_over_url_from_graph(;src_type, dst_type, edge_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)    
     src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
@@ -7165,6 +7365,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Constructs a command to execute Neo4j Cypher queries via cypher-shell.
+
+# Arguments
+- `cmd`: The Cypher query command to execute
+- `address::String="neo4j://localhost:7687"`: Neo4j server address
+- `username::String="neo4j"`: Neo4j authentication username
+- `password::String="password"`: Neo4j authentication password 
+- `format::String="auto"`: Output format (auto, verbose, or plain)
+- `database::String="neo4j"`: Target Neo4j database name
+
+# Returns
+- `Cmd`: A command object ready for execution
 """
 function cypher(cmd;
     address="neo4j://localhost:7687",
@@ -7181,6 +7394,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Lists all available Neo4j databases on the specified server.
+
+# Arguments
+- `address::String`: Neo4j server address (e.g. "neo4j://localhost:7687")
+- `username::String="neo4j"`: Neo4j authentication username
+- `password::String`: Neo4j authentication password
+
+# Returns
+- `DataFrame`: Contains database information with columns typically including:
+  - name: Database name
+  - address: Database address
+  - role: Database role (e.g., primary, secondary)
+  - status: Current status (e.g., online, offline)
+  - default: Boolean indicating if it's the default database
 """
 function list_databases(;address, username="neo4j", password)
     cmd = "show databases"
@@ -7191,6 +7419,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a new Neo4j database instance if it doesn't already exist.
+
+# Arguments
+- `database::String`: Name of the database to create
+- `address::String`: Neo4j server address (e.g. "neo4j://localhost:7687")
+- `username::String`: Neo4j authentication username (defaults to "neo4j")
+- `password::String`: Neo4j authentication password
+
+# Notes
+- Requires system database privileges to execute
+- Silently returns if database already exists
+- Temporarily switches to system database to perform creation
 """
 function create_database(;database, address, username="neo4j", password)
     current_databases = list_databases(;address, username, password)
@@ -7221,6 +7462,25 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases.
+
+# Arguments
+- `db::String`: Database source, must be either "genbank" or "refseq"
+
+# Returns
+- `DataFrame`: Parsed metadata table with properly typed columns including:
+  - Integer columns: taxid, species_taxid, genome metrics, and gene counts
+  - Float columns: gc_percent
+  - Date columns: seq_rel_date, annotation_date
+  - String columns: all other fields
+
+# Details
+Downloads the assembly summary file from NCBI's FTP server and processes it by:
+1. Parsing the tab-delimited file with commented headers
+2. Converting numeric strings to proper Integer/Float types
+3. Parsing date strings to Date objects
+4. Handling missing values throughout
 """
 function load_ncbi_metadata(db)
     if !(db in ["genbank", "refseq"])
@@ -7265,6 +7525,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Query Neo4j database to find all descendant taxonomic IDs for a given taxonomic ID.
+
+# Arguments
+- `tax_id`: Source taxonomic ID to find children for
+- `DATABASE_ID`: Neo4j database identifier (required)
+- `USERNAME`: Neo4j database username (default: "neo4j")
+- `PASSWORD`: Neo4j database password (required)
+
+# Returns
+`Vector{Int}`: Sorted array of unique child taxonomic IDs
 """
 function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME="neo4j", PASSWORD)
     DATABASE = "neo4j"
@@ -7283,6 +7554,13 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Loads NCBI RefSeq metadata into a DataFrame. RefSeq is NCBI's curated collection 
+of genomic, transcript and protein sequences.
+
+# Returns
+- `DataFrame`: Contains metadata columns including accession numbers, taxonomic information,
+and sequence details from RefSeq.
 """
 function load_refseq_metadata()
     return load_ncbi_metadata("refseq")
@@ -7290,6 +7568,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Load metadata for GenBank sequences into a DataFrame.
+
+This is a convenience wrapper around `load_ncbi_metadata("genbank")` that
+specifically loads metadata from the GenBank database.
+
+# Returns
+- `DataFrame`: Contains metadata fields like accession numbers, taxonomy,
+and sequence information from GenBank.
 """
 function load_genbank_metadata()
     return load_ncbi_metadata("genbank")
@@ -7297,6 +7584,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Constructs a complete NCBI FTP URL by combining a base FTP path with a file extension.
+
+# Arguments
+- `ftp_path::String`: Base FTP directory path for the resource
+- `extension::String`: File extension to append to the resource name
+
+# Returns
+- `String`: Complete FTP URL path to the requested resource
 
 Extensions include:
 - genomic.fna.gz
@@ -7332,6 +7628,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate and display frequency counts for all columns in a DataFrame.
+
+# Arguments
+- `table::DataFrame`: Input DataFrame to analyze
+
+# Details
+Iterates through each column in the DataFrame and displays:
+1. The column name
+2. A Dict mapping unique values to their frequencies using StatsBase.countmap
 """
 function countmap_columns(table)
     for n in names(refseq_metadata)
