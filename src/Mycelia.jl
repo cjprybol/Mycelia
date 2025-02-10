@@ -7651,6 +7651,16 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
 or get fasta directly from FTP site
+
+Retrieve FASTA format sequences from NCBI databases or direct FTP URLs.
+
+# Arguments
+- `db::String`: NCBI database type ("nuccore" for DNA or "protein" for protein sequences)
+- `accession::String`: NCBI sequence accession number
+- `ftp::String`: Direct FTP URL to a FASTA file (alternative to db/accession pair)
+
+# Returns
+- `FASTX.FASTA.Reader`: Reader object containing the requested sequence(s)
 """
 function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
@@ -7673,6 +7683,23 @@ end
 # function ncbi_datasets_download_by_taxon_id
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads and constructs a MetaDiGraph representation of the NCBI taxonomy database.
+
+# Arguments
+- `path_to_taxdump`: Directory path where taxonomy files will be downloaded and extracted
+
+# Returns
+- `MetaDiGraph`: A directed graph where:
+  - Vertices represent taxa with properties:
+    - `:tax_id`: NCBI taxonomy identifier
+    - `:scientific_name`, `:common_name`, etc.: Name properties
+    - `:rank`: Taxonomic rank
+    - `:division_id`, `:division_cde`, `:division_name`: Division information
+  - Edges represent parent-child relationships in the taxonomy
+
+# Dependencies
+Requires internet connection for initial download. Uses DataFrames, MetaGraphs, and ProgressMeter.
 """
 function load_ncbi_taxonomy(;
         path_to_taxdump="$(homedir())/workspace/blastdb/taxdump"
@@ -7818,6 +7845,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a SAM/BAM file into a summary DataFrame containing alignment metadata.
+
+# Arguments
+- `xam::AbstractString`: Path to input SAM (.sam), BAM (.bam), or gzipped SAM (.sam.gz) file
+
+# Returns
+DataFrame with columns:
+- `template`: Read name
+- `flag`: SAM flag
+- `reference`: Reference sequence name
+- `position`: Alignment position range (start:end)
+- `mappingquality`: Mapping quality score
+- `alignment_score`: Alignment score (AS tag)
+- `isprimary`: Whether alignment is primary
+- `alignlength`: Length of the alignment
+- `ismapped`: Whether read is mapped
+- `mismatches`: Number of mismatches (NM tag)
+
+Note: Only mapped reads are included in the output DataFrame.
 """
 function parse_xam_to_summary_table(xam)
     record_table = DataFrames.DataFrame(
@@ -7928,6 +7975,27 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run fastani with a query and reference list
+
+Calculate Average Nucleotide Identity (ANI) between genome sequences using FastANI.
+
+# Arguments
+- `query_list::String`: Path to file containing list of query genome paths (one per line)
+- `reference_list::String`: Path to file containing list of reference genome paths (one per line)
+- `outfile::String`: Path to output file that will contain ANI results
+- `threads::Int=Sys.CPU_THREADS`: Number of parallel threads to use
+- `force::Bool=false`: If true, rerun analysis even if output file exists
+
+# Output
+Generates a tab-delimited file with columns:
+- Query genome
+- Reference genome  
+- ANI value (%)
+- Count of bidirectional fragment mappings
+- Total query fragments
+
+# Notes
+- Requires FastANI to be available via Bioconda
+- Automatically sets up required conda environment
 """
 function fastani_list(;query_list="", reference_list="", outfile="", threads=Sys.CPU_THREADS, force=false)
     Mycelia.add_bioconda_env("fastani")
@@ -7945,6 +8013,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Average Nucleotide Identity (ANI) between two genomes using FastANI.
+
+# Arguments
+- `query::String`: Path to query genome FASTA file
+- `reference::String`: Path to reference genome FASTA file  
+- `outfile::String`: Path to save FastANI results
+- `force::Bool=false`: If true, overwrite existing output file
+
+# Notes
+- Requires FastANI to be available via Bioconda
+- Stdout and stderr are captured in separate files with '.stdout.txt' and '.stderr.txt' suffixes
+- ANI results are written to the specified outfile
 """
 # ./fastANI -q [QUERY_GENOME] -r [REFERENCE_GENOME] -o [OUTPUT_FILE] 
 function fastani_pair(;query="", reference="", outfile="", force=false)
@@ -7960,11 +8041,23 @@ function fastani_pair(;query="", reference="", outfile="", force=false)
     end
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Determines the contig with the greatest number of total bases mapping to it
+
+Identify the primary contig based on mapping coverage from Qualimap results.
+
+# Arguments
+- `qualimap_results::DataFrame`: DataFrame containing Qualimap alignment statistics with 
+  columns "Contig" and "Mapped bases"
+
+# Returns
+- `String`: Name of the contig with the highest number of mapped bases
+
+# Description
+Takes Qualimap alignment results and determines which contig has the most total bases 
+mapped to it, which often indicates the main chromosomal assembly.
 """
 function determine_primary_contig(qualimap_results)
     primary_contig_index = last(findmax(qualimap_results[!, "Mapped bases"]))
@@ -7981,6 +8074,29 @@ In the context of picking out phage from metagenomic assemblies
 the longest contig is often bacteria whereas the highest coverage contigs are often primer-dimers or other PCR amplification artifacts.
 
 Taking the contig that has the most bases mapped to it as a product of length * depth is cherry picked as our phage
+
+Isolates and exports the primary contig from an assembly based on coverage depth × length.
+
+The primary contig is defined as the contig with the highest total mapped bases 
+(coverage depth × length). This method helps identify potential phage contigs in 
+metagenomic assemblies, avoiding both long bacterial contigs and short high-coverage 
+PCR artifacts.
+
+# Arguments
+- `assembled_fasta`: Path to the assembled contigs in FASTA format
+- `assembled_gfa`: Path to the assembly graph in GFA format
+- `qualimap_report_txt`: Path to Qualimap coverage report
+- `identifier`: String identifier for the output file
+- `k`: Integer representing k-mer size used in assembly
+- `primary_contig_fasta`: Optional output filepath (default: "\${identifier}.primary_contig.fna")
+
+# Returns
+- Path to the output FASTA file containing the primary contig
+
+# Notes
+- For circular contigs, removes the k-mer closure scar if detected
+- Trims k bases from the end if they match the first k bases
+- Uses coverage × length to avoid both long bacterial contigs and short PCR artifacts
 """
 function isolate_normalized_primary_contig(assembled_fasta, assembled_gfa, qualimap_report_txt, identifier, k::Int; primary_contig_fasta = "$(identifier).primary_contig.fna")
     
@@ -8018,6 +8134,20 @@ By cleanly assembled we mean that the contig does not have other contigs attache
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
+
+Check if a contig exists in isolation within its connected component in an assembly graph.
+
+# Arguments
+- `graph_file::String`: Path to the assembly graph file in GFA format
+- `contig_name::String`: Name/identifier of the contig to check
+
+# Returns
+- `Bool`: `true` if the contig exists alone in its connected component, `false` otherwise
+
+# Details
+A contig is considered "cleanly assembled" if it appears as a single entry in the 
+assembly graph's connected components. This function parses the GFA file and checks
+the contig's isolation status using the graph structure.
 """
 function contig_is_cleanly_assembled(graph_file::String, contig_name::String)
     contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
@@ -8053,6 +8183,18 @@ Returns bool indicating whether the contig is a circle
 
 graph_file = path to assembly graph.gfa file
 contig_name = name of the contig
+
+Determine if a contig represents a circular structure in the assembly graph.
+
+A circular contig is one where the sequence forms a complete loop in the assembly graph,
+typically representing structures like plasmids, circular chromosomes, or other circular DNA elements.
+
+# Arguments
+- `graph_file::String`: Path to the assembly graph in GFA format
+- `contig_name::String`: Name/identifier of the contig to check
+
+# Returns
+- `Bool`: `true` if the contig forms a circular structure, `false` otherwise
 """
 function contig_is_circular(graph_file::String, contig_name::String)
     contig_table, records = Mycelia.gfa_to_structure_table(graph_file)
@@ -8088,6 +8230,30 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Compare two FASTA sequences and calculate alignment statistics.
+
+# Arguments
+- `reference_fasta::String`: Path to the reference FASTA file
+- `query_fasta::String`: Path to the query FASTA file
+
+# Returns
+DataFrame with the following columns:
+- `alignment_percent_identity`: Percentage of matching bases in alignment
+- `total_equivalent_bases`: Number of equivalent bases between sequences
+- `total_alignment_length`: Length of the alignment
+- `query_length`: Length of query sequence
+- `total_variants`: Total number of variants (SNPs + indels)
+- `total_snps`: Number of single nucleotide polymorphisms
+- `total_indels`: Number of insertions and deletions
+- `alignment_coverage_query`: Percentage of query sequence covered
+- `alignment_coverage_reference`: Percentage of reference sequence covered
+- `size_equivalence_to_reference`: Size ratio of query to reference (%)
+
+# Notes
+- Uses minimap2 with progressively relaxed settings (asm5→asm10→asm20)
+- Returns empty string values for alignment statistics if no alignment is found
+- Requires minimap2 to be installed and accessible in PATH
 """
 # uses minimap
 function determine_percent_identity(reference_fasta, query_fasta)
@@ -8185,6 +8351,33 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Analyzes k-mer frequency spectra from sequencing reads to detect sequencing errors and 
+coverage patterns.
+
+# Arguments
+- `out_directory`: Directory where output files will be saved
+- `forward_reads`: Path to forward reads FASTQ file
+- `reverse_reads`: Path to reverse reads FASTQ file (optional)
+- `k`: Length of k-mers to analyze (default: 17)
+- `target_coverage`: Desired coverage level. If non-zero, returns downsampling rate (default: 0)
+- `plot_size`: Dimensions of output plot in pixels (default: (600,400))
+
+# Returns
+- If `target_coverage > 0`: Returns downsampling rate as Float64
+- If `target_coverage = 0`: Returns nothing, saves plots only
+
+# Outputs
+- `peak-detected.png`: K-mer spectra plot with detected boundaries
+- `peak-detected.svg`: Vector format of the same plot
+- `downsampling-rate.txt`: Created only if target_coverage is specified
+
+# Algorithm
+1. Counts canonical k-mers from input reads
+2. Generates log-scale histogram of k-mer frequencies
+3. Detects error threshold using regression or local minimum
+4. Identifies coverage peak after error threshold
+5. Calculates downsampling rate if target coverage specified
 """
 # https://github.com/cjprybol/Mycelia/blob/e7fe50ffe2d18406fb70e0e24ebcfa45e0937596/notebooks/exploratory/2021-08-25-k-medoids-error-cluster-detection-multi-entity-graph-aligner-test.ipynb
 function analyze_kmer_spectra(;out_directory, forward_reads="", reverse_reads="", k=17, target_coverage=0, plot_size=(600,400))
@@ -8278,6 +8471,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Assess k-mer saturation in DNA sequences from FASTX files.
+
+# Arguments
+- `fastxs::AbstractVector{<:AbstractString}`: Vector of paths to FASTA/FASTQ files
+- `kmer_type`: Type of k-mer to analyze (e.g., DNAKmer{21})
+- `kmers_to_assess=Inf`: Maximum number of k-mers to process
+- `power=10`: Base for exponential sampling intervals
+- `min_count=1`: Minimum count threshold for considering a k-mer
+
+# Returns
+Named tuple containing:
+- `sampling_points::Vector{Int}`: K-mer counts at which samples were taken
+- `unique_kmer_counts::Vector{Int}`: Number of unique canonical k-mers at each sampling point
+- `eof::Bool`: Whether the entire input was processed
+
+# Details
+Analyzes k-mer saturation by counting unique canonical k-mers at exponentially spaced 
+intervals (powers of `power`). Useful for assessing sequence complexity and coverage.
+Returns early if all possible k-mers are observed.
 """
 function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer_type; kmers_to_assess=Inf, power=10, min_count = 1)
     # canonical_kmers = Set{kmer_type}()
@@ -8345,6 +8558,28 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Analyze k-mer saturation in DNA sequences to determine optimal k value.
+
+# Arguments
+- `fastxs`: Vector of paths to FASTA/FASTQ files to analyze
+- `power`: Base of logarithmic sampling points (default: 10)
+- `outdir`: Optional output directory for plots and results
+- `min_k`: Minimum k-mer size to test (default: 7)
+- `max_k`: Maximum k-mer size to test (default: 17)
+- `threshold`: Saturation threshold to determine optimal k (default: 0.1)
+- `kmers_to_assess`: Maximum number of k-mers to sample (default: 10M)
+- `plot`: Whether to generate saturation curves (default: true)
+
+# Returns
+Integer representing the first k value that achieves saturation below threshold.
+If no k value meets the threshold, returns the k with minimum saturation.
+
+# Details
+- Tests only prime k values between min_k and max_k
+- Generates saturation curves using logarithmic sampling
+- Fits curves to estimate maximum unique k-mers
+- If outdir is provided, saves plots as SVG and chosen k value to text file
 """
 function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; power=10, outdir::Union{Missing, String}=missing, min_k=7, max_k=17, threshold=0.1, kmers_to_assess=10_000_000, plot=true)
     ks = Primes.primes(min_k, max_k)
@@ -8437,6 +8672,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Analyzes k-mer saturation in a FASTA/FASTQ file to determine optimal k-mer size.
+
+# Arguments
+- `fastx::AbstractString`: Path to input FASTA/FASTQ file
+- `power::Int=10`: Exponent for downsampling k-mers (2^power)
+- `outdir::String=""`: Output directory for results. Uses current directory if empty
+- `min_k::Int=3`: Minimum k-mer size to evaluate
+- `max_k::Int=17`: Maximum k-mer size to evaluate
+- `threshold::Float64=0.1`: Saturation threshold for k-mer assessment
+- `kmers_to_assess::Int=10_000_000`: Maximum number of k-mers to sample
+
+# Returns
+`Dict{Int,Float64}`: Dictionary mapping k-mer sizes to their saturation scores
 """
 function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000)
     assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power, kmers_to_assess=kmers_to_assess)
@@ -8451,6 +8700,21 @@ Create an in-memory kmer-graph that records:
 - all *observed* edges between kmers
 - edge orientations
 - edge counts
+
+Construct a kmer-graph from one or more FASTX files (FASTA/FASTQ).
+
+# Arguments
+- `KMER_TYPE`: Type for kmer representation (e.g., `DNAKmer{K}`)
+- `fastxs`: Vector of paths to FASTX files
+
+# Returns
+A `MetaGraph` where:
+- Vertices represent unique kmers with properties:
+  - `:kmer` => The kmer sequence
+  - `:count` => Number of occurrences
+- Edges represent observed kmer adjacencies with properties:
+  - `:orientation` => Relative orientation of connected kmers
+  - `:count` => Number of observed transitions
 """
 function fastx_to_kmer_graph(KMER_TYPE, fastxs::AbstractVector{<:AbstractString})
     
@@ -8485,6 +8749,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Constructs a k-mer graph from a single FASTX format string.
+
+# Arguments
+- `KMER_TYPE`: The k-mer type specification (e.g., DNAKmer{K} where K is k-mer length)
+- `fastx::AbstractString`: Input sequence in FASTX format (FASTA or FASTQ)
+
+# Returns
+- `KmerGraph`: A directed graph where vertices are k-mers and edges represent overlaps
 """
 function fastx_to_kmer_graph(KMER_TYPE, fastx::AbstractString)
     return fastx_to_kmer_graph(KMER_TYPE, [fastx])
@@ -8492,6 +8765,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Add FASTX records from multiple files as a graph property.
+
+# Arguments
+- `graph`: A MetaGraph that will store the FASTX records
+- `fastxs`: Collection of FASTA/FASTQ file paths to process
+
+# Details
+Creates a dictionary mapping sequence descriptions to their corresponding FASTX records,
+then stores this dictionary as a graph property under the key `:records`.
+Multiple input files are merged, with later files overwriting records with duplicate descriptions.
+
+# Returns
+The modified graph with added records property.
 """
 function add_fastx_records_to_graph!(graph, fastxs)
     record_dict = Dict(String(FASTX.description(record)) => record for record in Mycelia.open_fastx(first(fastxs)))
@@ -8506,6 +8793,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Processes DNA sequence records stored in the graph and adds their edgemers (k+1 length subsequences) 
+to build the graph structure.
+
+# Arguments
+- `graph`: A Mycelia graph object containing DNA sequence records and graph properties
+
+# Details
+- Uses the k-mer size specified in `graph.gprops[:k]` to generate k+1 length edgemers
+- Iterates through each record in `graph.gprops[:records]`
+- For each record, generates all possible overlapping edgemers
+- Adds each edgemer to the graph with its position and record information
+
+# Returns
+- The modified graph object with added edgemer information
 """
 function add_record_edgemers_to_graph!(graph)
     edgemer_size = graph.gprops[:k] + 1
@@ -8519,6 +8821,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert an edgemer to two vertex kmers.
+
+This function takes an edgemer (a sequence of DNA nucleotides) and converts it into two vertex kmers. 
+A kmer is a substring of length k from a DNA sequence. The first kmer is created from the first 
+n-1 elements of the edgemer, and the second kmer is created from the last n-1 elements of the edgemer.
+
+# Arguments
+- `edgemer::AbstractVector{T}`: A vector of DNA nucleotides where T is a subtype of `BioSequences.DNAAlphabet{2}`.
+
+# Returns
+- `Tuple{Kmers.Kmer{BioSequences.DNAAlphabet{2}}, Kmers.Kmer{BioSequences.DNAAlphabet{2}}}`: A tuple containing two kmers.
 """
 function edgemer_to_vertex_kmers(edgemer)
     a = Kmers.Kmer{BioSequences.DNAAlphabet{2}}(collect(edgemer[i] for i in 1:length(edgemer)-1))
@@ -8528,6 +8842,27 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Add an observed edgemer to a graph with its associated metadata.
+
+# Arguments
+- `graph::MetaGraph`: The graph to modify
+- `record_identifier`: Identifier for the source record
+- `index`: Position where edgemer was observed
+- `observed_edgemer`: The biological sequence representing the edgemer
+
+# Details
+Processes the edgemer by:
+1. Splitting it into source and destination kmers
+2. Converting kmers to their canonical forms
+3. Creating or updating an edge with orientation metadata
+4. Storing observation details (record, position, orientation)
+
+# Returns
+Modified graph with the new edge and metadata
+
+# Note
+If the edge already exists, the observation is added to the existing metadata.
 """
 function add_edgemer_to_graph!(graph, record_identifier, index, observed_edgemer)
     # observed_orientation = BioSequences.iscanonical(observed_edgemer)
@@ -10584,6 +10919,15 @@ end
 # Save the distance matrix to a JLD2 file
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Saves a matrix to a JLD2 file format.
+
+# Arguments
+- `matrix`: The matrix to be saved
+- `filename`: String path where the file should be saved
+
+# Returns
+- The filename string that was used to save the matrix
 """
 function save_matrix_jld2(;matrix, filename)
     if !isfile(filename) || (filesize(filename) == 0)
@@ -10597,6 +10941,14 @@ end
 # Load the distance matrix from a JLD2 file
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Loads a matrix from a JLD2 file.
+
+# Arguments
+- `filename::String`: Path to the JLD2 file containing the matrix under the key "matrix"
+
+# Returns
+- `Matrix`: The loaded matrix data
 """
 function load_matrix_jld2(filename)
     return JLD2.load(filename, "matrix")
@@ -10604,6 +10956,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Load data stored in a JLD2 file format.
+
+# Arguments
+- `filename::String`: Path to the JLD2 file to load
+
+# Returns
+- `Dict`: Dictionary containing the loaded data structures
 """
 function load_jld2(filename)
     return JLD2.load(filename)
@@ -10611,6 +10971,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GenBank format file to FASTA format using EMBOSS seqret.
+
+# Arguments
+- `genbank`: Path to input GenBank format file
+- `fasta`: Optional output FASTA file path (defaults to input path with .fna extension)
+- `force`: If true, overwrites existing output file (defaults to false)
+
+# Returns
+Path to the output FASTA file
+
+# Notes
+- Requires EMBOSS suite (installed automatically via Conda)
+- Will not regenerate output if it already exists unless force=true
 """
 function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
     add_bioconda_env("emboss")
@@ -10620,14 +10994,8 @@ function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
     return fasta
 end
 
-
 """
-    function ncbi_genome_download_accession(;
-            accession,
-            outdir = pwd(),
-            outpath = joinpath(outdir, accession * ".zip"),
-            include_string = "genome"
-        )
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Download an accession using NCBI datasets command line tool
 
@@ -10637,6 +11005,24 @@ returns the outfolder
 
 ncbi's default include string is 
 include_string = "gff3,rna,cds,protein,genome,seq-report"
+
+Downloads and extracts a genome from NCBI using the datasets command line tool.
+
+# Arguments
+- `accession`: NCBI accession number for the genome
+- `outdir`: Directory where files will be downloaded (defaults to current directory)
+- `outpath`: Full path for the temporary zip file (defaults to `outdir/accession.zip`)
+- `include_string`: Data types to download (defaults to "genome"). Other options include:
+  "gff3,rna,cds,protein,genome,seq-report"
+
+# Returns
+- Path to the extracted genome data directory
+
+# Notes
+- Requires the ncbi-datasets-cli conda package (automatically installed if missing)
+- Downloaded zip file is automatically removed after extraction
+- If output folder already exists, download is skipped
+- Data is extracted to `outdir/accession/ncbi_dataset/data/accession`
 """
 function ncbi_genome_download_accession(;
         accession,
@@ -10662,6 +11048,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Load a graph structure from a serialized file.
+
+# Arguments
+- `file::AbstractString`: Path to the file containing the serialized graph data
+
+# Returns
+- The deserialized graph object
 """
 function load_graph(file)
     return FileIO.load(file)["graph"]
@@ -10669,6 +11063,37 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse TransTerm terminator prediction output into a structured DataFrame.
+
+Takes a TransTerm output file path and returns a DataFrame containing parsed terminator predictions.
+Each row represents one predicted terminator with the following columns:
+
+- `chromosome`: Identifier of the sequence being analyzed
+- `term_id`: Unique terminator identifier (e.g. "TERM 19")
+- `start`: Start position of the terminator
+- `stop`: End position of the terminator
+- `strand`: Strand orientation ("+" or "-")
+- `location`: Context type, where:
+    * G/g = in gene interior (≥50bp from ends)
+    * F/f = between two +strand genes
+    * R/r = between two -strand genes
+    * T = between ends of +strand and -strand genes
+    * H = between starts of +strand and -strand genes
+    * N = none of the above
+    Lowercase indicates opposite strand from region
+- `confidence`: Overall confidence score (0-100)
+- `hairpin_score`: Hairpin structure score
+- `tail_score`: Tail sequence score  
+- `notes`: Additional annotations (e.g. "bidir")
+
+# Arguments
+- `transterm_output::AbstractString`: Path to TransTerm output file
+
+# Returns
+- `DataFrame`: Parsed terminator predictions with columns as described above
+
+See TransTerm HP documentation for details on scoring and location codes.
 """
 function parse_transterm_output(transterm_output)
     
@@ -10721,6 +11146,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert TransTerm terminator predictions output to GFF3 format.
+
+Parses TransTerm output and generates a standardized GFF3 file with the following transformations:
+- Sets source field to "transterm"
+- Sets feature type to "terminator"  
+- Converts terminator IDs to GFF attributes
+- Renames fields to match GFF3 spec
+
+# Arguments
+- `transterm_output::String`: Path to the TransTerm output file
+
+# Returns
+- `String`: Path to the generated GFF3 file (original filename with .gff extension)
 """
 function transterm_output_to_gff(transterm_output)
     transterm_table = parse_transterm_output(transterm_output)
@@ -10740,8 +11179,6 @@ function transterm_output_to_gff(transterm_output)
     return transterm_gff
 end
 
-
-
 # TODO: switch to using GenomicAnnotations if GFF3 package isn't updated
 # PR -> https://github.com/BioJulia/GFF3.jl/pull/12
 """
@@ -10749,6 +11186,16 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
 or get fasta directly from FTP site
+
+Retrieve GFF3 formatted genomic feature data from NCBI or direct FTP source.
+
+# Arguments
+- `db::String`: NCBI database to query ("nuccore" for DNA or "protein" for protein sequences)
+- `accession::String`: NCBI accession number
+- `ftp::String`: Direct FTP URL to GFF3 file (typically gzipped)
+
+# Returns
+- `IO`: IOBuffer containing uncompressed GFF3 data
 """
 function get_gff(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
@@ -10768,6 +11215,20 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Get dna (db = "nuccore") or protein (db = "protein") sequences from NCBI
 or get fasta directly from FTP site
+
+Retrieve GenBank records from NCBI or directly from an FTP site.
+
+# Arguments
+- `db::String`: NCBI database to query ("nuccore" for nucleotide or "protein" for protein sequences)
+- `accession::String`: NCBI accession number for the sequence
+- `ftp::String`: Direct FTP URL to a GenBank file (gzipped)
+
+# Returns
+- `GenomicAnnotations.GenBank.Reader`: A reader object containing the GenBank record
+
+# Details
+When using NCBI queries (`db` and `accession`), the function implements rate limiting 
+(0.5s sleep) to comply with NCBI's API restrictions of max 2 requests per second.
 """
 function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
     if !isempty(db) && !isempty(accession)
@@ -10793,6 +11254,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert FASTA sequence and GFF annotation files to GenBank format using EMBOSS seqret.
+
+# Arguments
+- `fasta::String`: Path to input FASTA file containing sequence data
+- `gff::String`: Path to input GFF file containing genomic features
+- `genbank::String`: Path for output GenBank file
+
+# Details
+Requires EMBOSS toolkit (installed via Bioconda). The function will:
+1. Create necessary output directories
+2. Run seqret to combine sequence and features
+3. Generate a GenBank format file at the specified location
 """
 function fasta_and_gff_to_genbank(;fasta, gff, genbank)
     add_bioconda_env("emboss")
@@ -10831,6 +11305,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Opens and parses a GenBank format file containing genomic sequence and annotation data.
+
+# Arguments
+- `genbank_file::AbstractString`: Path to the GenBank (.gb or .gbk) file
+
+# Returns
+- `Vector{GenomicAnnotations.Chromosome}`: Vector containing parsed chromosome data
 """
 function open_genbank(genbank_file)
     return GenomicAnnotations.readgbk(genbank_file)
@@ -10838,6 +11320,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a VirSorter score TSV file and return a DataFrame.
+
+# Arguments
+- `virsorter_score_tsv::String`: The file path to the VirSorter score TSV file.
+
+# Returns
+- `DataFrame`: A DataFrame containing the parsed data from the TSV file. If the file is empty, returns a DataFrame with the appropriate headers but no data.
 """
 function parse_virsorter_score_tsv(virsorter_score_tsv)
     data, header = uCSV.read(virsorter_score_tsv, delim='\t', header=1)
@@ -10849,6 +11339,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse MMseqs2 tophit alignment output file into a structured DataFrame.
+
+# Arguments
+- `tophit_aln::AbstractString`: Path to tab-delimited MMseqs2 alignment output file
+
+# Returns
+DataFrame with columns:
+- `query`: Query sequence/profile identifier
+- `target`: Target sequence/profile identifier  
+- `percent identity`: Sequence identity percentage
+- `alignment length`: Length of alignment
+- `number of mismatches`: Count of mismatched positions
+- `number of gaps`: Count of gap openings
+- `query start`: Start position in query sequence
+- `query end`: End position in query sequence
+- `target start`: Start position in target sequence
+- `target end`: End position in target sequence
+- `evalue`: E-value of alignment
+- `bit score`: Bit score of alignment
 """
 function parse_mmseqs_tophit_aln(tophit_aln)
     data, header = uCSV.read(tophit_aln, delim='\t')
@@ -10873,6 +11383,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse an MMseqs2 easy-taxonomy tophit report into a structured DataFrame.
+
+# Arguments
+- `tophit_report::String`: Path to the MMseqs2 easy-taxonomy tophit report file (tab-delimited)
+
+# Returns
+- `DataFrame`: A DataFrame with columns:
+  - `target_id`: Target sequence identifier
+  - `number of sequences aligning to target`: Count of aligned sequences
+  - `unique coverage of target`: Ratio of uniqueAlignedResidues to targetLength
+  - `Target coverage`: Ratio of alignedResidues to targetLength
+  - `Average sequence identity`: Mean sequence identity
+  - `taxon_id`: Taxonomic identifier
+  - `taxon_rank`: Taxonomic rank
+  - `taxon_name`: Species name and lineage
 """
 function parse_mmseqs_easy_taxonomy_tophit_report(tophit_report)
     data, header = uCSV.read(tophit_report, delim='\t')
@@ -10898,6 +11424,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse the taxonomic Last Common Ancestor (LCA) TSV output from MMseqs2's easy-taxonomy workflow.
+
+# Arguments
+- `lca_tsv`: Path to the TSV file containing MMseqs2 taxonomy results
+
+# Returns
+DataFrame with columns:
+- `contig_id`: Sequence identifier
+- `taxon_id`: NCBI taxonomy identifier 
+- `taxon_rank`: Taxonomic rank (e.g. species, genus)
+- `taxon_name`: Scientific name
+- `fragments_retained`: Number of fragments kept
+- `fragments_taxonomically_assigned`: Number of fragments with taxonomy
+- `fragments_in_agreement_with_assignment`: Fragments matching contig taxonomy
+- `support -log(E-value)`: Statistical support score
 """
 function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
     data, header = uCSV.read(lca_tsv, delim='\t')
@@ -10940,6 +11482,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Read results from MMSeqs2 easy-search output file into a DataFrame.
+
+# Arguments
+- `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search
+
+# Returns
+- `DataFrame`: Contains search results with columns:
+  - `query`: Query sequence identifier
+  - `target`: Target sequence identifier
+  - `seqIdentity`: Sequence identity (0.0-1.0)
+  - `alnLen`: Alignment length
+  - `mismatch`: Number of mismatches
+  - `gapOpen`: Number of gap openings
+  - `qStart`: Query start position
+  - `qEnd`: Query end position
+  - `tStart`: Target start position 
+  - `tEnd`: Target end position
+  - `evalue`: Expected value
+  - `bits`: Bit score
 """
 function read_mmseqs_easy_search(mmseqs_file)
     mmseqs_results = CSV.read(mmseqs_file, DataFrames.DataFrame, header=1, delim='\t')
@@ -10948,6 +11510,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Update GFF annotations with protein descriptions from MMseqs2 search results.
+
+# Arguments
+- `gff_file::String`: Path to input GFF3 format file
+- `mmseqs_file::String`: Path to MMseqs2 easy-search output file
+
+# Returns
+- `DataFrame`: Modified GFF table with updated attribute columns containing protein descriptions
+
+# Details
+Takes sequence matches from MMseqs2 and adds their descriptions as 'label' and 'product' 
+attributes in the GFF file. Only considers top hits from MMseqs2 results. Preserves existing 
+GFF attributes while prepending new annotations.
 """
 function update_gff_with_mmseqs(gff_file, mmseqs_file)
     top_hits = read_mmseqs_easy_search(mmseqs_file, top_hit_only=true)
@@ -10970,6 +11546,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Opens a GFF (General Feature Format) file for reading.
+
+# Arguments
+- `path::String`: Path to GFF file. Can be:
+    - Local file path
+    - HTTP/FTP URL (FTP URLs are automatically converted to HTTP)
+    - Gzipped file (automatically decompressed)
+
+# Returns
+- `IO`: An IO stream ready to read the GFF content
 """
 function open_gff(path::String)
     if isfile(path)
@@ -10989,6 +11576,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Reads a GFF (General Feature Format) file and parses it into a DataFrame.
+
+# Arguments
+- `gff::AbstractString`: Path to the GFF file
+
+# Returns
+- `DataFrame`: A DataFrame containing the parsed GFF data with standard columns:
+  seqid, source, type, start, end, score, strand, phase, and attributes
 """
 function read_gff(gff::AbstractString)
     return read_gff(open_gff(gff))
@@ -10996,6 +11592,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Read a GFF (General Feature Format) file into a DataFrame.
+
+# Arguments
+- `gff_io`: An IO stream containing GFF formatted data
+
+# Returns
+- `DataFrame`: A DataFrame with standard GFF columns:
+  - seqid: sequence identifier
+  - source: feature source
+  - type: feature type
+  - start: start position (1-based)
+  - end: end position
+  - score: numeric score
+  - strand: strand (+, -, or .)
+  - phase: phase (0, 1, 2 or .)
+  - attributes: semicolon-separated key-value pairs
 """
 function read_gff(gff_io)
     data, header = uCSV.read(gff_io, delim='\t', header=0, comment='#')
@@ -11026,6 +11639,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Takes a GFF (General Feature Format) DataFrame and expands the attributes column into separate columns.
+
+# Arguments
+- `gff_df::DataFrame`: A DataFrame containing GFF data with an 'attributes' column formatted as key-value pairs
+  separated by semicolons (e.g., "ID=gene1;Name=BRCA1;Type=gene")
+
+# Returns
+- `DataFrame`: The input DataFrame with additional columns for each attribute key found in the 'attributes' column
 """
 function split_gff_attributes_into_columns(gff_df)
     # 1. Extract unique keys from the attribute column
@@ -11063,6 +11685,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Write GFF (General Feature Format) data to a tab-delimited file.
+
+# Arguments
+- `gff`: DataFrame/Table containing GFF formatted data
+- `outfile`: String path where the output file should be written
+
+# Returns
+- `String`: Path to the written output file
 """
 function write_gff(;gff, outfile)
     uCSV.write(outfile, gff, delim='\t')
@@ -11071,6 +11702,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a Kraken taxonomic classification report into a structured DataFrame.
+
+# Arguments
+- `kraken_report::AbstractString`: Path to a tab-delimited Kraken report file
+
+# Returns
+- `DataFrame`: A DataFrame with the following columns:
+  - `percentage_of_fragments_at_or_below_taxon`: Percentage of fragments covered
+  - `number_of_fragments_at_or_below_taxon`: Count of fragments at/below taxon
+  - `number_of_fragments_assigned_directly_to_taxon`: Direct fragment assignments
+  - `rank`: Taxonomic rank
+  - `ncbi_taxonid`: NCBI taxonomy identifier
+  - `scientific_name`: Scientific name (whitespace-trimmed)
+
+# Notes
+- Scientific names are automatically stripped of leading/trailing whitespace
+- Input file must be tab-delimited
 """
 function read_kraken_report(kraken_report)
     kraken_report_header = [
@@ -11173,6 +11822,25 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Parse contig coverage statistics from a Qualimap BAM QC report file.
+
+# Arguments
+- `qualimap_report_txt::String`: Path to Qualimap bamqc report text file
+
+# Returns
+- `DataFrame`: Coverage statistics with columns:
+  - `Contig`: Contig identifier
+  - `Length`: Contig length in bases
+  - `Mapped bases`: Number of bases mapped to contig
+  - `Mean coverage`: Average coverage depth
+  - `Standard Deviation`: Standard deviation of coverage
+  - `% Mapped bases`: Percentage of total mapped bases on this contig
+
+# Supported Assemblers
+Handles output from both SPAdes and MEGAHIT assemblers:
+- SPAdes format: NODE_X_length_Y_cov_Z
+- MEGAHIT format: kXX_Y 
+
 Parse the contig coverage information from qualimap bamqc text report, which looks like the following:
 
 ```
@@ -11213,6 +11881,26 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Imports results of fastani
+
+Reads and processes FastANI output results from a tab-delimited file.
+
+# Arguments
+- `path::String`: Path to the FastANI output file
+
+# Returns
+DataFrame with columns:
+- `query`: Original query filepath
+- `query_identifier`: Extracted filename without extension
+- `reference`: Original reference filepath
+- `reference_identifier`: Extracted filename without extension
+- `%_identity`: ANI percentage identity
+- `fragments_mapped`: Number of fragments mapped
+- `total_query_fragments`: Total number of query fragments
+
+# Notes
+- Expects tab-delimited input file from FastANI
+- Automatically strips .fasta, .fna, or .fa extensions from filenames
+- Column order is preserved as listed above
 """
 function read_fastani(path::String)
     data, header = uCSV.read(path, delim='\t', typedetectrows=100)
@@ -11268,6 +11956,21 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Expects output type 7 from BLAST, default output type 6 doesn't have the header comments and won't auto-parse
+
+Parse a BLAST output file into a structured DataFrame.
+
+# Arguments
+- `blast_report::AbstractString`: Path to a BLAST output file in format 7 (tabular with comments)
+
+# Returns
+- `DataFrame`: Table containing BLAST results with columns matching the header fields.
+  Returns empty DataFrame if no hits found.
+
+# Details
+- Requires BLAST output format 7 (`-outfmt 7`), which includes header comments
+- Handles missing values (encoded as "N/A") automatically
+- Infers column types based on BLAST field names
+- Supports standard BLAST tabular fields including sequence IDs, scores, alignments and taxonomic information
 """
 function parse_blast_report(blast_report)
     # example header line 
@@ -11386,6 +12089,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a Mycelia graph to GFA (Graphical Fragment Assembly) format.
+
+Writes a graph to GFA format, including:
+- Header (H) line with GFA version
+- Segment (S) lines for each vertex with sequence and depth
+- Link (L) lines for edges with overlap size and orientations
+
+# Arguments
+- `graph`: MetaGraph containing sequence vertices and their relationships
+- `outfile`: Path where the GFA file should be written
+
+# Returns
+- Path to the written GFA file
 """
 function graph_to_gfa(;graph, outfile)
     # kmer_vertices = collect(MetaGraphs.filter_vertices(graph, :TYPE, Kmers.kmertype(Kmers.DNAKmer{kmer_size})))
@@ -11501,6 +12218,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Open and return a reader for FASTA or FASTQ format files.
+
+# Arguments
+- `path::AbstractString`: Path to input file. Can be:
+    - Local file path
+    - HTTP/FTP URL
+    - Gzip compressed (.gz extension)
+
+# Supported formats
+- FASTA (.fasta, .fna, .faa, .fa)
+- FASTQ (.fastq, .fq)
+
+# Returns
+- `FASTX.FASTA.Reader` for FASTA files
+- `FASTX.FASTQ.Reader` for FASTQ files
 """
 function open_fastx(path::AbstractString)
     if isfile(path)
@@ -11529,6 +12262,7 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
 Writes FASTA records to a file, optionally gzipped.
 
 # Arguments
@@ -11568,6 +12302,23 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Plots a histogram of kmer counts against # of kmers with those counts
 
 Returns the plot object for adding additional layers and saving
+
+Creates a scatter plot visualizing the k-mer frequency spectrum - the relationship
+between k-mer frequencies and how many k-mers occur at each frequency.
+
+# Arguments
+- `counts::AbstractVector{<:Integer}`: Vector of k-mer counts/frequencies
+- `log_scale::Union{Function,Nothing} = log2`: Function to apply logarithmic scaling to both axes.
+  Set to `nothing` to use linear scaling.
+- `kwargs...`: Additional keyword arguments passed to `StatsPlots.plot()`
+
+# Returns
+- `Plots.Plot`: A scatter plot object that can be further modified or saved
+
+# Details
+The x-axis shows k-mer frequencies (how many times each k-mer appears),
+while the y-axis shows how many distinct k-mers appear at each frequency.
+Both axes are log-scaled by default using log2.
 """
 function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     kmer_counts_hist = StatsBase.countmap(c for c in counts)
@@ -11594,6 +12345,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert between different graph file formats.
+
+# Arguments
+- `args`: Dictionary with required keys:
+    - `"in"`: Input filepath (supported: .jld2, .gfa, .neo4j)
+    - `"out"`: Output filepath (supported: .jld2, .gfa, .neo4j)
+
+# Details
+Performs format conversion based on file extensions. For non-JLD2 to non-JLD2
+conversions, uses JLD2 as an intermediate format.
 """
 function convert(args)
     @show args
@@ -11638,6 +12400,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a visualization of a kmer graph where nodes represent kmers and their sizes reflect counts.
+
+# Arguments
+- `graph`: A MetaGraph where vertices have `:kmer` and `:count` properties
+
+# Returns
+- A Plots.jl plot object showing the graph visualization
+
+# Details
+- Node sizes are scaled based on kmer counts
+- Plot dimensions scale logarithmically with number of vertices
+- Each node is labeled with its kmer sequence
 """
 function plot_graph(graph)
     
@@ -11658,6 +12433,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Saves the given graph to a file in JLD2 format.
+
+# Arguments
+- `graph::Graphs.AbstractGraph`: The graph to be saved.
+- `outfile::String`: The name of the output file. If the file extension is not `.jld2`, it will be appended automatically.
+
+# Returns
+- `String`: The name of the output file with the `.jld2` extension.
 """
 function save_graph(graph::Graphs.AbstractGraph, outfile::String)
     if !occursin(r"\.jld2$", outfile)
@@ -11669,6 +12453,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Loads a graph object from a serialized file.
+
+# Arguments
+- `file::String`: Path to the file containing the serialized graph data. The file should have been created using `save_graph`.
+
+# Returns
+- The deserialized graph object stored under the "graph" key.
 """
 function load_graph(file::String)
     return FileIO.load(file)["graph"]
@@ -11851,6 +12643,25 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
+
+# Arguments
+- `outdir::String`: Output directory containing input FASTQ files
+- `identifier::String`: Prefix for input/output filenames
+
+# Input files
+Expects paired FASTQ files in `outdir` named:
+- `{identifier}_1.fastq.gz` (forward reads)
+- `{identifier}_2.fastq.gz` (reverse reads)
+
+# Output files
+Creates trimmed reads in `outdir/trim_galore/`:
+- `{identifier}_1_val_1.fq.gz` (trimmed forward reads)
+- `{identifier}_2_val_2.fq.gz` (trimmed reverse reads)
+
+# Dependencies
+Requires trim_galore conda environment:
 """
 function trim_galore(;outdir="", identifier="")
     
@@ -11873,6 +12684,26 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Download and compress paired-end sequencing reads from the SRA database using fasterq-dump.
+
+# Arguments
+- `outdir::String=""`: Output directory for the FASTQ files. Defaults to current directory.
+- `srr_identifier::String=""`: SRA run accession number (e.g., "SRR12345678")
+
+# Outputs
+Creates two gzipped FASTQ files in the output directory:
+- `{srr_identifier}_1.fastq.gz`: Forward reads
+- `{srr_identifier}_2.fastq.gz`: Reverse reads
+
+# Dependencies
+Requires `fasterq-dump` from the SRA Toolkit and `pigz` for compression.
+
+# Notes
+- Skips download if output files already exist
+- Uses up to 4 threads or system maximum, whichever is lower
+- Allocates 1GB memory for processing
+- Skips technical reads
 """
 function fasterq_dump(;outdir="", srr_identifier="")
     
@@ -11902,6 +12733,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads and quality filters paired-end reads from the Sequence Read Archive (SRA).
+
+# Arguments
+- `outdir::String`: Output directory path for downloaded and processed files
+- `srr_identifier::String`: SRA run accession number (e.g., "SRR12345678")
+
+# Details
+1. Downloads paired-end FASTQ files using fasterq-dump
+2. Performs quality trimming using trim_galore
+3. Removes intermediate compressed FASTQ files after processing
+
+# Returns
+Nothing, but creates the following files in `outdir`:
+- `trim_galore/[srr_identifier]_1_val_1.fq.gz`: Trimmed forward reads
+- `trim_galore/[srr_identifier]_2_val_2.fq.gz`: Trimmed reverse reads
 """
 function download_and_filter_sra_reads(;outdir="", srr_identifier="")
     forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
@@ -11924,6 +12771,11 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a mapping from amino acids to representative DNA codons using the standard genetic code.
+
+# Returns
+- Dictionary mapping each amino acid (including stop codon `AA_Term`) to a valid DNA codon that encodes it
 """
 function amino_acids_to_codons()
     amino_acid_to_codon_map = Dict(a => Kmers.DNACodon for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
@@ -11936,6 +12788,12 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a mapping between DNA codons and their corresponding amino acids using the standard genetic code.
+
+Returns a dictionary where:
+- Keys are 3-letter DNA codons (e.g., "ATG")
+- Values are the corresponding amino acids from BioSequences.jl
 """
 function codons_to_amino_acids()
     codons = Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
@@ -11945,6 +12803,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Analyze codon usage frequencies from genes in a GenBank file.
+
+# Arguments
+- `genbank`: Path to GenBank format file containing genomic sequences and annotations
+- `allow_all`: If true, initializes frequencies for all possible codons with count=1 (default: true)
+
+# Returns
+Nested dictionary mapping amino acids to their corresponding codon usage counts:
+- Outer key: AminoAcid (including stop codon)
+- Inner key: DNACodon
+- Value: Count of codon occurrences
+
+# Details
+- Only processes genes marked as ':misc_feature' in the GenBank file
+- Analyzes both forward and reverse complement sequences
+- Determines coding strand based on presence of stop codons and start codons
+- Skips ambiguous sequences that cannot be confidently oriented
 """
 function genbank_to_codon_frequencies(genbank; allow_all=true)
     # create an initial codon frequency table, where we initialize all possible codons with equal probability
@@ -12000,6 +12876,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalizes codon frequencies for each amino acid such that frequencies sum to 1.0.
+
+# Arguments
+- `codon_frequencies`: Nested dictionary mapping amino acids to their codon frequency distributions
+
+# Returns
+- Normalized codon frequencies where values for each amino acid sum to 1.0
 """
 function normalize_codon_frequencies(codon_frequencies)
     normalized_codon_frequencies = Dict{BioSymbols.AminoAcid, Dict{Kmers.DNACodon, Float64}}()
@@ -12017,6 +12901,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a protein sequence back to a possible DNA coding sequence using weighted random codon selection.
+
+# Arguments
+- `protein_sequence::BioSequences.LongAA`: The amino acid sequence to reverse translate
+
+# Returns
+- `BioSequences.LongDNA{2}`: A DNA sequence that would translate to the input protein sequence
+
+# Details
+Uses codon usage frequencies to randomly select codons for each amino acid, weighted by their 
+natural occurrence. Each selected codon is guaranteed to translate back to the original amino acid.
 """
 function reverse_translate(protein_sequence::BioSequences.LongAA)
     this_sequence = BioSequences.LongDNA{2}()
@@ -12041,6 +12937,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Optimizes the DNA sequence encoding for a given protein sequence using codon usage frequencies.
+
+# Arguments
+- `normalized_codon_frequencies`: Dictionary mapping amino acids to their codon frequencies
+- `protein_sequence::BioSequences.LongAA`: Target protein sequence to optimize
+- `n_iterations::Integer`: Number of optimization iterations to perform
+
+# Algorithm
+1. Creates initial DNA sequence through reverse translation
+2. Iteratively generates new sequences by sampling codons based on their frequencies
+3. Keeps track of the sequence with highest codon usage likelihood
+
+# Returns
+- `BioSequences.LongDNA{2}`: Optimized DNA sequence encoding the input protein
 """
 function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
     best_sequence = reverse_translate(protein_sequence)
@@ -12075,17 +12986,23 @@ function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequ
     end
     @show (best_likelihood)^-10 / (initial_log_likelihood)^-10
     return best_sequence
-    
 end
-
 
 # function codon_optimize(;normalized_codon_frequencies, optimization_sequence::BioSequences.LongDNA, n_iterations)
 #     protein_sequence = BioSequences.translate(optimization_sequence)
-
 # end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a dictionary of k-mer counts to a fixed-length numeric vector based on a predefined mapping.
+
+# Arguments
+- `kmer_to_index_map`: Dictionary mapping k-mer sequences to their corresponding vector indices
+- `kmer_counts`: Dictionary containing k-mer sequences and their occurrence counts
+
+# Returns
+- A vector where each position corresponds to a k-mer count, with zeros for absent k-mers
 """
 function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
     kmer_counts_vector = zeros(length(kmer_to_index_map))
@@ -12101,6 +13018,15 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Generate a sorted list of all possible k-mers for a given alphabet.
+
+# Arguments
+- `k::Integer`: Length of k-mers to generate
+- `alphabet`: Collection of symbols (DNA, RNA, or amino acids) from BioSymbols
+
+# Returns
+- Sorted Vector of Kmers of the appropriate type (DNA, RNA, or amino acid)
 """
 function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
@@ -12122,6 +13048,19 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Generate all possible canonical k-mers of length `k` from the given `alphabet`.
+
+For DNA/RNA sequences, returns unique canonical k-mers where each k-mer is represented by
+the lexicographically smaller of itself and its reverse complement.
+For amino acid sequences, returns all possible k-mers without canonicalization.
+
+# Arguments
+- `k`: Length of k-mers to generate
+- `alphabet`: Vector of BioSymbols (DNA, RNA or AminoAcid)
+
+# Returns
+- Vector of k-mers, canonicalized for DNA/RNA alphabets
 """
 function generate_all_possible_canonical_kmers(k, alphabet)
     kmers = generate_all_possible_kmers(k, alphabet)
@@ -12136,6 +13075,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the index position of a given k-mer in a sorted list of k-mers.
+
+# Arguments
+- `kmers`: A sorted vector of k-mers to search within
+- `kmer`: The k-mer sequence to find
+
+# Returns
+Integer index position where `kmer` is found in `kmers`
+
+# Throws
+- `AssertionError`: If the k-mer is not found in the list
 """
 function get_kmer_index(kmers, kmer)
     index = searchsortedfirst(kmers, kmer)
@@ -12149,6 +13100,28 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Create a dense kmer counts table (canonical for DNA, stranded for RNA & AA) for each fasta provided in a list.
 Scales very well for large numbers of organisms/fasta files, but not for k.
 Recommended for k <= 13, although 17 may still be possible
+
+Generate a dense k-mer frequency matrix from multiple FASTA files.
+
+# Arguments
+- `fasta_list`: Vector of paths to FASTA files
+- `k`: Length of k-mers to count (recommended k ≤ 13)
+- `alphabet`: Symbol specifying sequence type (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns 
+Named tuple containing:
+- `sorted_kmers`: Vector of sorted k-mers
+- `kmer_counts_matrix`: Dense matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA: Uses canonical k-mers (strand-neutral)
+- For RNA/AA: Uses stranded k-mers
+- Parallelized using Julia's multi-threading
+
+# Performance
+- Efficient for large numbers of sequences
+- Memory usage grows exponentially with k
+- For k > 13, use `fasta_list_to_sparse_counts_table` instead
 """
 function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet)
     k > 13 && error("use fasta_list_to_sparse_counts_table")
@@ -12186,6 +13159,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a collection of biological sequences into a dense k-mer count matrix.
+
+# Arguments
+- `biosequences`: Collection of DNA, RNA, or amino acid sequences (BioSequence types)
+- `k::Integer`: Length of k-mers to count (must be ≤ 13)
+
+# Returns
+Named tuple containing:
+- `sorted_kmers`: Vector of all possible k-mers in sorted order
+- `kmer_counts_matrix`: Dense matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA sequences, counts canonical k-mers (both strands)
+- For RNA and protein sequences, counts exact k-mers
+- Uses parallel processing with threads
+- For k > 13, use `fasta_list_to_sparse_counts_table` instead
 """
 function biosequences_to_dense_counts_table(;biosequences, k)
     k > 13 && error("use fasta_list_to_sparse_counts_table")    
@@ -12221,11 +13211,11 @@ function biosequences_to_dense_counts_table(;biosequences, k)
     return (;sorted_kmers, kmer_counts_matrix)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create a sparse kmer counts table in memory for each fasta provided in a list
-"""
+# Create a sparse kmer counts table in memory for each fasta provided in a list
+# """
 # function fasta_list_to_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
 #     if alphabet == :AA
 #         KMER_TYPE = Kmers.AAKmer{k}
@@ -12265,6 +13255,23 @@ Create a sparse kmer counts table in memory for each fasta provided in a list
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a collection of biological sequences into a k-mer count matrix.
+
+# Arguments
+- `biosequences`: Vector of biological sequences (DNA, RNA, or Amino Acids)
+- `k`: Length of k-mers to count
+
+# Returns
+Named tuple with:
+- `sorted_kmers`: Vector of all unique k-mers found, lexicographically sorted
+- `kmer_counts_matrix`: Sparse matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA sequences, counts canonical k-mers (both strands)
+- Uses parallel processing with Thread-safe progress tracking
+- Memory efficient sparse matrix representation
+- Supports DNA, RNA and Amino Acid sequences
 """
 function biosequences_to_counts_table(;biosequences, k)
     if eltype(first(biosequences)) == BioSymbols.AminoAcid
@@ -12305,18 +13312,31 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Normalize a distance matrix by dividing all elements by the maximum non-NaN value.
+
+# Arguments
+- `distance_matrix`: A matrix of distance values that may contain `NaN`, `nothing`, or `missing` values
+
+# Returns
+- Normalized distance matrix with values scaled to [0, 1] range
+
+# Details
+- Filters out `NaN`, `nothing`, and `missing` values when finding the maximum
+- All elements are divided by the same maximum value to preserve relative distances
+- If all values are NaN/nothing/missing, may return NaN values
 """
 function normalize_distance_matrix(distance_matrix)
     max_non_nan_value = maximum(filter(x -> !isnan(x) && !isnothing(x) && !ismissing(x), vec(distance_matrix)))
     return distance_matrix ./ max_non_nan_value
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
-"""
+# Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+# """
 # function count_matrix_to_probability_matrix(
 #         counts_matrix,
 #         probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
@@ -12336,6 +13356,14 @@ where distance is a proportional to total feature count magnitude (size) and cos
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a matrix of counts into a probability matrix by normalizing each column to sum to 1.0.
+
+# Arguments
+- `counts_matrix::Matrix{<:Number}`: Input matrix where each column represents counts/frequencies
+
+# Returns
+- `Matrix{Float64}`: Probability matrix where each column sums to 1.0
 """
 function count_matrix_to_probability_matrix(counts_matrix)
     probability_matrix = zeros(size(counts_matrix))
@@ -12350,6 +13378,21 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Convert a distance matrix into a Newick tree format using UPGMA hierarchical clustering.
+
+# Arguments
+- `distance_matrix`: Square matrix of pairwise distances between entities
+- `labels`: Vector of labels corresponding to the entities in the distance matrix
+- `outfile`: Path where the Newick tree file will be written
+
+# Returns
+- Path to the generated Newick tree file
+
+# Details
+Performs hierarchical clustering using the UPGMA (average linkage) method and 
+converts the resulting dendrogram into Newick tree format. The branch lengths 
+in the tree represent the heights from the clustering.
 """
 function distance_matrix_to_newick(;distance_matrix, labels, outfile)
     # phage_names = phage_host_table[indices, :name]
@@ -12410,8 +13453,6 @@ end
 # end
 
 # """
-
-
 # Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
 # where distance is a proportional to total feature count magnitude (size)
 # """
@@ -12436,6 +13477,21 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Create a Euclidean distance matrix from a column-major counts matrix
 (features as rows and entities as columns), where distance is proportional
 to total feature count magnitude (size).
+
+Compute pairwise Euclidean distances between entity profiles in a counts matrix.
+
+# Arguments
+- `counts_table`: A matrix where rows represent features and columns represent entities (column-major format).
+  Each column contains the feature counts/frequencies for one entity.
+
+# Returns
+- A symmetric N×N matrix of Euclidean distances between each pair of entities, where N is the number of entities.
+
+# Details
+- Parallelized computation using multi-threading
+- Progress tracking via ProgressMeter
+- Memory efficient: only upper triangle is computed, then mirrored
+- Distance between entities increases with total feature magnitude differences
 """
 function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     n_entities = size(counts_table, 2)
@@ -12458,6 +13514,7 @@ function frequency_matrix_to_euclidean_distance_matrix(counts_table)
     ProgressMeter.finish!(progress)  # Ensure the progress meter completes
     return distance_matrix
 end
+
 # didn't work
 # function frequency_matrix_to_euclidean_distance_matrix(counts_table)
 #     n_entities = size(counts_table, 2)
@@ -12484,6 +13541,21 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create cosine distance matrix from a column-major counts matrix (features as rows and entities as columns)
 where distance is a proportional to cosine similarity (relative frequency)
+
+Compute pairwise cosine distances between entities based on their feature distributions.
+
+# Arguments
+- `probability_matrix`: Column-major matrix where rows represent features and columns represent entities.
+  Each column should contain frequency/probability values for one entity.
+
+# Returns
+- Symmetric matrix of size (n_entities × n_entities) containing pairwise cosine distances.
+  Distance values range from 0 (identical distributions) to 1 (orthogonal distributions).
+
+# Details
+- Computes upper triangle and mirrors to lower triangle for efficiency
+- Uses `Distances.cosine_dist` for the core computation
+- Time complexity is O(n²) where n is the number of entities
 """
 function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
     n_entities = size(probability_matrix, 2)
@@ -12502,6 +13574,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a path of overlapping k-mers into a single DNA sequence.
+
+# Arguments
+- `kmer_path`: Vector of k-mers (DNA sequences) where each consecutive pair overlaps by k-1 bases
+
+# Returns
+- `BioSequences.LongDNA{2}`: Assembled DNA sequence from the k-mer path
+
+# Description
+Reconstructs the original DNA sequence by joining k-mers, validating that consecutive k-mers 
+overlap correctly. The first k-mer is used in full, then each subsequent k-mer contributes 
+its last base.
 """
 function kmer_path_to_sequence(kmer_path)
     sequence = BioSequences.LongDNA{2}(first(kmer_path))
@@ -12855,6 +13940,23 @@ end
 # currently this is only for amino acid sequences, expand to include DNA and RNA via multiple dispatch
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a single random mutation in an amino acid sequence.
+
+# Arguments
+- `reference_sequence`: Input amino acid sequence to be mutated
+
+# Returns
+- `mutant_sequence`: The sequence after applying the mutation
+- `haplotype`: A `SequenceVariation.Haplotype` object containing the mutation details
+
+# Details
+Performs one of three possible mutation types:
+- Substitution: Replace one amino acid with another
+- Insertion: Insert 1+ random amino acids at a position
+- Deletion: Remove 1+ amino acids from a position
+
+Insertion and deletion sizes follow a truncated Poisson distribution (λ=1, min=1).
 """
 function mutate_sequence(reference_sequence)
     i = rand(1:length(reference_sequence))
@@ -12920,6 +14022,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Aligns two sequences using the Levenshtein distance and returns the total number of matches and edits.
+
+# Arguments
+- `a::AbstractString`: The first sequence to be aligned.
+- `b::AbstractString`: The second sequence to be aligned.
+
+# Returns
+- `NamedTuple{(:total_matches, :total_edits), Tuple{Int, Int}}`: A named tuple containing:
+    - `total_matches::Int`: The total number of matching bases in the alignment.
+    - `total_edits::Int`: The total number of edits (insertions, deletions, substitutions) in the alignment.
 """
 function assess_alignment(a, b)
     pairwise_alignment = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(), a, b)
@@ -12932,6 +14045,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Canonicalizes the k-mer counts in the given dictionary.
+
+This function iterates over the provided dictionary `kmer_counts`, which maps k-mers to their respective counts. For each k-mer that is not in its canonical form, it converts the k-mer to its canonical form and updates the count in the dictionary accordingly. If the canonical form of the k-mer already exists in the dictionary, their counts are summed. The original non-canonical k-mer is then removed from the dictionary.
+
+# Arguments
+- `kmer_counts::Dict{BioSequences.Kmer, Int}`: A dictionary where keys are k-mers and values are their counts.
+
+# Returns
+- The input dictionary `kmer_counts` with all k-mers in their canonical form, sorted by k-mers.
 """
 function canonicalize_kmer_counts!(kmer_counts)
     for (kmer, count) in kmer_counts
@@ -12950,6 +14073,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize k-mer counts into a canonical form by creating a non-mutating copy.
+
+# Arguments
+- `kmer_counts`: Dictionary or collection of k-mer count data
+
+# Returns
+- A new normalized k-mer count collection
 """
 function canonicalize_kmer_counts(kmer_counts)
     return canonicalize_kmer_counts!(copy(kmer_counts))
@@ -12957,6 +14088,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical k-mers in biological sequences. A canonical k-mer is the lexicographically 
+smaller of a DNA sequence and its reverse complement, ensuring strand-independent counting.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer size and structure
+- `sequences`: Iterator of biological sequences to analyze
+
+# Returns
+- `Dict{KMER_TYPE,Int}`: Dictionary mapping canonical k-mers to their counts
 """
 function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
     kmer_counts = count_kmers(KMER_TYPE, sequences)
@@ -12965,6 +14106,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of each k-mer in a DNA sequence.
+
+# Arguments
+- `::Type{Kmers.Kmer{A,K}}`: K-mer type with alphabet A and length K
+- `sequence::BioSequences.LongSequence`: Input DNA sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+
+# Type Parameters
+- `A <: BioSequences.DNAAlphabet`: DNA alphabet type
+- `K`: Length of k-mers
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.DNAAlphabet, K}
     # return sort(StatsBase.countmap(Kmers.FwDNAMers{K}(sequence)))
@@ -12973,6 +14127,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of each k-mer in an RNA sequence.
+
+# Arguments
+- `Kmer`: Type parameter specifying the k-mer length K and RNA alphabet
+- `sequence`: Input RNA sequence to analyze
+
+# Returns
+- `Dict{Kmers.Kmer, Int}`: Sorted dictionary mapping each k-mer to its frequency count
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
     # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
@@ -12981,6 +14144,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of amino acid k-mers in a biological sequence.
+
+# Arguments
+- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
+- `sequence`: Input biological sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.AminoAcidAlphabet, K}
     return sort(StatsBase.countmap(Kmers.FwAAMers{K}(sequence)))
@@ -12989,6 +14161,15 @@ end
 # TODO add a way to handle ambiguity or not
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of amino acid k-mers in a biological sequence.
+
+# Arguments
+- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
+- `sequence`: Input biological sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
 """
 function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     # TODO: need to figure out how to infer the sequence type
@@ -13005,6 +14186,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers across multiple sequence records and return a sorted frequency table.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{3}` for 3-mers)
+- `records`: Vector of FASTA/FASTQ records to analyze
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Sorted dictionary mapping k-mers to their frequencies
 """
 function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     kmer_counts = count_kmers(KMER_TYPE, first(records))
@@ -13017,6 +14207,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts k-mer occurrences in biological sequences from a FASTA/FASTQ reader.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length and encoding (e.g., `DNAKmer{4}` for 4-mers)
+- `sequences`: A FASTA or FASTQ reader containing the biological sequences to analyze
+
+# Returns
+A dictionary mapping k-mers to their counts in the input sequences
 """
 function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
     return count_kmers(KMER_TYPE, collect(sequences))
@@ -13024,6 +14223,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers across multiple FASTA/FASTQ files and merge the results.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{4}` for 4-mers)
+- `fastx_files`: Vector of paths to FASTA/FASTQ files
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Dictionary mapping k-mers to their total counts across all files
 """
 function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {KMER_TYPE, T <: AbstractString}
     kmer_counts = count_kmers(KMER_TYPE, first(fastx_files))
@@ -13036,6 +14244,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers in a FASTA/FASTQ file and return their frequencies.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer type (e.g., `DNAKmer{K}`)
+- `fastx_file`: Path to input FASTA/FASTQ file
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Dictionary mapping each k-mer to its frequency
 """
 function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_TYPE}
     fastx_io = open_fastx(fastx_file)
@@ -13046,6 +14263,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a Phred quality score (Q-value) to a probability of error.
+
+# Arguments
+- `q_value`: Phred quality score, typically ranging from 0 to 40
+
+# Returns
+- Error probability in range [0,1], where 0 indicates highest confidence
+
+A Q-value of 10 corresponds to an error rate of 0.1 (10%), while a Q-value of 
+30 corresponds to an error rate of 0.001 (0.1%).
 """
 function q_value_to_error_rate(q_value)
     error_rate = 10^(q_value/(-10))
@@ -13054,6 +14282,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a sequencing error probability to a Phred quality score (Q-value).
+
+The calculation uses the standard Phred formula: Q = -10 * log₁₀(error_rate)
+
+# Arguments
+- `error_rate::Float64`: Probability of error (between 0 and 1)
+
+# Returns
+- `q_value::Float64`: Phred quality score
 """
 function error_rate_to_q_value(error_rate)
     q_value = -10 * log10(error_rate)
@@ -13062,6 +14300,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Check if two biological sequences are equivalent, considering both direct and reverse complement matches.
+
+# Arguments
+- `a`: First biological sequence (BioSequence or compatible type)
+- `b`: Second biological sequence (BioSequence or compatible type)
+
+# Returns
+- `Bool`: `true` if sequences are identical or if one is the reverse complement of the other, `false` otherwise
 """
 function is_equivalent(a, b)
     a == b || a == BioSequences.reverse_complement(b)
@@ -13069,6 +14316,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Converts a path of edges in a kmer graph into a DNA sequence by concatenating overlapping kmers.
+
+# Arguments
+- `kmer_graph`: A directed graph where vertices represent kmers and edges represent overlaps
+- `edge_path`: Vector of edges representing a path through the graph
+
+# Returns
+A `BioSequences.LongDNASeq` containing the merged sequence represented by the path
+
+# Details
+The function:
+1. Takes the first kmer from the source vertex of first edge
+2. For each edge, handles orientation (forward/reverse complement)
+3. Verifies overlaps between consecutive kmers
+4. Concatenates unique bases to build final sequence
 """
 function edge_path_to_sequence(kmer_graph, edge_path)
     edge = first(edge_path)
@@ -13128,6 +14391,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts the total number of records in a FASTA/FASTQ file.
+
+# Arguments
+- `fastx`: Path to a FASTA or FASTQ file (can be gzipped)
+
+# Returns
+- Number of records (sequences) in the file
 """
 function count_records(fastx)
     n_records = 0
@@ -13139,6 +14410,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate sequence lengths for reads in a FASTQ file.
+
+# Arguments
+- `fastq_file::String`: Path to input FASTQ file
+- `total_reads::Integer=Inf`: Number of reads to process (defaults to all reads)
+
+# Returns
+- `Vector{Int}`: Array containing the length of each sequence read
 """
 function determine_read_lengths(fastq_file; total_reads = Inf)
     if total_reads == Inf
@@ -13157,6 +14437,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the maximum number of possible canonical k-mers for a given alphabet.
+
+# Arguments
+- `k::Integer`: Length of k-mer
+- `ALPHABET::Vector{Char}`: Character set (nucleotides or amino acids)
+
+# Returns
+- `Int`: Maximum number of possible canonical k-mers
+
+# Details
+- For amino acids (AA_ALPHABET): returns total possible k-mers
+- For nucleotides: returns half of total possible k-mers (canonical form)
+- Requires odd k-mer length for nucleotide alphabets
 """
 function determine_max_canonical_kmers(k, ALPHABET)
     max_possible_kmers = determine_max_possible_kmers(k, ALPHABET)
@@ -13170,6 +14464,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the total number of possible unique k-mers that can be generated from a given alphabet.
+
+# Arguments
+- `k`: Length of k-mers to consider
+- `ALPHABET`: Vector containing the allowed characters/symbols
+
+# Returns
+- Integer representing the maximum number of possible unique k-mers (|Σ|ᵏ)
 """
 function determine_max_possible_kmers(k, ALPHABET)
     return length(ALPHABET)^k
@@ -13177,6 +14480,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate reaction velocity using Michaelis-Menten enzyme kinetics equation.
+
+# Arguments
+- `s::Vector{Float64}`: Substrate concentration(s) [mol/L]
+- `p::Vector{Float64}`: Parameters vector where:
+    - `p[1]`: vmax - Maximum reaction velocity [mol/(L⋅s)]
+    - `p[2]`: km - Michaelis constant [mol/L]
+
+# Returns
+- `v::Vector{Float64}`: Reaction velocity [mol/(L⋅s)]
+
+# Description
+Implements the Michaelis-Menten equation: v = (vmax * s)/(km + s)
+
+# Reference
+Michaelis L., Menten M.L. (1913). Die Kinetik der Invertinwirkung. 
+Biochem Z 49:333-369.
 """
 # Michaelis–Menten
 function calculate_v(s,p)
@@ -13188,6 +14509,15 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Translates nucleic acid sequences from a FASTA file into amino acid sequences.
+
+# Arguments
+- `fasta_nucleic_acid_file::String`: Path to input FASTA file containing nucleic acid sequences
+- `fasta_amino_acid_file::String`: Path where the translated amino acid sequences will be written
+
+# Returns
+- `String`: Path to the output FASTA file containing translated amino acid sequences
 """
 function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_file)
     open(fasta_amino_acid_file, "w") do io
@@ -13211,6 +14541,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a FASTA file/record iterator to a DataFrame.
+
+# Arguments
+- `fasta`: FASTA record iterator from FASTX.jl
+
+# Returns
+- `DataFrame` with columns:
+  - `identifier`: Sequence identifiers
+  - `description`: Full sequence descriptions 
+  - `sequence`: Biological sequences as strings
 """
 function fasta_to_table(fasta)
     collected_fasta = collect(fasta)
@@ -13224,6 +14565,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a DataFrame containing FASTA sequence information into a vector of FASTA records.
+
+# Arguments
+- `fasta_df::DataFrame`: DataFrame with columns "identifier", "description", and "sequence"
+
+# Returns
+- `Vector{FASTX.FASTA.Record}`: Vector of FASTA records
 """
 function fasta_table_to_fasta(fasta_df)
     records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
@@ -13236,6 +14585,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove duplicate sequences from a FASTA file while preserving headers.
+
+# Arguments
+- `in_fasta`: Path to input FASTA file
+- `out_fasta`: Path where deduplicated FASTA will be written
+
+# Returns
+Path to the output FASTA file (same as `out_fasta` parameter)
+
+# Details
+- Sequences are considered identical if they match exactly (case-sensitive)
+- For duplicate sequences, keeps the first header encountered
+- Input sequences are sorted by identifier before deduplication
+- Preserves the original sequence formatting
 """
 function deduplicate_fasta_file(in_fasta, out_fasta)
     fasta_df = fasta_to_table(collect(open_fastx(in_fasta)))
@@ -13252,7 +14616,6 @@ function deduplicate_fasta_file(in_fasta, out_fasta)
     return out_fasta
 end
 
-
 # seqkit concat $(cat fasta_files.txt) > merged.fasta
 # seqtk seq -L $(cat fasta_files.txt) > merged.fasta
 """
@@ -13263,6 +14626,19 @@ Join fasta files without any regard to record uniqueness.
 A cross-platform version of `cat *.fasta > joint.fasta`
 
 See merge_fasta_files
+
+Concatenate multiple FASTA files into a single output file by simple appending.
+
+# Arguments
+- `files`: Vector of paths to input FASTA files
+- `file`: Path where the concatenated output will be written
+
+# Returns
+- Path to the output concatenated file
+
+# Details
+Platform-independent implementation of `cat *.fasta > combined.fasta`.
+Files are processed sequentially with a progress indicator.
 """
 function concatenate_files(;files, file)
     close(open(file, "w"))
