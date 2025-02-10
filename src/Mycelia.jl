@@ -14719,6 +14719,23 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads and extracts the NCBI taxonomy database required for taxonkit operations.
+
+Downloads `taxdump.tar.gz` from NCBI FTP server and extracts it to `~/.taxonkit/`.
+This is a prerequisite for using taxonkit-based taxonomy functions.
+
+# Requirements
+- Working internet connection
+- Sufficient disk space (~100MB)
+- `taxonkit` must be installed separately
+
+# Returns
+- Nothing
+
+# Throws
+- `SystemError` if download fails or if unable to create directory
+- `ErrorException` if tar extraction fails
 """
 function setup_taxonkit_taxonomy()
     run(`wget -q ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
@@ -14733,6 +14750,25 @@ end
 # )
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Retrieves and formats the complete NCBI taxonomy hierarchy into a structured DataFrame.
+
+# Details
+- Automatically sets up taxonkit environment and downloads taxonomy database if needed
+- Starts from root taxid (1) and includes all descendant taxa
+- Reformats lineage information into separate columns for each taxonomic rank
+
+# Returns
+DataFrame with columns:
+- `taxid`: Taxonomy identifier
+- `lineage`: Full taxonomic lineage string
+- `taxid_lineage`: Lineage with taxonomy IDs
+- Individual rank columns:
+  - superkingdom, kingdom, phylum, class, order, family, genus, species
+  - corresponding taxid columns (e.g., superkingdom_taxid)
+
+# Dependencies
+Requires taxonkit (installed automatically via Bioconda)
 """
 function list_full_taxonomy()
     Mycelia.add_bioconda_env("taxonkit")
@@ -14774,6 +14810,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Return an ordered list of taxonomic ranks from highest (top) to lowest (species).
+
+# Arguments
+- `synonyms::Bool=false`: If true, includes alternative names for certain ranks (e.g. "domain" for "superkingdom")
+
+# Returns
+- `Vector{String}`: An array of taxonomic rank names in hierarchical order
 """
 function list_ranks(;synonyms=false)
     if !synonyms
@@ -14805,22 +14849,45 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns a DataFrame containing the top-level taxonomic nodes.
+
+The DataFrame has two fixed rows representing the most basic taxonomic classifications:
+- taxid=0: "unclassified"
+- taxid=1: "root"
+
+Returns
+-------
+DataFrame
+    Columns:
+    - taxid::Int : Taxonomic identifier
+    - name::String : Node name
 """
 function list_toplevel()
     return DataFrames.DataFrame(taxid=[0, 1], name=["unclassified", "root"])
 end
-    
 
 """
-- top
-- superkingdom/domain
-- kingdom
-- phylum
-- class
-- order
-- family
-- genus
-- species
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+List all taxonomic entries at the specified rank level.
+
+# Arguments
+- `rank::String`: Taxonomic rank to query. Must be one of:
+  - "top" (top level)
+  - "superkingdom"/"domain"  
+  - "kingdom"
+  - "phylum" 
+  - "class"
+  - "order"
+  - "family"
+  - "genus"
+  - "species"
+
+# Returns
+DataFrame with columns:
+- `taxid`: NCBI taxonomy ID
+- `name`: Scientific name at the specified rank
 """
 function list_rank(rank)
     if rank == "top"
@@ -14850,6 +14917,11 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns an array of all taxonomic superkingdoms (e.g., Bacteria, Archaea, Eukaryota).
+
+# Returns
+- `Vector{String}`: Array containing names of all superkingdoms in the taxonomy database
 """
 function list_superkingdoms()
     return list_rank("superkingdom")
@@ -14857,6 +14929,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Lists all taxonomic kingdoms in the database.
+
+Returns a vector of kingdom names as strings. Kingdoms represent the highest
+major taxonomic rank in biological classification.
+
+# Returns
+- `Vector{String}`: Array of kingdom names
 """
 function list_kingdoms()
     return list_rank("kingdom")
@@ -14864,6 +14944,8 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns a sorted list of all unique phyla in the database.
 """
 function list_phylums()
     return list_rank("phylum")
@@ -14871,6 +14953,13 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns an array of all taxonomic classes in the database.
+
+Classes represent a major taxonomic rank between phylum and order in biological classification.
+
+# Returns
+- `Vector{String}`: Array of class names sorted alphabetically
 """
 function list_classes()
     return list_rank("class")
@@ -14878,6 +14967,14 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Lists all orders in the taxonomic database.
+
+Returns a vector of strings containing valid order names according to current mycological taxonomy.
+Uses the underlying `list_rank()` function with rank="order".
+
+# Returns
+- `Vector{String}`: Alphabetically sorted list of order names
 """
 function list_orders()
     return list_rank("order")
@@ -14885,6 +14982,8 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns a sorted vector of all family names present in the database.
 """
 function list_families()
     return list_rank("family")
@@ -14892,6 +14991,8 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns a sorted vector of all genera names present in the database.
 """
 function list_genera()
     return list_rank("genus")
@@ -14899,6 +15000,8 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns a sorted vector of all species names present in the database.
 """
 function list_species()
     return list_rank("species")
@@ -14913,6 +15016,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns an array of Integer taxon IDs representing all sub-taxa under the specified taxonomic ID.
+
+# Arguments
+- `taxid`: NCBI taxonomy identifier for the parent taxon
+
+# Returns
+Vector{Int} containing all descendant taxon IDs
+
+# Details
+- Requires taxonkit to be installed via Bioconda
+- Automatically sets up taxonkit database if not present
+- Uses local taxonomy database in ~/.taxonkit/
 """
 function list_subtaxa(taxid)
     Mycelia.add_bioconda_env("taxonkit")
@@ -14924,6 +15040,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert scientific name(s) to NCBI taxonomy ID(s) using taxonkit.
+
+# Arguments
+- `name::AbstractString`: Scientific name(s) to query. Can be a single name or multiple names separated by newlines.
+
+# Returns
+- `DataFrame` with columns:
+  - `name`: Input scientific name
+  - `taxid`: NCBI taxonomy ID
+  - `rank`: Taxonomic rank (e.g., "species", "genus")
+
+# Dependencies
+Requires taxonkit package (installed automatically via Bioconda)
 """
 function name2taxid(name)
     Mycelia.add_bioconda_env("taxonkit")
@@ -14944,6 +15074,25 @@ end
 # more useful
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a vector of NCBI taxonomy IDs into a detailed taxonomy table using NCBI Datasets CLI.
+
+# Arguments
+- `taxids::AbstractVector{Int}`: Vector of NCBI taxonomy IDs to query
+
+# Returns
+- `DataFrame`: Table containing taxonomy information with columns including:
+  - tax_id
+  - species
+  - genus
+  - family
+  - order
+  - class
+  - phylum
+  - kingdom
+
+# Dependencies
+Requires ncbi-datasets-cli Conda package (automatically installed if missing)
 """
 function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
     Mycelia.add_bioconda_env("ncbi-datasets-cli")
@@ -14960,6 +15109,18 @@ end
 # more complete
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert NCBI taxonomic IDs to their complete taxonomic lineage information using taxonkit.
+
+# Arguments
+- `taxids::AbstractVector{Int}`: Vector of NCBI taxonomy IDs
+
+# Returns
+A DataFrame with columns:
+- `taxid`: Original query taxonomy ID
+- `lineage`: Full taxonomic lineage as semicolon-separated string
+- `lineage-taxids`: Corresponding taxonomy IDs for each rank in lineage
+- `lineage-ranks`: Taxonomic ranks for each level in lineage
 """
 # function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
 function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
@@ -14982,6 +15143,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert taxonomic IDs to a structured lineage rank mapping.
+
+Takes a vector of taxonomic IDs and returns a nested dictionary mapping each input taxid 
+to its complete taxonomic lineage information. For each taxid, creates a dictionary where:
+- Keys are taxonomic ranks (e.g., "species", "genus", "family")
+- Values are NamedTuples containing:
+  - `lineage::String`: The taxonomic name at that rank
+  - `taxid::Union{Int, Missing}`: The corresponding taxonomic ID (if available)
+
+Excludes "no rank" entries from the final output.
+
+Returns:
+    Dict{Int, Dict{String, NamedTuple{(:lineage, :taxid), Tuple{String, Union{Int, Missing}}}}}
 """
 function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
     table = taxids2taxonkit_full_lineage_table(taxids)
@@ -15001,6 +15176,21 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a vector of taxonomy IDs to a summarized lineage table using taxonkit.
+
+# Arguments
+- `taxids::AbstractVector{Int}`: Vector of NCBI taxonomy IDs
+
+# Returns
+DataFrame with the following columns:
+- `taxid`: Original input taxonomy ID
+- `species_taxid`, `species`: Species level taxonomy ID and name
+- `genus_taxid`, `genus`: Genus level taxonomy ID and name  
+- `family_taxid`, `family`: Family level taxonomy ID and name
+- `superkingdom_taxid`, `superkingdom`: Superkingdom level taxonomy ID and name
+
+Missing values are used when a taxonomic rank is not available.
 """
 function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     taxid_to_lineage_ranks = taxids2taxonkit_taxid2lineage_ranks(taxids)
@@ -15025,6 +15215,22 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the Lowest Common Ancestor (LCA) taxonomic ID for a set of input taxonomic IDs.
+
+# Arguments
+- `ids::Vector{Int}`: Vector of NCBI taxonomic IDs
+
+# Returns
+- `Int`: The taxonomic ID of the lowest common ancestor
+
+# Details
+Uses taxonkit to compute the LCA. Automatically sets up the required taxonomy database 
+if not already present in `~/.taxonkit/`.
+
+# Dependencies
+- Requires taxonkit (installed via Bioconda)
+- Requires taxonomy database (downloaded automatically if missing)
 """
 function taxids2lca(ids::Vector{Int})
     Mycelia.add_bioconda_env("taxonkit")
@@ -15046,6 +15252,16 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a vector of species/taxon names to their corresponding NCBI taxonomy IDs.
+
+# Arguments
+- `names::AbstractVector{<:AbstractString}`: Vector of scientific names or common names
+
+# Returns
+- `Vector{Int}`: Vector of NCBI taxonomy IDs corresponding to the input names
+
+Progress is displayed using ProgressMeter.
 """
 function names2taxids(names::AbstractVector{<:AbstractString})
     results = []
@@ -15085,6 +15301,31 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulates genetic variants (substitutions, insertions, deletions, inversions) in a DNA sequence.
+
+# Arguments
+- `fasta_record`: Input DNA sequence in FASTA format
+
+# Keywords
+- `n_variants=√(sequence_length)`: Number of variants to generate
+- `window_size=sequence_length/n_variants`: Size of windows for variant placement
+- `variant_size_disbribution=Geometric(1/√window_size)`: Distribution for variant sizes
+- `variant_type_likelihoods`: Vector of pairs mapping variant types to probabilities
+    - `:substitution => 10⁻¹`
+    - `:insertion => 10⁻²` 
+    - `:deletion => 10⁻²`
+    - `:inversion => 10⁻²`
+
+# Returns
+DataFrame in VCF format containing simulated variants with columns:
+CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO, FORMAT, SAMPLE
+
+# Notes
+- Variants are distributed across sequence windows to ensure spread
+- Variant sizes are capped by window size
+- Equivalent variants are filtered out
+- FILTER column indicates variant type
 """
 function simulate_variants(fasta_record::FASTX.FASTA.Record;        
         n_variants = Int(floor(sqrt(length(FASTX.sequence(fasta_record))))),
@@ -15186,6 +15427,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulates genetic variants from sequences in a FASTA file and generates corresponding VCF records.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing sequences to analyze
+
+# Details
+1. Processes each record in the input FASTA file
+2. Generates simulated variants for each sequence
+3. Creates a VCF file with the same base name as input file (.vcf extension)
+4. Updates sequences with simulated variants in a new FASTA file (.vcf.fna extension)
+
+# Returns
+Path to the modified FASTA file containing sequences with simulated variants
 """
 function simulate_variants(fasta_file::String)
     vcf_file = fasta_file * ".vcf"
@@ -15200,6 +15455,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Write variant data to a VCF v4.3 format file.
+
+# Arguments
+- `vcf_file::String`: Output path for the VCF file
+- `vcf_table::DataFrame`: Table containing variant data with standard VCF columns
+- `fasta_file::String`: Path to the reference genome FASTA file
+
+# Details
+Automatically filters out equivalent variants where REF == ALT.
+Includes standard VCF headers for substitutions, insertions, deletions, and inversions.
+Adds GT (Genotype) and GQ (Genotype Quality) format fields.
 """
 function write_vcf_table(;vcf_file, vcf_table, fasta_file)
     true_variant = vcf_table[!, "REF"] .!= vcf_table[!, "ALT"]
@@ -15231,6 +15498,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Apply variants from a VCF file to a reference FASTA sequence.
+
+# Arguments
+- `in_fasta`: Path to input reference FASTA file
+- `vcf_file`: Path to input VCF file containing variants
+- `out_fasta`: Optional output path for modified FASTA. Defaults to replacing '.vcf' with '.normalized.vcf.fna'
+
+# Details
+1. Normalizes indels in the VCF using bcftools norm
+2. Applies variants to the reference sequence using bcftools consensus
+3. Handles temporary files and compression with bgzip/tabix
+
+# Requirements
+Requires bioconda packages: htslib, tabix, bcftools
+
+# Returns
+Path to the output FASTA file containing the modified sequence
 """
 function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, ".vcf" => ".normalized.vcf.fna"))
     add_bioconda_env("htslib")
@@ -15255,6 +15540,20 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Compare two FASTA files to determine if they contain the same set of sequences,
+regardless of sequence order.
+
+# Arguments
+- `fasta_1::String`: Path to first FASTA file
+- `fasta_2::String`: Path to second FASTA file
+
+# Returns
+- `Bool`: `true` if both files contain exactly the same sequences, `false` otherwise
+
+# Details
+Performs a set-based comparison of DNA sequences by hashing each sequence.
+Sequence order differences between files do not affect the result.
 """
 function equivalent_fasta_sequences(fasta_1, fasta_2)
     fasta_1_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_1))
@@ -15267,6 +15566,21 @@ end
 # function normalize_vcf(;reference_fasta, vcf, normalized_vcf=)
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a VCF file using bcftools norm, with automated handling of compression and indexing.
+
+# Arguments
+- `reference_fasta::String`: Path to the reference FASTA file used for normalization
+- `vcf_file::String`: Path to input VCF file (can be gzipped or uncompressed)
+
+# Returns
+- `String`: Path to the normalized, sorted, and compressed output VCF file (*.sorted.normalized.vcf.gz)
+
+# Notes
+- Requires bioconda packages: htslib, tabix, bcftools
+- Creates intermediate files with extensions .tbi for indices
+- Skips processing if output file already exists
+- Performs left-alignment and normalization of variants
 """
 function normalize_vcf(;reference_fasta, vcf_file)
     add_bioconda_env("htslib")
@@ -15787,6 +16101,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a DNA sequence into a path through a collection of stranded k-mers.
+
+# Arguments
+- `stranded_kmers`: Collection of unique k-mers representing possible path vertices
+- `sequence`: Input DNA sequence to convert to a path
+
+# Returns
+Vector of `Pair{Int,Bool}` where:
+- First element (Int) is the index of the k-mer in `stranded_kmers`
+- Second element (Bool) indicates orientation (true=forward, false=reverse)
 """
 function sequence_to_stranded_path(stranded_kmers, sequence)
     KMER_TYPE = typeof(first(stranded_kmers))
@@ -15801,6 +16126,19 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a path through k-mers into a single DNA sequence.
+
+Takes a vector of k-mers and a path representing the order to traverse them,
+reconstructs the original sequence by joining the k-mers according to the path.
+The first k-mer is used in full, then only the last nucleotide from each subsequent k-mer is added.
+
+# Arguments
+- `kmers`: Vector of DNA k-mers (as LongDNA{4})
+- `path`: Vector of tuples representing the path through the k-mers
+
+# Returns
+- `LongDNA{4}`: The reconstructed DNA sequence
 """
 function path_to_sequence(kmers, path)
     # @show path
@@ -15813,6 +16151,24 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the probability of traversing a specific edge in a stranded k-mer graph.
+
+The probability is computed as the ratio of this edge's coverage weight to the sum
+of all outgoing edge weights from the source vertex.
+
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+# Arguments
+- `stranded_kmer_graph`: A directed graph where edges represent k-mer connections
+- `edge`: The edge for which to calculate the probability
+
+# Returns
+- `Float64`: Probability in range [0,1] representing likelihood of traversing this edge
+  Returns 0.0 if sum of all outgoing edge weights is zero
+
+# Note
+Probability is based on the :coverage property of edges, using their length as weights
 """
 function edge_probability(stranded_kmer_graph, edge)
     neighbors = Graphs.outneighbors(stranded_kmer_graph, edge.src)
@@ -15829,6 +16185,29 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Finds maximum likelihood paths through a stranded k-mer graph using the Viterbi algorithm
+to correct sequencing errors.
+
+# Arguments
+- `stranded_kmer_graph`: A directed graph where vertices represent k-mers and edges represent overlaps
+- `error_rate::Float64`: Expected per-base error rate (default: 1/(k+1)). Must be < 0.5
+- `verbosity::String`: Output detail level ("debug", "reads", or "dataset")
+
+# Returns
+Vector of FASTX.FASTA.Record containing error-corrected sequences
+
+# Details
+- Uses dynamic programming to find most likely path through k-mer graph
+- Accounts for matches, mismatches, insertions and deletions
+- State likelihoods based on k-mer coverage counts
+- Transition probabilities derived from error rate
+- Progress tracking based on verbosity level
+
+# Notes
+- Error rate should be probability of error (e.g. 0.01 for 1%), not accuracy
+- Higher verbosity levels ("debug", "reads") provide detailed path finding information
+- "dataset" verbosity shows only summary statistics
 """
 function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
                                                error_rate::Float64=1/(stranded_kmer_graph.gprops[:k] + 1),
