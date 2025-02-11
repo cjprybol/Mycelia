@@ -13841,6 +13841,18 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Simulate sequencing of a DNA/RNA record by introducing random errors at the specified rate.
+
+# Arguments
+- `record`: A FASTA or FASTQ record containing the sequence to be "observed"
+- `error_rate`: Probability of error at each position (default: 0.0)
+
+# Returns
+A new FASTQ.Record with:
+- Random UUID as identifier
+- Original record's description 
+- Modified sequence with introduced errors
+- Generated quality scores
 """
 function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     converted_sequence = convert_sequence(FASTX.sequence(record))
@@ -13851,7 +13863,7 @@ function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Reco
 end
 
 """
-    detect_alphabet(seq::AbstractString) -> Symbol
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Determines the alphabet of a sequence. The function scans through `seq` only once:
 - If a 'T' or 't' is found (and no 'U/u'), the sequence is classified as DNA.
@@ -13891,7 +13903,7 @@ function detect_alphabet(seq::AbstractString)::Symbol
 end
 
 """
-    convert_sequence(seq::AbstractString)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Converts the given sequence (output from FASTX.sequence) into the appropriate BioSequence type:
 - DNA sequences are converted using `BioSequences.LongDNA`
@@ -13988,7 +14000,16 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Return proportion of matched bases in alignment to total matches + edits.
 
-0-1, not %
+Calculate the accuracy of a sequence alignment by computing the ratio of matched bases 
+to total alignment operations (matches + edits).
+
+# Arguments
+- `alignment_result`: Alignment result object containing `total_matches` and `total_edits` fields
+
+# Returns
+Float64 between 0.0 and 1.0 representing alignment accuracy, where:
+- 1.0 indicates perfect alignment (all matches)
+- 0.0 indicates no matches
 """
 function assess_alignment_accuracy(alignment_result)
     return alignment_result.total_matches / (alignment_result.total_matches + alignment_result.total_edits)
@@ -13998,6 +14019,24 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Used to determine which orientation provides an optimal alignment for initiating path likelihood analyses in viterbi analysis
+
+Compare alignment scores between a query k-mer and an observed k-mer in both forward and
+reverse complement orientations to determine optimal alignment.
+
+# Arguments
+- `kmer`: Query k-mer sequence to align
+- `observed_kmer`: Target k-mer sequence to align against
+
+# Returns
+A tuple containing:
+- `alignment_result`: The alignment result object for the optimal orientation
+- `orientation`: Boolean indicating orientation (`true` = forward, `false` = reverse complement, `missing` = tied scores)
+
+# Details
+- Performs pairwise alignment in both orientations using `assess_alignment()`
+- Calculates accuracy scores using `assess_alignment_accuracy()`
+- For tied alignment scores, randomly selects one orientation
+- Uses BioSequences.reverse_complement for reverse orientation comparison
 """
 function assess_optimal_kmer_alignment(kmer, observed_kmer)
 
