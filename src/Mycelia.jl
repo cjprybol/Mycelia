@@ -16730,9 +16730,43 @@ function _detect_sequence_extension(sequence_type::Symbol)
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the SHA-256 hash of the contents of a file.
+
+# Arguments
+- `file::AbstractString`: The path to the file for which the SHA-256 hash is to be computed.
+
+# Returns
+- `String`: The SHA-256 hash of the file contents, represented as a hexadecimal string.
+"""
 function sha256_file(file::AbstractString)
     @assert isfile(file)
     return SHA.bytes2hex(SHA.sha256(read(file)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run a function `f` in parallel over a collection of `items` with a progress meter.
+
+# Arguments
+- `f::Function`: The function to be applied to each item in the collection.
+- `items::AbstractVector`: A collection of items to be processed.
+
+# Description
+This function creates a progress meter to track the progress of processing each item in the `items` collection. 
+It uses multithreading to run the function `f` on each item in parallel, updating the progress meter after each item is processed.
+"""
+function run_parallel_progress(f::Function, items::AbstractVector)
+    # Create a progress meter with the total number of items.
+    p = ProgressMeter.Progress(length(items))
+    
+    @threads for item in items
+        f(item)  # Call the passed function on the current item.
+        ProgressMeter.next!(p)  # Update progress after processing an item.
+    end
 end
 
 # dynamic import of files??
