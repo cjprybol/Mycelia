@@ -12,7 +12,7 @@ import SHA
 const SEED = 42
 
 # Simulation: for multi-omics data generation for benchmarking or testing.
-@testset "FASTA simulation" begin
+@testset "FASTA simulation and acquisition" begin
     @testset "dna record" begin
         dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=SEED, L = 10)
         # @test FASTX.identifier(dna_record) == "e6614e938383857305089158322604fb9c07d0aac05567844d01f1517ce82ddc"
