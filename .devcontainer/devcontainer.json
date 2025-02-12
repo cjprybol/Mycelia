@@ -8,16 +8,44 @@
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
-		"ghcr.io/julialang/devcontainer-features/julia:1": {},
-		"ghcr.io/devcontainers/features/rust:1": {}
+		"ghcr.io/julialang/devcontainer-features/julia:1": {
+            "channel": "release"
+        },
+        "ghcr.io/devcontainers/features/rust:1": {
+            "version": "latest",
+            "profile": "minimal",
+            "targets": "aarch64-unknown-linux-gnu"
+        },
+        "ghcr.io/devcontainers/features/python:1": {
+            "installTools": true,
+            "installJupyterlab": true,
+            "version": "os-provided"
+        }
 	},
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"julialang.language-julia"
-			]
+                "julialang.language-julia",
+                "rust-lang.rust-analyzer",
+                "ms-python.debugpy",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.vscode-jupyter-slideshow",
+                "ms-toolsai.jupyter-renderers",
+                "ms-toolsai.jupyter-keymap",
+                "ms-toolsai.vscode-jupyter-cell-tags",
+                "ms-toolsai.jupyter",
+                "GitHub.copilot-chat",
+                "GitHub.copilot",
+                "tamasfe.even-better-toml",
+                "ms-azuretools.vscode-docker",
+                "vadimcn.vscode-lldb",
+                "ms-python.autopep8"
+            ]
 		}
 	}
+    // "postCreateCommand": "julia -e 'using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))'"
+    // "postCreateCommand": "using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))"
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],

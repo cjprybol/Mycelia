@@ -4152,7 +4152,7 @@ For regular files, returns the last extension. For gzipped files, returns the ex
 before .gz.
 """
 function get_base_extension(filename::String)
-  parts = split(filename, "."; limit=3)  # Limit to 3 to handle 2-part extensions
+  parts = split(basename(filename), "."; limit=3)  # Limit to 3 to handle 2-part extensions
   extension = parts[end]  # Get the last part
   
   if extension == "gz" && length(parts) > 2  # Check for .gz and more parts
@@ -4204,7 +4204,6 @@ function fasta2normalized_table(fasta_file;
             outfile = joinpath(dirname(fasta_file), filename)
         end
     end
-    @show outfile
 
     if isfile(outfile) && (filesize(outfile) > 0) && !force
         @warn "$(outfile) already present and non-empty"
@@ -11035,9 +11034,8 @@ Downloads and extracts a genome from NCBI using the datasets command line tool.
 - `accession`: NCBI accession number for the genome
 - `outdir`: Directory where files will be downloaded (defaults to current directory)
 - `outpath`: Full path for the temporary zip file (defaults to `outdir/accession.zip`)
-- `include_string`: Data types to download (defaults to "genome"). Other options include:
-  "gff3,rna,cds,protein,genome,seq-report"
-
+- `include_string`: Data types to download (defaults to all "gff3,rna,cds,protein,genome,seq-report").
+  
 # Returns
 - Path to the extracted genome data directory
 
@@ -11051,7 +11049,7 @@ function ncbi_genome_download_accession(;
         accession,
         outdir = pwd(),
         outpath = joinpath(outdir, accession * ".zip"),
-        include_string = "genome"
+        include_string = "gff3,rna,cds,protein,genome,seq-report"
     )
     outfolder = joinpath(outdir, accession)
     if !isdir(outfolder)
@@ -11066,7 +11064,53 @@ function ncbi_genome_download_accession(;
     end
     final_outfolder = joinpath(outfolder, "ncbi_dataset", "data", accession)
     isfile(outpath) && rm(outpath)
-    return final_outfolder
+    # Mapping include_string items to file paths
+    include_items = split(include_string, ",")
+    genome_value = nothing
+    cds_value = nothing
+    gff3_value = nothing
+    protein_value = nothing
+    seqreport_value = nothing
+    for included_item in include_items
+        if included_item == "genome"
+            genome_value = first(filter(x -> occursin(accession, basename(x)) && occursin(Mycelia.FASTA_REGEX, basename(x)), readdir(final_outfolder, join=true)))
+            @assert isfile(genome_value)
+            @assert filesize(genome_value) > 0
+        elseif included_item == "cds"
+            cds_value = joinpath(final_outfolder, "cds_from_genomic.fna")
+            @assert isfile(cds_value)
+            @assert filesize(cds_value) > 0
+        elseif included_item == "gff3"
+            gff3_value = joinpath(final_outfolder, "genomic.gff")
+            @assert isfile(gff3_value)
+            @assert filesize(gff3_value) > 0
+        elseif included_item == "protein"
+            protein_value = joinpath(final_outfolder, "protein.faa")
+            @assert isfile(protein_value)
+            @assert filesize(protein_value) > 0
+        elseif included_item == "seq-report"
+            seqreport_value = joinpath(final_outfolder, "sequence_report.jsonl")
+        end
+    end
+    return (
+        directory = final_outfolder,
+        genome = genome_value,
+        cds = cds_value,
+        gff3 = gff3_value,
+        protein = protein_value,
+        seqreport = seqreport_value
+    )
+end
+
+function get_ncbi_dataset_filename(item)
+    filenames = Dict(
+        "genome" => "GCF_000819615.1_ViralProj14015_genomic.fna",
+        "cds" => "cds_from_genomic.fna",
+        "gff3" => "genomic.gff",
+        "protein" => "protein.faa",
+        "seq-report" => "sequence_report.jsonl"
+    )
+    return get(filenames, item, "")
 end
 
 """
@@ -16684,6 +16728,11 @@ function _detect_sequence_extension(sequence_type::Symbol)
         @warn "unrecognized sequence type: $(seq_type)"
         return ".fa"
     end
+end
+
+function sha256_file(file::AbstractString)
+    @assert isfile(file)
+    return SHA.bytes2hex(SHA.sha256(read(file)))
 end
 
 # dynamic import of files??

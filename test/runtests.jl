@@ -1,4 +1,9 @@
-# julia --project=. -e 'using Pkg; Pkg.test("Mycelia")'
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+
+using Revise
 using Test
 import Mycelia
 
@@ -10,6 +15,8 @@ import Random
 import SHA
 
 const SEED = 42
+const phiX174_accession_id = "NC_001422.1"
+const phiX174_assembly_id = "GCF_000819615.1"
 
 # Simulation: for multi-omics data generation for benchmarking or testing.
 @testset "FASTA simulation and acquisition" begin
@@ -31,8 +38,18 @@ const SEED = 42
         @test FASTX.sequence(aa_record) == "VATAGWWITI"
     end
     
-    @testset "virus-like" begin
-        @test 1 + 1 == 2
+    @testset "virus phiX174" begin
+        genome_result = Mycelia.download_genome_by_accession(accession=phiX174_accession_id)
+        @test basename(genome_result) == phiX174_accession_id * ".fna.gz"
+        @test Mycelia.get_base_extension(genome_result) == ".fna.gz"
+        # @test Mycelia.sha256_file(genome_result) == "765354d42319e4a350c93b09260bf911864263653f828ad97b5c35eed950591a"
+        
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="gff3,rna,cds,protein,genome,seq-report")
+        @test basename(phiX174_assembly_dataset.genome) == phiX174_assembly_id * "_ViralProj14015_genomic.fna"
+        #TODO add tests for remaining items? do that elsewhere?
+        @test Mycelia.get_base_extension(phiX174_assembly_dataset.genome) == ".fna"
+        @test Mycelia.get_base_extension(phiX174_assembly_dataset.protein) == ".faa"
+        # @test Mycelia.sha256_file(phiX174_assembly_dataset.genome) == "74c1aca649f207a175b7d99e22fe4ef785c88f924aa5a7f5223c07c4e5c2b5aa"
     end
 
     @testset "bacteria-like" begin
