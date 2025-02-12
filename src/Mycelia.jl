@@ -4159,7 +4159,7 @@ function get_base_extension(filename::String)
     extension = parts[end - 1]  # Get the part before .gz
   end
   
-  return extension
+  return "." * extension
 end
 
 """
@@ -4183,8 +4183,29 @@ Creates a gzipped TSV file with the following columns:
 - sequence_description: Full sequence description from FASTA
 - sequence: The actual sequence
 """
-function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; force=false)
+function fasta2normalized_table(fasta_file;
+    normalize_name=true,
+    outfile="",
+    force=false)
     @assert isfile(fasta_file) && filesize(fasta_file) > 0
+
+    if !isempty(outfile) && normalize_name
+        @warn "Both 'outfile' and 'normalize_name' are set. Ignoring 'outfile'."
+    end
+    if isempty(outfile) && !normalize_name
+        @warn "Both 'outfile' and 'normalize_name' are unset. Setting 'outfile' to '$(fasta_file).tsv.gz'."
+    end
+
+    if isempty(outfile)
+        if !normalize_name
+            outfile = fasta_file * ".tsv.gz"
+        else
+            filename = Mycelia.normalized_current_datetime() * "." * basename(fasta_file) * ".tsv.gz"
+            outfile = joinpath(dirname(fasta_file), filename)
+        end
+    end
+    @show outfile
+
     if isfile(outfile) && (filesize(outfile) > 0) && !force
         @warn "$(outfile) already present and non-empty"
         return outfile
@@ -4208,11 +4229,11 @@ function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; forc
     for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
         seq_id = FASTX.identifier(record)
         seq_desc = FASTX.description(record)
-        seq = FASTX.sequence(record)
+        seq = String(FASTX.sequence(record))
         sha256 = Mycelia.seq2sha256(seq)
 
         # Write to the temporary file
-        line = join([basename(fasta_file), sha256, seq_id, seq_desc, seq], '\t')
+        line = join([basename(fasta_file), string(sha256), String(seq_id), String(seq_desc), String(seq)], '\t')
         println(outfile_io, line)
 
         sequence_sha256s[i] = sha256
@@ -4222,10 +4243,12 @@ function fasta2normalized_table(fasta_file, outfile=fasta_file * ".tsv.gz"; forc
     # Close the output file
     close(outfile_io)
 
-    # Rename the temporary file
-    # final_outfile = joinpath(dirname(fasta_file), Mycelia.metasha256(sequence_sha256s) * basename(tmp_outfile))
-    # mv(tmp_outfile, final_outfile; force=true)
-
+    if normalize_name
+        full_extension = Mycelia.get_base_extension(fasta_file) * ".tsv.gz"
+        final_outfile = joinpath(dirname(outfile), Mycelia.metasha256(sequence_sha256s) * full_extension)
+        mv(outfile, final_outfile; force=true)
+        outfile = final_outfile
+    end
     return outfile
 end
 
@@ -12249,13 +12272,12 @@ function open_fastx(path::AbstractString)
         io = CodecZlib.GzipDecompressorStream(io)
         path_base = replace(path_base, ".gz" => "")
     end
-    if occursin(r"\.(fasta|fna|faa|fa)$", path_base)
+    if occursin(r"\.(fasta|fna|faa|fa|frn)$", path_base)
         fastx_io = FASTX.FASTA.Reader(io)
     elseif occursin(r"\.(fastq|fq)$", path_base)
         fastx_io = FASTX.FASTQ.Reader(io)
     else
-        @show path_base
-        error()
+        error("attempting to open a FASTX file with an unsupported extension: $(path_base)")
     end
     return fastx_io
 end
@@ -13900,6 +13922,21 @@ function detect_alphabet(seq::AbstractString)::Symbol
         # In the absence of explicit T or U, default to DNA.
         return :DNA
     end
+end
+
+# Specific dispatch for DNA sequences
+function detect_alphabet(sequence::BioSequences.LongDNA)
+    return :DNA
+end
+
+# Specific dispatch for RNA sequences
+function detect_alphabet(sequence::BioSequences.LongRNA)
+    return :RNA
+end
+
+# Specific dispatch for protein/amino acid sequences
+function detect_alphabet(sequence::BioSequences.LongAA)
+    return :AA
 end
 
 """
@@ -16594,6 +16631,59 @@ function build_stranded_kmer_graph(kmer_type, observations::AbstractVector{<:Uni
     @info Graphs.nv(stranded_kmer_graph)
     @info Graphs.ne(stranded_kmer_graph)
     return stranded_kmer_graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect sequence type from input and suggest appropriate file extension.
+
+# Arguments
+- `record`: A FASTA/FASTQ record
+- `sequence`: A string or BioSequence containing sequence data
+
+# Returns
+- `String`: Suggested file extension:
+  - ".fna" for DNA
+  - ".frn" for RNA
+  - ".faa" for protein
+  - ".fa" for unrecognized sequences
+"""
+function detect_sequence_extension(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record})
+    return detect_sequence_extension(FASTX.sequence(record))
+end
+function detect_sequence_extension(sequence::AbstractString)
+    sequence_type = detect_alphabet(sequence)
+    return _detect_sequence_extension(sequence_type::Symbol)
+end
+function detect_sequence_extension(sequence::BioSequences.LongSequence)
+    sequence_type = detect_alphabet(sequence)
+    return _detect_sequence_extension(sequence_type::Symbol)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Internal helper function to convert sequence type to file extension.
+
+Arguments
+- sequence_type: Symbol representing sequence type (:DNA, :RNA, or :AA)
+
+Returns
+- String: Appropriate file extensions
+"""
+function _detect_sequence_extension(sequence_type::Symbol)
+    @assert sequence_type in [:DNA, :RNA, :AA]
+    if sequence_type == :DNA
+        return ".fna"
+    elseif sequence_type == :RNA
+        return ".frn"
+    elseif sequence_type == :AA
+        return ".faa"
+    else
+        @warn "unrecognized sequence type: $(seq_type)"
+        return ".fa"
+    end
 end
 
 # dynamic import of files??

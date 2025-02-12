@@ -1,3 +1,4 @@
+# julia --project=. -e 'using Pkg; Pkg.test("Mycelia")'
 using Test
 import Mycelia
 
@@ -6,23 +7,26 @@ import DocStringExtensions
 import BioSequences
 import Dates
 import Random
+import SHA
+
+const SEED = 42
 
 # Simulation: for multi-omics data generation for benchmarking or testing.
 @testset "FASTA simulation" begin
     @testset "dna record" begin
-        dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=42, L = 10)
+        dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=SEED, L = 10)
         # @test FASTX.identifier(dna_record) == "e6614e938383857305089158322604fb9c07d0aac05567844d01f1517ce82ddc"
         @test FASTX.sequence(dna_record) == "CCGCCGCTCA"
     end
 
     @testset "rna record" begin
-        rna_record = Mycelia.random_fasta_record(moltype=:RNA, seed=42, L = 10)
+        rna_record = Mycelia.random_fasta_record(moltype=:RNA, seed=SEED, L = 10)
         # @test FASTX.identifier(rna_record) == "a4ebfc1dd4051dd9db816c42c5fb8f528ae0b5387d7a8ccad67995e2c31ee48d"
         @test FASTX.sequence(rna_record) == "CCGCCGCUCA"
     end
 
     @testset "aa record" begin
-        aa_record = Mycelia.random_fasta_record(moltype=:AA, seed=42, L = 10)
+        aa_record = Mycelia.random_fasta_record(moltype=:AA, seed=SEED, L = 10)
         # @test FASTX.identifier(aa_record) == "cdb40a05b841c44e3757de6a54a1fd011536fce187c7e8c9c1ed36c415db8344"
         @test FASTX.sequence(aa_record) == "VATAGWWITI"
     end
@@ -58,15 +62,21 @@ end
 
 @testset "sequence IO" begin
     @testset "detect alphabet type" begin
-        @test Mycelia.detect_alphabet(FASTX.sequence(Mycelia.random_fasta_record(L=10, moltype=:DNA))) == :DNA
-        @test Mycelia.detect_alphabet(FASTX.sequence(Mycelia.random_fasta_record(L=10, moltype=:RNA))) == :RNA
-        @test Mycelia.detect_alphabet(FASTX.sequence(Mycelia.random_fasta_record(L=10, moltype=:AA))) == :AA
+        @test Mycelia.detect_alphabet(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:DNA))) == :DNA
+        @test Mycelia.detect_alphabet(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:RNA))) == :RNA
+        @test Mycelia.detect_alphabet(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:AA))) == :AA
     end
 
     @testset "autoconvert sequences" begin
-        @test typeof(Mycelia.convert_sequence(FASTX.sequence(Mycelia.random_fasta_record(L=10, moltype=:DNA)))) <: BioSequences.LongDNA{4}
-        @test typeof(Mycelia.convert_sequence(FASTX.sequence(Mycelia.random_fasta_record(L=10, moltype=:RNA)))) <: BioSequences.LongRNA{4}
-        @test typeof(Mycelia.convert_sequence(FASTX.sequence(Mycelia.random_fasta_record(L=10, moltype=:AA)))) <: BioSequences.LongAA
+        @test typeof(Mycelia.convert_sequence(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:DNA)))) <: BioSequences.LongDNA{4}
+        @test typeof(Mycelia.convert_sequence(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:RNA)))) <: BioSequences.LongRNA{4}
+        @test typeof(Mycelia.convert_sequence(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:AA)))) <: BioSequences.LongAA
+    end
+
+    @testset "detect sequence extension" begin
+        @test Mycelia.detect_sequence_extension(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:DNA))) == ".fna"
+        @test Mycelia.detect_sequence_extension(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:RNA))) == ".frn"
+        @test Mycelia.detect_sequence_extension(FASTX.sequence(Mycelia.random_fasta_record(L=100, moltype=:AA))) == ".faa"
     end
 end
 
@@ -102,6 +112,25 @@ end
 # - Sanity checks and quality control (QC)
 # - Subsampling reads (e.g., subsample_reads_seqtk)
 @testset "Data ingestion & normalization" begin
+    @testset "fasta2normalized_table" begin
+        temp_dir = mktempdir()
+        for alphabet in [:DNA, :AA, :RNA]
+            fasta_record = Mycelia.random_fasta_record(moltype=alphabet, seed=SEED, L = 100)
+            extension = Mycelia.detect_sequence_extension(fasta_record)
+            fasta_file = joinpath(temp_dir, "test" * extension)
+            @test Mycelia.get_base_extension(fasta_file) == extension
+            Mycelia.write_fasta(outfile=fasta_file, records=[fasta_record])
+            result_file = Mycelia.fasta2normalized_table(fasta_file, normalize_name=true)
+            if alphabet == :DNA
+                @test basename(result_file) == "b58f92d3ad303b329300debba8a8b4e9ebe6fb68fabc1ff7b2aefc1e267b64fb" * extension * ".tsv.gz"
+            elseif alphabet == :RNA
+                @test basename(result_file) == "dad9c65109b858e38bdc34463807729136ecc102bfbd0247dc00bd4811098dab" * extension * ".tsv.gz"
+            elseif alphabet == :AA
+                @test basename(result_file) == "5abeeb482b1af9097f71b81d53c72f98c0a69716b6fbfda1a8a855c33b3b0888" * extension * ".tsv.gz"
+            end
+        end
+        rm(temp_dir, recursive=true)
+    end
 end
 
 # assembly modules
