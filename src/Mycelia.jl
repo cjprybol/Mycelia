@@ -16763,7 +16763,7 @@ function run_parallel_progress(f::Function, items::AbstractVector)
     # Create a progress meter with the total number of items.
     p = ProgressMeter.Progress(length(items))
     
-    @threads for item in items
+    Threads.@threads for item in items
         f(item)  # Call the passed function on the current item.
         ProgressMeter.next!(p)  # Update progress after processing an item.
     end
