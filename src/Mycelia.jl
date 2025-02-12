@@ -11073,23 +11073,31 @@ function ncbi_genome_download_accession(;
     seqreport_value = nothing
     for included_item in include_items
         if included_item == "genome"
-            genome_value = first(filter(x -> occursin(accession, basename(x)) && occursin(Mycelia.FASTA_REGEX, basename(x)), readdir(final_outfolder, join=true)))
+            candidate_genomes = filter(x -> occursin(accession, basename(x)) && occursin(Mycelia.FASTA_REGEX, basename(x)), readdir(final_outfolder, join=true))
+            @assert length(candidate_genomes) == 1
+            genome_value = first(candidate_genomes)
             @assert isfile(genome_value)
             @assert filesize(genome_value) > 0
         elseif included_item == "cds"
-            cds_value = joinpath(final_outfolder, "cds_from_genomic.fna")
-            @assert isfile(cds_value)
-            @assert filesize(cds_value) > 0
+            expected_cds_value = joinpath(final_outfolder, "cds_from_genomic.fna")
+            if isfile(expected_cds_value) && filesize(expected_cds_value) > 0
+                cds_value = expected_cds_value
+            end
         elseif included_item == "gff3"
-            gff3_value = joinpath(final_outfolder, "genomic.gff")
-            @assert isfile(gff3_value)
-            @assert filesize(gff3_value) > 0
+            expected_gff3_value = joinpath(final_outfolder, "genomic.gff")
+            if isfile(expected_gff3_value) && filesize(expected_gff3_value) > 0
+                gff3_value = expected_gff3_value
+            end
         elseif included_item == "protein"
-            protein_value = joinpath(final_outfolder, "protein.faa")
-            @assert isfile(protein_value)
-            @assert filesize(protein_value) > 0
+            expected_protein_value = joinpath(final_outfolder, "protein.faa")
+            if isfile(expected_protein_value) && filesize(expected_protein_value) > 0
+                protein_value = expected_protein_value
+            end
         elseif included_item == "seq-report"
-            seqreport_value = joinpath(final_outfolder, "sequence_report.jsonl")
+            expected_seqreport_value = joinpath(final_outfolder, "sequence_report.jsonl")
+            if isfile(expected_seqreport_value) && filesize(expected_seqreport_value) > 0
+                seqreport_value = expected_seqreport_value
+            end
         end
     end
     return (
