@@ -2,8 +2,6 @@
 
 Welcome to the Mycelia documentation.
 
-more
-
 ## Installation
 
 [Install Julia (if not already installed)](https://github.com/JuliaLang/juliaup)
@@ -22,18 +20,7 @@ export LD_LIBRARY_PATH="" && julia
 
 [And can be done for Julia jupyter kernels by setting the `env` key => value pair in the appropriate kernel.json file](https://stackoverflow.com/a/53595397)
 
-Clone the repo directly
-
-```julia
-cd /path/where/you/want/the/repo
-# for production usage
-git clone https://github.com/cjprybol/Mycelia.git
-# for development
-git clone git@github.com:cjprybol/Mycelia.git
-```
-
-Or as Julia package
-
+Clone the repo as a Julia package
 ```julia
 import Pkg
 # for production usage
@@ -41,6 +28,8 @@ Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 # for development
 Pkg.develop(url="git@github.com:cjprybol/Mycelia.git")
 ```
+
+## Function Docstrings
 
 ```@autodocs
 Modules = [Mycelia]
