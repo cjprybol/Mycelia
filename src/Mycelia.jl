@@ -1494,53 +1494,7 @@ function fasta_to_reference_kmer_counts(;kmer_type, fasta)
     return kmer_counts
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
 
-Filter and process long reads from a FASTQ file using Filtlong.
-
-This function filters long sequencing reads based on quality and length criteria, 
-then compresses the output using pigz.
-
-# Arguments
-- `in_fastq::String`: Path to the input FASTQ file.
-- `out_fastq::String`: Path to the output filtered and compressed FASTQ file. 
-   Defaults to the input filename with ".filtlong.fq.gz" appended.
-- `min_mean_q::Int`: Minimum mean quality score for reads to be kept. Default is 20.
-- `keep_percent::Int`: Percentage of reads to keep after filtering. Default is 95.
-
-# Returns
-- `Cmd`: A pipeline command that can be run to execute the filtering and compression.
-
-# Details
-This function uses Filtlong to filter long reads and pigz for compression. It requires
-the Bioconda environment for Filtlong to be set up, which is handled internally.
-
-# Example
-```julia
-filter_cmd = filter_long_reads(
-    in_fastq = "input.fastq.gz",
-    out_fastq = "filtered_output.fq.gz",
-    min_mean_q = 25,
-    keep_percent = 90
-)
-run(filter_cmd)
-```
-"""
-function filter_long_reads(;
-        in_fastq,
-        out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
-        min_mean_q = 20,
-        keep_percent = 95
-    )
-    Mycelia.add_bioconda_env("filtlong")
-    p1 = pipeline(
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
-        `pigz`
-    )
-    p2 = pipeline(p1, out_fastq)
-    return p2
-end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -12713,49 +12667,6 @@ end
 # println("Normalized d2* Matrix:")
 # println(d2_star_norm_matrix)
 
-
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
-
-# Arguments
-- `outdir::String`: Output directory containing input FASTQ files
-- `identifier::String`: Prefix for input/output filenames
-
-# Input files
-Expects paired FASTQ files in `outdir` named:
-- `{identifier}_1.fastq.gz` (forward reads)
-- `{identifier}_2.fastq.gz` (reverse reads)
-
-# Output files
-Creates trimmed reads in `outdir/trim_galore/`:
-- `{identifier}_1_val_1.fq.gz` (trimmed forward reads)
-- `{identifier}_2_val_2.fq.gz` (trimmed reverse reads)
-
-# Dependencies
-Requires trim_galore conda environment:
-"""
-function trim_galore(;outdir="", identifier="")
-    
-    trim_galore_dir = joinpath(outdir, "trim_galore")
-    
-    forward_reads = joinpath(outdir, "$(identifier)_1.fastq.gz")
-    reverse_reads = joinpath(outdir, "$(identifier)_2.fastq.gz")
-    
-    trimmed_forward_reads = joinpath(trim_galore_dir, "$(identifier)_1_val_1.fq.gz")
-    trimmed_reverse_reads = joinpath(trim_galore_dir, "$(identifier)_2_val_2.fq.gz")
-    
-    # mamba create -n trim_galore -c bioconda trim_galore
-    if !isfile(trimmed_forward_reads) && !isfile(trimmed_reverse_reads)
-        cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
-        run(cmd)
-    else
-        @info "$(trimmed_forward_reads) & $(trimmed_reverse_reads) already present"
-    end
-end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -16768,13 +16679,26 @@ This function creates a progress meter to track the progress of processing each 
 It uses multithreading to run the function `f` on each item in parallel, updating the progress meter after each item is processed.
 """
 function run_parallel_progress(f::Function, items::AbstractVector)
-    # Create a progress meter with the total number of items.
+    # Create a progress meter
     p = ProgressMeter.Progress(length(items))
     
-    Threads.@threads for item in items
-        f(item)  # Call the passed function on the current item.
-        ProgressMeter.next!(p)  # Update progress after processing an item.
+    # Create a lock and vector to store errors
+    lock = ReentrantLock()
+    errors = Vector{Union{Nothing, Tuple{Any, Any}}}(nothing, length(items))
+    
+    Threads.@threads for (i, item) in enumerate(items)
+        try
+            f(item)
+        catch e
+            lock() do
+                errors[i] = (e, item)
+            end
+        end
+        lock() do
+            ProgressMeter.next!(p)
+        end
     end
+    return errors
 end
 
 # dynamic import of files??
