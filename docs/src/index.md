@@ -6,11 +6,11 @@ Welcome to the Mycelia documentation.
 
 [Install Julia (if not already installed)](https://github.com/JuliaLang/juliaup)
 
-I have had trouble getting the visualization libraries Plots.jl and Makie.jl (and associated packages) to load correctly on HPC due to the complexities of the default LD_LIBRARY_PATH
+I have had trouble getting the visualization libraries Plots.jl and Makie.jl (and associated packages) to load correctly on HPC due to the complexities of the default `LD_LIBRARY_PATH`
 
 I imagine other research supercomputer users may have similar issues, although I don't have these issues on cloud vendors like GCP or AWS
 
-To enable Julia to install all of it's own necessary dependencies independent of the system, I reset the LD_LIBRARY_PATH variable prior to launching Julia !!
+To enable Julia to install all of it's own necessary dependencies independent of the system, I reset the `LD_LIBRARY_PATH` variable prior to launching Julia !!
 
 This can be done easily when launching Julia from the command line by
 

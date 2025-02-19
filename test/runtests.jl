@@ -99,6 +99,36 @@ end
 
 @testset "FASTQ simulation" begin
     @testset "Illumina" begin
+        # function simulate_short_reads(;in_fasta, coverage, outbase = "$(in_fasta).art.$(coverage)x.")
+    end
+
+    @testset "Ultima" begin
+        @test 1 + 1 == 2
+    end
+
+    @testset "Nanopore" begin
+        # function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore2023.$(quantity).fq.gz"))
+    end
+
+    @testset "PacBio" begin
+        # simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio2021.$(quantity).fq.gz"))
+    end
+
+    @testset "Nearly Perfect Long" begin
+        # @test simulate_nearly_perfect_long_reads()
+    end
+
+    @testset "multi-entity, even coverage" begin
+        @test 1 + 1 == 2
+    end
+
+    @testset "multi-entity, log-distributed coverage" begin
+        @test 1 + 1 == 2
+    end
+end
+
+@testset "FASTQ QC" begin
+    @testset "Illumina" begin
         @test 1 + 1 == 2
     end
 
@@ -113,13 +143,21 @@ end
     @testset "PacBio" begin
         @test 1 + 1 == 2
     end
+end
 
-    @testset "multi-entity, even coverage" begin
-        @test 1 + 1 == 2
+# PRE-PROCESSING & READ QC Tests
+@testset "Preprocessing" begin
+    @testset "Read Quality Control" begin
+        @test true # https://github.com/OpenGene/fastp
+        @test true # https://github.com/FelixKrueger/TrimGalore
+        @test true # https://github.com/rrwick/Filtlong
+        @test true # https://github.com/OpenGene/fastplong
     end
-
-    @testset "multi-entity, log-distributed coverage" begin
-        @test 1 + 1 == 2
+    @testset "Read Statistics" begin
+        # Example: test that estimated community composition is within expected bounds.
+        # comp = MyceliaAssembly.analyze_community("test_data/reads.fastq")
+        # @test 0.8 <= comp["expected_coverage"] <= 1.2
+        @test true  # placeholder
     end
 end
 
@@ -165,28 +203,6 @@ end
     @testset "6. Strain resolution" begin
     end
     @testset "7. Validation & Quality Control" begin
-    end
-end
-
-# PRE-PROCESSING & READ QC Tests
-@testset "Preprocessing" begin
-    @testset "Read Quality Control" begin
-        @test true # https://github.com/OpenGene/fastp
-        @test true # https://github.com/FelixKrueger/TrimGalore
-        @test true # https://github.com/rrwick/Filtlong
-        @test true # https://github.com/OpenGene/fastplong
-        @test true # https://github.com/wdecoster/chopper
-        # Example: test that adapter trimming and quality filtering work.
-        # result = MyceliaAssembly.preprocess_reads("test_data/reads.fastq")
-        # @test length(result.filtered_reads) > 0
-        # @test result.mean_quality ≥ 30
-        @test true  # placeholder
-    end
-    @testset "Read Statistics" begin
-        # Example: test that estimated community composition is within expected bounds.
-        # comp = MyceliaAssembly.analyze_community("test_data/reads.fastq")
-        # @test 0.8 <= comp["expected_coverage"] <= 1.2
-        @test true  # placeholder
     end
 end
 
