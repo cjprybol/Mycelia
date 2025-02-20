@@ -321,7 +321,7 @@ function fastx2normalized_table(fastx)
         ))
     end
     current_columns = names(normalized_table)
-    normalized_table[!, "fastx_path"] .= fastx
+    normalized_table[!, "fastx_path"] .= basename(fastx)
     normalized_table[!, "fastx_sha256"] .= Mycelia.metasha256(normalized_table[!, "record_sha256"])
     return normalized_table[!, ["fastx_path", "fastx_sha256", current_columns...]]
 end
