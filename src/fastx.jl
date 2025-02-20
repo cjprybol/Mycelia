@@ -219,3 +219,109 @@ end
 #     end
 #     return out_fastq
 # end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate basic statistics for FASTQ/FASTA sequence files using seqkit.
+
+# Arguments
+- `fastq::String`: Path to input FASTQ/FASTA file
+
+# Details
+Automatically installs and uses seqkit from Bioconda to compute sequence statistics
+including number of sequences, total bases, GC content, average length, etc.
+
+# Dependencies
+- Requires Conda and Bioconda channel
+- Installs seqkit package if not present
+
+# Returns
+Returns a DataFrame of the table
+
+https://bioinf.shenwei.me/seqkit/usage/#stats
+"""
+function fastx_stats(fastx)
+    Mycelia.add_bioconda_env("seqkit")
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats --N 90 --all --tabular $(fastx)`
+    return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, delim='\t'))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a FASTX (FASTA/FASTQ) file into a normalized tab-separated table format with standardized sequence identifiers.
+
+# Arguments
+- `fastx_file::String`: Path to input FASTX file
+- `outfile::String`: Path to output compressed TSV file (defaults to input filename + ".tsv.gz")
+- `force::Bool=false`: If true, overwrites existing output file
+
+# Returns
+- `String`: Path to the created output file
+
+# Output Format
+Creates a gzipped TSV file with the following columns:
+- fasta_identifier: Original FASTA filename
+- sequence_sha256: SHA256 hash of the sequence
+- sequence_identifier: Original sequence ID from FASTA
+- sequence_description: Full sequence description from FASTA
+- sequence: The actual sequence
+"""
+function fastx2normalized_table(fastx)
+
+    # Mycelia.add_bioconda_env("seqkit")
+    # cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit
+    #     fx2tab
+    # return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, delim='\t'))
+
+    @assert isfile(fastx) && filesize(fastx) > 0
+    normalized_table = DataFrames.DataFrame(
+        record_identifier = String[],
+        record_description = String[],
+        record_sha256 = String[],
+        record_quality = Union{Vector{Float64}, Missing}[],
+        record_alphabet = String[],
+        record_type = Symbol[],
+        mean_record_quality = Union{Float64, Missing}[],
+        median_record_quality = Union{Float64, Missing}[],
+        record_length = Int[],
+        record_sequence = String[],
+    )
+
+    file_type = :unknown
+    if occursin(Mycelia.FASTA_REGEX, fastx)
+        @info "Processing FASTA file"
+        file_type = :fasta
+    elseif occursin(Mycelia.FASTQ_REGEX, fastx)
+        @info "Processing FASTQ file"
+        file_type = :fastq
+    else
+        error("File is not FASTA or FASTQ")
+    end
+    
+    for record in Mycelia.open_fastx(fastx)
+        record_sequence = FASTX.sequence(record)
+        if file_type == :fasta
+            record_quality = missing
+        else
+            record_quality = collect(FASTX.quality_scores(record))
+        end
+        push!(normalized_table, (
+            record_identifier = FASTX.identifier(record),
+            record_description = FASTX.description(record),
+            record_sha256 = Mycelia.seq2sha256(record_sequence),
+            record_quality = record_quality,
+            record_alphabet = join(sort(collect(Set(uppercase(record_sequence))))),
+            record_type = Mycelia.detect_alphabet(record_sequence),
+            mean_record_quality = file_type == :fastq ? Statistics.mean(record_quality) : missing,
+            median_record_quality = file_type == :fastq ? Statistics.median(record_quality) : missing,
+            record_length = length(record_sequence),
+            record_sequence = record_sequence,
+        ))
+    end
+    current_columns = names(normalized_table)
+    normalized_table[!, "fastx_path"] .= fastx
+    normalized_table[!, "fastx_sha256"] .= Mycelia.metasha256(normalized_table[!, "record_sha256"])
+    return normalized_table[!, ["fastx_path", "fastx_sha256", current_columns...]]
+end

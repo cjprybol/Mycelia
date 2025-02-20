@@ -980,33 +980,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Calculate basic statistics for FASTQ/FASTA sequence files using seqkit.
-
-# Arguments
-- `fastq::String`: Path to input FASTQ/FASTA file
-
-# Details
-Automatically installs and uses seqkit from Bioconda to compute sequence statistics
-including number of sequences, total bases, GC content, average length, etc.
-
-# Dependencies
-- Requires Conda and Bioconda channel
-- Installs seqkit package if not present
-
-# Returns
-Returns a DataFrame of the table
-
-https://bioinf.shenwei.me/seqkit/usage/#stats
-"""
-function fastx_stats(fastx)
-    Mycelia.add_bioconda_env("seqkit")
-    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats --N 90 --all --tabular $(fastx)`
-    return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, delim='\t'))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Subsample reads from a FASTQ file using seqkit.
 
 # Arguments
@@ -3852,41 +3825,6 @@ function metasha256(vector_of_sha256s::Vector{<:AbstractString})
     return SHA.bytes2hex(SHA.digest!(ctx))
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-# """
-# function fasta2normalized_table(fasta_file)
-#     @assert isfile(fasta_file) && filesize(fasta_file) > 0
-#     n_records = Mycelia.count_records(fasta_file)
-
-#     # Pre-allocate arrays
-#     sequence_sha256s = Vector{String}(undef, n_records)
-#     sequence_identifiers = Vector{String}(undef, n_records)
-#     sequence_descriptions = Vector{String}(undef, n_records)
-#     sequences = Vector{String}(undef, n_records)
-
-#     # Progress meter
-#     p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ", color=:blue)
-
-#     for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
-#         sequence_identifiers[i] = FASTX.identifier(record)
-#         sequence_descriptions[i] = FASTX.description(record)
-#         sequences[i] = FASTX.sequence(record)
-#         sequence_sha256s[i] = Mycelia.seq2sha256(FASTX.sequence(record))
-#         ProgressMeter.next!(p)
-#     end
-
-#     normalized_fasta_table = DataFrames.DataFrame(
-#         fasta_sha256 = metasha256(sequence_sha256s),
-#         fasta_identifier = basename(fasta_file),
-#         sequence_sha256 = sequence_sha256s,
-#         sequence_identifier = sequence_identifiers,
-#         sequence_description = sequence_descriptions,
-#         sequence = sequences
-#     )
-#     return normalized_fasta_table
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -3904,95 +3842,6 @@ function get_base_extension(filename::String)
   end
   
   return "." * extension
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Convert a FASTA file into a normalized tab-separated table format with standardized sequence identifiers.
-
-# Arguments
-- `fasta_file::String`: Path to input FASTA file
-- `outfile::String`: Path to output compressed TSV file (defaults to input filename + ".tsv.gz")
-- `force::Bool=false`: If true, overwrites existing output file
-
-# Returns
-- `String`: Path to the created output file
-
-# Output Format
-Creates a gzipped TSV file with the following columns:
-- fasta_identifier: Original FASTA filename
-- sequence_sha256: SHA256 hash of the sequence
-- sequence_identifier: Original sequence ID from FASTA
-- sequence_description: Full sequence description from FASTA
-- sequence: The actual sequence
-"""
-function fasta2normalized_table(fasta_file;
-    normalize_name=true,
-    outfile="",
-    force=false)
-    @assert isfile(fasta_file) && filesize(fasta_file) > 0
-
-    if !isempty(outfile) && normalize_name
-        @warn "Both 'outfile' and 'normalize_name' are set. Ignoring 'outfile'."
-    end
-    if isempty(outfile) && !normalize_name
-        @warn "Both 'outfile' and 'normalize_name' are unset. Setting 'outfile' to '$(fasta_file).tsv.gz'."
-    end
-
-    if isempty(outfile)
-        if !normalize_name
-            outfile = fasta_file * ".tsv.gz"
-        else
-            filename = Mycelia.normalized_current_datetime() * "." * basename(fasta_file) * ".tsv.gz"
-            outfile = joinpath(dirname(fasta_file), filename)
-        end
-    end
-
-    if isfile(outfile) && (filesize(outfile) > 0) && !force
-        @warn "$(outfile) already present and non-empty"
-        return outfile
-    end
-
-    # Progress meter
-    n_records = Mycelia.count_records(fasta_file)
-    p = ProgressMeter.Progress(n_records, desc="Processing FASTA records: ")
-
-    # Open the output file for writing
-    outfile_io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
-
-    # Write the header
-    header = "fasta_identifier\tsequence_sha256\tsequence_identifier\tsequence_description\tsequence"
-    println(outfile_io, header)
-
-    # Vector to store SHAs
-    sequence_sha256s = Vector{String}(undef, n_records)
-
-    # Streaming processing
-    for (i, record) in enumerate(Mycelia.open_fastx(fasta_file))
-        seq_id = FASTX.identifier(record)
-        seq_desc = FASTX.description(record)
-        seq = String(FASTX.sequence(record))
-        sha256 = Mycelia.seq2sha256(seq)
-
-        # Write to the temporary file
-        line = join([basename(fasta_file), string(sha256), String(seq_id), String(seq_desc), String(seq)], '\t')
-        println(outfile_io, line)
-
-        sequence_sha256s[i] = sha256
-        ProgressMeter.next!(p)
-    end
-
-    # Close the output file
-    close(outfile_io)
-
-    if normalize_name
-        full_extension = Mycelia.get_base_extension(fasta_file) * ".tsv.gz"
-        final_outfile = joinpath(dirname(outfile), Mycelia.metasha256(sequence_sha256s) * full_extension)
-        mv(outfile, final_outfile; force=true)
-        outfile = final_outfile
-    end
-    return outfile
 end
 
 """
@@ -4853,21 +4702,7 @@ function generate_transterm_coordinates_from_gff(gff_file)
     return transterm_coordinates_file
 end
 
-# function normalize_fasta(fasta_file, outdir)
-#     mkpath("$(outdir)/normalized_fasta")
-#     normalized_fasta_file = "$(outdir)/normalized_fasta/$(basename(fasta_file))"
-#     if !isfile(normalized_fasta_file)
-#         fasta_in = FASTX.FASTA.Reader(open(fasta_file))
-#         fasta_out = FASTX.FASTA.Writer(open(normalized_fasta_file, "w"))
-#         for (i, record) in enumerate(fasta_in)
-#             updated_record = FASTX.FASTA.Record("$(i)", FASTX.FASTA.sequence(record))
-#             write(fasta_out, updated_record)
-#         end
-#         close(fasta_in)
-#         close(fasta_out)
-#     end
-#     return normalized_fasta_file
-# end
+
 
 # function run_prokka(ID, OUT_DIR, normalized_fasta_file)
 #     prokka_dir="$(OUT_DIR)/prokka"
