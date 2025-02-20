@@ -96,11 +96,15 @@ const AA_ALPHABET = filter(
 # can add support for conda too if needed
 # const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
 const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
-const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
-const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
-const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
+# const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
+const FASTQ_REGEX = r"\.(fq|fastq)(\.gz)?$"
+# const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
+const FASTA_REGEX = r"\.(fa|fasta|fna|fas|fsa|ffn|faa|mpfa|frn)(\.gz)?$"
+# const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
+const VCF_REGEX = r"\.vcf(\.gz)?$"
 # none of this code currently supports CRAM
-const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
+# const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
+const XAM_REGEX = r"\.(sam|bam|cram|sam\.gz)$"
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
