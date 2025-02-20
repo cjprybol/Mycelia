@@ -97,9 +97,44 @@ end
     end
 end
 
+@testset "SRA downloading" begin
+    outdir = mkpath("test-sra-tools")
+    @testset "download SRA short read data" begin
+        # https://trace.ncbi.nlm.nih.gov/Traces/?view=run_browser&acc=SRR31271002&display=metadata
+        srr_identifier = "SRR31271002"
+        prefetch_results = Mycelia.prefetch(SRR=srr_identifier, outdir=outdir)
+        @test prefetch_results.directory == "test-sra-tools/$(srr_identifier)"
+        @test prefetch_results.archive == "test-sra-tools/$(srr_identifier)/$(srr_identifier).sra"
+        @test filesize(prefetch_results.archive) == 18295489
+        
+        fasterq_dump_result = Mycelia.fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
+        @test fasterq_dump_result.forward_reads == "$(outdir)/$(srr_identifier)/$(srr_identifier)_1.fastq.gz"
+        @test fasterq_dump_result.reverse_reads == "$(outdir)/$(srr_identifier)/$(srr_identifier)_2.fastq.gz"
+        @test ismissing(fasterq_dump_result.unpaired_reads)
+        @test filesize(fasterq_dump_result.forward_reads) == 11637534
+        @test filesize(fasterq_dump_result.reverse_reads) == 11908008
+    end
+    
+    @testset "download SRA long read data" begin
+        # https://trace.ncbi.nlm.nih.gov/Traces/?view=run_browser&acc=SRR31812976&display=metadata
+        srr_identifier = "SRR31812976"
+        prefetch_results = Mycelia.prefetch(SRR=srr_identifier, outdir=outdir)
+        @test prefetch_results.directory == "$(outdir)/$(srr_identifier)"
+        @test prefetch_results.archive == "$(outdir)/$(srr_identifier)/$(srr_identifier).sra"
+        @test filesize(prefetch_results.archive) == 33392268
+
+        fasterq_dump_result = Mycelia.fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
+        @test ismissing(fasterq_dump_result.forward_reads)
+        @test ismissing(fasterq_dump_result.reverse_reads)
+        @test fasterq_dump_result.unpaired_reads == "$(outdir)/$(srr_identifier)/$(srr_identifier).fastq.gz"
+        @test filesize(fasterq_dump_result.unpaired_reads) == 34353450
+    end
+    rm(outdir, recursive=true)
+end
+
 @testset "FASTQ simulation" begin
     @testset "Illumina" begin
-        # function simulate_short_reads(;in_fasta, coverage, outbase = "$(in_fasta).art.$(coverage)x.")
+        @test 1 + 1 == 2
     end
 
     @testset "Ultima" begin
@@ -107,15 +142,11 @@ end
     end
 
     @testset "Nanopore" begin
-        # function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore2023.$(quantity).fq.gz"))
+        @test 1 + 1 == 2
     end
 
     @testset "PacBio" begin
-        # simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio2021.$(quantity).fq.gz"))
-    end
-
-    @testset "Nearly Perfect Long" begin
-        # @test simulate_nearly_perfect_long_reads()
+        @test 1 + 1 == 2
     end
 
     @testset "multi-entity, even coverage" begin
@@ -127,24 +158,6 @@ end
     end
 end
 
-@testset "FASTQ QC" begin
-    @testset "Illumina" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "Ultima" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "Nanopore" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "PacBio" begin
-        @test 1 + 1 == 2
-    end
-end
-
 # PRE-PROCESSING & READ QC Tests
 @testset "Preprocessing" begin
     @testset "Read Quality Control" begin
@@ -152,6 +165,12 @@ end
         @test true # https://github.com/FelixKrueger/TrimGalore
         @test true # https://github.com/rrwick/Filtlong
         @test true # https://github.com/OpenGene/fastplong
+        @test true # https://github.com/wdecoster/chopper
+        # Example: test that adapter trimming and quality filtering work.
+        # result = MyceliaAssembly.preprocess_reads("test_data/reads.fastq")
+        # @test length(result.filtered_reads) > 0
+        # @test result.mean_quality ≥ 30
+        @test true  # placeholder
     end
     @testset "Read Statistics" begin
         # Example: test that estimated community composition is within expected bounds.

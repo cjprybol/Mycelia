@@ -1441,74 +1441,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Downloads a genomic sequence from NCBI's nucleotide database by its accession number.
-
-# Arguments
-- `accession::String`: NCBI nucleotide accession number (e.g. "NC_045512")
-- `outdir::String`: Output directory path. Defaults to current directory
-- `compressed::Bool`: If true, compresses output file with gzip. Defaults to true
-
-# Returns
-- `String`: Path to the downloaded file (.fna or .fna.gz)
-"""
-function download_genome_by_accession(;accession, outdir=pwd(), compressed = true)
-    temp_fasta = joinpath(outdir, accession * ".fna")
-    if compressed
-        outfile = temp_fasta * ".gz"
-    else
-        outfile = temp_fasta
-    end
-    if !isfile(outfile)
-        try
-            # pull the entire record so that if the download fails we don't leave an empty file
-            fasta_records = collect(Mycelia.get_sequence(db = "nuccore", accession = accession))
-            open(temp_fasta, "w") do io
-                fastx_io = FASTX.FASTA.Writer(io)
-                for fasta_record in fasta_records
-                    write(fastx_io, fasta_record)
-                end
-                close(fastx_io)
-                if compressed
-                    run(`gzip $(temp_fasta)`)
-                end
-                @assert isfile(outfile)
-            end
-        catch e
-            println("An error occurred: ", e)
-        end
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Downloads a genome file from NCBI FTP server to the specified directory.
-
-# Arguments
-- `ftp::String`: NCBI FTP path for the genome (e.g. "ftp://ftp.ncbi.nlm.nih.gov/.../")
-- `outdir::String`: Output directory path. Defaults to current working directory.
-
-# Returns
-- `String`: Path to the downloaded file
-
-# Notes
-- If the target file already exists, returns the existing file path without re-downloading
-- Downloads the genomic.fna.gz version of the genome
-"""
-function download_genome_by_ftp(;ftp, outdir=pwd())
-    url = Mycelia.ncbi_ftp_path_to_url(ftp_path=ftp, extension="genomic.fna.gz")
-    outfile = joinpath(outdir, basename(url))
-    if !isfile(outfile)
-        return Downloads.download(url, outfile)
-    else
-        return outfile
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Returns the current date and time as a normalized string with all non-word characters removed.
 
 The output format is based on ISO datetime (YYYYMMDDThhmmss) but strips any special characters
@@ -6146,30 +6078,6 @@ function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2,
     ks_assessed = ks_to_try[1:length(silhouette_scores)]
     return (;optimal_number_of_clusters, ks_assessed, silhouette_scores, hclust_result)
 end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Downloads Sequence Read Archive (SRA) data using the prefetch tool from sra-tools.
-
-# Arguments
-- `SRR`: SRA accession number (e.g., "SRR12345678")
-- `outdir`: Directory where the downloaded data will be saved. Defaults to current directory.
-
-# Notes
-- Requires sra-tools which will be installed in a Conda environment
-- Downloads are saved in .sra format
-- Internet connection required
-"""
-function prefetch(;SRR, outdir=pwd())
-    Mycelia.add_bioconda_env("sra-tools")
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
-end
-
-# function fastq_dump(SRR, outdir=SRR)
-#     Mycelia.add_bioconda_env("sra-tools")
-#     $(CONDA_RUNNER) run --live-stream -n sra-tools fastq-dump /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980 --split-3 --skip-technical --gzip --outdir /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980
-
 
 
 
@@ -12521,93 +12429,6 @@ end
 
 # println("Normalized d2* Matrix:")
 # println(d2_star_norm_matrix)
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Download and compress paired-end sequencing reads from the SRA database using fasterq-dump.
-
-# Arguments
-- `outdir::String=""`: Output directory for the FASTQ files. Defaults to current directory.
-- `srr_identifier::String=""`: SRA run accession number (e.g., "SRR12345678")
-
-# Outputs
-Creates two gzipped FASTQ files in the output directory:
-- `{srr_identifier}_1.fastq.gz`: Forward reads
-- `{srr_identifier}_2.fastq.gz`: Reverse reads
-
-# Dependencies
-Requires `fasterq-dump` from the SRA Toolkit and `pigz` for compression.
-
-# Notes
-- Skips download if output files already exist
-- Uses up to 4 threads or system maximum, whichever is lower
-- Allocates 1GB memory for processing
-- Skips technical reads
-"""
-function fasterq_dump(;outdir="", srr_identifier="")
-    
-    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
-    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
-    
-    forward_reads_gz = forward_reads * ".gz"
-    reverse_reads_gz = reverse_reads * ".gz"
-    
-    if !isfile(forward_reads_gz) && !isfile(reverse_reads_gz)
-        # --progress doesn't work well for jupyter output
-        fasterq_dump_cmd = `
-            fasterq-dump
-                --outdir $(outdir)
-                --mem 1G
-                --split-3
-                --threads $(min(Sys.CPU_THREADS, 4))
-                --skip-technical
-                $(srr_identifier)`
-        @time run(fasterq_dump_cmd)
-        run(`pigz $(forward_reads)`)
-        run(`pigz $(reverse_reads)`)
-    else
-        @info "$(forward_reads_gz) & $(reverse_reads_gz) already present"
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Downloads and quality filters paired-end reads from the Sequence Read Archive (SRA).
-
-# Arguments
-- `outdir::String`: Output directory path for downloaded and processed files
-- `srr_identifier::String`: SRA run accession number (e.g., "SRR12345678")
-
-# Details
-1. Downloads paired-end FASTQ files using fasterq-dump
-2. Performs quality trimming using trim_galore
-3. Removes intermediate compressed FASTQ files after processing
-
-# Returns
-Nothing, but creates the following files in `outdir`:
-- `trim_galore/[srr_identifier]_1_val_1.fq.gz`: Trimmed forward reads
-- `trim_galore/[srr_identifier]_2_val_2.fq.gz`: Trimmed reverse reads
-"""
-function download_and_filter_sra_reads(;outdir="", srr_identifier="")
-    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
-    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
-    forward_reads_gz = forward_reads * ".gz"
-    reverse_reads_gz = reverse_reads * ".gz"
-    trimmed_forward_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_1_val_1.fq.gz")
-    trimmed_reverse_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_2_val_2.fq.gz")
-
-    if !(isfile(trimmed_forward_reads) && isfile(trimmed_reverse_reads))
-        @info "processing $(srr_identifier)"
-        fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
-        trim_galore(outdir=outdir, identifier=srr_identifier)
-    # else
-        # @info "$(srr_identifier) already processed..."
-    end
-    isfile(forward_reads_gz) && rm(forward_reads_gz)
-    isfile(reverse_reads_gz) && rm(reverse_reads_gz)
-end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
