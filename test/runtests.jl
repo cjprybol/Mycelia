@@ -13,6 +13,8 @@ import BioSequences
 import Dates
 import Random
 import SHA
+import CSV
+import uCSV
 
 const SEED = 42
 const phiX174_accession_id = "NC_001422.1"
@@ -40,8 +42,10 @@ const phiX174_assembly_id = "GCF_000819615.1"
     
     @testset "virus phiX174" begin
         genome_result = Mycelia.download_genome_by_accession(accession=phiX174_accession_id)
+        @show genome_result
         @test basename(genome_result) == phiX174_accession_id * ".fna.gz"
         @test Mycelia.get_base_extension(genome_result) == ".fna.gz"
+        rm(genome_result)
         # @test Mycelia.sha256_file(genome_result) == "765354d42319e4a350c93b09260bf911864263653f828ad97b5c35eed950591a"
         
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="gff3,rna,cds,protein,genome,seq-report")
@@ -49,7 +53,7 @@ const phiX174_assembly_id = "GCF_000819615.1"
         #TODO add tests for remaining items? do that elsewhere?
         @test Mycelia.get_base_extension(phiX174_assembly_dataset.genome) == ".fna"
         @test Mycelia.get_base_extension(phiX174_assembly_dataset.protein) == ".faa"
-        # @test Mycelia.sha256_file(phiX174_assembly_dataset.genome) == "74c1aca649f207a175b7d99e22fe4ef785c88f924aa5a7f5223c07c4e5c2b5aa"
+        rm(phiX174_assembly_id, recursive=true)
     end
 
     @testset "bacteria-like" begin
@@ -132,6 +136,46 @@ end
     rm(outdir, recursive=true)
 end
 
+# PRE-PROCESSING & READ QC Tests
+@testset "Preprocessing" begin
+    @testset "FASTX stats" begin
+        # https://trace.ncbi.nlm.nih.gov/Traces/?view=run_browser&acc=SRR31812976&display=metadata
+        srr_identifier = "SRR31812976"
+        outdir = mkpath("fastx-stats-test")
+        fasterq_dump_result = Mycelia.fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
+        @test fasterq_dump_result.unpaired_reads == "$(outdir)/$(srr_identifier)/$(srr_identifier).fastq.gz"
+        table = Mycelia.fastx_stats(fasterq_dump_result.unpaired_reads)
+        io = IOBuffer()
+        CSV.write(io, table)
+        csv_string = String(take!(io))
+        @test csv_string == 
+        """
+        file,format,type,num_seqs,sum_len,min_len,avg_len,max_len,Q1,Q2,Q3,sum_gap,N50,N50_num,Q20(%),Q30(%),AvgQual,GC(%),sum_n,N90
+        fastx-stats-test/SRR31812976/SRR31812976.fastq.gz,FASTQ,DNA,58982,34921275,80,592.1,2315,341.0,544.0,811.0,0,743,608,50.26,9.75,11.4,39.62,0,329
+        """
+        rm(outdir, recursive=true)
+    end
+    
+    @testset "Read Quality Control" begin
+        @test true # https://github.com/OpenGene/fastp
+        @test true # https://github.com/FelixKrueger/TrimGalore
+        @test true # https://github.com/rrwick/Filtlong
+        @test true # https://github.com/OpenGene/fastplong
+        @test true # https://github.com/wdecoster/chopper
+        # Example: test that adapter trimming and quality filtering work.
+        # result = MyceliaAssembly.preprocess_reads("test_data/reads.fastq")
+        # @test length(result.filtered_reads) > 0
+        # @test result.mean_quality ≥ 30
+        @test true  # placeholder
+    end
+    @testset "Read Statistics" begin
+        # Example: test that estimated community composition is within expected bounds.
+        # comp = MyceliaAssembly.analyze_community("test_data/reads.fastq")
+        # @test 0.8 <= comp["expected_coverage"] <= 1.2
+        @test true  # placeholder
+    end
+end
+
 @testset "FASTQ simulation" begin
     @testset "Illumina" begin
         @test 1 + 1 == 2
@@ -155,28 +199,6 @@ end
 
     @testset "multi-entity, log-distributed coverage" begin
         @test 1 + 1 == 2
-    end
-end
-
-# PRE-PROCESSING & READ QC Tests
-@testset "Preprocessing" begin
-    @testset "Read Quality Control" begin
-        @test true # https://github.com/OpenGene/fastp
-        @test true # https://github.com/FelixKrueger/TrimGalore
-        @test true # https://github.com/rrwick/Filtlong
-        @test true # https://github.com/OpenGene/fastplong
-        @test true # https://github.com/wdecoster/chopper
-        # Example: test that adapter trimming and quality filtering work.
-        # result = MyceliaAssembly.preprocess_reads("test_data/reads.fastq")
-        # @test length(result.filtered_reads) > 0
-        # @test result.mean_quality ≥ 30
-        @test true  # placeholder
-    end
-    @testset "Read Statistics" begin
-        # Example: test that estimated community composition is within expected bounds.
-        # comp = MyceliaAssembly.analyze_community("test_data/reads.fastq")
-        # @test 0.8 <= comp["expected_coverage"] <= 1.2
-        @test true  # placeholder
     end
 end
 

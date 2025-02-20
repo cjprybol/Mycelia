@@ -994,11 +994,14 @@ including number of sequences, total bases, GC content, average length, etc.
 - Installs seqkit package if not present
 
 # Returns
-Prints statistics to standard output in tabular format
+Returns a DataFrame of the table
+
+https://bioinf.shenwei.me/seqkit/usage/#stats
 """
-function fastx_stats(fastq)
+function fastx_stats(fastx)
     Mycelia.add_bioconda_env("seqkit")
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats $(fastq)`)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats --N 90 --all --tabular $(fastx)`
+    return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, delim='\t'))
 end
 
 """
