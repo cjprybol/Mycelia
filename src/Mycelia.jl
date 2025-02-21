@@ -96,15 +96,10 @@ const AA_ALPHABET = filter(
 # can add support for conda too if needed
 # const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
 const CONDA_RUNNER = joinpath(Conda.BINDIR, "conda")
-# const FASTQ_REGEX = r"\.(fq\.gz|fastq\.gz|fastq|fq)$"
-const FASTQ_REGEX = r"\.(fq|fastq)(\.gz)?$"
-# const FASTA_REGEX = r"\.(fa\.gz|fasta\.gz|fna\.gz|fasta|fa|fna)$"
 const FASTA_REGEX = r"\.(fa|fasta|fna|fas|fsa|ffn|faa|mpfa|frn)(\.gz)?$"
-# const VCF_REGEX = r"\.(vcf|vcf\.gz)$"
-const VCF_REGEX = r"\.vcf(\.gz)?$"
-# none of this code currently supports CRAM
-# const XAM_REGEX = r"\.(sam|sam\.gz|bam)$"
+const FASTQ_REGEX = r"\.(fq|fastq)(\.gz)?$"
 const XAM_REGEX = r"\.(sam|bam|cram|sam\.gz)$"
+const VCF_REGEX = r"\.vcf(\.gz)?$"
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -3573,6 +3568,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run the 'padloc' tool from the 'padlocbio' conda environment on a given FASTA file.
 
 https://doi.org/10.1093/nar/gkab883
+
 https://github.com/padlocbio/padloc
 
 This function first ensures that the 'padloc' environment is available via Bioconda. 
@@ -3580,15 +3576,17 @@ It then attempts to update the 'padloc' database.
 If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
 it runs 'padloc' with the specified FASTA file as input.
 """
-function run_padloc(fasta_file)
+function run_padloc(fasta_file, outdir=dirname(fasta_file))
     Mycelia.add_bioconda_env("padlocbio::padloc")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
-    padloc_outfile = replace(fasta_file, ".fna" => "") * "_padloc.csv"
+    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), ".fna" => "") * "_padloc.csv")
     if !isfile(padloc_outfile)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file)`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file) --outdir $(outdir)`)
     else
         @info "$(padloc_outfile) already present"
     end
+    @assert isfile(padloc_outfile)
+    return padloc_outfile
 end
 
 """

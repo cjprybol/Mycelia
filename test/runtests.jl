@@ -236,6 +236,17 @@ end
     end
 end
 
+@testset "tool integration" begin
+    @testset "padloc" begin
+        ecoli_k12_accession = "GCF_000005845.2"
+        result = Mycelia.ncbi_genome_download_accession(accession=ecoli_k12_accession, include_string="genome")
+        # @show result.genome
+        padloc_result = Mycelia.run_padloc(result.genome)
+        @test isfile(padloc_result)
+        rm(ecoli_k12_accession, recursive=true)
+    end
+end
+
 # Data ingestion & normalization: for multi-omics data loading, sanity checks, QC.
 # Data Ingestion & Normalization
 # - Loading multi-omics data
