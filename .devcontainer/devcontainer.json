@@ -1,10 +1,11 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/JuliaLang/devcontainer-templates/tree/main/src/julia
 {
-    "name": "Julia Development Container",
-    "build": {
-        "dockerfile": "Dockerfile"
-    },
+    "name": "Mycelia Development Container",
+    "image": "mcr.microsoft.com/devcontainers/universal:2-linux",
+    // "build": {
+    //     "dockerfile": "Dockerfile"
+    // },
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
