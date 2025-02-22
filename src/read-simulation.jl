@@ -1,58 +1,131 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Simulate Illumina paired-end short reads from a FASTA file using ART simulator.
+Simulate Illumina short reads from a FASTA file using the ART Illumina simulator.
+
+This function wraps ART (installed via Bioconda) to simulate reads from an input
+reference FASTA. It supports paired-end (or optionally single-end/mate-pair) simulation,
+with options to choose either fold coverage (`--fcov`) or an absolute read count (`--rcount`),
+to enable amplicon mode, and to optionally generate a zero-error SAM file.
 
 # Arguments
-- `in_fasta::String`: Input FASTA file path
-- `coverage::Number`: Desired read coverage/depth
-- `outbase::String`: Prefix for output files (default: "\${in_fasta}.art.\${coverage}x.")
+- `in_fasta::String`: Path to the input FASTA file.
+- `coverage::Union{Nothing,Number}`: Desired fold coverage (used with `--fcov`); if `nothing`
+  and `read_count` is provided then fold coverage is ignored. (Default: 20)
+- `read_count::Union{Nothing,Number}`: Total number of reads (or read pairs) to generate
+  (used with `--rcount` instead of fold coverage). (Default: `nothing`)
+- `outbase::String`: Output file prefix (default: "\$(in_fasta).art.\$(coverage)x.").
+- `read_length::Int`: Length of reads to simulate (default: 150).
+- `mflen::Int`: Mean fragment length for paired-end simulations (default: 500).
+- `sdev::Int`: Standard deviation of fragment lengths (default: 10).
+- `seqSys::String`: Illumina sequencing system ID (e.g. "HS25" for HiSeq 2500) (default: "HS25").
+- `paired::Bool`: Whether to simulate paired-end reads (default: true).
+- `amplicon::Bool`: Enable amplicon sequencing simulation mode (default: false).
+- `errfree::Bool`: Generate an extra SAM file with zero sequencing errors (default: false).
+- `noALN::Bool`: Do not output the ALN alignment file (default: true).
+- `rndSeed::Union{Nothing,Int}`: Optional seed for reproducibility (default: nothing).
 
 # Outputs
-Generates two gzipped FASTQ files:
-- `\${outbase}1.fq.gz`: Forward reads
-- `\${outbase}2.fq.gz`: Reverse reads
+Generates gzipped FASTQ files in the working directory:
+- For paired-end: `\$(outbase)1.fq.gz` (forward) and `\$(outbase)2.fq.gz` (reverse).
+- For single-end: `\$(outbase)1.fq.gz`.
+
+Additional SAM files may be produced if `--errfree` is enabled and/or if
+the ART `--samout` option is specified.
 
 # Details
-Uses ART Illumina with the following parameters:
-- Read length: 150bp
-- Fragment length: 500bp (SD: 10bp)
-- Sequencing system: HiSeq 2500 (HS25)
+This function calls ART with the provided options. Note that if `read_count` is supplied,
+the function uses the `--rcount` option; otherwise, it uses `--fcov` with the given coverage.
+Amplicon mode (via `--amplicon`) restricts the simulation to the amplicon regions, which is
+important for targeted sequencing studies.
 
 # Dependencies
-Requires ART simulator (automatically installed via Bioconda)
+Requires ART simulator (installed via Bioconda) and the Mycelia environment helper.
 
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_pacbio_reads`
 """
-function simulate_short_reads(;in_fasta, coverage, outbase = "$(in_fasta).art.$(coverage)x.")
-    # -c --rcount
-    # total number of reads/read pairs to be generated [per amplicon if for amplicon simulation](not be used together with -f/--fcov)
-    # -d --id
-    # the prefix identification tag for read ID
-    # -ef --errfree
-    # indicate to generate the zero sequencing errors SAM file as well the regular one
-    # NOTE: the reads in the zero-error SAM file have the same alignment positions as those in the regular SAM file, but have no sequencing errors
-    # -f --fcov
-    # the fold of read coverage to be simulated or number of reads/read pairs generated for each amplicon
-    # --samout
+function simulate_illumina_paired_reads(;in_fasta::String,
+    coverage::Union{Nothing, Number}=20,
+    read_count::Union{Nothing, Number}=nothing,
+    outbase::String = "$(in_fasta).art.$(coverage)x.",
+    read_length::Int = 150,
+    mflen::Int = 500,
+    sdev::Int = 10,
+    seqSys::String = "HS25",
+    paired::Bool = true,
+    amplicon::Bool = false,
+    errfree::Bool = false,
+    noALN::Bool = true,
+    rndSeed::Union{Nothing,Int} = nothing
+    )
+
+    # Ensure ART is available via Bioconda
     Mycelia.add_bioconda_env("art")
-    p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina --noALN --paired --seqSys HS25 --len 150 --mflen 500 --sdev 10 --in $(in_fasta) --out $(outbase) --fcov $(coverage)`)
-    @time run(p)
-    out_forward = "$(outbase)1.fq"
-    target_forward = out_forward * ".gz"
-    @assert isfile(out_forward)
-    run(`gzip $(out_forward)`)
-    @assert isfile(target_forward)
 
-    out_reverse = "$(outbase)2.fq"
-    target_reverse = out_reverse * ".gz"
-    @assert isfile(out_reverse)
-    run(`gzip $(out_reverse)`)
-    @assert isfile(target_reverse)
+    # Precompute option values
+    amplicon_flag = amplicon ? "--amplicon" : ""
+    errfree_flag = errfree ? "--errfree" : ""
+    noALN_flag = noALN ? "--noALN" : ""
+    rndSeed_val = (rndSeed !== nothing && rndSeed > -1) ? "$(rndSeed)" : ""
 
-    # isfile("$(outbase)1.aln") && rm("$(outbase)1.aln")
-    # isfile("$(outbase)2.aln") && rm("$(outbase)2.aln")
-    # isfile("$(outbase).sam") && rm("$(outbase).sam")
+    # Determine read count or coverage
+    if read_count !== nothing
+        rcount_val = "$(read_count)"
+        fcov_val = ""
+    elseif coverage !== nothing
+        rcount_val = ""
+        fcov_val = "$(coverage)"
+    else
+        error("Either 'coverage' or 'read_count' must be provided.")
+    end
+
+    # Input and output values
+    in_fasta_val = "$(in_fasta)"
+    outbase_val = "$(outbase)"
+
+    # Full command with all options explicitly defined
+    full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+        --seqSys $(seqSys) \
+        --len $(read_length) \
+        $(paired_flag) \
+        --mflen $(mflen_val) \
+        --sdev $(sdev_val) \
+        $(amplicon_flag) \
+        $(errfree_flag) \
+        $(noALN_flag) \
+        --rndSeed $(rndSeed_val) \
+        --rcount $(rcount_val) \
+        --fcov $(fcov_val) \
+        --in $(in_fasta_val) \
+        --out $(outbase_val)`
+
+    @info "Running ART with command: $(full_cmd)"
+    @time run(full_cmd)
+
+    # Process output FASTQ files: gzip them if not already compressed.
+    # For paired-end, output files are expected as outbase1.fq and outbase2.fq.
+    # For single-end, only outbase1.fq is produced.
+    forward_fq = "$(outbase)1.fq"
+    forward_gz = forward_fq * ".gz"
+    @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
+    run(`gzip $(forward_fq)`)
+    @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
+
+
+    if paired
+        reverse_fq = "$(outbase)2.fq"
+        reverse_gz = reverse_fq * ".gz"
+        @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
+        run(`gzip $(reverse_fq)`)
+        @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
+    else
+        reverse_fq = nothing
+        reverse_gz = nothing
+    end
+
+    # Optionally, you could remove ALN or SAM files here if not needed.
+    # return nothing
+    return (forward_reads = forward_gz, reverse_reads = reverse_gz)
 end
 
 """

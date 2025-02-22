@@ -14,7 +14,13 @@
         "ghcr.io/devcontainers/features/python:1": {},
         "ghcr.io/devcontainers/features/node:1": {}
 	},
+    "waitFor": "onCreateCommand",
+    // "updateContentCommand": "python3 -m pip install -r requirements.txt",
+    // "postCreateCommand": "",
 	"customizations": {
+        "codespaces": {
+            "openFiles": []
+          },
 		"vscode": {
 			"extensions": [
                 "julialang.language-julia",
