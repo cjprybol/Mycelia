@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/base:ubuntu
+FROM mcr.microsoft.com/devcontainers/universal:2-linux
 
 # Install Python and pip
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
