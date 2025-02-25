@@ -20,6 +20,18 @@ const SEED = 42
 const phiX174_accession_id = "NC_001422.1"
 const phiX174_assembly_id = "GCF_000819615.1"
 
+@testset "tool integration" begin
+    @testset "padloc" begin
+        ecoli_k12_accession = "GCF_000005845.2"
+        result = Mycelia.ncbi_genome_download_accession(accession=ecoli_k12_accession, include_string="genome")
+        # @show result.genome
+        padloc_result = Mycelia.run_padloc(fasta_file = result.genome)
+        @show padloc_result
+        @test isfile(padloc_result.csv)
+        rm(ecoli_k12_accession, recursive=true)
+    end
+end
+
 @testset "Constants" begin
     @testset "FASTQ regex" begin
         hypothethical_fastq_files = [
@@ -125,6 +137,43 @@ end
     end
 
     @testset "microbiome" begin
+        @test 1 + 1 == 2
+    end
+end
+
+
+
+@testset "FASTQ simulation" begin
+    @testset "Illumina" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_illumina_paired_reads(in_fasta = phiX174_assembly_dataset.genome, coverage=10)
+        @test isfile(read_simulation_result.forward_reads)
+        @test isfile(read_simulation_result.reverse_reads)
+        @test isfile(read_simulation_result.sam)
+        @test isfile(read_simulation_result.error_free_sam)
+        rm(phiX174_assembly_id, recursive=true)
+    end
+
+    @testset "Ultima" begin
+        @test 1 + 1 == 2
+    end
+
+    @testset "Nanopore" begin
+        @test 1 + 1 == 2
+    end
+
+    @testset "PacBio" begin
+        @test 1 + 1 == 2
+    end
+
+    @testset "multi-entity, even coverage" begin
+        @test 1 + 1 == 2
+    end
+
+    @testset "multi-entity, log-distributed coverage" begin
         @test 1 + 1 == 2
     end
 end
@@ -236,17 +285,6 @@ end
     end
 end
 
-@testset "tool integration" begin
-    @testset "padloc" begin
-        ecoli_k12_accession = "GCF_000005845.2"
-        result = Mycelia.ncbi_genome_download_accession(accession=ecoli_k12_accession, include_string="genome")
-        # @show result.genome
-        padloc_result = Mycelia.run_padloc(result.genome)
-        @test isfile(padloc_result)
-        rm(ecoli_k12_accession, recursive=true)
-    end
-end
-
 # Data ingestion & normalization: for multi-omics data loading, sanity checks, QC.
 # Data Ingestion & Normalization
 # - Loading multi-omics data
@@ -273,32 +311,6 @@ end
 #         rm(temp_dir, recursive=true)
 #     end
 # end
-
-@testset "FASTQ simulation" begin
-    @testset "Illumina" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "Ultima" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "Nanopore" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "PacBio" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "multi-entity, even coverage" begin
-        @test 1 + 1 == 2
-    end
-
-    @testset "multi-entity, log-distributed coverage" begin
-        @test 1 + 1 == 2
-    end
-end
 
 # assembly modules
 @testset "assembly modules" begin

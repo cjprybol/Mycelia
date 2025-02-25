@@ -22,7 +22,6 @@ to enable amplicon mode, and to optionally generate a zero-error SAM file.
 - `paired::Bool`: Whether to simulate paired-end reads (default: true).
 - `amplicon::Bool`: Enable amplicon sequencing simulation mode (default: false).
 - `errfree::Bool`: Generate an extra SAM file with zero sequencing errors (default: false).
-- `noALN::Bool`: Do not output the ALN alignment file (default: true).
 - `rndSeed::Union{Nothing,Int}`: Optional seed for reproducibility (default: nothing).
 
 # Outputs
@@ -45,59 +44,57 @@ Requires ART simulator (installed via Bioconda) and the Mycelia environment help
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_pacbio_reads`
 """
 function simulate_illumina_paired_reads(;in_fasta::String,
-    coverage::Union{Nothing, Number}=20,
-    read_count::Union{Nothing, Number}=nothing,
-    outbase::String = "$(in_fasta).art.$(coverage)x.",
+    coverage::Union{Nothing, Number}=nothing,
+    read_count::Union{Nothing, Int}=nothing,
+    outbase::String = "",
     read_length::Int = 150,
     mflen::Int = 500,
     sdev::Int = 10,
     seqSys::String = "HS25",
-    paired::Bool = true,
     amplicon::Bool = false,
-    errfree::Bool = false,
-    noALN::Bool = true,
-    rndSeed::Union{Nothing,Int} = nothing
+    errfree::Bool = true,
+    rndSeed::Int = current_unix_datetime()
     )
 
     # Ensure ART is available via Bioconda
     Mycelia.add_bioconda_env("art")
-
-    # Precompute option values
-    amplicon_flag = amplicon ? "--amplicon" : ""
-    errfree_flag = errfree ? "--errfree" : ""
-    noALN_flag = noALN ? "--noALN" : ""
-    rndSeed_val = (rndSeed !== nothing && rndSeed > -1) ? "$(rndSeed)" : ""
-
+    
     # Determine read count or coverage
     if read_count !== nothing
-        rcount_val = "$(read_count)"
-        fcov_val = ""
+        if isempty(outbase)
+            outbase = "$(in_fasta).rcount_$(read_count).art"
+        end
+        full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+            --paired \
+            --errfree \
+            --noALN \
+            --seqSys $(seqSys) \
+            --len $(read_length) \
+            --mflen $(mflen) \
+            --sdev $(sdev) \
+            --rndSeed $(rndSeed) \
+            --rcount $(read_count) \
+            --in $(in_fasta) \
+            --out $(outbase)`
     elseif coverage !== nothing
-        rcount_val = ""
-        fcov_val = "$(coverage)"
+        if isempty(outbase)
+            outbase = "$(in_fasta).fcov_$(coverage)x.art"
+        end
+        full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+            --paired \
+            --errfree \
+            --noALN \
+            --seqSys $(seqSys) \
+            --len $(read_length) \
+            --mflen $(mflen) \
+            --sdev $(sdev) \
+            --rndSeed $(rndSeed) \
+            --fcov $(coverage) \
+            --in $(in_fasta) \
+            --out $(outbase)`
     else
         error("Either 'coverage' or 'read_count' must be provided.")
     end
-
-    # Input and output values
-    in_fasta_val = "$(in_fasta)"
-    outbase_val = "$(outbase)"
-
-    # Full command with all options explicitly defined
-    full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
-        --seqSys $(seqSys) \
-        --len $(read_length) \
-        $(paired_flag) \
-        --mflen $(mflen_val) \
-        --sdev $(sdev_val) \
-        $(amplicon_flag) \
-        $(errfree_flag) \
-        $(noALN_flag) \
-        --rndSeed $(rndSeed_val) \
-        --rcount $(rcount_val) \
-        --fcov $(fcov_val) \
-        --in $(in_fasta_val) \
-        --out $(outbase_val)`
 
     @info "Running ART with command: $(full_cmd)"
     @time run(full_cmd)
@@ -111,21 +108,30 @@ function simulate_illumina_paired_reads(;in_fasta::String,
     run(`gzip $(forward_fq)`)
     @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
 
+    reverse_fq = "$(outbase)2.fq"
+    reverse_gz = reverse_fq * ".gz"
+    @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
+    run(`gzip $(reverse_fq)`)
+    @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
 
-    if paired
-        reverse_fq = "$(outbase)2.fq"
-        reverse_gz = reverse_fq * ".gz"
-        @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
-        run(`gzip $(reverse_fq)`)
-        @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
-    else
-        reverse_fq = nothing
-        reverse_gz = nothing
+    #  SAM Alignment File:
+    samfile = outbase * ".sam"
+    @assert isfile(samfile)
+    samfile_gz = samfile * ".gz"
+    if !isfile(samfile_gz)
+        run(`gzip $(samfile)`)
+        @assert isfile(samfile_gz)
+    end
+    
+    error_free_samfile = outbase * "_errFree.sam"
+    @assert isfile(error_free_samfile)
+    error_free_samfile_gz = error_free_samfile * ".gz"
+    if !isfile(error_free_samfile_gz)
+        run(`gzip $(error_free_samfile)`)
+        @assert isfile(error_free_samfile_gz)
     end
 
-    # Optionally, you could remove ALN or SAM files here if not needed.
-    # return nothing
-    return (forward_reads = forward_gz, reverse_reads = reverse_gz)
+    return (forward_reads = forward_gz, reverse_reads = reverse_gz, sam = samfile_gz, error_free_sam = error_free_samfile_gz)
 end
 
 """

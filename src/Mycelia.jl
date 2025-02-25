@@ -3576,7 +3576,7 @@ It then attempts to update the 'padloc' database.
 If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
 it runs 'padloc' with the specified FASTA file as input.
 """
-function run_padloc(fasta_file, outdir=dirname(fasta_file))
+function run_padloc(;fasta_file, outdir=dirname(abspath(fasta_file)))
     Mycelia.add_bioconda_env("padlocbio::padloc")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
     padloc_outfile = joinpath(outdir, replace(basename(fasta_file), ".fna" => "") * "_padloc.csv")
@@ -3585,8 +3585,13 @@ function run_padloc(fasta_file, outdir=dirname(fasta_file))
     else
         @info "$(padloc_outfile) already present"
     end
-    @assert isfile(padloc_outfile)
-    return padloc_outfile
+    padloc_faa = replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa")
+    padloc_gff = replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff")
+    padloc_domtblout = replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout")
+    if !isfile(padloc_outfile)
+        padloc_outfile = missing
+    end
+    return (csv = padloc_outfile, faa = padloc_faa, gff = padloc_gff, domtblout = padloc_domtblout)
 end
 
 """
@@ -16215,6 +16220,10 @@ function run_parallel_progress(f::Function, items::AbstractVector)
         end
     end
     return errors
+end
+
+function current_unix_datetime()
+    return Int(floor(Dates.datetime2unix(Dates.now())))
 end
 
 # dynamic import of files??
