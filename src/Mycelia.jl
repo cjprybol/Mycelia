@@ -3576,12 +3576,12 @@ It then attempts to update the 'padloc' database.
 If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
 it runs 'padloc' with the specified FASTA file as input.
 """
-function run_padloc(;fasta_file, outdir=dirname(abspath(fasta_file)))
+function run_padloc(;fasta_file, outdir=dirname(abspath(fasta_file)), threads=Sys.CPU_THREADS)
     Mycelia.add_bioconda_env("padlocbio::padloc")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
     padloc_outfile = joinpath(outdir, replace(basename(fasta_file), ".fna" => "") * "_padloc.csv")
     if !isfile(padloc_outfile)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file) --outdir $(outdir)`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file) --outdir $(outdir) --cpu $(threads)`)
     else
         @info "$(padloc_outfile) already present"
     end
