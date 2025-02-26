@@ -120,10 +120,12 @@ function blastdb2table(;blastdb, outfile="", force=false)
     println("Processing $(length(accessions)) sequences...")
     p = ProgressMeter.Progress(length(accessions), desc="Processing: ")
     
+    cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+
     # Stream process directly to Arrow
     open(outfile, "w") do io
         Arrow.write(io, schema; compress=:zstd) do writer
-            cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+            
             for (idx, line) in enumerate(eachline(cmd))
                 # Split line and extract fields
                 split_line = split(strip(line), '\t')
