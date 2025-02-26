@@ -1,3 +1,170 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a BLAST database to Arrow format with sequence and taxonomy information.
+Uses a simple serial approach with direct Arrow streaming for minimal memory usage.
+
+# Arguments
+- `blastdb::String`: Path to the BLAST database
+- `outfile::String=""`: Output file path. If empty, generates name based on input database
+- `force::Bool=false`: Whether to overwrite existing output file
+
+# Returns
+- `String`: Path to the generated output file (.arrow)
+
+# Output Format
+Arrow file containing columns (in this order):
+- sequence SHA256
+- sequence hash
+- sequence id
+- accession
+- gi
+- sequence title
+- BLAST name
+- taxid
+- taxonomic super kingdom
+- scientific name
+- scientific names for leaf-node taxids
+- common taxonomic name
+- common taxonomic names for leaf-node taxids
+- leaf-node taxids
+- membership integer
+- ordinal id
+- PIG
+- sequence length
+- sequence
+"""
+function blastdb2table(;blastdb, outfile="", force=false)
+    # Set up environment and validate database
+    Mycelia.add_bioconda_env("blast")
+    blast_db_info = Mycelia.local_blast_database_info()
+    filtered_blast_db_table = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+    @assert DataFrames.nrow(filtered_blast_db_table) == 1
+    blast_db_info = filtered_blast_db_table[1, :]
+    
+    # Determine database type and file extension
+    if blast_db_info["BLAST database molecule type"] == "Protein"
+        extension = ".faa"
+    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+        extension = ".fna"
+    else
+        @show blast_db_info["BLAST database molecule type"]
+        error("unexpected blast database molecule type")
+    end
+    
+    # Set output file name if not provided
+    if outfile == ""
+        outfile = blastdb * extension * ".arrow"
+    end
+    
+    # Check if we can skip processing and use existing output file
+    if isfile(outfile) && filesize(outfile) > 0 && !force
+        @show Mycelia.filesize_human_readable(outfile)
+        return outfile
+    end
+    
+    # Set up the format string for blastdbcmd
+    symbol_header_map = OrderedCollections.OrderedDict(
+        "%s" => "sequence",
+        "%a" => "accession",
+        "%g" => "gi",
+        "%o" => "ordinal id",
+        "%i" => "sequence id",
+        "%t" => "sequence title",
+        "%l" => "sequence length",
+        "%h" => "sequence hash",
+        "%T" => "taxid",
+        "%X" => "leaf-node taxids",
+        "%e" => "membership integer",
+        "%L" => "common taxonomic name",
+        "%C" => "common taxonomic names for leaf-node taxids",
+        "%S" => "scientific name",
+        "%N" => "scientific names for leaf-node taxids",
+        "%B" => "BLAST name",
+        "%K" => "taxonomic super kingdom",
+        "%P" => "PIG"
+    )
+    outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+    
+    # Define the schema based on the header order
+    header_order = [
+        "sequence SHA256",
+        "sequence hash",
+        "sequence id",
+        "accession",
+        "gi",
+        "sequence title",
+        "BLAST name",
+        "taxid",
+        "taxonomic super kingdom",
+        "scientific name",
+        "scientific names for leaf-node taxids",
+        "common taxonomic name",
+        "common taxonomic names for leaf-node taxids",
+        "leaf-node taxids",
+        "membership integer",
+        "ordinal id",
+        "PIG",
+        "sequence length",
+        "sequence"
+    ]
+    
+    # # Get all accessions
+    println("Getting all accessions...")
+    accessions = readlines(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt "%a"`)
+    
+    # Create Arrow schema
+    schema = Arrow.Schema([(name, Arrow.Utf8) for name in header_order])
+    
+    # Set up progress bar
+    println("Processing $(length(accessions)) sequences...")
+    p = ProgressMeter.Progress(length(accessions), desc="Processing: ")
+    
+    # Stream process directly to Arrow
+    open(outfile, "w") do io
+        Arrow.write(io, schema; compress=:zstd) do writer
+            cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+            for (idx, line) in enumerate(eachline(cmd))
+                # Split line and extract fields
+                split_line = split(strip(line), '\t')
+                
+                # Process sequence and create hash
+                seq = uppercase(String(filter(x -> isvalid(Char, x), split_line[1])))
+                seq_sha256 = Mycelia.seq2sha256(seq)
+                
+                # Prepare row data 
+                row_data = Dict{String, String}("sequence SHA256" => seq_sha256)
+                
+                # Add other fields from symbol_header_map
+                for (i, (_, col_name)) in enumerate(symbol_header_map)
+                    val = i <= length(split_line) ? split_line[i] : ""
+                    row_data[col_name] = val
+                end
+                
+                # Create a single row table with the desired schema
+                row_values = [get(row_data, col, "") for col in header_order]
+                single_row = [row_values]
+                
+                # Convert to column format for Arrow
+                columns = Dict(name => [row_values[i]] for (i, name) in enumerate(header_order))
+                
+                # Create a DataFrame with this single row and write to Arrow stream
+                df = DataFrames.DataFrame(columns)
+                Arrow.write(writer, df)
+                
+                # Update progress
+                ProgressMeter.next!(p)
+            end
+        end
+    end
+    
+    println("Done! Output saved to $(outfile)")
+    return outfile
+end
+
+
+
+
 # function fastq_dump(SRR, outdir=SRR)
 #     
 #     $(CONDA_RUNNER) run --live-stream -n sra-tools fastq-dump /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980 --split-3 --skip-technical --gzip --outdir /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980
@@ -305,7 +472,7 @@ function local_blast_database_info(;blastdbs_dir="$(homedir())/workspace/blastdb
         "%v" => "BLAST database format version"
     )
     outfmt_string = join(collect(keys(symbol_header_map)), "\t")
-    data, header = uCSV.read(open(`blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`), delim='\t')
+    data, header = uCSV.read(open(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`), delim='\t')
     header = collect(values(symbol_header_map))
     df = DataFrames.DataFrame(data, header)
     # remove numbered database fragments from summary results
@@ -401,123 +568,6 @@ function blastdb_to_fasta(;db, dbdir="$(homedir())/workspace/blastdb", compresse
         p = pipeline(p, `gzip`)
     end
     run(pipeline(p, outfile))
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Convert a BLAST database to a tabular format with sequence and taxonomy information.
-
-# Arguments
-- `blastdb::String`: Path to the BLAST database
-- `outfile::String=""`: Output file path. If empty, generates name based on input database
-- `force::Bool=false`: Whether to overwrite existing output file
-
-# Returns
-- `String`: Path to the generated output file (.tsv.gz)
-
-# Output Format
-Tab-separated file containing columns:
-- sequence SHA256
-- sequence
-- accession
-- gi
-- ordinal id
-- sequence id
-- sequence title
-- sequence length
-- sequence hash
-- taxid
-- leaf-node taxids
-- membership integer
-- common taxonomic name
-- common taxonomic names for leaf-node taxids
-- scientific name
-- scientific names for leaf-node taxids
-- BLAST name
-- taxonomic super kingdom
-- PIG
-"""
-function blastdb2table(;blastdb, outfile="", force=false)
-    # try
-    #     run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
-    # catch
-    #     run(`apt-get install ncbi-blast+ perl-doc -y`)
-    # end
-    Mycelia.add_bioconda_env("blast")
-    blast_db_info = Mycelia.local_blast_database_info()
-    # @info "local blast databases found"
-    # display(blast_db_info)
-    # @show blastdb
-    filtered_blast_db_table = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
-    @assert DataFrames.nrow(filtered_blast_db_table) == 1
-    blast_db_info = filtered_blast_db_table[1, :]
-    n_sequences = blast_db_info["number of sequences"]
-    if blast_db_info["BLAST database molecule type"] == "Protein"
-        extension = ".faa"
-    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
-        extension = ".fna"
-    else
-        @show blast_db_info["BLAST database molecule type"]
-        error("unexpected blast database molecule type")
-    end
-    if outfile == ""
-        outfile = blastdb * extension * ".tsv.gz"
-    end
-    lets_go = false
-    if !isfile(outfile)
-        lets_go = true
-    elseif filesize(outfile) == 0
-        lets_go = true
-    elseif force
-        lets_go = true
-    else
-        @show isfile(outfile)
-        @show Mycelia.filesize_human_readable(outfile)
-    end
-    !lets_go && return outfile
-    
-    symbol_header_map = OrderedCollections.OrderedDict(
-        "%s" => "sequence",
-        "%a" => "accession",
-        "%g" => "gi",
-        "%o" => "ordinal id",
-        "%i" => "sequence id",
-        "%t" => "sequence title",
-        "%l" => "sequence length",
-        "%h" => "sequence hash",
-        "%T" => "taxid",
-        "%X" => "leaf-node taxids",
-        "%e" => "membership integer",
-        "%L" => "common taxonomic name",
-        "%C" => "common taxonomic names for leaf-node taxids",
-        "%S" => "scientific name",
-        "%N" => "scientific names for leaf-node taxids",
-        "%B" => "BLAST name",
-        "%K" => "taxonomic super kingdom",
-        "%P" => "PIG"
-    )
-    outfmt_string = join(collect(keys(symbol_header_map)), "\t")
-    # @show outfmt_string
-    outfile_io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
-    
-    header = collect(values(symbol_header_map))
-    header = ["sequence SHA256", header...]
-    println(outfile_io, join(header, '\t'))
-    p = ProgressMeter.Progress(n_sequences, desc="Processing $(n_sequences) records from Blast DB $(blastdb): ")
-    # io = open(pipeline(`blastdbcmd -entry 'all' -db $(blastdb) -outfmt $(outfmt_string)`, `head`))
-    io = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -entry 'all' -db $(blastdb) -outfmt $(outfmt_string)`
-    for line in eachline(io)
-        split_line = split(line, '\t')
-        # remove invalid characters
-        seq = uppercase(String(filter(x -> isvalid(Char, x), split_line[1])))
-        seq_sha256 = Mycelia.seq2sha256(seq)
-        updated_line = join([seq_sha256, split_line...], "\t")
-        println(outfile_io, updated_line)
-        ProgressMeter.next!(p)
-    end
-    close(outfile_io)
     return outfile
 end
 

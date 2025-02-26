@@ -4,7 +4,7 @@ __precompile__(false)
 
 # import AlgebraOfGraphics
 # import ArgParse
-# import Arrow
+import Arrow
 import BioAlignments
 import BioSequences
 import BioSymbols
