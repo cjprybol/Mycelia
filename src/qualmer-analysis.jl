@@ -53,7 +53,7 @@ The type parameter `N` specifies the bit encoding used for DNA (typically 4 or 2
 # Examples
 ```julia
 # Create a DNAQualmer from a DNA sequence and quality scores
-seq = LongDNA{4}("ACGTACGT")
+seq = BioSequences.LongDNA{4}("ACGTACGT")
 quality = UInt8[30, 32, 25, 40, 38, 30, 25, 20]
 qmer = qualmer(seq, quality, DNAQualmer{5,4})
 ```
@@ -122,7 +122,7 @@ Base.hash(q::AbstractQualmer, h::UInt) = hash(q.qualities, hash(q.kmer, h))
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function qualmer(seq::LongDNA{N}, quality::Vector{UInt8}, ::Type{DNAQualmer{K,N}}) where {K,N}
+function qualmer(seq::BioSequences.LongDNA{N}, quality::Vector{UInt8}, ::Type{DNAQualmer{K,N}}) where {K,N}
     if length(seq) < K
         throw(ArgumentError("Sequence length must be at least K"))
     end
@@ -138,7 +138,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function qualmer(seq::LongRNA{N}, quality::Vector{UInt8}, ::Type{RNAQualmer{K,N}}) where {K,N}
+function qualmer(seq::BioSequences.LongRNA{N}, quality::Vector{UInt8}, ::Type{RNAQualmer{K,N}}) where {K,N}
     if length(seq) < K
         throw(ArgumentError("Sequence length must be at least K"))
     end
@@ -154,7 +154,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function qualmer(seq::LongAA{N}, quality::Vector{UInt8}, ::Type{AAQualmer{K,N}}) where {K,N}
+function qualmer(seq::BioSequences.LongAA{N}, quality::Vector{UInt8}, ::Type{AAQualmer{K,N}}) where {K,N}
     if length(seq) < K
         throw(ArgumentError("Sequence length must be at least K"))
     end
@@ -314,7 +314,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function qualmer(rec::FASTQ.Record, ::Type{DNAQualmer{K,N}}) where {K,N}
-    seq = FASTQ.sequence(LongDNA{N}, rec)
+    seq = FASTQ.sequence(BioSequences.LongDNA{N}, rec)
     quality = FASTQ.quality(rec)
     qualmer(seq, quality, DNAQualmer{K,N})
 end
@@ -323,7 +323,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function qualmer(rec::FASTQ.Record, ::Type{RNAQualmer{K,N}}) where {K,N}
-    seq = FASTQ.sequence(LongRNA{N}, rec)
+    seq = FASTQ.sequence(BioSequences.LongRNA{N}, rec)
     quality = FASTQ.quality(rec)
     qualmer(seq, quality, RNAQualmer{K,N})
 end
@@ -332,7 +332,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function qualmer(rec::FASTQ.Record, ::Type{AAQualmer{K,N}}) where {K,N}
-    seq = FASTQ.sequence(LongAA{N}, rec)
+    seq = FASTQ.sequence(BioSequences.LongAA{N}, rec)
     quality = FASTQ.quality(rec)
     qualmer(seq, quality, AAQualmer{K,N})
 end
@@ -342,11 +342,11 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function EveryQualmer(rec::FASTQ.Record, ::Type{Q}) where {Q<:AbstractQualmer{K,N}} where {K,N}
     seq_type = if Q <: DNAQualmer
-        LongDNA{N}
+        BioSequences.LongDNA{N}
     elseif Q <: RNAQualmer
-        LongRNA{N}
+        BioSequences.LongRNA{N}
     else
-        LongAA{N}
+        BioSequences.LongAA{N}
     end
     seq = FASTQ.sequence(seq_type, rec)
     quality = FASTQ.quality(rec)

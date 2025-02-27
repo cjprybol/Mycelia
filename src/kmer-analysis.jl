@@ -1,3 +1,84 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the quality score for a single base given multiple observations.
+
+This function implements the "Converting to Error Probabilities and Combining" method:
+1. Takes error probabilities from multiple reads covering the same base
+2. Calculates probability of ALL reads being wrong by multiplying probabilities
+3. Calculates final Phred score from this combined probability
+
+To avoid numerical underflow with very small probabilities, the calculation
+is performed in log space.
+
+# Arguments
+- `error_probabilities::Vector{Float64}`: Vector of error probabilities from 
+  multiple reads covering the same base position
+
+# Returns
+- `Float64`: Phred quality score representing the combined confidence
+"""
+function joint_base_quality_score(error_probabilities::Vector{Float64})
+    if isempty(error_probabilities)
+        return 0.0  # No data available
+    end
+    
+    # Work in log space to avoid underflow
+    log_p_all_wrong = sum(log.(error_probabilities))
+    
+    # Convert back from log space
+    p_all_wrong = exp(log_p_all_wrong)
+    
+    # Prevent underflow/overflow
+    if p_all_wrong <= eps(Float64)
+        return 999.0  # Cap at a very high quality score
+    end
+    
+    # Convert to Phred score
+    return Mycelia.error_rate_to_q_value(p_all_wrong)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate kmer quality score using the specified aggregation method.
+
+Available methods:
+- `:min`: Use the minimum base quality (default)
+- `:mean`: Use the mean of all base qualities
+- `:geometric`: Use the geometric mean (appropriate for probabilities)
+- `:harmonic`: Use the harmonic mean (emphasizes lower values)
+
+# Arguments
+- `base_qualities::Vector{Float64}`: Vector of quality scores for each base
+- `method::Symbol`: Method to use for aggregation
+
+# Returns
+- `Float64`: Overall quality score for the kmer
+"""
+function kmer_quality_score(base_qualities::Vector{Float64}, method::Symbol=:min)
+    if isempty(base_qualities)
+        return 0.0
+    end
+    
+    if method == :min
+        return minimum(base_qualities)
+    elseif method == :mean
+        return mean(base_qualities)
+    elseif method == :geometric
+        # Convert to probabilities, compute geometric mean, convert back
+        error_probs = [phred_to_error_prob(q) for q in base_qualities]
+        geo_mean_prob = exp(sum(log.(error_probs)) / length(error_probs))
+        return error_prob_to_phred(geo_mean_prob)
+    elseif method == :harmonic
+        # Harmonic mean emphasizes lower values
+        # which is appropriate for quality scores
+        return length(base_qualities) / sum(1.0 ./ base_qualities)
+    else
+        error("Unknown aggregation method: $method")
+    end
+end
+
 # conda install -c bioconda kmer-jellyfish
 # count, bc, info, stats, histo, dump, merge, query, cite, mem, jf
 # cap at 4 threads, 8Gb per thread by default - this should be plenty fast enough for base usage, but open it up for higher performance!
