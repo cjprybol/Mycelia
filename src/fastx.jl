@@ -1,6 +1,127 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Compare two FASTA sequences and calculate alignment statistics.
+
+# Arguments
+- `reference_fasta::String`: Path to the reference FASTA file
+- `query_fasta::String`: Path to the query FASTA file
+
+# Returns
+DataFrame with the following columns:
+- `alignment_percent_identity`: Percentage of matching bases in alignment
+- `total_equivalent_bases`: Number of equivalent bases between sequences
+- `total_alignment_length`: Length of the alignment
+- `query_length`: Length of query sequence
+- `total_variants`: Total number of variants (SNPs + indels)
+- `total_snps`: Number of single nucleotide polymorphisms
+- `total_indels`: Number of insertions and deletions
+- `alignment_coverage_query`: Percentage of query sequence covered
+- `alignment_coverage_reference`: Percentage of reference sequence covered
+- `size_equivalence_to_reference`: Size ratio of query to reference (%)
+
+# Notes
+- Uses minimap2 with progressively relaxed settings (asm5→asm10→asm20)
+- Returns empty string values for alignment statistics if no alignment is found
+- Requires minimap2 to be installed and accessible in PATH
+"""
+# uses minimap
+function pairwise_minimap_fasta_comparison(;reference_fasta, query_fasta)
+    header = [
+        "Query",
+        "Query length",
+        "Query start",
+        "Query end",
+        "Query strand",
+        "Target",
+        "Target length",
+        "Target start",
+        "Target end",
+        "Matches",
+        "Alignment length",
+        "Mapping quality",
+        "Cigar",
+        "CS tag"]
+    
+#     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
+    results5 = read(`minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
+    if !isempty(results5)
+        results = results5
+    else
+        @warn "no hit with asm5, trying asm10"
+        results10 = read(`minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
+        if !isempty(results10)
+            results = results10
+        else
+            @warn "no hits with asm5 or asm10, trying asm20"
+            results20 = read(`minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
+            if !isempty(results20)
+                results = results20
+            end
+        end
+    end
+    if !isempty(results)
+        data =  DelimitedFiles.readdlm(IOBuffer(results), '\t')
+        data_columns_of_interest = [collect(1:length(header)-2)..., collect(size(data, 2)-1:size(data, 2))...]
+        minimap_results = DataFrames.DataFrame(data[:, data_columns_of_interest], header)
+
+        equivalent_matches = reduce(vcat, map(x -> collect(eachmatch(r":([0-9]+)", replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_equivalent_bases = sum(map(match -> parse(Int, first(match.captures)), equivalent_matches))
+
+        insertion_matches = reduce(vcat, map(x -> collect(eachmatch(r"\+([a-z]+)"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_inserted_bases = sum(map(match -> length(first(match.captures)), insertion_matches))
+        deletion_matches = reduce(vcat, map(x -> collect(eachmatch(r"\-([a-z]+)"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_deleted_bases = sum(map(match -> length(first(match.captures)), deletion_matches))
+        substitution_matches = reduce(vcat, map(x -> collect(eachmatch(r"\*([a-z]{2})"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
+        total_substituted_bases = length(substitution_matches)
+        total_variants = length(insertion_matches) + length(deletion_matches) + length(substitution_matches)
+        total_variable_bases = total_inserted_bases + total_deleted_bases + total_substituted_bases
+
+        total_alignment_length = sum(minimap_results[!, "Alignment length"])
+        total_matches = sum(minimap_results[!, "Matches"])
+        
+        alignment_percent_identity = round(total_matches / total_alignment_length * 100, digits=2)
+        size_equivalence_to_reference = round(minimap_results[1, "Query length"]/minimap_results[1, "Target length"] * 100, digits=2)
+        alignment_coverage_query = round(total_alignment_length / minimap_results[1, "Query length"] * 100, digits=2)
+        alignment_coverage_reference = round(total_alignment_length / minimap_results[1, "Target length"] * 100, digits=2)
+
+        results = DataFrames.DataFrame(
+            alignment_percent_identity = alignment_percent_identity,
+            total_equivalent_bases = total_equivalent_bases,
+            total_alignment_length = total_alignment_length,
+            query_length = minimap_results[1, "Query length"],
+            total_variants = total_variants,
+            total_snps = total_substituted_bases,
+            total_indels = length(insertion_matches) + length(deletion_matches),
+            alignment_coverage_query = alignment_coverage_query,
+            alignment_coverage_reference = alignment_coverage_reference,
+            size_equivalence_to_reference = size_equivalence_to_reference,
+        )
+    else
+        query_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(query_fasta)))))
+        target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
+        size_equivalence_to_reference = round(query_length/target_length * 100, digits=2)
+
+        # unable to find any matches
+        results = DataFrames.DataFrame(
+            alignment_percent_identity = "",
+            total_equivalent_bases = "",
+            total_alignment_length = "",
+            query_length = query_length,
+            total_variants = "",
+            total_snps = "",
+            total_indels = "",
+            alignment_coverage_query = 0,
+            alignment_coverage_reference = 0,
+            size_equivalence_to_reference = size_equivalence_to_reference
+        )
+    end
+    return results
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
 
 # Arguments
