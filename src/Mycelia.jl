@@ -14903,6 +14903,113 @@ function current_unix_datetime()
     return Int(floor(Dates.datetime2unix(Dates.now())))
 end
 
+                                        """
+    optimal_subsequence_length(error_rate::Union{Real, AbstractArray{<:Real}};
+                              threshold::Float64=0.95,
+                              sequence_length::Union{Nothing, Int}=nothing,
+                              plot_result::Bool=false)
+
+Calculate the optimal subsequence length based on error rate distribution.
+
+# Arguments
+- `error_rate`: Single error rate or array of error rates (between 0 and 1)
+- `threshold`: Desired probability that a subsequence is error-free (default: 0.95)
+- `sequence_length`: Maximum sequence length to consider for plotting
+- `plot_result`: If true, returns a plot of probability vs. length
+
+# Returns
+- If `plot_result=false`: Integer representing optimal subsequence length
+- If `plot_result=true`: Tuple of (optimal_length, plot)
+
+# Examples
+```julia
+# Single error rate
+optimal_subsequence_length(error_rate=0.01)
+
+# Array of error rates
+optimal_subsequence_length(error_rate=[0.01, 0.02, 0.01])
+
+# With more stringent threshold
+optimal_subsequence_length(error_rate=0.01, threshold=0.99)
+
+# Generate plot
+length, p = optimal_subsequence_length(error_rate=0.01, plot_result=true)
+Plots.display(p)
+```
+"""
+function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Real}}
+                                   threshold::Float64=0.95,
+                                   sequence_length::Union{Nothing, Int}=nothing,
+                                   plot_result::Bool=false)
+    # Handle array input by calculating mean error rate
+    avg_error_rate = isa(error_rate, AbstractArray) ? Statistics.mean(error_rate) : error_rate
+    
+    # Validate inputs
+    if avg_error_rate <= 0
+        optimal_length = typemax(Int)
+    elseif avg_error_rate >= 1
+        optimal_length = 1
+    else
+        # Calculate optimal length where P(error-free) >= threshold
+        optimal_length = floor(Int, log(threshold) / log(1 - avg_error_rate))
+        optimal_length = max(1, optimal_length)  # Ensure at least length 1
+    end
+
+    # Return early if no plot requested
+    if !plot_result
+        return optimal_length
+    end
+    
+    # For plotting, determine sequence length to display
+    max_length = isnothing(sequence_length) ? 2 * optimal_length : sequence_length
+    
+    # Calculate probabilities for different lengths
+    lengths = 1:max_length
+    probabilities = [(1 - avg_error_rate)^len for len in lengths]
+    
+    # Create DataFrame for plotting
+    df = DataFrames.DataFrame(
+        Length = collect(lengths),
+        Probability = probabilities,
+        Optimal = lengths .== optimal_length
+    )
+
+    quality_score = Mycelia.error_rate_to_q_value(error_rate)
+    rounded_quality_score = Int(floor(quality_score))
+    rounded_error_rate = round(avg_error_rate, digits=4)
+    rounded_threshold_rate = round(threshold, digits=2)
+    plot_title = 
+    """
+    Optimal Kmer Length Inference
+    Error Rate: $(rounded_error_rate * 100)%≈Q$(rounded_quality_score)
+    Threshold: $(rounded_threshold_rate * 100)% of kmers expected to be correct
+    """
+    
+    # Create plot
+    p = Plots.plot(
+        df.Length, df.Probability,
+        linewidth=2, 
+        label="P(error-free)",
+        xlabel="Subsequence Length",
+        ylabel="Probability of Error-free Match",
+        title=plot_title,
+        grid=true,
+        ylims=(0,1),
+        alpha=0.8
+    )
+    
+    # Add horizontal line for threshold
+    Plots.hline!([threshold], linestyle=:dash, color=:red, label="Threshold")
+    
+    # Add vertical line for optimal length
+    Plots.vline!([optimal_length], linestyle=:dash, color=:green, label="Optimal length: $optimal_length")
+    
+    # Highlight optimal point
+    Plots.scatter!([optimal_length], [threshold], color=:orange, markersize=8, label="")
+    
+    return optimal_length, p
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
