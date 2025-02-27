@@ -154,7 +154,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
-function qualmer(seq::BioSequences.LongAA{N}, quality::Vector{UInt8}, ::Type{AAQualmer{K,N}}) where {K,N}
+function qualmer(seq::BioSequences.LongAA, quality::Vector{UInt8}, ::Type{AAQualmer{K,N}}) where {K,N}
     if length(seq) < K
         throw(ArgumentError("Sequence length must be at least K"))
     end
@@ -332,7 +332,7 @@ end
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function qualmer(rec::FASTQ.Record, ::Type{AAQualmer{K,N}}) where {K,N}
-    seq = FASTQ.sequence(BioSequences.LongAA{N}, rec)
+    seq = FASTQ.sequence(BioSequences.LongAA, rec)
     quality = FASTQ.quality(rec)
     qualmer(seq, quality, AAQualmer{K,N})
 end
@@ -346,7 +346,7 @@ function EveryQualmer(rec::FASTQ.Record, ::Type{Q}) where {Q<:AbstractQualmer{K,
     elseif Q <: RNAQualmer
         BioSequences.LongRNA{N}
     else
-        BioSequences.LongAA{N}
+        BioSequences.LongAA
     end
     seq = FASTQ.sequence(seq_type, rec)
     quality = FASTQ.quality(rec)
