@@ -14155,6 +14155,10 @@ function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Rea
     return optimal_length, p
 end
 
+function get_biosequence_alphabet(s::T) where T<:BioSequences.BioSequence
+    return first(T.parameters)
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file

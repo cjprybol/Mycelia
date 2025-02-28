@@ -1,6 +1,8 @@
 import Pkg
 if isinteractive()
     Pkg.activate("..")
+else
+    # this should be set via the `--project=` flag
 end
 
 using Revise
@@ -15,10 +17,52 @@ import Random
 import SHA
 import CSV
 import uCSV
+import DataFrames
+import Arrow
 
 const SEED = 42
 const phiX174_accession_id = "NC_001422.1"
 const phiX174_assembly_id = "GCF_000819615.1"
+
+include("test_qualmer-analysis.jl")
+
+Threads.nthreads()
+
+# https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id=10239&lvl=3&lin=f&keep=1&srchmode=1&unlock
+# viruses: 10239
+
+# # Processing 51 records from Blast DB /global/homes/c/cjprybol/workspace/blastdb/ref_viroids_rep_genomes: 100% Time: 0:00:04
+# # "/global/homes/c/cjprybol/workspace/blastdb/ref_viroids_rep_genomes.fna.tsv.gz"
+blast_viroids_path = Mycelia.download_blast_db(db = "ref_viroids_rep_genomes", source="ncbi")
+blast_viroids_arrow_path = Mycelia.blastdb2table(blastdb = blast_viroids_path)
+blast_viroids_arrow_table = DataFrames.DataFrame(Arrow.Table(blast_viroids_arrow_path))
+
+# rm(blast_viruses_arrow_path)
+
+# Processing 18689 records from Blast DB /global/homes/c/cjprybol/workspace/blastdb/ref_viruses_rep_genomes: 100% Time: 0:06:56m
+# "/global/homes/c/cjprybol/workspace/blastdb/ref_viruses_rep_genomes.fna.tsv.gz"
+# blast_viruses_path = Mycelia.download_blast_db(db = "ref_viruses_rep_genomes", source="ncbi")
+# blast_viruses_arrow_path = Mycelia.blastdb2table(blastdb = blast_viruses_path)
+# blast_viruses_arrow_table = DataFrames.DataFrame(Arrow.Table(blast_viruses_arrow_path))
+
+# https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id=2157&lvl=3&lin=f&keep=1&srchmode=1&unlock
+# archaea: 2157
+
+# https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id=2&lvl=3&lin=f&keep=1&srchmode=1&unlock
+# bacteria: 2
+
+# Processing 1080184 records from Blast DB /global/homes/c/cjprybol/workspace/blastdb/ref_prok_rep_genomes:   0%  ETA: 399.24 days
+# blast_prok_path = Mycelia.download_blast_db(db = "ref_prok_rep_genomes", source="ncbi")
+# blast_prok_arrow_path = Mycelia.blastdb2table(blastdb = blast_prok_path, threads=16)
+# blast_prok_arrow_table = DataFrames.DataFrame(Arrow.Table(blast_prok_arrow_path))
+
+# blastdbcmd -db core_nt -taxids 2 -outfmt %S
+# nt_core_eukaryotic_genomes
+
+# https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id=2759&lvl=3&lin=f&keep=1&srchmode=1&unlock
+# eukaryota: 2759
+# blast_core_nt_path = Mycelia.download_blast_db(db = "core_nt", source="ncbi")
+# Mycelia.blastdb2table(blastdb = blast_core_nt_path)
 
 @testset "tool integration" begin
     @testset "padloc" begin
@@ -26,9 +70,14 @@ const phiX174_assembly_id = "GCF_000819615.1"
         result = Mycelia.ncbi_genome_download_accession(accession=ecoli_k12_accession, include_string="genome")
         # @show result.genome
         padloc_result = Mycelia.run_padloc(fasta_file = result.genome)
-        @show padloc_result
+        # @show padloc_result
         @test isfile(padloc_result.csv)
         rm(ecoli_k12_accession, recursive=true)
+    end
+
+    @testset "ncbi-blast" begin
+        blast_database_table = Mycelia.list_blastdbs()
+        @test blast_database_table isa DataFrames.DataFrame
     end
 end
 
