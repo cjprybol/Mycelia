@@ -520,7 +520,14 @@ Lists available BLAST databases from the specified source.
 function list_blastdbs(;source::String="")
     Mycelia.add_bioconda_env("blast")
     @assert source in Set(["", "ncbi", "aws", "gcp"])
-    data, header = uCSV.read(open(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall tsv`), delim='\t')
+    blast_table_data = readlines(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall tsv`)
+    # filter out "Connected to AWS" etc...
+    if occursin(r"^Connected to"i, blast_table_data[1])
+        io = IOBuffer(join(blast_table_data[2:end], '\n'))
+    else
+        io = IOBuffer(join(blast_table_data, '\n'))
+    end
+    data, header = uCSV.read(io, delim='\t', typedetectrows=100, comment="#")
     header = ["NAME", "DESCRIPTION", "SIZE (GB)", "LAST_UPDATED"]
     blast_database_table = DataFrames.DataFrame(data, header)
     blast_database_table[!, "LAST_UPDATED"] = map(x -> Dates.Date(first(split(x, "T")), Dates.DateFormat("yyyy-mm-dd")), blast_database_table[!, "LAST_UPDATED"])
