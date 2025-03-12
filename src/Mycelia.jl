@@ -2,13 +2,12 @@ module Mycelia
 
 __precompile__(false)
 
-# import AlgebraOfGraphics
-# import ArgParse
+import AlgebraOfGraphics
 import Arrow
 import BioAlignments
 import BioSequences
 import BioSymbols
-# import CairoMakie
+import CairoMakie
 import Clustering
 # import CodecBase
 # import CodecBzip2
@@ -31,17 +30,17 @@ import GenomicAnnotations
 # import GeoMakie
 import GFF3
 import GLM
-# import GraphMakie
+import GraphMakie
 import Graphs
 # import HDF5
 import HTTP
 import JLD2
 import JSON
-# import Karnak
+import Karnak
 import Kmers
 import LsqFit
 import Luxor
-# import Makie
+import Makie
 import MetaGraphs
 import Mmap
 import OrderedCollections
