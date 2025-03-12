@@ -1,6 +1,102 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Analyze sequence duplication rates in a FASTQ file.
+
+This function processes a FASTQ file to quantify both exact sequence duplications and 
+canonical duplications (considering sequences and their reverse complements as equivalent).
+The function makes two passes through the file: first to count total records, then to
+analyze unique sequences.
+
+# Arguments
+- `fastq::String`: Path to the input FASTQ file to analyze
+- `results_table::String`: Optional. Path where the results will be saved as a tab-separated file.
+  Defaults to the same path as the input file but with extension changed to ".duplication_rates.tsv"
+
+# Returns
+- `String`: Path to the results table file
+
+# Output
+Generates a tab-separated file containing the following metrics:
+- `total_records`: Total number of sequence records in the file
+- `total_unique_observations`: Count of unique sequence strings
+- `total_unique_canonical_observations`: Count of unique canonical sequences 
+  (after normalizing for reverse complements)
+- `percent_unique_observations`: Percentage of sequences that are unique
+- `percent_unique_canonical_observations`: Percentage of sequences that are unique after canonicalization
+- `percent_duplication_rate`: Percentage of sequences that are duplicates (100 - percent_unique_observations)
+- `percent_canonical_duplication_rate`: Percentage of sequences that are duplicates after canonicalization
+
+# Notes
+- If the specified results file already exists and is not empty, the function will
+  return early without recomputing.
+- Progress is displayed during processing with a progress bar showing speed.
+
+# Example
+```julia
+# Analyze a FASTQ file and save results to default location
+result_path = assess_duplication_rates("data/sample.fastq")
+
+# Specify custom output path
+result_path = assess_duplication_rates("data/sample.fastq", results_table="results/duplication_analysis.tsv")
+```
+"""
+function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FASTQ_REGEX => ".duplication_rates.tsv"))
+    # @show results_table
+    if isfile(results_table) && (filesize(results_table) > 0)
+        println("$results_table already exists.")
+        return results_table
+    end
+    # First pass: count total records
+    println("Counting total records in FASTQ file...")
+    total_records = 0
+    for _ in Mycelia.open_fastx(fastq)
+        total_records += 1
+    end
+    println("Found $total_records total records.")
+    
+    # Initialize sets for unique sequences
+    unique_observations = Set{String}()
+    unique_canonical_observations = Set{String}()
+    
+    # Create progress meter
+    println("Analyzing duplication rates...")
+    prog = ProgressMeter.Progress(total_records, desc="Processing: ", showspeed=true)
+    
+    # Second pass: process records with progress meter
+    for record in Mycelia.open_fastx(fastq)
+        seq = FASTX.sequence(record)
+        # converted_seq = Mycelia.convert_sequence(seq)
+        converted_seq = BioSequences.LongDNA{4}(seq)
+        push!(unique_observations, string(converted_seq))
+        push!(unique_canonical_observations, string(BioSequences.canonical(converted_seq)))
+        
+        # Update progress meter
+        ProgressMeter.next!(prog)
+    end
+    
+    total_unique_observations = length(unique_observations)
+    total_unique_canonical_observations = length(unique_canonical_observations)
+    percent_unique_observations = (total_unique_observations / total_records) * 100
+    percent_unique_canonical_observations = (total_unique_canonical_observations / total_records) * 100
+    percent_duplication_rate = 100 - percent_unique_observations
+    percent_canonical_duplication_rate = 100 - percent_unique_canonical_observations
+
+    results_df = DataFrames.DataFrame(;total_records,
+                total_unique_observations,
+                total_unique_canonical_observations,
+                percent_unique_observations,
+                percent_unique_canonical_observations,
+                percent_duplication_rate,
+                percent_canonical_duplication_rate
+            )
+    display(results_df)
+    uCSV.write(results_table, results_df, delim='\t')
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Compare two FASTA sequences and calculate alignment statistics.
 
 # Arguments
