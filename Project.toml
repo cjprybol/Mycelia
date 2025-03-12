@@ -4,12 +4,14 @@ authors = ["Cameron Prybol <cameron.prybol@gmail.com> and contributors"]
 version = "0.1.0"
 
 [deps]
+AlgebraOfGraphics = "cbdf2221-f076-402e-a563-3d30da359d67"
 Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
 Automa = "67c07d97-cdcb-5c2c-af73-a7f9c32a568b"
 BioAlignments = "00701ae9-d1dc-5365-b64a-a3a3ebf5695e"
 BioSequences = "7e6ae17a-c86d-528c-b3b9-7f778a29fe59"
 BioSymbols = "3c28c6f8-a34d-59c4-9654-267d177fcfa9"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
