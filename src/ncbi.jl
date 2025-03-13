@@ -33,8 +33,8 @@ function blastdb_to_fasta(;blastdb, entries = String[], taxids = Int[], outfile=
         elseif blastdb_metadata["dbtype"] == "Protein"
             extension = ".faa.gz"
         end
-        update_time = string(blastdb_metadata["last-updated"])
-        outfile = "$(blastdb).$(update_time)" * extension
+        update_date = string(Dates.format(blastdb_metadata["last-updated"], "yyyy-mm-dd"))
+        outfile = "$(blastdb).$(update_date)" * extension
     end
     if isfile(outfile) && (filesize(outfile) > 0) && !force
         return outfile
