@@ -2154,269 +2154,22 @@ function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     # DataFrames.DataFrame(data, header)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Parse SAM/BAM files into a DataFrame containing mapped read alignments.
-
-# Arguments
-- `xam::String`: Path to input SAM/BAM file (supports .sam, .bam, or .sam.gz)
-- `primary_only::Bool=false`: Flag to filter for primary alignments only (currently unused)
-
-# Returns
-DataFrame with columns:
-- `template`: Read template name
-- `flag`: SAM flag
-- `reference`: Reference sequence name
-- `position`: Alignment position range
-- `mappingquality`: Mapping quality score
-- `tlen`: Template length
-- `alignlength`: Alignment length
-- `ismapped`: Boolean indicating if read is mapped
-- `isprimary`: Boolean indicating if alignment is primary
-- `alignment_score`: Alignment score (AS tag)
-- `mismatches`: Number of mismatches (NM tag)
-"""
-function parse_xam_to_mapped_records_table(xam, primary_only=false)
-# merge name conflicts, leaving breadcrumb for reference
-# function xam_records_to_dataframe(records)
-    record_table = DataFrames.DataFrame(
-        template = String[],
-        flag = UInt16[],
-        reference = String[],
-        position = UnitRange{Int}[],
-        mappingquality = UInt8[],
-        tlen = Int[],
-        alignlength = Int[],
-        ismapped = Bool[],
-        isprimary = Bool[],
-        alignment_score = Int[],
-        mismatches = Int[]
-    )
-    if occursin(r"\.bam$", xam)
-        MODULE = XAM.BAM
-        io = open(xam)
-    elseif occursin(r"\.sam$", xam)
-        MODULE = XAM.SAM
-        io = open(xam)
-    elseif occursin(r"\.sam.gz$", xam)
-        MODULE = XAM.SAM
-        io = CodecZlib.GzipDecompressorStream(open(xam))
-    else
-        error("unrecognized file extension in file: $xam")
-    end
-    # filter out header lines
-    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
-    # reader = MODULE.Reader(io)
-    for record in reader
-        if XAM.SAM.ismapped(record)
-            row = (
-                template = XAM.SAM.tempname(record),
-                flag = XAM.flag(record),
-                reference = XAM.SAM.refname(record),
-                position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
-                mappingquality = XAM.SAM.mappingquality(record),
-                tlen = XAM.SAM.templength(record),
-                alignlength = XAM.SAM.alignlength(record),
-                ismapped = XAM.SAM.ismapped(record),
-                isprimary = XAM.SAM.isprimary(record),
-                alignment_score = record["AS"],
-                mismatches = record["NM"]
-                )
-            push!(record_table, row, promote=true)
-        end
-    end
-    close(io)
-    return record_table
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Parse a SAM/BAM alignment file and extract template-to-reference mapping information.
-
-# Arguments
-- `xam::String`: Path to input alignment file (.sam, .sam.gz, or .bam format)
-
-# Returns
-- `DataFrame`: Table with columns:
-  - `template`: Read template names
-  - `reference`: Reference sequence names
-
-Only includes primary alignments (not secondary/supplementary) that are mapped to references.
-Skips header lines starting with '@'.
-"""
-function parse_xam_to_primary_mapping_table(xam)
-    record_table = DataFrames.DataFrame(
-        template = String[],
-        reference = String[]
-    )
-    if occursin(r"\.bam$", xam)
-        MODULE = XAM.BAM
-        io = open(xam)
-    elseif occursin(r"\.sam$", xam)
-        MODULE = XAM.SAM
-        io = open(xam)
-    elseif occursin(r"\.sam.gz$", xam)
-        MODULE = XAM.SAM
-        io = CodecZlib.GzipDecompressorStream(open(xam))
-    else
-        error("unrecognized file extension in file: $xam")
-    end
-    # filter out header lines
-    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
-    # reader = MODULE.Reader(io)
-    for record in reader
-        if XAM.SAM.ismapped(record) && XAM.SAM.isprimary(record)
-            row = (
-                template = XAM.SAM.tempname(record),
-                reference = XAM.SAM.refname(record)
-                )
-            push!(record_table, row, promote=true)
-        end
-    end
-    close(io)
-    return record_table
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Parse alignment data from SAM/BAM files into a structured DataFrame containing mapping quality
-and taxonomic information.
-
-# Arguments
-- `xam::String`: Path to input file (.sam, .bam, or .sam.gz)
-- `primary_only::Bool=false`: When true, include only primary alignments (currently not implemented)
-
-# Returns
-DataFrames.DataFrame with columns:
-- `template`: Read name
-- `flag`: SAM flag
-- `reference`: Reference sequence name  
-- `position`: Alignment position range
-- `mappingquality`: Mapping quality score
-- `tlen`: Template length
-- `alignlength`: Alignment length
-- `ismapped`: Boolean indicating if read is mapped
-- `isprimary`: Boolean indicating if alignment is primary
-- `alignment_score`: Alignment score (AS tag)
-- `mismatches`: Number of mismatches (NM tag)
-
-# Notes
-- Skips unmapped reads
-- Automatically detects and handles SAM/BAM/compressed SAM formats
-"""
-function parse_xam_to_taxonomic_mapping_quality(xam, primary_only=false)
-# merge name conflicts, leaving breadcrumb for reference
-# function xam_records_to_dataframe(records)
-    record_table = DataFrames.DataFrame(
-        template = String[],
-        flag = UInt16[],
-        reference = String[],
-        position = UnitRange{Int}[],
-        mappingquality = UInt8[],
-        tlen = Int[],
-        alignlength = Int[],
-        ismapped = Bool[],
-        isprimary = Bool[],
-        alignment_score = Int[],
-        mismatches = Int[]
-    )
-    if occursin(r"\.bam$", xam)
-        MODULE = XAM.BAM
-        io = open(xam)
-    elseif occursin(r"\.sam$", xam)
-        MODULE = XAM.SAM
-        io = open(xam)
-    elseif occursin(r"\.sam.gz$", xam)
-        MODULE = XAM.SAM
-        io = CodecZlib.GzipDecompressorStream(open(xam))
-    else
-        error("unrecognized file extension in file: $xam")
-    end
-    # filter out header lines
-    reader = MODULE.Reader(IOBuffer(join(Iterators.filter(line -> !startswith(line, '@'), eachline(io)), '\n')))
-    # reader = MODULE.Reader(io)
-    for record in reader
-        if XAM.SAM.ismapped(record)
-            row = (
-                template = XAM.SAM.tempname(record),
-                flag = XAM.flag(record),
-                reference = XAM.SAM.refname(record),
-                position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
-                mappingquality = XAM.SAM.mappingquality(record),
-                tlen = XAM.SAM.templength(record),
-                alignlength = XAM.SAM.alignlength(record),
-                ismapped = XAM.SAM.ismapped(record),
-                isprimary = XAM.SAM.isprimary(record),
-                alignment_score = record["AS"],
-                mismatches = record["NM"]
-                )
-            push!(record_table, row, promote=true)
-        end
-    end
-    close(io)
-    return record_table
-end
-
 # smaller, higher diversity databases do better with >=5 as the denominator - w/ <=4 they run out of memory
 # denominator = 5 # produced OOM for NT on NERSC
 # denominator = 8 # produced OOM for NT on Lawrencium
 # denominator = 10 was only 56% efficient for NT on NERSC
 const DEFAULT_MINIMAP_DENOMINATOR=10
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Calculate appropriate minimap index size based on available system memory.
-
-Converts total system memory to a recommended minimap index size by dividing the available
-memory by a denominator factor. Returns the size as a string with 'G' suffix.
-
-# Arguments
-- `system_mem_gb::Number`: Total system memory in gigabytes
-- `denominator::Number=DEFAULT_MINIMAP_DENOMINATOR`: Divisor to scale down memory allocation
-
-# Returns
-- `String`: Formatted memory size string (e.g. "4G")
-"""
-function system_mem_to_minimap_index_size(;system_mem_gb, denominator=DEFAULT_MINIMAP_DENOMINATOR)
-
+function system_mem_to_minimap_index_size(;system_mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), denominator=DEFAULT_MINIMAP_DENOMINATOR)
     value = Int(floor(system_mem_gb/denominator))
     # 4G is the default
     # this value should be larger for larger memory machines, and smaller for smaller ones
     # it seems related to the total size of the sequences stored in memory, rather than the total size of the in-memory database
     return "$(value)G"
 end
-# system_mem_to_minimap_index_size(Mycelia.NERSC_MEM)
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Generate a minimap2 index command and output file path for mapping DNA sequencing reads.
-
-Run this on the machine you intend to use to map the reads to confirm the index will fit.
-
-# Arguments
-- `fasta`: Path to the reference FASTA file to be indexed
-- `mem_gb`: Available system memory in gigabytes for indexing
-- `mapping_type`: Sequencing technology preset. One of:
-  * "map-hifi": PacBio HiFi reads
-  * "map-ont": Oxford Nanopore reads
-  * "map-pb": PacBio CLR reads
-  * "sr": Short reads
-  * "lr:hq": High-quality long reads
-- `threads`: Number of threads to use for indexing
-- `as_string`: Return command as String instead of Cmd (default: false)
-- `denominator`: Divisor for calculating index size (default: $(DEFAULT_MINIMAP_DENOMINATOR))
-
-# Returns
-Named tuple containing:
-- `cmd`: The minimap2 indexing command (as String or Cmd)
-- `outfile`: Path to the output index file (.mmi)
-"""
-function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
+function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=Sys.CPU_THREADS, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
+    Mycelia.add_bioconda_env("minimap2")
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
@@ -2426,6 +2179,46 @@ function minimap_index(;fasta, mem_gb, mapping_type, threads, as_string=false, d
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)`
     end
     outfile = index_file
+    return (;cmd, outfile)
+end
+
+
+function minimap_map_with_index(;
+        fasta,
+        mapping_type,
+        fastq,
+        index_file="",
+        mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85),
+        threads=Sys.CPU_THREADS,
+        as_string=false,
+        denominator=DEFAULT_MINIMAP_DENOMINATOR
+    )
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    
+    if !isempty(index_file) && !isfile(index_file)
+        error("user-specific index file $index_file does not exist")
+    else
+        # index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+        index_file_result = Mycelia.minimap_index(fasta=fasta, mapping_type=mapping_type, mem_gb = mem_gb, threads=threads)
+        index_file = index_file_result.outfile
+    end
+    @show index_file
+    @assert isfile(index_file)
+    outfile = fastq * "." * basename(index_file) * "." * "minimap2.bam"
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(outfile).tmp \\
+        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(outfile).tmp`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
+        cmd = pipeline(map, compress)
+    end
     return (;cmd, outfile)
 end
 
@@ -2480,65 +2273,7 @@ function minimap_map(;
     else
         map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
         compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-        cmd = [map, compress]
-    end
-    return (;cmd, outfile)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Generate minimap2 mapping commands with a pre-built index file.
-
-# Arguments
-- `fasta`: Path to the reference FASTA file
-- `mem_gb`: Available system memory in gigabytes for index generation
-- `mapping_type`: Mapping preset. Must be one of: "map-hifi", "map-ont", "map-pb", "sr", or "lr:hq"
-- `threads`: Number of threads to use for mapping and compression
-- `fastq`: Path to input FASTQ file
-- `as_string`: If true, returns command as a string; if false, returns as command array
-- `denominator`: Divisor for index size calculation (default: $(DEFAULT_MINIMAP_DENOMINATOR))
-
-# Returns
-Named tuple containing:
-- `cmd`: The minimap2 mapping command (string or array)
-- `outfile`: Path to the output compressed SAM file
-
-# Notes
-- Requires pre-built index file with pattern: `\${fasta}.x\${mapping_type}.I\${index_size}.mmi`
-- Automatically installs required conda environments (minimap2, samtools, pigz)
-- Output is automatically compressed with pigz
-"""
-function minimap_map_with_index(;
-        fasta,
-        mem_gb,
-        mapping_type,
-        threads,
-        fastq,
-        as_string=false,
-        denominator=DEFAULT_MINIMAP_DENOMINATOR
-    )
-    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
-    @show index_file
-    @assert isfile(index_file)
-    temp_sam_outfile = fastq * "." * basename(index_file) * "." * "minimap2.sam"
-    # outfile = temp_sam_outfile
-    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-    Mycelia.add_bioconda_env("minimap2")
-    Mycelia.add_bioconda_env("samtools")
-    Mycelia.add_bioconda_env("pigz")
-    if as_string
-        cmd =
-        """
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-        """
-    else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-        cmd = [map, compress]
+        cmd = pipeline(map, compress)
     end
     return (;cmd, outfile)
 end
@@ -2576,130 +2311,129 @@ function find_matching_prefix(filename1::String, filename2::String; strip_traili
     return matching_prefix
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Map paired-end reads to a reference sequence using minimap2.
+# Map paired-end reads to a reference sequence using minimap2.
 
-# Arguments
-- `fasta::String`: Path to reference FASTA file
-- `forward::String`: Path to forward reads FASTQ file
-- `reverse::String`: Path to reverse reads FASTQ file
-- `mem_gb::Integer`: Available system memory in GB
-- `threads::Integer`: Number of threads to use
-- `outdir::String`: Output directory (defaults to forward reads directory)
-- `as_string::Bool=false`: Return command as string instead of Cmd array
-- `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-- `denominator::Float64`: Memory scaling factor for index size
+# # Arguments
+# - `fasta::String`: Path to reference FASTA file
+# - `forward::String`: Path to forward reads FASTQ file
+# - `reverse::String`: Path to reverse reads FASTQ file
+# - `mem_gb::Integer`: Available system memory in GB
+# - `threads::Integer`: Number of threads to use
+# - `outdir::String`: Output directory (defaults to forward reads directory)
+# - `as_string::Bool=false`: Return command as string instead of Cmd array
+# - `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+# - `denominator::Float64`: Memory scaling factor for index size
 
-# Returns
-Named tuple containing:
-- `cmd`: Command(s) to execute (String or Array{Cmd})
-- `outfile`: Path to compressed output SAM file (*.sam.gz)
+# # Returns
+# Named tuple containing:
+# - `cmd`: Command(s) to execute (String or Array{Cmd})
+# - `outfile`: Path to compressed output SAM file (*.sam.gz)
 
-# Notes
-- Requires minimap2, samtools, and pigz conda environments
-- Automatically compresses output using pigz
-- Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
-"""
-function minimap_map_paired_end_with_index(;
-        fasta,
-        forward,
-        reverse,
-        mem_gb,
-        threads,
-        outdir = dirname(forward),
-        as_string=false,
-        mapping_type="sr",
-        denominator=DEFAULT_MINIMAP_DENOMINATOR
-    )
-    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
-    # @show index_file
-    @assert isfile(index_file) "$(index_file) not found!!"
-    @assert isfile(forward) "$(forward) not found!!"
-    @assert isfile(reverse) "$(reverse) not found!!"
-    fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
-    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
-    # outfile = temp_sam_outfile
-    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-    Mycelia.add_bioconda_env("minimap2")
-    Mycelia.add_bioconda_env("samtools")
-    Mycelia.add_bioconda_env("pigz")
-    if as_string
-        cmd =
-        """
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-        """
-    else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-        cmd = [map, compress]
-    end
-    return (;cmd, outfile)
-end
+# # Notes
+# - Requires minimap2, samtools, and pigz conda environments
+# - Automatically compresses output using pigz
+# - Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
+# """
+# function minimap_map_paired_end_with_index(;
+#         fasta,
+#         forward,
+#         reverse,
+#         mem_gb,
+#         threads,
+#         outdir = dirname(forward),
+#         as_string=false,
+#         mapping_type="sr",
+#         denominator=DEFAULT_MINIMAP_DENOMINATOR
+#     )
+#     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+#     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+#     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+#     # @show index_file
+#     @assert isfile(index_file) "$(index_file) not found!!"
+#     @assert isfile(forward) "$(forward) not found!!"
+#     @assert isfile(reverse) "$(reverse) not found!!"
+#     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
+#     temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
+#     # outfile = temp_sam_outfile
+#     outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+#     Mycelia.add_bioconda_env("minimap2")
+#     Mycelia.add_bioconda_env("samtools")
+#     Mycelia.add_bioconda_env("pigz")
+#     if as_string
+#         cmd =
+#         """
+#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+#         """
+#     else
+#         map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+#         compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+#         cmd = [map, compress]
+#     end
+#     return (;cmd, outfile)
+# end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Maps paired-end reads to a reference genome using minimap2 and compresses the output.
+# Maps paired-end reads to a reference genome using minimap2 and compresses the output.
 
-# Arguments
-- `fasta::String`: Path to reference genome FASTA file
-- `forward::String`: Path to forward reads FASTQ file
-- `reverse::String`: Path to reverse reads FASTQ file  
-- `mem_gb::Integer`: Available system memory in GB
-- `threads::Integer`: Number of threads to use
-- `outdir::String`: Output directory (defaults to forward reads directory)
-- `as_string::Bool`: Return command as string instead of Cmd array
-- `mapping_type::String`: Mapping preset, e.g. "sr" for short reads (default)
-- `denominator::Float64`: Memory scaling factor for minimap2 index
+# # Arguments
+# - `fasta::String`: Path to reference genome FASTA file
+# - `forward::String`: Path to forward reads FASTQ file
+# - `reverse::String`: Path to reverse reads FASTQ file  
+# - `mem_gb::Integer`: Available system memory in GB
+# - `threads::Integer`: Number of threads to use
+# - `outdir::String`: Output directory (defaults to forward reads directory)
+# - `as_string::Bool`: Return command as string instead of Cmd array
+# - `mapping_type::String`: Mapping preset, e.g. "sr" for short reads (default)
+# - `denominator::Float64`: Memory scaling factor for minimap2 index
 
-# Returns
-Named tuple containing:
-- `cmd`: Command(s) to execute (String or Vector{Cmd})
-- `outfile`: Path to compressed output SAM file (*.sam.gz)
+# # Returns
+# Named tuple containing:
+# - `cmd`: Command(s) to execute (String or Vector{Cmd})
+# - `outfile`: Path to compressed output SAM file (*.sam.gz)
 
-# Dependencies
-Requires bioconda packages: minimap2, samtools, pigz
-"""
-function minimap_map_paired_end(;
-        fasta,
-        forward,
-        reverse,
-        mem_gb,
-        threads,
-        outdir = dirname(forward),
-        as_string=false,
-        mapping_type="sr",
-        denominator=Mycelia.DEFAULT_MINIMAP_DENOMINATOR
-    )
-    index_size = Mycelia.system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    @assert isfile(forward) "$(forward) not found!!"
-    @assert isfile(reverse) "$(reverse) not found!!"
-    fastq_prefix = Mycelia.find_matching_prefix(basename(forward), basename(reverse))
-    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * "minimap2.sam"
-    # outfile = temp_sam_outfile
-    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-    Mycelia.add_bioconda_env("minimap2")
-    Mycelia.add_bioconda_env("samtools")
-    Mycelia.add_bioconda_env("pigz")
-    if as_string
-        cmd =
-        """
-        fasta,
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_size) -ax $(mapping_type) $(fasta) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-        """
-    else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_size) -ax $(mapping_type) $(fasta) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-        cmd = [map, compress]
-    end
-    return (;cmd, outfile)
-end
+# # Dependencies
+# Requires bioconda packages: minimap2, samtools, pigz
+# """
+# function minimap_map_paired_end(;
+#         fasta,
+#         forward,
+#         reverse,
+#         mem_gb,
+#         threads,
+#         outdir = dirname(forward),
+#         as_string=false,
+#         mapping_type="sr",
+#         denominator=Mycelia.DEFAULT_MINIMAP_DENOMINATOR
+#     )
+#     index_size = Mycelia.system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+#     @assert isfile(forward) "$(forward) not found!!"
+#     @assert isfile(reverse) "$(reverse) not found!!"
+#     fastq_prefix = Mycelia.find_matching_prefix(basename(forward), basename(reverse))
+#     temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * "minimap2.sam"
+#     # outfile = temp_sam_outfile
+#     outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+#     Mycelia.add_bioconda_env("minimap2")
+#     Mycelia.add_bioconda_env("samtools")
+#     Mycelia.add_bioconda_env("pigz")
+#     if as_string
+#         cmd =
+#         """
+#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_size) -ax $(mapping_type) $(fasta) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+#         """
+#     else
+#         map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_size) -ax $(mapping_type) $(fasta) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+#         compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+#         cmd = [map, compress]
+#     end
+#     return (;cmd, outfile)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2804,76 +2538,7 @@ function bandage_visualize(;gfa, img=gfa*".png")
     return img
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
 
-Generate detailed mapping statistics for each reference sequence/contig in a XAM (SAM/BAM/CRAM) file.
-
-# Arguments
-- `xam`: Path to XAM file or XAM object
-
-# Returns
-A DataFrame with per-contig statistics including:
-- `n_aligned_reads`: Number of aligned reads
-- `total_aligned_bases`: Sum of alignment lengths
-- `total_alignment_score`: Sum of alignment scores
-- Mapping quality statistics (mean, std, median)
-- Alignment length statistics (mean, std, median)
-- Alignment score statistics (mean, std, median)
-- Percent mismatches statistics (mean, std, median)
-
-Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) are considered.
-"""
-function xam_to_contig_mapping_stats(xam)
-    xam_results = Mycelia.parse_xam_to_summary_table(xam)
-    xam_results = xam_results[xam_results[!, "isprimary"] .& xam_results[!, "ismapped"], :]
-    # Calculate the percentage of mismatches
-    xam_results.percent_mismatches = xam_results.mismatches ./ xam_results.alignlength * 100
-    
-    # Group by the 'reference' column and calculate the summary statistics
-    contig_mapping_stats = DataFrames.combine(DataFrames.groupby(xam_results, :reference)) do subdf
-        mappingquality_stats = StatsBase.summarystats(subdf.mappingquality)
-        alignlength_stats = StatsBase.summarystats(subdf.alignlength)
-        alignment_score_stats = StatsBase.summarystats(subdf.alignment_score)
-        # mismatches_stats = StatsBase.summarystats(subdf.mismatches)
-        percent_mismatches_stats = StatsBase.summarystats(subdf.percent_mismatches)
-
-        (n_aligned_reads = length(subdf[!, "alignlength"]),
-         total_aligned_bases = sum(subdf[!, "alignlength"]),
-         total_alignment_score = sum(subdf[!, "alignment_score"]),
-         mappingquality_mean = mappingquality_stats.mean,
-         mappingquality_std = mappingquality_stats.sd,
-         # mappingquality_min = mappingquality_stats.min,
-         mappingquality_median = mappingquality_stats.median,
-         # mappingquality_max = mappingquality_stats.max,
-
-         alignlength_mean = alignlength_stats.mean,
-         alignlength_std = alignlength_stats.sd,
-         # alignlength_min = alignlength_stats.min,
-         alignlength_median = alignlength_stats.median,
-         # alignlength_max = alignlength_stats.max,
-
-         alignment_score_mean = alignment_score_stats.mean,
-         alignment_score_std = alignment_score_stats.sd,
-         # alignment_score_min = alignment_score_stats.min,
-         alignment_score_median = alignment_score_stats.median,
-         # alignment_score_max = alignment_score_stats.max,
-
-         # mismatches_mean = mismatches_stats.mean,
-         # mismatches_std = mismatches_stats.sd,
-         # mismatches_min = mismatches_stats.min,
-         # mismatches_median = mismatches_stats.median,
-         # mismatches_max = mismatches_stats.max,
-
-         percent_mismatches_mean = percent_mismatches_stats.mean,
-         percent_mismatches_std = percent_mismatches_stats.sd,
-         # percent_mismatches_min = percent_mismatches_stats.min,
-         percent_mismatches_median = percent_mismatches_stats.median,
-         # percent_mismatches_max = percent_mismatches_stats.max)
-        )
-    end
-    return contig_mapping_stats
-end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2897,67 +2562,6 @@ Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) 
 """
 function fastx_to_contig_lengths(fastx)
     OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Calculate mapping statistics by comparing sequence alignments (BAM/SAM) to a reference FASTA.
-
-# Arguments
-- `fasta::String`: Path to reference FASTA file
-- `xam::String`: Path to alignment file (BAM or SAM format)
-
-# Returns
-DataFrame with columns:
-- `contig`: Reference sequence name
-- `contig_length`: Length of reference sequence
-- `total_aligned_bases`: Total number of bases aligned to reference
-- `mean_depth`: Average depth of coverage (total_aligned_bases/contig_length)
-"""
-function fasta_xam_mapping_stats(;fasta, xam)
-    fastx_contig_lengths = fastx_to_contig_lengths(fasta)
-    xam_stats = xam_to_contig_mapping_stats(xam)
-    fastx_contig_lengths = fastx_to_contig_lengths(fasta)
-    fastx_contig_lengths_table = DataFrames.DataFrame(contig = collect(keys(fastx_contig_lengths)), contig_length = collect(values(fastx_contig_lengths)))
-    fastx_contig_mapping_stats_table = DataFrames.innerjoin(fastx_contig_lengths_table, xam_stats, on="contig" => "reference")
-    mean_depth = fastx_contig_mapping_stats_table[!, "total_aligned_bases"] ./ fastx_contig_mapping_stats_table[!, "contig_length"]
-    DataFrames.insertcols!(fastx_contig_mapping_stats_table, 4, :mean_depth => mean_depth)
-    return fastx_contig_mapping_stats_table
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Generate alignment statistics for a SAM/BAM/CRAM file using samtools flagstat.
-
-# Arguments
-- `xam::AbstractString`: Path to input SAM/BAM/CRAM alignment file
-- `samtools_flagstat::AbstractString`: Output path for flagstat results (default: input_path.samtools-flagstat.txt)
-
-# Returns
-- `String`: Path to the generated flagstat output file
-
-# Details
-Runs samtools flagstat to calculate statistics on the alignment file, including:
-- Total reads
-- Secondary alignments
-- Supplementary alignments  
-- Duplicates
-- Mapped/unmapped reads
-- Proper pairs
-- Read 1/2 counts
-
-# Requirements
-- Requires samtools to be available via Bioconda
-- Input file must be in SAM, BAM or CRAM format
-"""
-function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
-    Mycelia.add_bioconda_env("samtools")
-    if !isfile(samtools_flagstat)
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`, samtools_flagstat))
-    end
-    return samtools_flagstat
 end
 
 # not a very good function yet, but good enough for the pinches I need it for
@@ -14156,6 +13760,77 @@ end
 
 function get_biosequence_alphabet(s::T) where T<:BioSequences.BioSequence
     return first(T.parameters)
+end
+
+import JLD2
+import DataFrames: DataFrame
+
+"""
+    JLD2_write_table(df::DataFrame, filename::String)
+
+Write a DataFrame to a JLD2 file using a standardized internal name.
+"""
+function JLD2_write_table(;df::DataFrames.DataFrame, filename::String)
+    JLD2.jldopen(filename, "w") do file
+        file["dataframe"] = df  # Always use the same internal name
+    end
+    return filename
+end
+
+"""
+    JLD2_read_table(filename::String) -> DataFrame
+
+Read a DataFrame from a JLD2 file without needing to know the internal name.
+If the file contains multiple DataFrames, returns the first one found.
+"""
+function JLD2_read_table(filename::String)
+    df = JLD2.jldopen(filename, "r") do file
+        # Try standard name first
+        if haskey(file, "dataframe")
+            return file["dataframe"]
+        end
+        
+        # Otherwise search for any DataFrame
+        for key in keys(file)
+            if typeof(file[key]) <: DataFrames.DataFrame
+                return file[key]
+            end
+        end
+        
+        # No DataFrame found
+        error("No DataFrame found in file: $filename")
+    end
+    
+    return df
+end
+
+"""
+    sanitize_inline_strings!(df::DataFrame) -> DataFrame
+
+Convert all InlineString columns in a DataFrame to standard Strings.
+Modifies the dataframe in-place and returns it.
+"""
+function sanitize_inline_strings!(df::DataFrames.DataFrame)
+    for col in names(df)
+        if eltype(df[!, col]) <: InlineStrings.InlineString
+            df[!, col] = String.(df[!, col])
+        end
+    end
+    return df
+end
+
+"""
+    sanitize_inline_strings(v::AbstractVector) -> AbstractVector
+
+Convert a column to standard Strings if it contains InlineStrings,
+otherwise return the original column unchanged.
+"""
+function sanitize_inline_strings(v::AbstractVector)
+    if eltype(v) <: InlineStrings.InlineString
+        return String.(v)
+    else
+        return v
+    end
 end
 
 # dynamic import of files??
