@@ -1,3 +1,23 @@
+function run_fastqc(fastq; outdir = replace(fastq, Mycelia.FASTQ_REGEX => "_fastqc"))
+    Mycelia.add_bioconda_env("fastqc")
+    if !isdir(outdir)
+        mkpath(outdir)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastqc fastqc --outdir $(outdir) $(fastq)`)
+    else
+        @warn "$outdir already exists"
+    end
+end
+
+function run_fastqc(forward, reverse; outdir = Mycelia.find_matching_prefix(forward, reverse) * "_fastqc")
+    Mycelia.add_bioconda_env("fastqc")
+    if !isdir(outdir)
+        mkpath(outdir)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastqc fastqc --outdir $(outdir) $(forward) $(reverse)`)
+    else
+        @warn "$outdir already exists"
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -391,14 +411,15 @@ the Bioconda environment for Filtlong to be set up, which is handled internally.
 """
 function qc_filter_long_reads_filtlong(;
         in_fastq,
-        out_fastq = replace(in_fastq, r"\.(fq\.gz|fastq\.gz|fastq|fq)$" => ".filtlong.fq.gz"),
+        out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".filtlong.fq.gz"),
         min_mean_q = 20,
         keep_percent = 95
     )
     Mycelia.add_bioconda_env("filtlong")
+    Mycelia.add_bioconda_env("pigz")
     p1 = pipeline(
         `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
-        `pigz`
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz`
     )
     p2 = pipeline(p1, out_fastq)
     run(p2)
