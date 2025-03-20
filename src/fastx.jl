@@ -92,6 +92,7 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
             )
     display(results_df)
     uCSV.write(results_table, results_df, delim='\t')
+    return results_table
 end
 
 """
