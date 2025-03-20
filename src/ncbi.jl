@@ -33,8 +33,8 @@ function blastdb_to_fasta(;blastdb, entries = String[], taxids = Int[], outfile=
         elseif blastdb_metadata["dbtype"] == "Protein"
             extension = ".faa.gz"
         end
-        update_time = string(blastdb_metadata["last-updated"])
-        outfile = "$(blastdb).$(update_time)" * extension
+        last_update_date = string(Dates.format(Dates.DateTime(blastdb_metadata["last-updated"]), "yyyy-mm-dd"))
+        outfile = "$(blastdb).$(last_update_date)" * extension
     end
     if isfile(outfile) && (filesize(outfile) > 0) && !force
         return outfile
@@ -301,9 +301,64 @@ function blastdb2table(; blastdb, outfile="", force=false)
     return outfile
 end
 
-# function fastq_dump(SRR, outdir=SRR)
-#     
-#     $(CONDA_RUNNER) run --live-stream -n sra-tools fastq-dump /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980 --split-3 --skip-technical --gzip --outdir /home/jovyan/workspace/pacbio-metagenomic-datasets/ATCC-MSA-1003/SRR9328980
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a BLAST database to Arrow format with taxonomy information.
+
+# Arguments
+- `blastdb::String`: Path to the BLAST database
+- `outfile::String=""`: Output file path. If empty, generates name based on input database
+- `force::Bool=false`: Whether to overwrite existing output file
+
+# Returns
+- `String`: Path to the generated output file (.arrow)
+
+# Output Format
+Arrow file containing columns (in this order):
+- sequence hash
+- sequence id
+- accession
+- gi
+- sequence title
+- BLAST name
+- taxid
+- taxonomic super kingdom
+- scientific name
+- scientific names for leaf-node taxids
+- common taxonomic name
+- common taxonomic names for leaf-node taxids
+- leaf-node taxids
+"""
+function blastdb2tax_table(; blastdb)
+    # Set up environment and validate database
+    Mycelia.add_bioconda_env("blast")
+    blast_db_info = Mycelia.local_blast_database_info()
+    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+    @assert DataFrames.nrow(filtered) == 1
+    blast_db_info = filtered[1, :]
+    @show blast_db_info
+
+    # Define the mapping from outfmt symbols to column names.
+    symbol_header_map = OrderedCollections.OrderedDict(
+        "%a" => "accession",           # field 2
+        "%g" => "gi",                  # field 3
+        "%i" => "sequence id",         # field 5
+        "%t" => "sequence title",      # field 6
+        "%h" => "sequence hash",       # field 8
+        "%T" => "taxid",               # field 9
+        "%X" => "leaf-node taxids",    # field 10
+        "%L" => "common taxonomic name",   # field 12
+        "%C" => "common taxonomic names for leaf-node taxids",  # field 13
+        "%S" => "scientific name",     # field 14
+        "%N" => "scientific names for leaf-node taxids",  # field 15
+        "%B" => "BLAST name",          # field 16
+        "%K" => "taxonomic super kingdom", # field 17
+    )
+    outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+    cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+    return CSV.read(open(cmd), DataFrames.DataFrame, delim='\t', header=collect(values(symbol_header_map)))
+end
 
 
 """
