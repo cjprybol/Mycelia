@@ -65,6 +65,7 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
     # @show results_table
     if isfile(results_table) && (filesize(results_table) > 0)
         println("$results_table already exists.")
+        display(DataFrames.DataFrame(uCSV.read(results_table, delim='\t', header=1)))
         return results_table
     end
     # First pass: count total records
@@ -235,46 +236,46 @@ function pairwise_minimap_fasta_comparison(;reference_fasta, query_fasta)
     return results
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
+# Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
 
-# Arguments
-- `outdir::String`: Output directory containing input FASTQ files
-- `identifier::String`: Prefix for input/output filenames
+# # Arguments
+# - `outdir::String`: Output directory containing input FASTQ files
+# - `identifier::String`: Prefix for input/output filenames
 
-# Input files
-Expects paired FASTQ files in `outdir` named:
-- `{identifier}_1.fastq.gz` (forward reads)
-- `{identifier}_2.fastq.gz` (reverse reads)
+# # Input files
+# Expects paired FASTQ files in `outdir` named:
+# - `{identifier}_1.fastq.gz` (forward reads)
+# - `{identifier}_2.fastq.gz` (reverse reads)
 
-# Output files
-Creates trimmed reads in `outdir/trim_galore/`:
-- `{identifier}_1_val_1.fq.gz` (trimmed forward reads)
-- `{identifier}_2_val_2.fq.gz` (trimmed reverse reads)
+# # Output files
+# Creates trimmed reads in `outdir/trim_galore/`:
+# - `{identifier}_1_val_1.fq.gz` (trimmed forward reads)
+# - `{identifier}_2_val_2.fq.gz` (trimmed reverse reads)
 
-# Dependencies
-Requires trim_galore conda environment:
-"""
-function trim_galore(;outdir="", identifier="")
+# # Dependencies
+# Requires trim_galore conda environment:
+# """
+# function trim_galore(;outdir="", identifier="")
     
-    trim_galore_dir = joinpath(outdir, "trim_galore")
+#     trim_galore_dir = joinpath(outdir, "trim_galore")
     
-    forward_reads = joinpath(outdir, "$(identifier)_1.fastq.gz")
-    reverse_reads = joinpath(outdir, "$(identifier)_2.fastq.gz")
+#     forward_reads = joinpath(outdir, "$(identifier)_1.fastq.gz")
+#     reverse_reads = joinpath(outdir, "$(identifier)_2.fastq.gz")
     
-    trimmed_forward_reads = joinpath(trim_galore_dir, "$(identifier)_1_val_1.fq.gz")
-    trimmed_reverse_reads = joinpath(trim_galore_dir, "$(identifier)_2_val_2.fq.gz")
+#     trimmed_forward_reads = joinpath(trim_galore_dir, "$(identifier)_1_val_1.fq.gz")
+#     trimmed_reverse_reads = joinpath(trim_galore_dir, "$(identifier)_2_val_2.fq.gz")
     
-    # mamba create -n trim_galore -c bioconda trim_galore
-    if !isfile(trimmed_forward_reads) && !isfile(trimmed_reverse_reads)
-        cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
-        run(cmd)
-    else
-        @info "$(trimmed_forward_reads) & $(trimmed_reverse_reads) already present"
-    end
-end
+#     # mamba create -n trim_galore -c bioconda trim_galore
+#     if !isfile(trimmed_forward_reads) && !isfile(trimmed_reverse_reads)
+#         cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+#         run(cmd)
+#     else
+#         @info "$(trimmed_forward_reads) & $(trimmed_reverse_reads) already present"
+#     end
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -306,7 +307,7 @@ function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdi
     trimmed_reverse = joinpath(trim_galore_dir, replace(reverse_base, Mycelia.FASTQ_REGEX => "_val_2.fq.gz"))
     
     if !isfile(trimmed_forward) && !isfile(trimmed_reverse)
-        cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
         run(cmd)
     else
         @info "$(trimmed_forward) & $(trimmed_reverse) already present"
@@ -335,8 +336,11 @@ This function uses fastp to remove adapter contamination, trim low‐quality bas
 and discard reads shorter than `min_length`. It’s a simple wrapper that executes the external fastp command.
 """
 function qc_filter_short_reads_fastp(in_fastq::String, out_fastq::String; adapter_seq::String, quality_threshold::Int=20, min_length::Int=50)
-    cmd = `fastp --in1 $(in_fastq) --out1 $(out_fastq) --adapter_sequence $(adapter_seq) --qualified_quality_phred $(quality_threshold) --length_required $(min_length)`
-    run(cmd)
+    if !isfile(out_fastq)
+        Mycelia.add_bioconda_env("fastp")
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastp fastp --in1 $(in_fastq) --out1 $(out_fastq) --adapter_sequence $(adapter_seq) --qualified_quality_phred $(quality_threshold) --length_required $(min_length)`
+        run(cmd)
+    end
     return out_fastq
 end
 
@@ -368,21 +372,23 @@ function qc_filter_long_reads_fastplong(;
                             min_length::Int=1000,
                             max_length::Int=0)
     # Build command with required parameters
-    Mycelia.add_bioconda_env("fastplong")
-    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastplong fastplong
-            --in $(in_fastq)
-            --out $(out_fastq)
-            --report_title $(report_title)
-            --html $(html_report)
-            --json $(json_report)
-            --length_required $(min_length)`
-    # Add max length if specified
-    if max_length > 0
-        push!(cmd, "--length_limit")
-        push!(cmd, string(max_length))
-    end
+    if !isfile(out_fastq)
+        Mycelia.add_bioconda_env("fastplong")
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastplong fastplong
+                --in $(in_fastq)
+                --out $(out_fastq)
+                --report_title $(report_title)
+                --html $(html_report)
+                --json $(json_report)
+                --length_required $(min_length)`
+        # Add max length if specified
+        if max_length > 0
+            push!(cmd, "--length_limit")
+            push!(cmd, string(max_length))
+        end
 
-    run(`$cmd`)
+        run(`$cmd`)
+    end
     return out_fastq
 end
 
@@ -414,14 +420,16 @@ function qc_filter_long_reads_filtlong(;
         min_mean_q = 20,
         keep_percent = 95
     )
-    Mycelia.add_bioconda_env("filtlong")
-    Mycelia.add_bioconda_env("pigz")
-    p1 = pipeline(
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz`
-    )
-    p2 = pipeline(p1, out_fastq)
-    run(p2)
+    if !isfile(out_fastq)
+        Mycelia.add_bioconda_env("filtlong")
+        Mycelia.add_bioconda_env("pigz")
+        p1 = pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n filtlong filtlong --min_mean_q $(min_mean_q) --keep_percent $(keep_percent) $(in_fastq)`,
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz`
+        )
+        p2 = pipeline(p1, out_fastq)
+        run(p2)
+    end
     return out_fastq
 end
 

@@ -510,6 +510,42 @@ function taxids2lca(ids::Vector{Int})
     return parse(Int, lca_id)
 end
 
+function batch_taxids2lca(ids_list::Vector{Vector{Int}})
+    # Ensure taxonkit environment and taxonomy are set up
+    Mycelia.add_bioconda_env("taxonkit")
+    if !isdir("$(homedir())/.taxonkit") || isempty(readdir("$(homedir())/.taxonkit"))
+        setup_taxonkit_taxonomy()
+    end
+
+    # Write the queries to a temporary file: one query per line
+    tmpfile = tempname()
+    open(tmpfile, "w") do io
+        for ids in ids_list
+            # Join taxids with a space (TaxonKit lca accepts space-separated IDs)
+            println(io, join(ids, " "))
+        end
+    end
+
+    # Run taxonkit lca in batch mode, reading input from the temporary file.
+    # The command here uses `cat tmpfile | taxonkit lca`
+    cmd = pipeline(`cat $(tmpfile)`, `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lca`)
+    output_str = read(cmd, String)
+
+    # Clean up temporary file
+    rm(tmpfile)
+
+    # Parse the output: assume each line corresponds to one input query.
+    # TaxonKit's output is expected to be tab-separated, with the last field being the LCA.
+    lca_lines = split(chomp(output_str), "\n")
+    result = Vector{Int}(undef, length(lca_lines))
+    for (i, line) in enumerate(lca_lines)
+        fields = split(line, "\t")
+        result[i] = parse(Int, fields[end])
+    end
+
+    return result
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

@@ -13766,7 +13766,7 @@ import JLD2
 import DataFrames: DataFrame
 
 """
-    JLD2_write_table(df::DataFrame, filename::String)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Write a DataFrame to a JLD2 file using a standardized internal name.
 """
@@ -13778,7 +13778,7 @@ function JLD2_write_table(;df::DataFrames.DataFrame, filename::String)
 end
 
 """
-    JLD2_read_table(filename::String) -> DataFrame
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Read a DataFrame from a JLD2 file without needing to know the internal name.
 If the file contains multiple DataFrames, returns the first one found.
@@ -13805,7 +13805,7 @@ function JLD2_read_table(filename::String)
 end
 
 """
-    sanitize_inline_strings!(df::DataFrame) -> DataFrame
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert all InlineString columns in a DataFrame to standard Strings.
 Modifies the dataframe in-place and returns it.
@@ -13820,7 +13820,7 @@ function sanitize_inline_strings!(df::DataFrames.DataFrame)
 end
 
 """
-    sanitize_inline_strings(v::AbstractVector) -> AbstractVector
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert a column to standard Strings if it contains InlineStrings,
 otherwise return the original column unchanged.
@@ -13831,6 +13831,36 @@ function sanitize_inline_strings(v::AbstractVector)
     else
         return v
     end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function dataframe_convert_dicts_to_json(df)
+    df_copy = DataFrames.copy(df)
+    for col in DataFrames.names(df_copy)
+        if eltype(df_copy[!, col]) <: AbstractDict || any(x -> isa(x, AbstractDict), df_copy[!, col])
+            df_copy[!, col] = [isa(cell, AbstractDict) ? JSON.json(cell) : cell for cell in df_copy[!, col]]
+        end
+    end
+    return df_copy
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return a string representation of the vector `v` with each element on a new line,
+mimicking valid Julia syntax. The output encloses the elements in square brackets
+and separates them with a comma followed by a newline.
+"""
+function repr_long(v)
+    buf = IOBuffer()
+    println(buf, "[")
+    for x in v
+        println(buf, "    \"$x\",")
+    end
+    println(buf, "]")
+    return String(take!(buf))
 end
 
 # dynamic import of files??
