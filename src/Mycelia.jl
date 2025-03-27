@@ -48,6 +48,7 @@ import Plots
 import Primes
 import ProgressMeter
 import Random
+import SankeyPlots
 import SHA
 import SparseArrays
 import StableRNGs

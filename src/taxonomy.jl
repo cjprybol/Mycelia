@@ -1,3 +1,344 @@
+function visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs; title = "Distribution of Relative Abundance by Taxa")
+    df = DataFrames.DataFrame(
+        taxa = first.(taxa_count_pairs),
+        count = last.(taxa_count_pairs)
+    )
+    df[!, "proportion"] .= round.(df[!, "count"] ./ sum(df[!, "count"]), digits=3)
+
+    # Create the plot
+    fig = CairoMakie.Figure(size=(800, 500), fontsize=12)
+    ax = CairoMakie.Axis(
+        fig[1, 1],
+        xlabel = "Taxa",
+        ylabel = "Proportion",
+        title = title,
+        xticks = (1:length(df.taxa), df.taxa),
+        xticklabelrotation = π/3
+    )
+
+    # Create bar plot
+    bars = CairoMakie.barplot!(
+        ax,
+        1:length(df.taxa),
+        df.proportion,
+        # bar_labels = :y,
+        # label_formatter = x -> string(x),
+        strokewidth = 1,
+        strokecolor = :black
+    )
+
+    # Add a bit of styling
+    CairoMakie.ylims!(ax, 0, maximum(df.proportion) * 1.2)
+
+    # Add count values on top of each bar as vertical labels
+    for (i, proportion) in enumerate(df.proportion)
+        CairoMakie.text!(
+            ax,
+            i,
+            proportion + maximum(df.proportion) * 0.02,
+            text = string(proportion),
+            align = (:left, :center),
+            fontsize = 14,
+            rotation = π/2  # Make the labels vertical (90 degrees)
+        )
+    end
+
+    # Add grid lines for better readability
+    ax.ygridvisible = true
+    ax.ygridstyle = :dash
+
+    # Add a subtle background color
+    ax.backgroundcolor = (:grey90, 0.1)
+
+    # Save the figure
+
+
+    # Display the figure
+    fig
+end
+
+
+function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Distribution of Counts by Taxa")
+    # Convert to DataFrame for easier plotting
+    df = DataFrames.DataFrame(
+        taxa = first.(taxa_count_pairs),
+        count = last.(taxa_count_pairs)
+    )
+
+    # Create the plot
+    fig = CairoMakie.Figure(size=(800, 500), fontsize=12)
+    ax = CairoMakie.Axis(
+        fig[1, 1],
+        xlabel = "Taxa",
+        ylabel = "Count",
+        title = title,
+        xticks = (1:length(df.taxa), df.taxa),
+        xticklabelrotation = π/3
+    )
+
+    # Create bar plot
+    bars = CairoMakie.barplot!(
+        ax,
+        1:length(df.taxa),
+        df.count,
+        strokewidth = 1,
+        strokecolor = :black
+    )
+
+    # Add a bit of styling
+    CairoMakie.ylims!(ax, 0, maximum(df.count) * 1.2)
+
+    # Add count values on top of each bar as vertical labels
+    for (i, count) in enumerate(df.count)
+        CairoMakie.text!(
+            ax,
+            i,
+            count + maximum(df.count) * 0.02,
+            text = string(count),
+            align = (:left, :center),
+            fontsize = 14,
+            rotation = π/2  # Make the labels vertical (90 degrees)
+        )
+    end
+
+    # Add grid lines for better readability
+    ax.ygridvisible = true
+    ax.ygridstyle = :dash
+
+    # Add a subtle background color
+    ax.backgroundcolor = (:grey90, 0.1)
+
+    # Display the figure
+    fig
+end
+
+function streamline_counts(counts; min_count=3)
+    new_counts = Vector{eltype(counts)}()
+    other_counts = 0
+    for (a, b) in counts
+        if b >= min_count
+            push!(new_counts, a =>b)
+        else
+            other_counts += b
+        end
+    end
+    push!(new_counts, "Other" => other_counts)
+    return new_counts
+end
+
+function assign_lowest_rank_to_reads_to_taxon_lineage_table(reads_to_taxon_lineage_table)
+    reads_to_taxon_lineage_table[!, "lowest_rank"] .= 0
+    for (i, row) in enumerate(DataFrames.eachrow(reads_to_taxon_lineage_table))
+        if !ismissing(row["species"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 9
+        elseif !ismissing(row["genus"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 8
+        elseif !ismissing(row["family"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 7
+        elseif !ismissing(row["order"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 6
+        elseif !ismissing(row["class"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 5
+        elseif !ismissing(row["phylum"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 4
+        elseif !ismissing(row["kingdom"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 3
+        elseif !ismissing(row["realm"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 2
+        elseif !ismissing(row["domain"])
+            reads_to_taxon_lineage_table[i, "lowest_rank"] = 1
+        end
+    end
+    return reads_to_taxon_lineage_table
+end
+
+function sankey_visualize_reads_lowest_rank(lowest_ranks; title="")
+    level_hits = [sum(lowest_ranks .>= i) for i in 1:9]
+    connections = [(a, b, c) for (a, b, c) in zip(1:10, 2:11, level_hits)]
+    push!(connections, (1, 11, sum(lowest_ranks .== 0)))
+    labels = [
+        "all reads",
+        "domain",
+        "realm",
+        "kingdom",
+        "phylum",
+        "class",
+        "order",
+        "family",
+        "genus",
+        "species",
+        "unclassified"
+    ]
+
+    total_count = length(lowest_ranks)
+
+    counts = vcat(total_count, [c[3] for c in connections])
+
+    percentages = round.(counts ./ total_count * 100, digits=1)
+
+    labels = [label * "\n$(count)\n$(percentage)%" for (label, count, percentage) in zip(labels, counts, percentages)]
+
+    p = SankeyPlots.sankey(
+        title = title,
+        [c[1] for c in connections],
+        [c[2] for c in connections],
+        [c[3] for c in connections],
+        node_labels=labels,
+        edge_color=:gradient,
+        label_position=:bottom,
+        label_size=7,
+        compact=true,
+        size=(1200,800),
+        dpi=100
+    )
+    return p
+end
+
+function classify_xam_with_blast_taxonomies(;xam, blast_tax_table)
+    xam_table_columns_of_interest = [
+        "template",
+        "ismapped",
+        "isprimary",
+        "flag",
+        "reference",
+        "position",
+        # "mappingquality",
+        # "cigar",
+        # "rnext",
+        # "pnext",
+        # "tlen",
+        # "seq",
+        # "qual",
+        # "alignlength",
+        "alignment_score",
+        # "mismatches",
+    ]
+    
+    blast_tax_table_columns_of_interest = [
+        "accession",
+        "gi",
+        "sequence id",
+        "sequence title",
+        "sequence hash",
+        "taxid",
+        # "leaf-node taxids",
+        # "common taxonomic name",
+        # "common taxonomic names for leaf-node taxids",
+        # "scientific name",
+        # "scientific names for leaf-node taxids",
+        # "BLAST name",
+        # "taxonomic super kingdom",
+    ]
+
+    taxid_aware_xam_table = DataFrames.leftjoin(
+        DataFrames.select(xam_table, xam_table_columns_of_interest),
+        DataFrames.select(blast_tax_table, blast_tax_table_columns_of_interest),
+        on="reference" => "accession",
+        matchmissing = :notequal
+    )
+    
+    template_taxid_score_table = DataFrames.combine(DataFrames.groupby(taxid_aware_xam_table, [:template, :taxid]), :alignment_score => sum => :total_alignment_score)
+    # replace missing (unclassified) with 0 (NCBI taxonomies start at 1, so 0 is a common, but technically non-standard NCBI taxon identifier
+    template_taxid_score_table = DataFrames.coalesce.(template_taxid_score_table, 0)
+    
+    # For each template, identify top taxid and calculate score difference
+    results_df = DataFrames.combine(DataFrames.groupby(template_taxid_score_table, :template)) do group
+        # Sort scores in descending order
+        sorted = DataFrames.sort(group, :total_alignment_score, rev=true)
+
+        # Get top taxid and score
+        top_taxid = sorted[1, :taxid]
+        top_score = sorted[1, :total_alignment_score]
+
+        # Calculate ratio with next best (if it exists)
+        score_ratio = Inf
+        if DataFrames.nrow(sorted) > 1
+            second_score = sorted[2, :total_alignment_score]
+            score_ratio = top_score/second_score
+        end
+
+        # Store all additional taxids and their scores (excluding the top one)
+        additional_taxids = OrderedCollections.OrderedDict{Int, Float64}()
+        if DataFrames.nrow(sorted) > 1
+            for i in 2:DataFrames.nrow(sorted)
+                additional_taxids[sorted[i, :taxid]] = sorted[i, :total_alignment_score]
+            end
+        end
+
+        # Return a new row with the results
+        return DataFrames.DataFrame(
+            top_taxid = top_taxid,
+            top_score = top_score,
+            ratio_to_next_best_score = score_ratio,
+            additional_taxids = [additional_taxids]  # Wrap in array to make it a single element
+        )
+    end
+    classification_table = Mycelia.apply_conservative_taxonomy(results_df)
+    return classification_table
+end
+
+function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
+    # Initialize output columns with default values
+    n_rows = DataFrames.nrow(results_df)
+    final_assignment = copy(results_df.top_taxid)
+    confidence_level = fill("high", n_rows)
+    
+    # Collect all sets of taxids that need LCA calculation
+    lca_needed_indices = Int[]
+    competing_taxids_list = Vector{Vector{Int}}()
+    
+    # First pass: identify which rows need LCA and prepare the taxid sets
+    for i in 1:n_rows
+        top_taxid = results_df.top_taxid[i]
+        top_score = results_df.top_score[i]
+        ratio = results_df.ratio_to_next_best_score[i]
+        additional_dict = results_df.additional_taxids[i]
+        
+        # Skip if no competitors or ratio is high enough
+        if isempty(additional_dict) || ratio >= ratio_threshold
+            continue
+        end
+        
+        # Collect taxids that are within the threshold
+        competing_taxids = [top_taxid]
+        for (taxid, score) in additional_dict
+            if top_score / score < ratio_threshold
+                push!(competing_taxids, taxid)
+            end
+        end
+        
+        # If we have multiple competing taxids, add to the batch
+        if length(competing_taxids) > 1
+            push!(lca_needed_indices, i)
+            push!(competing_taxids_list, competing_taxids)
+            confidence_level[i] = "lca"  # Mark as needing LCA
+        end
+    end
+    
+    # If we have any rows that need LCA calculation
+    if !isempty(lca_needed_indices)
+        # Batch calculate all LCAs
+        lca_results = Mycelia.batch_taxids2lca(competing_taxids_list)
+        
+        # Apply LCA results to the appropriate rows
+        for (idx, lca_idx) in enumerate(lca_needed_indices)
+            final_assignment[lca_idx] = lca_results[idx]
+        end
+    end
+    
+    # Create a new dataframe with the original data plus our new columns
+    updated_results = DataFrames.hcat(
+        results_df,
+        DataFrames.DataFrame(
+            final_assignment = final_assignment,
+            confidence_level = confidence_level
+        )
+    )
+    
+    return updated_results
+end
+
+
 # this is faster than NCBI version
 # run(pipeline(
 #         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon 1 --children --as-json-lines`,
@@ -356,13 +697,29 @@ Requires ncbi-datasets-cli Conda package (automatically installed if missing)
 """
 function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
     Mycelia.add_bioconda_env("ncbi-datasets-cli")
-    joint_table = DataFrames.DataFrame()
-    ProgressMeter.@showprogress for taxid in taxids
-        cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon $(taxid) --as-json-lines`
-        cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
-        io = open(pipeline(cmd1, cmd2))
-        append!(joint_table, DataFrames.DataFrame(uCSV.read(io, delim='\t', header=1)), promote=true)
+    # joint_table = DataFrames.DataFrame()
+    # ProgressMeter.@showprogress for taxid in taxids
+    #     cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon $(taxid) --as-json-lines`
+    #     cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
+    #     io = open(pipeline(cmd1, cmd2))
+    #     try
+    #         append!(joint_table, CSV.read(io, DataFrames.DataFrame, delim='\t', header=1), promote=true)
+    #     catch e
+    #         error("unable to process taxid: $(taxid)\n$(e)")
+    #     end
+    # end
+    temp_file = tempname() * ".taxonids.txt"
+    unique_taxids = sort(unique(taxids))
+    open(temp_file, "w") do io
+        for taxid in unique_taxids
+            println(io, taxid)
+        end
     end
+    cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon --inputfile $(temp_file) --as-json-lines`
+    cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
+    io = open(pipeline(cmd1, cmd2))
+    joint_table = CSV.read(io, DataFrames.DataFrame, delim='\t', header=1)
+    rm(temp_file)    
     return joint_table
 end
 
@@ -395,7 +752,7 @@ function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
         end
     end
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lineage --show-lineage-taxids --show-lineage-ranks $(f)`
-    data, header = uCSV.read(open(pipeline(cmd)), delim='\t', header=false)
+    data, header = uCSV.read(open(pipeline(cmd)), delim='\t', header=false, typedetectrows=100)
     rm(f)
     header = ["taxid", "lineage", "lineage-taxids", "lineage-ranks"]
     return DataFrames.DataFrame(data, header)
@@ -461,12 +818,31 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
             taxid = taxid,
             species_taxid = haskey(lineage_ranks, "species") ? lineage_ranks["species"].taxid : missing,
             species = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing,
+            
             genus_taxid = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing,
             genus = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing,
+            
             family_taxid = haskey(lineage_ranks, "family") ? lineage_ranks["family"].taxid : missing,
             family = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage : missing,
-            superkingdom_taxid = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].taxid : missing,
-            superkingdom = haskey(lineage_ranks, "superkingdom") ? lineage_ranks["superkingdom"].lineage : missing,
+            
+            order_taxid = haskey(lineage_ranks, "order") ? lineage_ranks["order"].taxid : missing,
+            order = haskey(lineage_ranks, "order") ? lineage_ranks["order"].lineage : missing,
+
+            class_taxid = haskey(lineage_ranks, "class") ? lineage_ranks["class"].taxid : missing,
+            class = haskey(lineage_ranks, "class") ? lineage_ranks["class"].lineage : missing,
+            
+            phylum_taxid = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].taxid : missing,
+            phylum = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].lineage : missing,
+            
+            kingdom_taxid = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].taxid : missing,
+            kingdom = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].lineage : missing,
+            
+            realm_taxid = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].taxid : missing,
+            realm = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].lineage : missing,
+            
+            domain_taxid = haskey(lineage_ranks, "domain") ? lineage_ranks["domain"].taxid : missing,
+            domain = haskey(lineage_ranks, "domain") ? lineage_ranks["domain"].lineage : missing,
+
         )
         push!(taxids_to_lineage_table, row, promote=true)
     end
