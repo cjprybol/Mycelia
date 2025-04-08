@@ -1367,10 +1367,12 @@ Vector of Int containing the specialized prime sequence
 function ks(;min=0, max=10_000)
     # flip from all odd primes to only nearest to fibonnaci primes
     flip_point = 23
-    vcat(
-        filter(isodd, Primes.primes(min, flip_point)),
-        filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max)))
+    # skip 19 because it is so similar to 17
+    results = vcat(
+        filter(x -> x != 19, filter(isodd, Primes.primes(0, flip_point))),
+        filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max*10)))
     )
+    return filter(x -> min <= x <= max, results)
 end
 
 """
@@ -13862,6 +13864,205 @@ function repr_long(v)
     end
     println(buf, "]")
     return String(take!(buf))
+end
+
+"""
+    dataframe_to_ndjson(df::DataFrame; outfile::Union{String,Nothing}=nothing)
+
+Converts a DataFrame `df` into a newline-delimited JSON (NDJSON) string.
+Each line in the returned string represents one DataFrame row in JSON format,
+suitable for upload to Google BigQuery.
+
+# Keyword Arguments
+- `outfile::Union{String,Nothing}`: If provided, writes the resulting NDJSON to the file path given.
+
+# Examples
+```julia
+using DataFrames, Dates
+
+# Sample DataFrame
+df = DataFrame(
+    id = [1, 2, 3],
+    name = ["Alice", "Bob", "Carol"],
+    created = [DateTime(2025, 4, 8, 14, 30), DateTime(2025, 4, 8, 15, 0), missing]
+)
+
+ndjson_str = dataframe_to_ndjson(df)
+println(ndjson_str)
+
+# Optionally, write to a file
+dataframe_to_ndjson(df; outfile="output.ndjson")
+"""
+function dataframe_to_ndjson(df::DataFrames.DataFrame; outfile::Union{String, Nothing}=nothing) ndjson_lines = String[]
+    # Iterate over each row in the DataFrame
+    for row in eachrow(df)
+        row_dict = Dict{String, Any}()
+    
+        # Build a dictionary for the current row
+        for (col, value) in pairs(row)
+            # Convert column names to strings
+            col_name = string(col)
+            if value === missing
+                # Convert missing values to `nothing` which JSON prints as null
+                row_dict[col_name] = nothing
+            elseif isa(value, Dates.DateTime)
+                # Format DateTime value in ISO 8601 format with millisecond precision
+                # Modify the format string if a different format is needed for BigQuery.
+                formatted = Dates.format(value, Dates.dateformat"yyyy-mm-ddTHH:MM:SS.sss") * "Z"
+                row_dict[col_name] = formatted
+            else
+                row_dict[col_name] = value
+            end
+        end
+    
+        # Convert the dictionary to a JSON string and push into the list
+        push!(ndjson_lines, JSON.json(row_dict))
+    end
+    
+    # Join all JSON strings with newline delimiters (one JSON object per line)
+    ndjson_str = join(ndjson_lines, "\n")
+    
+    # Optionally write the NDJSON content to a file if an outfile path is provided.
+    if outfile !== nothing
+        open(outfile, "w") do io
+            write(io, ndjson_str)
+        end
+        return outfile
+    else
+        return ndjson_str
+    end
+end
+
+function install_cloud_cli()
+    # Get the user's home directory
+    home_dir = ENV["HOME"]
+    
+    # Define the target installation directory ($HOME/google-cloud-sdk)
+    sdk_install_dir = joinpath(home_dir, "google-cloud-sdk")
+    sdk_bin_dir = joinpath(sdk_install_dir, "bin")
+    
+    # Function to update the PATH in current session and persist to .bashrc if needed.
+    function update_path()
+        # Update current session PATH
+        if !occursin(sdk_bin_dir, ENV["PATH"])
+            ENV["PATH"] = "$sdk_bin_dir:" * ENV["PATH"]
+        end
+        
+        bashrc_file = joinpath(home_dir, ".bashrc")
+        path_is_set = false
+        if isfile(bashrc_file)
+            for line in eachline(bashrc_file)
+                if occursin("google-cloud-sdk/bin", line)
+                    path_is_set = true
+                    break
+                end
+            end
+        end
+        
+        if !path_is_set
+            println("Appending SDK bin path to $bashrc_file ...")
+            open(bashrc_file, "a") do io
+                println(io, "\n# Added by install_cloud_cli() on $(Dates.now())")
+                println(io, "export PATH=\"$sdk_bin_dir:\$PATH\"")
+            end
+            println("Please reload your shell (e.g., run: source ~/.bashrc) to update your PATH.")
+        else
+            println("PATH already includes google-cloud-sdk/bin")
+        end
+    end
+    
+    # Check if the SDK is already installed.
+    if isdir(sdk_install_dir)
+        println("Google Cloud CLI is already installed.")
+        update_path()
+        println("No further installation required.")
+        return
+    end
+
+    # Not installed: proceed with downloading and installing.
+    tarball = "google-cloud-cli-linux-x86_64.tar.gz"
+    sdk_url = "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/$tarball"
+    
+    println("Downloading Google Cloud CLI from: $sdk_url ...")
+    run(`curl -O $sdk_url`)
+    
+    println("Extracting $tarball to $home_dir ...")
+    run(`tar -xf $tarball -C $home_dir`)
+    
+    # Run the install script from within the extracted folder.
+    install_script = joinpath(sdk_install_dir, "install.sh")
+    println("Running the installation script ...")
+    run(`bash $install_script --quiet --usage-reporting false --command-completion false --path-update false`)
+    
+    # Cleanup the downloaded tarball on successful install.
+    println("Cleaning up the downloaded tarball...")
+    rm(tarball, force=true)
+    
+    update_path()
+    
+    println("Installation complete. You now have gsutil and bq installed as part of the Google Cloud CLI.")
+    println("Please run `gcloud init` or `gcloud auth login` and follow the interactive prompts to log in.")
+end
+
+
+function upload_dataframe_to_bigquery(;
+    ndjson_file::String,
+    project_id::String,
+    dataset_id::String,
+    table_id::String,
+    gcs_bucket_name::String,
+    bq_location::String, # e.g., "US"
+    verbose=true
+)
+    full_table_id = "$(project_id):$(dataset_id).$(table_id)"
+    if verbose
+        println("Target BigQuery Table: ", full_table_id)
+        println("Target GCS Bucket: ", gcs_bucket_name)
+        println("BigQuery Location: ", bq_location)
+    end
+    
+    try
+        @assert isfile(ndjson_file) && filesize(ndjson_file) > 0
+        verbose && println("NDJSON detected locally at: ", ndjson_file)
+
+        # --- 3. Upload NDJSON to GCS ---
+        verbose && println("Uploading to GCS bucket: ", gcs_bucket_name)
+        gcs_uri = "gs://$(gcs_bucket_name)/$(basename(ndjson_file))"
+
+        # Using gsutil command (simpler integration)
+        upload_cmd = `gsutil cp $(ndjson_file) $(gcs_uri)`
+        verbose && println("Running command: ", upload_cmd)
+        run(upload_cmd)
+        verbose && println("Upload to GCS complete: ", gcs_uri)
+
+        # --- 4. Trigger BigQuery Load Job ---
+        verbose && println("Triggering BigQuery load job for: ", full_table_id)
+
+        # Using bq command (simpler integration)
+        # Explicitly setting schema source_format and location
+        load_cmd = `bq load --source_format=NEWLINE_DELIMITED_JSON --location=$(bq_location) $(full_table_id) $(gcs_uri)`
+        # If you have a local schema file (e.g., schema.json):
+        # load_cmd = `bq load --source_format=NEWLINE_DELIMITED_JSON --location=$(bq_location) $(full_table_id) $(gcs_uri) ./schema.json`
+        # Or rely on auto-detect (use with caution):
+        # load_cmd = `bq load --source_format=NEWLINE_DELIMITED_JSON --autodetect --location=$(bq_location) $(full_table_id) $(gcs_uri)`
+
+        verbose && println("Running command: ", load_cmd)
+        run(load_cmd)
+        verbose && println("BigQuery load job initiated.")
+
+        # --- 5. Cleanup GCS File (Optional) ---
+        # Rely on bucket lifecycle rules or explicitly remove the temp file
+        cleanup_cmd = `gsutil rm $(gcs_uri)`
+        verbose && println("Running command: ", cleanup_cmd)
+        run(cleanup_cmd)
+        verbose && println("Cleaned up GCS file: ", gcs_uri)
+
+        verbose && println("Process complete for table: ", full_table_id)
+
+    catch e
+        println("Error during process: ", e)
+        # Add more robust error handling
+    end
 end
 
 # dynamic import of files??
