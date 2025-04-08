@@ -128,44 +128,494 @@ function get_blastdb_tax_info(;blastdb, entries = String[], taxids = Int[])
           )
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert a BLAST database to Arrow format with sequence and taxonomy information.
+# Uses a simple serial approach with direct Arrow streaming for minimal memory usage.
+
+# # Arguments
+# - `blastdb::String`: Path to the BLAST database
+# - `outfile::String=""`: Output file path. If empty, generates name based on input database
+# - `force::Bool=false`: Whether to overwrite existing output file
+
+# # Returns
+# - `String`: Path to the generated output file (.arrow)
+
+# # Output Format
+# Arrow file containing columns (in this order):
+# - sequence SHA256
+# - sequence hash
+# - sequence id
+# - accession
+# - gi
+# - sequence title
+# - BLAST name
+# - taxid
+# - taxonomic super kingdom
+# - scientific name
+# - scientific names for leaf-node taxids
+# - common taxonomic name
+# - common taxonomic names for leaf-node taxids
+# - leaf-node taxids
+# - membership integer
+# - ordinal id
+# - PIG
+# - sequence length
+# - sequence
+# """
+# function blastdb2table(;blastdb, outfile="", force=false)
+#     # Set up environment and validate database
+#     Mycelia.add_bioconda_env("blast")
+#     blast_db_info = Mycelia.local_blast_database_info()
+#     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+#     @assert DataFrames.nrow(filtered) == 1
+#     blast_db_info = filtered[1, :]
+#     @show blast_db_info
+
+#     # Determine database type and file extension
+#     if blast_db_info["BLAST database molecule type"] == "Protein"
+#         extension = ".faa"
+#     elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+#         extension = ".fna"
+#     else
+#         @show blast_db_info["BLAST database molecule type"]
+#         error("unexpected blast database molecule type")
+#     end
+
+#     # Set output file name if not provided
+#     if outfile == ""
+#         outfile = blastdb * extension * ".arrow"
+#     end
+
+#     # Skip processing if output exists (unless forced)
+#     if isfile(outfile) && filesize(outfile) > 0 && !force
+#         @show Mycelia.filesize_human_readable(outfile)
+#         return outfile
+#     end
+
+#     # Define the mapping from outfmt symbols to column names.
+#     symbol_header_map = OrderedCollections.OrderedDict(
+#         "%s" => "sequence",            # field 1
+#         "%a" => "accession",           # field 2
+#         "%g" => "gi",                  # field 3
+#         "%o" => "ordinal id",          # field 4
+#         "%i" => "sequence id",         # field 5
+#         "%t" => "sequence title",      # field 6
+#         "%l" => "sequence length",     # field 7
+#         "%h" => "sequence hash",       # field 8
+#         "%T" => "taxid",               # field 9
+#         "%X" => "leaf-node taxids",    # field 10
+#         "%e" => "membership integer",  # field 11
+#         "%L" => "common taxonomic name",   # field 12
+#         "%C" => "common taxonomic names for leaf-node taxids",  # field 13
+#         "%S" => "scientific name",     # field 14
+#         "%N" => "scientific names for leaf-node taxids",  # field 15
+#         "%B" => "BLAST name",          # field 16
+#         "%K" => "taxonomic super kingdom", # field 17
+#         "%P" => "PIG"                  # field 18
+#     )
+#     outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+
+#     # Define the desired output column order.
+#     header_order = [
+#         "sequence SHA256",
+#         "sequence hash",
+#         "sequence id",
+#         "accession",
+#         "gi",
+#         "sequence title",
+#         "BLAST name",
+#         "taxid",
+#         "taxonomic super kingdom",
+#         "scientific name",
+#         "scientific names for leaf-node taxids",
+#         "common taxonomic name",
+#         "common taxonomic names for leaf-node taxids",
+#         "leaf-node taxids",
+#         "membership integer",
+#         "ordinal id",
+#         "PIG",
+#         "sequence length"
+#         # "sequence"
+#     ]
+
+#     total_sequences = blast_db_info["number of sequences"]
+#     progress = ProgressMeter.Progress(total_sequences, desc="Converting BLAST DB to Arrow: ", dt=1.0)
+    
+#     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+#     open(Arrow.Writer, outfile) do writer
+#         for (i, line) in enumerate(eachline(cmd))
+#             fields = split(strip(line), '\t')
+#             # Pad fields with empty strings if necessary
+#             if length(fields) < length(symbol_header_map)
+#                 fields = vcat(fields, fill("", length(symbol_header_map) - length(fields)))
+#             end
+#             # Process sequence: clean and compute SHA256 from field 1 (the raw sequence)
+#             seq = uppercase(String(filter(x -> isvalid(Char, x), fields[1])))
+#             seq_sha256 = Mycelia.seq2sha256(seq)
+
+#             # Build a mapping from column names to the extracted field values.
+#             mapped = Dict{String, String}()
+#             idx = 1
+#             for (_, colname) in symbol_header_map
+#                 mapped[colname] = fields[idx]
+#                 idx += 1
+#             end
+
+#             # Construct a NamedTuple which is Arrow-compatible
+#             row = DataFrames.DataFrame(
+#                 sequence_SHA256 = seq_sha256,
+#                 sequence_hash = mapped["sequence hash"],
+#                 sequence_id = mapped["sequence id"],
+#                 accession = mapped["accession"],
+#                 gi = mapped["gi"],
+#                 sequence_title = mapped["sequence title"],
+#                 BLAST_name = mapped["BLAST name"],
+#                 taxid = mapped["taxid"],
+#                 taxonomic_super_kingdom = mapped["taxonomic super kingdom"],
+#                 scientific_name = mapped["scientific name"],
+#                 scientific_names_for_leaf_node_taxids = mapped["scientific names for leaf-node taxids"],
+#                 common_taxonomic_name = mapped["common taxonomic name"],
+#                 common_taxonomic_names_for_leaf_node_taxids = mapped["common taxonomic names for leaf-node taxids"],
+#                 leaf_node_taxids = mapped["leaf-node taxids"],
+#                 membership_integer = mapped["membership integer"],
+#                 ordinal_id = mapped["ordinal id"],
+#                 PIG = mapped["PIG"],
+#                 sequence_length = mapped["sequence length"],
+#                 # sequence = mapped["sequence"]
+#             )
+#             Arrow.write(writer, row)
+            
+#             # Update progress meter
+#             ProgressMeter.next!(progress; showvalues = [
+#                 (:completed, i),
+#                 (:total, total_sequences),
+#                 (:percent, round(i/total_sequences*100, digits=1))
+#             ])
+#         end
+#     end
+
+#     ProgressMeter.finish!(progress)
+#     println("Done! Output saved to $(outfile)")
+#     return outfile
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert a BLAST database to an in-memory table with sequence and taxonomy information.
+
+# # Arguments
+# - `blastdb::String`: Path to the BLAST database
+# - `outfile::String=""`: Optional output file path. If provided, results will be saved to this file
+# - `force::Bool=false`: Whether to overwrite existing output file
+# - `ALL_FIELDS::Bool=true`: If true, include all fields regardless of other flag settings
+# - Field selection flags (default to false unless ALL_FIELDS is true):
+#   - `sequence_sha256::Bool`: Include SHA256 hash of the sequence
+#   - `sequence_hash::Bool`: Include sequence hash
+#   - `sequence_id::Bool`: Include sequence ID
+#   - `accession::Bool`: Include accession number
+#   - `gi::Bool`: Include GI number
+#   - `sequence_title::Bool`: Include sequence title
+#   - `blast_name::Bool`: Include BLAST name
+#   - `taxid::Bool`: Include taxid
+#   - `taxonomic_super_kingdom::Bool`: Include taxonomic super kingdom
+#   - `scientific_name::Bool`: Include scientific name
+#   - `scientific_names_leaf_nodes::Bool`: Include scientific names for leaf-node taxids
+#   - `common_taxonomic_name::Bool`: Include common taxonomic name
+#   - `common_names_leaf_nodes::Bool`: Include common taxonomic names for leaf-node taxids
+#   - `leaf_node_taxids::Bool`: Include leaf-node taxids
+#   - `membership_integer::Bool`: Include membership integer
+#   - `ordinal_id::Bool`: Include ordinal ID
+#   - `pig::Bool`: Include PIG
+#   - `sequence_length::Bool`: Include sequence length
+#   - `sequence::Bool`: Include the full sequence
+
+# # Returns
+# - `DataFrame`: DataFrame containing the requested columns from the BLAST database
+# """
+# function blastdb2table(;
+#     blastdb, 
+#     outfile="", 
+#     force=false,
+#     # Master field selection flag
+#     ALL_FIELDS=true,
+#     # Individual field selection flags
+#     sequence_sha256=false,
+#     sequence_hash=false,
+#     sequence_id=false,
+#     accession=false,
+#     gi=false,
+#     sequence_title=false,
+#     blast_name=false,
+#     taxid=false,
+#     taxonomic_super_kingdom=false,
+#     scientific_name=false,
+#     scientific_names_leaf_nodes=false,
+#     common_taxonomic_name=false,
+#     common_names_leaf_nodes=false,
+#     leaf_node_taxids=false,
+#     membership_integer=false,
+#     ordinal_id=false,
+#     pig=false,
+#     sequence_length=false,
+#     sequence=false
+# )
+#     # If ALL_FIELDS is true, override all field flags to true
+#     if ALL_FIELDS
+#         sequence_sha256 = true
+#         sequence_hash = true
+#         sequence_id = true
+#         accession = true
+#         gi = true
+#         sequence_title = true
+#         blast_name = true
+#         taxid = true
+#         taxonomic_super_kingdom = true
+#         scientific_name = true
+#         scientific_names_leaf_nodes = true
+#         common_taxonomic_name = true
+#         common_names_leaf_nodes = true
+#         leaf_node_taxids = true
+#         membership_integer = true
+#         ordinal_id = true
+#         pig = true
+#         sequence_length = true
+#         sequence = true
+#     end
+    
+#     Mycelia.add_bioconda_env("blast")
+#     blast_db_info = Mycelia.local_blast_database_info()
+#     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+#     @assert DataFrames.nrow(filtered) == 1
+#     blast_db_info = filtered[1, :]
+#     @show blast_db_info
+
+#     # Determine database type
+#     if blast_db_info["BLAST database molecule type"] == "Protein"
+#         extension = ".faa"
+#     elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+#         extension = ".fna"
+#     else
+#         @show blast_db_info["BLAST database molecule type"]
+#         error("unexpected blast database molecule type")
+#     end
+
+#     # Check if output file exists (if specified)
+#     if outfile != "" && isfile(outfile) && filesize(outfile) > 0 && !force
+#         @show Mycelia.filesize_human_readable(outfile)
+#         # Load and return the existing file
+#         return Arrow.Table(outfile) |> DataFrames.DataFrame
+#     end
+
+#     # Check if sequence needs to be extracted for SHA256 calculation
+#     needs_sequence = sequence || sequence_sha256
+
+#     # Define the mapping from outfmt symbols to column names and their inclusion status
+#     field_config = [
+#         # format, column_name, include_flag, dependency (if any)
+#         ("%s", "sequence", needs_sequence, nothing),  # Need sequence for SHA256
+#         ("%a", "accession", accession, nothing),
+#         ("%g", "gi", gi, nothing),
+#         ("%o", "ordinal_id", ordinal_id, nothing),
+#         ("%i", "sequence_id", sequence_id, nothing),
+#         ("%t", "sequence_title", sequence_title, nothing),
+#         ("%l", "sequence_length", sequence_length, nothing),
+#         ("%h", "sequence_hash", sequence_hash, nothing),
+#         ("%T", "taxid", taxid, nothing),
+#         ("%X", "leaf_node_taxids", leaf_node_taxids, nothing),
+#         ("%e", "membership_integer", membership_integer, nothing),
+#         ("%L", "common_taxonomic_name", common_taxonomic_name, nothing),
+#         ("%C", "common_names_leaf_nodes", common_names_leaf_nodes, nothing),
+#         ("%S", "scientific_name", scientific_name, nothing),
+#         ("%N", "scientific_names_leaf_nodes", scientific_names_leaf_nodes, nothing),
+#         ("%B", "blast_name", blast_name, nothing),
+#         ("%K", "taxonomic_super_kingdom", taxonomic_super_kingdom, nothing),
+#         ("%P", "pig", pig, nothing)
+#     ]
+
+#     # Generate format string for fields we need to fetch
+#     formats_to_fetch = [fmt for (fmt, _, include, _) in field_config if include]
+#     outfmt_string = join(formats_to_fetch, '\t')
+
+#     # Create field name mapping for processing
+#     format_to_colname = Dict(fmt => colname for (fmt, colname, _, _) in field_config)
+    
+#     # Create list of field names to include in final output
+#     output_columns = []
+#     if sequence_sha256
+#         push!(output_columns, "sequence_sha256")
+#     end
+    
+#     for (_, colname, include, _) in field_config
+#         if include && colname != "sequence"  # Handle sequence separately
+#             push!(output_columns, colname)
+#         end
+#     end
+    
+#     if sequence
+#         push!(output_columns, "sequence")
+#     end
+
+#     # Create DataFrame to hold results
+#     result_df = DataFrames.DataFrame()
+    
+#     total_sequences = blast_db_info["number of sequences"]
+#     progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+    
+#     # Run blastdbcmd to get data
+#     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+    
+#     # Process results and build DataFrame
+#     rows = []
+    
+#     for (i, line) in enumerate(eachline(cmd))
+#         fields = split(strip(line), '\t')
+#         # Pad fields with empty strings if necessary
+#         if length(fields) < length(formats_to_fetch)
+#             fields = vcat(fields, fill("", length(formats_to_fetch) - length(fields)))
+#         end
+        
+#         # Map fields to column names
+#         field_map = Dict{String, String}()
+#         for (j, fmt) in enumerate(formats_to_fetch)
+#             field_map[format_to_colname[fmt]] = fields[j]
+#         end
+        
+#         # Process sequence if needed (for SHA256 or to include in output)
+#         seq_sha256 = ""
+#         if needs_sequence
+#             seq = uppercase(String(filter(x -> isvalid(Char, x), field_map["sequence"])))
+#             if sequence_sha256
+#                 seq_sha256 = Mycelia.seq2sha256(seq)
+#             end
+#         end
+        
+#         # Create a Dict for this row
+#         row = Dict{String, String}()
+        
+#         # Add sequence_sha256 if requested
+#         if sequence_sha256
+#             row["sequence_sha256"] = seq_sha256
+#         end
+        
+#         # Add other fields if requested
+#         for (_, colname, include, _) in field_config
+#             if include && colname != "sequence"  # Handle sequence separately
+#                 row[colname] = field_map[colname]
+#             end
+#         end
+        
+#         # Add sequence if requested
+#         if sequence
+#             row["sequence"] = field_map["sequence"]
+#         end
+        
+#         push!(rows, row)
+        
+#         # Update progress meter
+#         ProgressMeter.next!(progress; showvalues = [
+#             (:completed, i),
+#             (:total, total_sequences),
+#             (:percent, round(i/total_sequences*100, digits=1))
+#         ])
+#     end
+    
+#     # Convert rows to DataFrame
+#     result_df = DataFrames.DataFrame(rows)
+    
+#     # Reorder columns if necessary to match expected order
+#     final_columns = filter(col -> col in names(result_df), output_columns)
+#     result_df = result_df[:, final_columns]
+    
+#     ProgressMeter.finish!(progress)
+#     return result_df
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Convert a BLAST database to Arrow format with sequence and taxonomy information.
-Uses a simple serial approach with direct Arrow streaming for minimal memory usage.
+Convert a BLAST database to an in-memory table with sequence and taxonomy information.
 
 # Arguments
 - `blastdb::String`: Path to the BLAST database
-- `outfile::String=""`: Output file path. If empty, generates name based on input database
+- `outfile::String=""`: Optional output file path. If provided, results will be saved to this file
 - `force::Bool=false`: Whether to overwrite existing output file
+- `ALL_FIELDS::Bool=true`: If true, include all fields regardless of other flag settings
+- Field selection flags (default to false unless ALL_FIELDS is true):
+  - `sequence_sha256::Bool`: Include SHA256 hash of the sequence
+  - `sequence_hash::Bool`: Include sequence hash
+  - `sequence_id::Bool`: Include sequence ID
+  - `accession::Bool`: Include accession number
+  - `gi::Bool`: Include GI number
+  - `sequence_title::Bool`: Include sequence title
+  - `blast_name::Bool`: Include BLAST name
+  - `taxid::Bool`: Include taxid
+  - `taxonomic_super_kingdom::Bool`: Include taxonomic super kingdom
+  - `scientific_name::Bool`: Include scientific name
+  - `scientific_names_leaf_nodes::Bool`: Include scientific names for leaf-node taxids
+  - `common_taxonomic_name::Bool`: Include common taxonomic name
+  - `common_names_leaf_nodes::Bool`: Include common taxonomic names for leaf-node taxids
+  - `leaf_node_taxids::Bool`: Include leaf-node taxids
+  - `membership_integer::Bool`: Include membership integer
+  - `ordinal_id::Bool`: Include ordinal ID
+  - `pig::Bool`: Include PIG
+  - `sequence_length::Bool`: Include sequence length
+  - `sequence::Bool`: Include the full sequence
 
 # Returns
-- `String`: Path to the generated output file (.arrow)
-
-# Output Format
-Arrow file containing columns (in this order):
-- sequence SHA256
-- sequence hash
-- sequence id
-- accession
-- gi
-- sequence title
-- BLAST name
-- taxid
-- taxonomic super kingdom
-- scientific name
-- scientific names for leaf-node taxids
-- common taxonomic name
-- common taxonomic names for leaf-node taxids
-- leaf-node taxids
-- membership integer
-- ordinal id
-- PIG
-- sequence length
-- sequence
+- `DataFrame`: DataFrame containing the requested columns from the BLAST database
 """
-function blastdb2table(; blastdb, outfile="", force=false)
-    # Set up environment and validate database
+function blastdb2table(;
+    blastdb::String, 
+    # Master field selection flag
+    ALL_FIELDS::Bool=true,
+    # Individual field selection flags
+    sequence_sha256::Bool=false,
+    sequence_hash::Bool=false,
+    sequence_id::Bool=false,
+    accession::Bool=false,
+    gi::Bool=false,
+    sequence_title::Bool=false,
+    blast_name::Bool=false,
+    taxid::Bool=false,
+    taxonomic_super_kingdom::Bool=false,
+    scientific_name::Bool=false,
+    scientific_names_leaf_nodes::Bool=false,
+    common_taxonomic_name::Bool=false,
+    common_names_leaf_nodes::Bool=false,
+    leaf_node_taxids::Bool=false,
+    membership_integer::Bool=false,
+    ordinal_id::Bool=false,
+    pig::Bool=false,
+    sequence_length::Bool=false,
+    sequence::Bool=false
+)
+
+    # If ALL_FIELDS is true, override all field flags to true
+    if ALL_FIELDS
+        sequence_sha256 = true
+        sequence_hash = true
+        sequence_id = true
+        accession = true
+        gi = true
+        sequence_title = true
+        blast_name = true
+        taxid = true
+        taxonomic_super_kingdom = true
+        scientific_name = true
+        scientific_names_leaf_nodes = true
+        common_taxonomic_name = true
+        common_names_leaf_nodes = true
+        leaf_node_taxids = true
+        membership_integer = true
+        ordinal_id = true
+        pig = true
+        sequence_length = true
+        sequence = true
+    end
+    
     Mycelia.add_bioconda_env("blast")
     blast_db_info = Mycelia.local_blast_database_info()
     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
@@ -173,7 +623,7 @@ function blastdb2table(; blastdb, outfile="", force=false)
     blast_db_info = filtered[1, :]
     @show blast_db_info
 
-    # Determine database type and file extension
+    # Determine database type
     if blast_db_info["BLAST database molecule type"] == "Protein"
         extension = ".faa"
     elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
@@ -183,182 +633,185 @@ function blastdb2table(; blastdb, outfile="", force=false)
         error("unexpected blast database molecule type")
     end
 
-    # Set output file name if not provided
-    if outfile == ""
-        outfile = blastdb * extension * ".arrow"
-    end
+    # Check if sequence needs to be extracted for SHA256 calculation
+    needs_sequence = sequence || sequence_sha256
 
-    # Skip processing if output exists (unless forced)
-    if isfile(outfile) && filesize(outfile) > 0 && !force
-        @show Mycelia.filesize_human_readable(outfile)
-        return outfile
-    end
-
-    # Define the mapping from outfmt symbols to column names.
-    symbol_header_map = OrderedCollections.OrderedDict(
-        "%s" => "sequence",            # field 1
-        "%a" => "accession",           # field 2
-        "%g" => "gi",                  # field 3
-        "%o" => "ordinal id",          # field 4
-        "%i" => "sequence id",         # field 5
-        "%t" => "sequence title",      # field 6
-        "%l" => "sequence length",     # field 7
-        "%h" => "sequence hash",       # field 8
-        "%T" => "taxid",               # field 9
-        "%X" => "leaf-node taxids",    # field 10
-        "%e" => "membership integer",  # field 11
-        "%L" => "common taxonomic name",   # field 12
-        "%C" => "common taxonomic names for leaf-node taxids",  # field 13
-        "%S" => "scientific name",     # field 14
-        "%N" => "scientific names for leaf-node taxids",  # field 15
-        "%B" => "BLAST name",          # field 16
-        "%K" => "taxonomic super kingdom", # field 17
-        "%P" => "PIG"                  # field 18
-    )
-    outfmt_string = join(collect(keys(symbol_header_map)), '\t')
-
-    # Define the desired output column order.
-    header_order = [
-        "sequence SHA256",
-        "sequence hash",
-        "sequence id",
-        "accession",
-        "gi",
-        "sequence title",
-        "BLAST name",
-        "taxid",
-        "taxonomic super kingdom",
-        "scientific name",
-        "scientific names for leaf-node taxids",
-        "common taxonomic name",
-        "common taxonomic names for leaf-node taxids",
-        "leaf-node taxids",
-        "membership integer",
-        "ordinal id",
-        "PIG",
-        "sequence length"
-        # "sequence"
+    # Define the mapping from outfmt symbols to column names and their inclusion status
+    # Using a tuple for better performance (less allocations)
+    field_config = [
+        ("%s", "sequence", needs_sequence),  # Need sequence for SHA256
+        ("%a", "accession", accession),
+        ("%g", "gi", gi),
+        ("%o", "ordinal_id", ordinal_id),
+        ("%i", "sequence_id", sequence_id),
+        ("%t", "sequence_title", sequence_title),
+        ("%l", "sequence_length", sequence_length),
+        ("%h", "sequence_hash", sequence_hash),
+        ("%T", "taxid", taxid),
+        ("%X", "leaf_node_taxids", leaf_node_taxids),
+        ("%e", "membership_integer", membership_integer),
+        ("%L", "common_taxonomic_name", common_taxonomic_name),
+        ("%C", "common_names_leaf_nodes", common_names_leaf_nodes),
+        ("%S", "scientific_name", scientific_name),
+        ("%N", "scientific_names_leaf_nodes", scientific_names_leaf_nodes),
+        ("%B", "blast_name", blast_name),
+        ("%K", "taxonomic_super_kingdom", taxonomic_super_kingdom),
+        ("%P", "pig", pig)
     ]
 
-    total_sequences = blast_db_info["number of sequences"]
-    progress = ProgressMeter.Progress(total_sequences, desc="Converting BLAST DB to Arrow: ", dt=1.0)
-    
-    cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    open(Arrow.Writer, outfile) do writer
-        for (i, line) in enumerate(eachline(cmd))
-            fields = split(strip(line), '\t')
-            # Pad fields with empty strings if necessary
-            if length(fields) < length(symbol_header_map)
-                fields = vcat(fields, fill("", length(symbol_header_map) - length(fields)))
-            end
-            # Process sequence: clean and compute SHA256 from field 1 (the raw sequence)
-            seq = uppercase(String(filter(x -> isvalid(Char, x), fields[1])))
-            seq_sha256 = Mycelia.seq2sha256(seq)
+    # Generate format string for fields we need to fetch
+    active_fields = [(fmt, colname) for (fmt, colname, include) in field_config if include]
+    formats_to_fetch = [fmt for (fmt, _) in active_fields]
+    columns_to_fetch = [colname for (_, colname) in active_fields]
+    outfmt_string = join(formats_to_fetch, '\t')
 
-            # Build a mapping from column names to the extracted field values.
-            mapped = Dict{String, String}()
-            idx = 1
-            for (_, colname) in symbol_header_map
-                mapped[colname] = fields[idx]
-                idx += 1
-            end
-
-            # Construct a NamedTuple which is Arrow-compatible
-            row = DataFrames.DataFrame(
-                sequence_SHA256 = seq_sha256,
-                sequence_hash = mapped["sequence hash"],
-                sequence_id = mapped["sequence id"],
-                accession = mapped["accession"],
-                gi = mapped["gi"],
-                sequence_title = mapped["sequence title"],
-                BLAST_name = mapped["BLAST name"],
-                taxid = mapped["taxid"],
-                taxonomic_super_kingdom = mapped["taxonomic super kingdom"],
-                scientific_name = mapped["scientific name"],
-                scientific_names_for_leaf_node_taxids = mapped["scientific names for leaf-node taxids"],
-                common_taxonomic_name = mapped["common taxonomic name"],
-                common_taxonomic_names_for_leaf_node_taxids = mapped["common taxonomic names for leaf-node taxids"],
-                leaf_node_taxids = mapped["leaf-node taxids"],
-                membership_integer = mapped["membership integer"],
-                ordinal_id = mapped["ordinal id"],
-                PIG = mapped["PIG"],
-                sequence_length = mapped["sequence length"],
-                # sequence = mapped["sequence"]
-            )
-            Arrow.write(writer, row)
-            
-            # Update progress meter
-            ProgressMeter.next!(progress; showvalues = [
-                (:completed, i),
-                (:total, total_sequences),
-                (:percent, round(i/total_sequences*100, digits=1))
-            ])
+    # Create mapping of format positions to column indices for faster access
+    format_positions = Dict{Int, Int}()
+    for (i, (fmt, _)) in enumerate(active_fields)
+        format_idx = findfirst(==(fmt), formats_to_fetch)
+        if format_idx !== nothing
+            format_positions[i] = format_idx
         end
     end
 
-    ProgressMeter.finish!(progress)
-    println("Done! Output saved to $(outfile)")
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Convert a BLAST database to Arrow format with taxonomy information.
-
-# Arguments
-- `blastdb::String`: Path to the BLAST database
-- `outfile::String=""`: Output file path. If empty, generates name based on input database
-- `force::Bool=false`: Whether to overwrite existing output file
-
-# Returns
-- `String`: Path to the generated output file (.arrow)
-
-# Output Format
-Arrow file containing columns (in this order):
-- sequence hash
-- sequence id
-- accession
-- gi
-- sequence title
-- BLAST name
-- taxid
-- taxonomic super kingdom
-- scientific name
-- scientific names for leaf-node taxids
-- common taxonomic name
-- common taxonomic names for leaf-node taxids
-- leaf-node taxids
-"""
-function blastdb2tax_table(; blastdb)
-    # Set up environment and validate database
-    Mycelia.add_bioconda_env("blast")
-    blast_db_info = Mycelia.local_blast_database_info()
-    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
-    @assert DataFrames.nrow(filtered) == 1
-    blast_db_info = filtered[1, :]
-    @show blast_db_info
-
-    # Define the mapping from outfmt symbols to column names.
-    symbol_header_map = OrderedCollections.OrderedDict(
-        "%a" => "accession",           # field 2
-        "%g" => "gi",                  # field 3
-        "%i" => "sequence id",         # field 5
-        "%t" => "sequence title",      # field 6
-        "%h" => "sequence hash",       # field 8
-        "%T" => "taxid",               # field 9
-        "%X" => "leaf-node taxids",    # field 10
-        "%L" => "common taxonomic name",   # field 12
-        "%C" => "common taxonomic names for leaf-node taxids",  # field 13
-        "%S" => "scientific name",     # field 14
-        "%N" => "scientific names for leaf-node taxids",  # field 15
-        "%B" => "BLAST name",          # field 16
-        "%K" => "taxonomic super kingdom", # field 17
-    )
-    outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+    # Define output columns
+    output_columns = String[]
+    if sequence_sha256
+        push!(output_columns, "sequence_sha256")
+    end
+    
+    # Add the other active columns
+    for (_, colname, include) in field_config
+        if include && colname != "sequence"  # Handle sequence separately
+            push!(output_columns, colname)
+        end
+    end
+    
+    if sequence
+        push!(output_columns, "sequence")
+    end
+    
+    # Get total sequences for pre-allocation
+    total_sequences = blast_db_info["number of sequences"]
+    
+    # Pre-allocate column vectors for better performance
+    # Using a dictionary of vectors for type flexibility
+    column_data = OrderedCollections.OrderedDict{String, Vector{String}}()
+    for col in output_columns
+        column_data[col] = Vector{String}(undef, total_sequences)
+    end
+    
+    progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+    
+    # Run blastdbcmd to get data
     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    return CSV.read(open(cmd), DataFrames.DataFrame, delim='\t', header=collect(values(symbol_header_map)))
+    
+    # Sequence index in fields (if needed)
+    sequence_idx = findfirst(==("%s"), formats_to_fetch)
+    
+    # Process each line from blastdbcmd
+    for (i, line) in enumerate(eachline(cmd))
+        fields = split(strip(line), '\t')
+        # Pad fields with empty strings if necessary
+        if length(fields) < length(formats_to_fetch)
+            append!(fields, fill("", length(formats_to_fetch) - length(fields)))
+        end
+        
+        # Process sequence if needed (for SHA256 or to include in output)
+        if needs_sequence && sequence_idx !== nothing
+            seq_raw = fields[sequence_idx]
+            seq = uppercase(String(filter(x -> isvalid(Char, x), seq_raw)))
+            
+            if sequence_sha256
+                seq_sha256 = Mycelia.seq2sha256(seq)
+                column_data["sequence_sha256"][i] = seq_sha256
+            end
+            
+            if sequence
+                column_data["sequence"][i] = seq
+            end
+        end
+        
+        # Add other fields directly to column vectors (avoiding dictionary lookups)
+        for (j, colname) in enumerate(columns_to_fetch)
+            if colname != "sequence" || (colname == "sequence" && !needs_sequence)
+                column_data[colname][i] = fields[j]
+            end
+        end
+        
+        # Update progress meter
+        ProgressMeter.next!(progress; showvalues = [
+            (:completed, i),
+            (:total, total_sequences),
+            (:percent, round(i/total_sequences*100, digits=1))
+        ])
+    end
+    
+    # Construct DataFrame directly from column vectors
+    result_df = DataFrames.DataFrame(column_data)
+    
+    ProgressMeter.finish!(progress)
+    return result_df
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert a BLAST database to Arrow format with taxonomy information.
+
+# # Arguments
+# - `blastdb::String`: Path to the BLAST database
+# - `outfile::String=""`: Output file path. If empty, generates name based on input database
+# - `force::Bool=false`: Whether to overwrite existing output file
+
+# # Returns
+# - `String`: Path to the generated output file (.arrow)
+
+# # Output Format
+# Arrow file containing columns (in this order):
+# - sequence hash
+# - sequence id
+# - accession
+# - gi
+# - sequence title
+# - BLAST name
+# - taxid
+# - taxonomic super kingdom
+# - scientific name
+# - scientific names for leaf-node taxids
+# - common taxonomic name
+# - common taxonomic names for leaf-node taxids
+# - leaf-node taxids
+# """
+# function blastdb2tax_table(; blastdb)
+#     # Set up environment and validate database
+#     Mycelia.add_bioconda_env("blast")
+#     blast_db_info = Mycelia.local_blast_database_info()
+#     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+#     @assert DataFrames.nrow(filtered) == 1
+#     blast_db_info = filtered[1, :]
+#     @show blast_db_info
+
+#     # Define the mapping from outfmt symbols to column names.
+#     symbol_header_map = OrderedCollections.OrderedDict(
+#         "%a" => "accession",           # field 2
+#         "%g" => "gi",                  # field 3
+#         "%i" => "sequence id",         # field 5
+#         "%t" => "sequence title",      # field 6
+#         "%h" => "sequence hash",       # field 8
+#         "%T" => "taxid",               # field 9
+#         "%X" => "leaf-node taxids",    # field 10
+#         "%L" => "common taxonomic name",   # field 12
+#         "%C" => "common taxonomic names for leaf-node taxids",  # field 13
+#         "%S" => "scientific name",     # field 14
+#         "%N" => "scientific names for leaf-node taxids",  # field 15
+#         "%B" => "BLAST name",          # field 16
+#         "%K" => "taxonomic super kingdom", # field 17
+#     )
+#     outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+#     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+#     return CSV.read(open(cmd), DataFrames.DataFrame, delim='\t', header=collect(values(symbol_header_map)))
+# end
 
 
 """
