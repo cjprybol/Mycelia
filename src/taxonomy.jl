@@ -1,3 +1,450 @@
+import DataFrames
+import CairoMakie
+import StatsBase
+import OrderedCollections
+import Colors
+import Random
+
+"""
+    plot_taxa_abundances(
+        df::DataFrames.DataFrame, 
+        taxa_level::String; 
+        top_n::Int = 10,
+        sample_id_col::String = "sample_id",
+        filter_taxa::Union{Vector{Union{String, Missing}}, Nothing} = nothing,
+        figure_width::Int = 1500,
+        figure_height::Int = 1000,
+        bar_width::Float64 = 0.7,
+        x_rotation::Int = 45,
+        sort_samples::Bool = true,
+        color_seed::Union{Int, Nothing} = nothing,
+        legend_fontsize::Float64 = 12.0,
+        legend_itemsize::Float64 = 12.0,
+        legend_padding::Float64 = 5.0,
+        legend_rowgap::Float64 = 1.0,
+        legend_labelwidth::Union{Nothing, Float64} = nothing,
+        legend_titlesize::Float64 = 15.0,
+        legend_nbanks::Int = 1
+    )
+
+Create a stacked bar chart showing taxa relative abundances for each sample.
+
+# Arguments
+- `df`: DataFrame with sample_id and taxonomic assignments at different levels
+- `taxa_level`: Taxonomic level to analyze (e.g., "genus", "species")
+- `top_n`: Number of top taxa to display individually, remainder grouped as "Other"
+- `sample_id_col`: Column name containing sample identifiers
+- `filter_taxa`: Taxa to exclude from visualization (default: nothing - no filtering)
+- `figure_width`: Width of the figure in pixels
+- `figure_height`: Height of the figure in pixels
+- `bar_width`: Width of each bar (between 0 and 1)
+- `x_rotation`: Rotation angle for x-axis labels in degrees
+- `sort_samples`: Whether to sort samples alphabetically
+- `color_seed`: Seed for reproducible color generation
+- `legend_fontsize`: Font size for legend entries
+- `legend_itemsize`: Size of the colored marker/icon in the legend
+- `legend_padding`: Padding around legend elements
+- `legend_rowgap`: Space between legend rows
+- `legend_labelwidth`: Maximum width for legend labels (truncation)
+- `legend_titlesize`: Font size for legend title
+- `legend_nbanks`: Number of legend columns
+
+# Returns
+- `fig`: CairoMakie figure object
+- `ax`: CairoMakie axis object
+- `taxa_colors`: Dictionary mapping taxa to their assigned colors
+"""
+function plot_taxa_abundances(
+    df::DataFrames.DataFrame, 
+    taxa_level::String; 
+    top_n::Int = 10,
+    sample_id_col::String = "sample_id",
+    filter_taxa::Union{Vector{Union{String, Missing}}, Nothing} = nothing,
+    figure_width::Int = 1500,
+    figure_height::Int = 1000,
+    bar_width::Float64 = 0.7,
+    x_rotation::Int = 45,
+    sort_samples::Bool = true,
+    color_seed::Union{Int, Nothing} = nothing,
+    legend_fontsize::Float64 = 12.0,
+    legend_itemsize::Float64 = 12.0,
+    legend_padding::Float64 = 5.0,
+    legend_rowgap::Float64 = 1.0,
+    legend_labelwidth::Union{Nothing, Float64} = nothing,
+    legend_titlesize::Float64 = 15.0,
+    legend_nbanks::Int = 1
+)
+    # Validate inputs
+    if !DataFrames.hasproperty(df, Symbol(sample_id_col))
+        error("DataFrame must have a column named '$(sample_id_col)'")
+    end
+    if !DataFrames.hasproperty(df, Symbol(taxa_level))
+        error("DataFrame must have a column named '$(taxa_level)'")
+    end
+    
+    # Helper function to check if a value represents "missing" in either format
+    is_missing_value = x -> x === missing || x == "missing"
+    
+    # Step 1: Group by sample_id and count taxa at the specified level
+    samples = unique(df[:, sample_id_col])
+    n_samples = length(samples)
+    
+    # Create ordered dictionary to store taxa counts for each sample
+    sample_to_taxa_counts = OrderedCollections.OrderedDict{String, Dict{Any, Int}}()
+    
+    # Count occurrences of each taxon within each sample
+    for sample in samples
+        sample_data = df[df[:, sample_id_col] .== sample, :]
+        sample_to_taxa_counts[string(sample)] = StatsBase.countmap(sample_data[:, taxa_level])
+    end
+    
+    # Step 2: Calculate joint counts across all samples to identify top taxa
+    joint_counts = Dict{Any, Int}()
+    for (_, counts) in sample_to_taxa_counts
+        for (taxon, count) in counts
+            joint_counts[taxon] = get(joint_counts, taxon, 0) + count
+        end
+    end
+    
+    # Filter out specified taxa if filter_taxa is provided
+    if !isnothing(filter_taxa)
+        for taxon in filter_taxa
+            delete!(joint_counts, taxon)
+        end
+    end
+    
+    # Collect all missing-like values (both actual missing and "missing" string)
+    missing_keys = filter(is_missing_value, keys(joint_counts))
+    missing_count = sum(joint_counts[k] for k in missing_keys)
+    
+    # Remove all missing-like values from joint_counts for sorting
+    for k in missing_keys
+        delete!(joint_counts, k)
+    end
+    
+    # Sort taxa by joint counts (descending)
+    sorted_taxa = sort(collect(keys(joint_counts)), by=x -> joint_counts[x], rev=true)
+    
+    # Identify top N taxa, the rest will be grouped as "Other"
+    top_taxa = sorted_taxa[1:min(top_n, length(sorted_taxa))]
+    
+    # Step 3: Normalize counts to get relative abundances for each sample
+    sample_to_taxa_relative_abundances = OrderedCollections.OrderedDict{String, Dict{String, Float64}}()
+    
+    for (sample, counts) in sample_to_taxa_counts
+        # Initialize relative abundances
+        abundances = Dict{String, Float64}()
+        
+        # Calculate total counts (excluding filtered taxa)
+        if isnothing(filter_taxa)
+            total_counts = sum(values(counts))
+        else
+            total_counts = sum([
+                count for (taxon, count) in counts 
+                if !(taxon in filter_taxa)
+            ])
+        end
+        
+        # Skip samples with no valid counts
+        if total_counts == 0
+            continue
+        end
+        
+        # Calculate relative abundances for top taxa, "Other", and "Missing"
+        other_abundance = 0.0
+        missing_abundance = 0.0
+        
+        for (taxon, count) in counts
+            if !isnothing(filter_taxa) && taxon in filter_taxa
+                continue
+            elseif is_missing_value(taxon)
+                missing_abundance += count / total_counts
+            elseif taxon in top_taxa
+                abundances[string(taxon)] = count / total_counts
+            else
+                other_abundance += count / total_counts
+            end
+        end
+        
+        # Add "Other" category if needed
+        if other_abundance > 0
+            abundances["Other"] = other_abundance
+        end
+        
+        # Add "Missing" category if needed
+        if missing_abundance > 0
+            abundances["Missing"] = missing_abundance
+        end
+        
+        # Ensure all top taxa are represented in each sample (even if absent)
+        for taxon in top_taxa
+            if !haskey(abundances, string(taxon))
+                abundances[string(taxon)] = 0.0
+            end
+        end
+        
+        sample_to_taxa_relative_abundances[sample] = abundances
+    end
+    
+    # Step 4: Prepare data for visualization
+    # Sort samples if requested
+    if sort_samples
+        samples = sort(collect(keys(sample_to_taxa_relative_abundances)))
+    else
+        samples = collect(keys(sample_to_taxa_relative_abundances))
+    end
+    
+    # Prepare final set of taxa in desired order (most abundant at bottom)
+    # This will hold our ordered taxa categories: top taxa, "Other", and "Missing" (in that order)
+    final_taxa = copy(top_taxa)
+    
+    # Check if any sample has "Other" category
+    has_other = any(haskey(abundances, "Other") for (_, abundances) in sample_to_taxa_relative_abundances)
+    if has_other
+        push!(final_taxa, "Other")
+    end
+    
+    # Check if any sample has "Missing" category
+    has_missing_category = any(haskey(abundances, "Missing") for (_, abundances) in sample_to_taxa_relative_abundances)
+    if has_missing_category
+        push!(final_taxa, "Missing")
+    end
+    
+    # Create matrix for stacked bars
+    # Dimensions: [taxa, samples]
+    abundance_matrix = zeros(length(final_taxa), length(samples))
+    
+    # Fill the matrix with relative abundances
+    for (col_idx, sample) in enumerate(samples)
+        abundances = sample_to_taxa_relative_abundances[sample]
+        for (row_idx, taxon) in enumerate(final_taxa)
+            taxon_str = string(taxon)
+            abundance_matrix[row_idx, col_idx] = get(abundances, taxon_str, 0.0)
+        end
+    end
+    
+    # Step 5: Create stacked bar chart visualization with CairoMakie
+    
+    # Set reproducible colors if seed is provided
+    if !isnothing(color_seed)
+        Random.seed!(color_seed)
+    end
+    
+    # Generate distinctive colors, reserving specific colors for "Other" and "Missing"
+    n_colors_needed = length(final_taxa)
+    
+    # Generate base colors for all taxa except special categories
+    if n_colors_needed > 0
+        colorscheme = Colors.distinguishable_colors(n_colors_needed, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
+        colorscheme = reverse(colorscheme)  # Reverse to match original behavior
+        
+        # Use light gray for "Other" and dark gray for "Missing" if they exist
+        if has_other
+            other_idx = findfirst(x -> x == "Other", final_taxa)
+            if !isnothing(other_idx)
+                colorscheme[other_idx] = Colors.RGB(0.7, 0.7, 0.7)  # Light gray for "Other"
+            end
+        end
+        
+        if has_missing_category
+            missing_idx = findfirst(x -> x == "Missing", final_taxa)
+            if !isnothing(missing_idx)
+                colorscheme[missing_idx] = Colors.RGB(0.4, 0.4, 0.4)  # Dark gray for "Missing"
+            end
+        end
+    else
+        colorscheme = Colors.RGB[]
+    end
+    
+    # Create mapping of taxa to colors for legend
+    taxa_colors = Dict(taxon => colorscheme[i] for (i, taxon) in enumerate(final_taxa))
+    
+    # Create the figure with appropriate size ratio for legend
+    # Make the figure wider if using more banks
+    adjusted_width = figure_width + (legend_nbanks > 1 ? 250 * (legend_nbanks - 1) : 0)
+    fig = CairoMakie.Figure(size=(adjusted_width, figure_height))
+    
+    # Create the main axis for the plot
+    ax = CairoMakie.Axis(
+        fig[1, 1],
+        xlabel="Sample",
+        ylabel="Relative Abundance",
+        title="$(titlecase(taxa_level)) Relative Abundance (top $(length(top_taxa)) classified)",
+        xticks=(1:length(samples), samples),
+        xticklabelrotation=x_rotation
+    )
+    
+    # Plot stacked bars - CairoMakie style
+    # In CairoMakie, we need to create stacked bars manually
+    x_positions = 1:length(samples)
+    
+    # Start from the bottom of the stack
+    previous_heights = zeros(length(samples))
+    
+    for (i, taxon) in enumerate(final_taxa)
+        heights = abundance_matrix[i, :]
+        
+        # CairoMakie uses 'offset' parameter for stacking
+        CairoMakie.barplot!(
+            ax,
+            x_positions,
+            heights,
+            offset = previous_heights,
+            color = colorscheme[i],
+            label = string(taxon),
+            width = bar_width
+        )
+        
+        # Update heights for next layer
+        previous_heights .+= heights
+    end
+    
+    # Add compact legend with smaller items and text
+    fig[1, 2] = CairoMakie.Legend(
+        fig,
+        ax,
+        "Taxa",
+        framevisible = true,
+        labelsize = legend_fontsize,        # Smaller text
+        titlesize = legend_titlesize,       # Smaller title
+        patchsize = (legend_itemsize, legend_itemsize),  # Smaller color patches
+        padding = legend_padding,           # Less padding around elements
+        rowgap = legend_rowgap,             # Less space between rows
+        labelwidth = legend_labelwidth,     # Optional truncation of long labels
+        nbanks = legend_nbanks              # Multiple columns if needed
+    )
+    
+    # Return the figure, axis, and color mapping for further customization if needed
+    return fig, ax, taxa_colors
+end
+
+"""
+    generate_taxa_abundances_plot(
+        joint_reads_to_taxon_lineage_table::DataFrames.DataFrame;
+        taxa_level::String,
+        top_n::Int = 30,
+        kwargs...
+    )
+
+Convenience wrapper function to generate taxa abundance visualization
+with default parameters and save to a file if requested.
+
+# Arguments
+- `joint_reads_to_taxon_lineage_table`: DataFrame with sample_id and taxonomic assignments
+- `taxa_level`: Taxonomic level to analyze
+- `top_n`: Number of top taxa to display individually
+- `kwargs...`: Additional parameters to pass to plot_taxa_abundances
+
+# Returns
+- `fig`: CairoMakie figure object
+- `ax`: CairoMakie axis object
+- `taxa_colors`: Dictionary mapping taxa to their assigned colors
+"""
+function generate_taxa_abundances_plot(
+    joint_reads_to_taxon_lineage_table::DataFrames.DataFrame;
+    taxa_level::String,
+    top_n::Int = 30,
+    save_path::Union{String, Nothing} = nothing,
+    adjust_legend_for_taxa_count::Bool = true,
+    kwargs...
+)
+    # Automatically adjust legend parameters based on taxa count
+    legend_params = Dict()
+    
+    if adjust_legend_for_taxa_count && top_n > 30
+        # For large numbers of taxa, make legend more compact
+        legend_params = Dict(
+            :legend_fontsize => 10.0,
+            :legend_itemsize => 10.0, 
+            :legend_padding => 5.0,
+            :legend_rowgap => 0.5,
+            :legend_titlesize => 12.0,
+            :legend_nbanks => top_n > 50 ? 2 : 1  # Use 2 columns for very large legends
+        )
+    end
+    
+    # Merge automatically determined legend parameters with any user-provided ones
+    merged_kwargs = merge(legend_params, kwargs)
+    
+    fig, ax, taxa_colors = plot_taxa_abundances(
+        joint_reads_to_taxon_lineage_table,
+        taxa_level;
+        top_n=top_n,
+        merged_kwargs...
+    )
+    
+    # Save figure if path is provided
+    if !isnothing(save_path)
+        CairoMakie.save(save_path, fig)
+    end
+    
+    return fig, ax, taxa_colors
+end
+
+
+
+
+
+
+# function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * "." * Mycelia.normalized_current_date() * ".accession_to_taxid.arrow")
+function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * ".accession_to_taxid.arrow")
+    if !isfile(outfile)
+        # Processing BLAST DB: 100%|██████████████████████████████| Time: 1:01:09
+        #   completed:  112880307
+        #   total:      112880307
+        #   percent:    100.0
+        # 4684.583511 seconds (6.22 G allocations: 306.554 GiB, 77.82% gc time, 0.29% compilation time: 2% of which was recompilation)
+        @time accession_to_taxid_table = Mycelia.blastdb2table(blastdb = blastdb, ALL_FIELDS=false, accession=true, taxid=true)
+        # 194.124952 seconds (3.76 M allocations: 6.231 GiB, 66.96% gc time, 10.46% compilation time: <1% of which was recompilation)
+        accession_to_taxid_table[!, "taxid"] .= parse.(Int, accession_to_taxid_table[!, "taxid"])
+        @time Arrow.write(outfile, accession_to_taxid_table)
+    else
+        accession_to_taxid_table = DataFrames.DataFrame(Arrow.Table(outfile))
+        if !(eltype(accession_to_taxid_table[!, "taxid"]) <: Int)
+            accession_to_taxid_table[!, "taxid"] .= parse.(Int, accession_to_taxid_table[!, "taxid"])
+        end
+    end
+    return accession_to_taxid_table
+end
+
+
+function visualize_xam_classifications(;xam, sample_id, accession_to_taxid_table)
+    xam_classification_table_file = xam * ".classification_table.arrow"
+    if !isfile(xam_classification_table_file)
+        @time classification_table = Mycelia.classify_xam_with_blast_taxonomies(xam=xam, accession_to_taxid_table=accession_to_taxid_table)
+        Arrow.write(xam_classification_table_file, classification_table)
+    else
+        classification_table = DataFrames.DataFrame(Arrow.Table(xam_classification_table_file))
+    end
+
+    unique_taxids = filter(x -> x > 0, sort(unique(classification_table[!, "final_assignment"])))
+    taxid_lineage_table = Mycelia.taxids2taxonkit_summarized_lineage_table(unique_taxids)
+    reads_to_taxon_lineage_table = DataFrames.leftjoin(classification_table, taxid_lineage_table, on="final_assignment" => "taxid")
+    reads_to_taxon_lineage_table = Mycelia.assign_lowest_rank_to_reads_to_taxon_lineage_table(reads_to_taxon_lineage_table)
+    p = Mycelia.sankey_visualize_reads_lowest_rank(reads_to_taxon_lineage_table[!, "lowest_rank"]; title="$sample_id")
+    StatsPlots.savefig(p, xam * ".$(sample_id).sankey.png")
+    StatsPlots.savefig(p, xam * ".$(sample_id).sankey.svg")
+    StatsPlots.savefig(p, xam * ".$(sample_id).sankey.pdf")
+    display(p)
+
+    for taxa_level in ["domain", "family", "genus", "species"]
+        taxa_counts = sort(collect(StatsBase.countmap(filter(!ismissing, reads_to_taxon_lineage_table[!, taxa_level]))), by=x->x[2], rev=true)
+        taxa_count_pairs = Mycelia.streamline_counts(taxa_counts)
+
+        fig = Mycelia.visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
+        CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.png", fig)
+        CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.svg", fig)
+        CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.pdf", fig)
+        display(fig)
+
+        fig = Mycelia.visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs, title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
+        CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.png", fig)
+        CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.svg", fig)
+        CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.pdf", fig)
+        display(fig)
+    end
+end
+
 function visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs; title = "Distribution of Relative Abundance by Taxa")
     df = DataFrames.DataFrame(
         taxa = first.(taxa_count_pairs),
@@ -13,7 +460,8 @@ function visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs; t
         ylabel = "Proportion",
         title = title,
         xticks = (1:length(df.taxa), df.taxa),
-        xticklabelrotation = π/3
+        xticklabelrotation = π/2,
+        xticklabelsize = max(15 - Int(floor(log(2, length(df.taxa)))), 6)
     )
 
     # Create bar plot
@@ -38,7 +486,7 @@ function visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs; t
             proportion + maximum(df.proportion) * 0.02,
             text = string(proportion),
             align = (:left, :center),
-            fontsize = 14,
+            fontsize = max(15 - Int(floor(log(2, length(df.taxa)))), 6),
             rotation = π/2  # Make the labels vertical (90 degrees)
         )
     end
@@ -73,7 +521,8 @@ function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Dis
         ylabel = "Count",
         title = title,
         xticks = (1:length(df.taxa), df.taxa),
-        xticklabelrotation = π/3
+        xticklabelrotation = π/2,
+        xticklabelsize = max(15 - Int(floor(log(2, length(df.taxa)))), 6)
     )
 
     # Create bar plot
@@ -96,7 +545,7 @@ function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Dis
             count + maximum(df.count) * 0.02,
             text = string(count),
             align = (:left, :center),
-            fontsize = 14,
+            fontsize = max(15 - Int(floor(log(2, length(df.taxa)))), 6),
             rotation = π/2  # Make the labels vertical (90 degrees)
         )
     end
@@ -112,17 +561,40 @@ function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Dis
     fig
 end
 
-function streamline_counts(counts; min_count=3)
+function streamline_counts(counts; threshold=0.01, min_len=30)
+    if length(counts) < min_len
+        return counts
+    end
+    total_counts = sum(last, counts)
+    
+    # Determine if threshold is relative (float between 0-1) or absolute (integer)
+    is_relative = isa(threshold, AbstractFloat) && 0.0 <= threshold <= 1.0
+    
     new_counts = Vector{eltype(counts)}()
     other_counts = 0
-    for (a, b) in counts
-        if b >= min_count
-            push!(new_counts, a =>b)
+    
+    for (item, count) in counts
+        if is_relative
+            # For relative threshold, check if the item's proportion is >= threshold
+            if count / total_counts >= threshold
+                push!(new_counts, item => count)
+            else
+                other_counts += count
+            end
         else
-            other_counts += b
+            # For absolute threshold, check if the count is >= threshold
+            if count >= threshold
+                push!(new_counts, item => count)
+            else
+                other_counts += count
+            end
         end
     end
-    push!(new_counts, "Other" => other_counts)
+    
+    if other_counts > 0
+        push!(new_counts, "Other" => other_counts)
+    end
+    
     return new_counts
 end
 
@@ -194,7 +666,7 @@ function sankey_visualize_reads_lowest_rank(lowest_ranks; title="")
     return p
 end
 
-function classify_xam_with_blast_taxonomies(;xam, blast_tax_table)
+function classify_xam_with_blast_taxonomies(;xam, accession_to_taxid_table)
     xam_table_columns_of_interest = [
         "template",
         "ismapped",
@@ -202,37 +674,20 @@ function classify_xam_with_blast_taxonomies(;xam, blast_tax_table)
         "flag",
         "reference",
         "position",
-        # "mappingquality",
-        # "cigar",
-        # "rnext",
-        # "pnext",
-        # "tlen",
-        # "seq",
-        # "qual",
-        # "alignlength",
         "alignment_score",
-        # "mismatches",
     ]
     
     blast_tax_table_columns_of_interest = [
         "accession",
-        "gi",
-        "sequence id",
-        "sequence title",
-        "sequence hash",
         "taxid",
-        # "leaf-node taxids",
-        # "common taxonomic name",
-        # "common taxonomic names for leaf-node taxids",
-        # "scientific name",
-        # "scientific names for leaf-node taxids",
-        # "BLAST name",
-        # "taxonomic super kingdom",
     ]
+    
+    # 151.408048 seconds (317.18 k allocations: 460.065 MiB, 0.10% compilation time: 20% of which was recompilation)
+    @time xam_table = Mycelia.xam_to_dataframe(xam)
 
     taxid_aware_xam_table = DataFrames.leftjoin(
         DataFrames.select(xam_table, xam_table_columns_of_interest),
-        DataFrames.select(blast_tax_table, blast_tax_table_columns_of_interest),
+        DataFrames.select(accession_to_taxid_table, blast_tax_table_columns_of_interest),
         on="reference" => "accession",
         matchmissing = :notequal
     )

@@ -78,7 +78,6 @@ const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
 const DEFAULT_BLASTDB_PATH = "$(homedir())/workspace/blastdb"
 
-
 # fix new error
 # ENV["MAMBA_ROOT_PREFIX"] = joinpath(DEPOT_PATH[1], "conda", "3", "x86_64")
 
@@ -102,6 +101,8 @@ const FASTA_REGEX = r"\.(fa|fasta|fna|fas|fsa|ffn|faa|mpfa|frn)(\.gz)?$"
 const FASTQ_REGEX = r"\.(fq|fastq)(\.gz)?$"
 const XAM_REGEX = r"\.(sam|bam|cram|sam\.gz)$"
 const VCF_REGEX = r"\.vcf(\.gz)?$"
+
+ProgressMeter.ijulia_behavior(:clear)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1218,6 +1219,18 @@ like hyphens, colons or dots.
 """
 function normalized_current_datetime()
     return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the current date as a normalized string with all non-word characters removed.
+
+The output format is based on ISO datetime (YYYYMMDD) but strips any special characters
+like hyphens, colons or dots.
+"""
+function normalized_current_date()
+    return replace(Dates.format(Dates.today(), Dates.ISODateFormat), r"[^\w]" => "")
 end
 
 """
@@ -13866,6 +13879,40 @@ function repr_long(v)
     return String(take!(buf))
 end
 
+function rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
+    # Create a temporary file for storing file paths
+    temp_file = joinpath(tempdir(), "rclone_sources_$(Random.randstring(8)).txt")
+    
+    try
+        # Write paths to temp file
+        open(temp_file, "w") do file
+            for path in relative_paths
+                println(file, path)
+            end
+        end
+        
+        println("Starting download of $(length(relative_paths)) files to $destination...")
+        
+        # Make sure the destination directory exists
+        if !isdir(destination)
+            mkdir(destination)
+        end
+        
+        # Download files using rclone with progress reporting
+        run(`rclone copy $source $destination --files-from $temp_file --progress`)
+        
+        println("Download completed successfully")
+        return true
+    catch e
+        println("Error: $e")
+        return false
+    finally
+        # Clean up temp file
+        if isfile(temp_file)
+            rm(temp_file)
+            println("Temporary file removed")
+        end
+        
 """
     dataframe_to_ndjson(df::DataFrame; outfile::Union{String,Nothing}=nothing)
 
