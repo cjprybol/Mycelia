@@ -728,68 +728,262 @@ function download_blast_db(;db, dbdir=Mycelia.DEFAULT_BLASTDB_PATH, source="", w
     return "$(dbdir)/$(db)"
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases.
+
+# # Arguments
+# - `db::String`: Database source, must be either "genbank" or "refseq"
+
+# # Returns
+# - `DataFrame`: Parsed metadata table with properly typed columns including:
+#   - Integer columns: taxid, species_taxid, genome metrics, and gene counts
+#   - Float columns: gc_percent
+#   - Date columns: seq_rel_date, annotation_date
+#   - String columns: all other fields
+
+# # Details
+# Downloads the assembly summary file from NCBI's FTP server and processes it by:
+# 1. Parsing the tab-delimited file with commented headers
+# 2. Converting numeric strings to proper Integer/Float types
+# 3. Parsing date strings to Date objects
+# 4. Handling missing values throughout
+# """
+# function load_ncbi_metadata(db)
+#     if !(db in ["genbank", "refseq"])
+#         error()
+#     end
+#     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#     # ncbi_summary_file = basename(ncbi_summary_url)
+#     # if !isfile(ncbi_summary_file)
+#     #     download(ncbi_summary_url, ncbi_summary_file)
+#     # end
+#     buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
+#     # types=[]
+#     # ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', encodings=Dict("na" => missing), allowmissing=true, typedetectrows=100)...)
+#     ncbi_summary_table = DataFrames.DataFrame(uCSV.read(buffer, comment = "## ", header=1, delim='\t', types=String)...)
+#     ints = [
+#         "taxid",
+#         "species_taxid",
+#         "genome_size",
+#         "genome_size_ungapped",
+#         "replicon_count",
+#         "scaffold_count",
+#         "contig_count",
+#         "total_gene_count",
+#         "protein_coding_gene_count",
+#         "non_coding_gene_count"
+#     ]
+#     floats = ["gc_percent"]
+#     dates = ["seq_rel_date", "annotation_date"]
+#     for int in ints
+#         ncbi_summary_table[!, int] = something.(tryparse.(Int, ncbi_summary_table[!, int]), missing)
+#     end
+#     for float in floats
+#         ncbi_summary_table[!, float] = something.(tryparse.(Float64, ncbi_summary_table[!, float]), missing)
+#     end
+#     for date in dates
+#         # ncbi_summary_table[!, date] = Dates.Date.(ncbi_summary_table[!, date], Dates.dateformat"yyyy/mm/dd")
+#         parsed_dates = map(date_string -> tryparse(Dates.Date, date_string, Dates.dateformat"yyyy/mm/dd"), ncbi_summary_table[!, date])
+#         ncbi_summary_table[!, date] = something.(parsed_dates, missing)
+#     end
+#     return ncbi_summary_table
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases using CSV.jl for improved performance.
+
+# # Arguments
+# - `db::String`: Database source, must be either "genbank" or "refseq".
+
+# # Returns
+# - `DataFrames.DataFrame`: Parsed metadata table with columns typed according to NCBI specifications. Handles missing values represented by "na" or empty fields.
+
+# # Details
+# Downloads the assembly summary file directly from NCBI's FTP server via HTTP and parses it efficiently using `CSV.File`.
+# 1.  Fetches data directly from the URL stream.
+# 2.  Skips the initial comment line (`## ...`).
+# 3.  Parses the tab-delimited file, recognizing the header line starting with `# assembly_accession...`.
+# 4.  Uses `CSV.jl`'s type detection and specific type mapping for performance.
+# 5.  Automatically handles missing values ("na", "", "NA").
+# 6.  Parses specified date columns using the format "yyyy/mm/dd".
+# """
+# function load_ncbi_metadata(db::String)
+#     # Validate database input
+#     if !(db in ["genbank", "refseq"])
+#         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+#     end
+
+#     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#     @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+#     try
+#         # Fetch data using HTTP.get, response body is an IO stream
+#         response = HTTP.get(ncbi_summary_url, status_exception = true) # Throw error for non-2xx status
+
+#         # Define column types for direct parsing by CSV.jl
+#         # Let CSV.jl infer non-specified columns (mostly String)
+#         # Specify Int, Float, and Date types for known columns
+#         types_dict = Dict(
+#             :taxid => Int64,
+#             :species_taxid => Int64,
+#             :genome_size => Int64,
+#             :genome_size_ungapped => Int64,
+#             :replicon_count => Int64,
+#             :scaffold_count => Int64,
+#             :contig_count => Int64,
+#             :total_gene_count => Int64,
+#             :protein_coding_gene_count => Int64,
+#             :non_coding_gene_count => Int64,
+#             :gc_percent => Float64,
+#             :seq_rel_date => Dates.Date,
+#             :annotation_date => Dates.Date
+#         )
+
+#         # Parse the stream directly using CSV.File
+#         # skipto=2: Skip the first line starting with "##"
+#         # header=1: The first line *after* skipping is the header (starts with '#')
+#         # delim='\t': Tab-separated values
+#         # missingstrings: Define strings that represent missing data
+#         # types: Apply specific types for efficiency; others inferred
+#         # dateformat: Specify the format for date parsing
+#         # pool=true: Can improve performance for string columns with repeated values
+#         csv_file = CSV.File(
+#             response.body;
+#             skipto=2,
+#             header=1,
+#             delim='\t',
+#             missingstrings=["na", "NA", ""],
+#             types=types_dict,
+#             dateformat="yyyy/mm/dd",
+#             pool=true,
+#             # normalizenames=true could be useful if header names have tricky characters,
+#             # but NCBI headers seem clean after the initial '#'.
+#             # CSV.jl handles the leading '#' in the header line automatically.
+#         )
+
+#         # Materialize the CSV.File into a DataFrame
+#         ncbi_summary_table = DataFrames.DataFrame(csv_file)
+#         @info "Successfully loaded and parsed NCBI assembly summary into a DataFrame."
+
+#         return ncbi_summary_table
+
+#     catch e
+#         @error "Failed to download or parse NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         # Depending on desired behavior, you might rethrow, return an empty DataFrame, or handle specific errors (e.g., HTTP.StatusError)
+#         rethrow(e)
+#     end
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases.
+Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases using CSV.jl for improved performance.
+
+Handles files with initial comment lines (`##...`) and header lines starting with '#'.
 
 # Arguments
-- `db::String`: Database source, must be either "genbank" or "refseq"
+- `db::String`: Database source, must be either "genbank" or "refseq".
 
 # Returns
-- `DataFrame`: Parsed metadata table with properly typed columns including:
-  - Integer columns: taxid, species_taxid, genome metrics, and gene counts
-  - Float columns: gc_percent
-  - Date columns: seq_rel_date, annotation_date
-  - String columns: all other fields
+- `DataFrames.DataFrame`: Parsed metadata table with columns typed according to NCBI specifications. Handles missing values represented by "na" or empty fields.
 
 # Details
-Downloads the assembly summary file from NCBI's FTP server and processes it by:
-1. Parsing the tab-delimited file with commented headers
-2. Converting numeric strings to proper Integer/Float types
-3. Parsing date strings to Date objects
-4. Handling missing values throughout
+Downloads the assembly summary file directly from NCBI's FTP server via HTTP and parses it efficiently using `CSV.File`.
+1.  Fetches the entire data into an in-memory buffer.
+2.  Manually reads the first line (comment `##`) and second line (header `# ...`).
+3.  Cleans the extracted header names (removes leading '#', splits by tab).
+4.  Parses the rest of the buffer using `CSV.File`, providing the cleaned header.
+5.  Uses `CSV.jl`'s type detection and specific type mapping for performance.
+6.  Automatically handles missing values ("na", "", "NA") using `missingstring`.
+7.  Parses specified date columns using the format "yyyy/mm/dd".
 """
-function load_ncbi_metadata(db)
+function load_ncbi_metadata(db::String)
+    # Validate database input
     if !(db in ["genbank", "refseq"])
-        error()
+        throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
     end
+
     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
-    # ncbi_summary_file = basename(ncbi_summary_url)
-    # if !isfile(ncbi_summary_file)
-    #     download(ncbi_summary_url, ncbi_summary_file)
-    # end
-    buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
-    # types=[]
-    # ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', encodings=Dict("na" => missing), allowmissing=true, typedetectrows=100)...)
-    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(buffer, comment = "## ", header=1, delim='\t', types=String)...)
-    ints = [
-        "taxid",
-        "species_taxid",
-        "genome_size",
-        "genome_size_ungapped",
-        "replicon_count",
-        "scaffold_count",
-        "contig_count",
-        "total_gene_count",
-        "protein_coding_gene_count",
-        "non_coding_gene_count"
-    ]
-    floats = ["gc_percent"]
-    dates = ["seq_rel_date", "annotation_date"]
-    for int in ints
-        ncbi_summary_table[!, int] = something.(tryparse.(Int, ncbi_summary_table[!, int]), missing)
+    @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+    local response_body::Vector{UInt8}
+    try
+        # Fetch data using HTTP.get
+        response = HTTP.get(ncbi_summary_url, status_exception=true) # Throw error for non-2xx status
+        response_body = response.body
+    catch e
+        @error "Failed to download NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+        rethrow(e)
     end
-    for float in floats
-        ncbi_summary_table[!, float] = something.(tryparse.(Float64, ncbi_summary_table[!, float]), missing)
+
+    try
+        # Create an IOBuffer from the downloaded body
+        buffer = IOBuffer(response_body)
+
+        # Read and discard the first line (## comment)
+        readline(buffer)
+
+        # Read the second line (header starting with #)
+        header_line_raw = readline(buffer)
+
+        # Clean the header line: remove leading '#', strip whitespace, split by tab
+        header_string = lstrip(header_line_raw, ['#', ' ']) # Remove leading '#' and potential space
+        # Using Base Julia string split:
+        # header_names = String.(Base.split(Base.strip(header_string), '\t'))
+        # Using StringManipulation for potentially more robust splitting/cleaning:
+        header_names = split(strip(header_string), '\t')
+
+        # Convert header names to Symbols for CSV.jl and DataFrames
+        header_symbols = Symbol.(header_names)
+
+        # Define column types for direct parsing by CSV.jl
+        types_dict = Dict(
+            :taxid => Int,
+            :species_taxid => Int,
+            :genome_size => Int,
+            :genome_size_ungapped => Int,
+            :replicon_count => Int,
+            :scaffold_count => Int,
+            :contig_count => Int,
+            :total_gene_count => Int,
+            :protein_coding_gene_count => Int,
+            :non_coding_gene_count => Int,
+            :gc_percent => Float64,
+            :seq_rel_date => String,
+            :annotation_date => String
+        )
+
+        # Parse the rest of the buffer using CSV.File
+        # The buffer is now positioned at the start of the data (line 3)
+        # Provide the cleaned header symbols explicitly
+        # Use 'missingstring' (singular) instead of 'missingstrings' (plural)
+        csv_file = CSV.File(
+            buffer; # Pass the buffer, already positioned after the header
+            header=header_symbols, # Provide the cleaned header names
+            delim='\t',
+            missingstring=["na", "NA", ""], # Corrected keyword
+            types=types_dict,
+            pool=true,
+            # No need for skipto, datarow, or numerical header argument now
+        )
+
+        # Materialize the CSV.File into a DataFrame
+        ncbi_summary_table = DataFrames.DataFrame(csv_file) # copycols=true is default but explicit
+        @info "Successfully loaded and parsed NCBI assembly summary into a DataFrame."
+
+        return ncbi_summary_table
+
+    catch e
+        @error "Failed to parse NCBI metadata buffer from $ncbi_summary_url" exception=(e, catch_backtrace())
+        # Rethrow the parsing error
+        rethrow(e)
     end
-    for date in dates
-        # ncbi_summary_table[!, date] = Dates.Date.(ncbi_summary_table[!, date], Dates.dateformat"yyyy/mm/dd")
-        parsed_dates = map(date_string -> tryparse(Dates.Date, date_string, Dates.dateformat"yyyy/mm/dd"), ncbi_summary_table[!, date])
-        ncbi_summary_table[!, date] = something.(parsed_dates, missing)
-    end
-    return ncbi_summary_table
 end
+
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
