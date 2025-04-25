@@ -10057,9 +10057,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Writes FASTA records to a file, optionally gzipped.
 
 # Arguments
-- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true.
+- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true and ".gz" isn't already the extension.
 - `records::Vector{FASTX.FASTA.Record}`: A vector of FASTA records.
-- `gzip::Bool=false`: Whether to compress the output with gzip.
+- `gzip::Bool`: Optionally force compression of the output with gzip. By default will use the file name to infer.
 
 # Returns
 - `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
@@ -14238,6 +14238,7 @@ function repr_long(v)
     return String(take!(buf))
 end
 
+
 function rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
     # Create a temporary file for storing file paths
     temp_file = joinpath(tempdir(), "rclone_sources_$(Random.randstring(8)).txt")
@@ -14250,15 +14251,16 @@ function rclone_copy_list(;source::String, destination::String, relative_paths::
             end
         end
         
-        println("Starting download of $(length(relative_paths)) files to $destination...")
+        println("Starting transfer of $(length(relative_paths)) files from $source to $destination...")
         
-        # Make sure the destination directory exists
-        if !isdir(destination)
+        # Make sure the destination directory exists if it's local
+        if !occursin(":", destination) && !isdir(destination)
             mkdir(destination)
         end
         
         # Download files using rclone with progress reporting
-        run(`rclone copy $source $destination --files-from $temp_file --progress`)
+        # --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 
+        run(`rclone copy $source $destination --verbose --files-from $temp_file`)
         
         println("Download completed successfully")
         return true

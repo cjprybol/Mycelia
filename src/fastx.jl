@@ -641,33 +641,54 @@ function fastx_stats(fastx)
 end
 
 """
+    fastx2normalized_table(fastx::AbstractString) -> DataFrames.DataFrame
+
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Convert a FASTX (FASTA/FASTQ) file into a normalized tab-separated table format with standardized sequence identifiers.
+Read a FASTA or FASTQ file and convert its records into a normalized `DataFrames.DataFrame` where each row represents a sequence record and columns provide standardized metadata and sequence statistics.
 
 # Arguments
-- `fastx_file::String`: Path to input FASTX file
-- `outfile::String`: Path to output compressed TSV file (defaults to input filename + ".tsv.gz")
-- `force::Bool=false`: If true, overwrites existing output file
+
+- `fastx::AbstractString`: Path to a FASTA or FASTQ file. The file must exist and be non-empty. The file type is inferred from the filename using `Mycelia.FASTA_REGEX` and `Mycelia.FASTQ_REGEX`.
 
 # Returns
-- `String`: Path to the created output file
 
-# Output Format
-Creates a gzipped TSV file with the following columns:
-- fasta_identifier: Original FASTA filename
-- sequence_sha256: SHA256 hash of the sequence
-- sequence_identifier: Original sequence ID from FASTA
-- sequence_description: Full sequence description from FASTA
-- sequence: The actual sequence
+- `DataFrames.DataFrame`: A data frame where each row contains information for a record from the input file, and columns include:
+    - `fastx_path`: Basename of the input file.
+    - `fastx_sha256`: Aggregated SHA256 hash of all record SHA256s in the file.
+    - `record_identifier`: Identifier from the record header.
+    - `record_description`: Description from the record header.
+    - `record_sha256`: SHA256 hash of the record sequence.
+    - `record_quality`: Vector of quality scores (`Vector{Float64}`) for FASTQ, or `missing` for FASTA.
+    - `record_alphabet`: Sorted, joined string of unique, uppercase characters in the record sequence.
+    - `record_type`: Alphabet type detected by `Mycelia.detect_alphabet` (e.g., `:DNA`, `:RNA`, etc.).
+    - `mean_record_quality`: Mean quality score (for FASTQ), or `missing` (for FASTA).
+    - `median_record_quality`: Median quality score (for FASTQ), or `missing` (for FASTA).
+    - `record_length`: Length of the sequence.
+    - `record_sequence`: The sequence string itself.
+
+# Notes
+
+- The function asserts that the file exists and is not empty.
+- File type is determined by regex matching on the filename.
+- For FASTA files, quality-related columns are set to `missing`.
+- For FASTQ files, quality scores are extracted and statistics are computed.
+- Record SHA256 hashes are aggregated to compute a file-level SHA256 via `Mycelia.metasha256`.
+- Requires the following namespaces: `DataFrames`, `Statistics`, `Mycelia`, `FASTX`, and `Base.basename`.
+- The function returns the columns in the order: `fastx_path`, `fastx_sha256`, followed by all other record columns.
+
+# Example
+
+```julia
+import DataFrames
+import Mycelia
+import FASTX
+
+table = fastx2normalized_table("example.fasta")
+DataFrames.first(table, 3)
+```
 """
 function fastx2normalized_table(fastx)
-
-    # Mycelia.add_bioconda_env("seqkit")
-    # cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit
-    #     fx2tab
-    # return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, delim='\t'))
-
     @assert isfile(fastx) && filesize(fastx) > 0
     normalized_table = DataFrames.DataFrame(
         record_identifier = String[],
@@ -684,10 +705,10 @@ function fastx2normalized_table(fastx)
 
     file_type = :unknown
     if occursin(Mycelia.FASTA_REGEX, fastx)
-        @info "Processing FASTA file"
+        # @info "Processing FASTA file"
         file_type = :fasta
     elseif occursin(Mycelia.FASTQ_REGEX, fastx)
-        @info "Processing FASTQ file"
+        # @info "Processing FASTQ file"
         file_type = :fastq
     else
         error("File is not FASTA or FASTQ")
