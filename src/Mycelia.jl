@@ -355,13 +355,13 @@ function scg_sbatch(;
         mail_user::String,
         mail_type::String="ALL",
         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
-        partition::String,
+        partition::String="interactive",
         account::String,
         nodes::Int=1,
         ntasks::Int=1,
         time::String="1-00:00:00",
-        cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 32,
+        cpus_per_task::Int=16,
+        mem_gb::Int=cpus_per_task * 8,
         cmd::String
     )
     submission = 
@@ -2175,7 +2175,9 @@ function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1
     Mycelia.add_bioconda_env("minimap2")
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    index_file = "$(fasta).x" * replace(mapping_type, ":" => "-") * ".I$(index_size).mmi"
+    # if lr:hq, deal with : in the name
+    # index_file = replace(mapping_type, ":" => "-")
     if as_string
         cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)"
     else
@@ -14064,6 +14066,77 @@ function upload_dataframe_to_bigquery(;
         # Add more robust error handling
     end
 end
+
+"""
+    save_df_jld2(df::DataFrames.DataFrame, filename::String; key::String="dataframe")
+
+Save a DataFrame to a JLD2 file.
+
+# Arguments
+- `df`: The DataFrame to save
+- `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
+- `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
+
+# Examples
+```julia
+import DataFrames
+df = DataFrames.DataFrame(x = 1:3, y = ["a", "b", "c"])
+save_df_jld2(df, "mydata")
+```
+"""
+function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
+    # Ensure filename has .jld2 extension
+    if !endswith(lowercase(filename), ".jld2")
+        filename = filename * ".jld2"
+    end
+    
+    # Save the dataframe to the JLD2 file
+    JLD2.jldopen(filename, "w") do file
+        file[key] = df
+    end
+    
+    return filename
+end
+
+"""
+    load_df_jld2(filename::String; key::String="dataframe") -> DataFrames.DataFrame
+
+Load a DataFrame from a JLD2 file.
+
+# Arguments
+- `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
+- `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
+
+# Returns
+- The loaded DataFrame
+
+# Examples
+```julia
+df = load_df_jld2("mydata")
+```
+"""
+function load_df_jld2(filename::String; key::String="dataframe")
+    # Ensure filename has .jld2 extension
+    if !endswith(lowercase(filename), ".jld2")
+        filename = filename * ".jld2"
+    end
+    
+    # Check if file exists
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Load the dataframe from the JLD2 file
+    df = JLD2.jldopen(filename, "r") do file
+        if !haskey(file, key)
+            error("Key '$key' not found in file $filename")
+        end
+        return file[key]
+    end
+    
+    return df
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
