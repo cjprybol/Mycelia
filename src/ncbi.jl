@@ -128,44 +128,494 @@ function get_blastdb_tax_info(;blastdb, entries = String[], taxids = Int[])
           )
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert a BLAST database to Arrow format with sequence and taxonomy information.
+# Uses a simple serial approach with direct Arrow streaming for minimal memory usage.
+
+# # Arguments
+# - `blastdb::String`: Path to the BLAST database
+# - `outfile::String=""`: Output file path. If empty, generates name based on input database
+# - `force::Bool=false`: Whether to overwrite existing output file
+
+# # Returns
+# - `String`: Path to the generated output file (.arrow)
+
+# # Output Format
+# Arrow file containing columns (in this order):
+# - sequence SHA256
+# - sequence hash
+# - sequence id
+# - accession
+# - gi
+# - sequence title
+# - BLAST name
+# - taxid
+# - taxonomic super kingdom
+# - scientific name
+# - scientific names for leaf-node taxids
+# - common taxonomic name
+# - common taxonomic names for leaf-node taxids
+# - leaf-node taxids
+# - membership integer
+# - ordinal id
+# - PIG
+# - sequence length
+# - sequence
+# """
+# function blastdb2table(;blastdb, outfile="", force=false)
+#     # Set up environment and validate database
+#     Mycelia.add_bioconda_env("blast")
+#     blast_db_info = Mycelia.local_blast_database_info()
+#     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+#     @assert DataFrames.nrow(filtered) == 1
+#     blast_db_info = filtered[1, :]
+#     @show blast_db_info
+
+#     # Determine database type and file extension
+#     if blast_db_info["BLAST database molecule type"] == "Protein"
+#         extension = ".faa"
+#     elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+#         extension = ".fna"
+#     else
+#         @show blast_db_info["BLAST database molecule type"]
+#         error("unexpected blast database molecule type")
+#     end
+
+#     # Set output file name if not provided
+#     if outfile == ""
+#         outfile = blastdb * extension * ".arrow"
+#     end
+
+#     # Skip processing if output exists (unless forced)
+#     if isfile(outfile) && filesize(outfile) > 0 && !force
+#         @show Mycelia.filesize_human_readable(outfile)
+#         return outfile
+#     end
+
+#     # Define the mapping from outfmt symbols to column names.
+#     symbol_header_map = OrderedCollections.OrderedDict(
+#         "%s" => "sequence",            # field 1
+#         "%a" => "accession",           # field 2
+#         "%g" => "gi",                  # field 3
+#         "%o" => "ordinal id",          # field 4
+#         "%i" => "sequence id",         # field 5
+#         "%t" => "sequence title",      # field 6
+#         "%l" => "sequence length",     # field 7
+#         "%h" => "sequence hash",       # field 8
+#         "%T" => "taxid",               # field 9
+#         "%X" => "leaf-node taxids",    # field 10
+#         "%e" => "membership integer",  # field 11
+#         "%L" => "common taxonomic name",   # field 12
+#         "%C" => "common taxonomic names for leaf-node taxids",  # field 13
+#         "%S" => "scientific name",     # field 14
+#         "%N" => "scientific names for leaf-node taxids",  # field 15
+#         "%B" => "BLAST name",          # field 16
+#         "%K" => "taxonomic super kingdom", # field 17
+#         "%P" => "PIG"                  # field 18
+#     )
+#     outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+
+#     # Define the desired output column order.
+#     header_order = [
+#         "sequence SHA256",
+#         "sequence hash",
+#         "sequence id",
+#         "accession",
+#         "gi",
+#         "sequence title",
+#         "BLAST name",
+#         "taxid",
+#         "taxonomic super kingdom",
+#         "scientific name",
+#         "scientific names for leaf-node taxids",
+#         "common taxonomic name",
+#         "common taxonomic names for leaf-node taxids",
+#         "leaf-node taxids",
+#         "membership integer",
+#         "ordinal id",
+#         "PIG",
+#         "sequence length"
+#         # "sequence"
+#     ]
+
+#     total_sequences = blast_db_info["number of sequences"]
+#     progress = ProgressMeter.Progress(total_sequences, desc="Converting BLAST DB to Arrow: ", dt=1.0)
+    
+#     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+#     open(Arrow.Writer, outfile) do writer
+#         for (i, line) in enumerate(eachline(cmd))
+#             fields = split(strip(line), '\t')
+#             # Pad fields with empty strings if necessary
+#             if length(fields) < length(symbol_header_map)
+#                 fields = vcat(fields, fill("", length(symbol_header_map) - length(fields)))
+#             end
+#             # Process sequence: clean and compute SHA256 from field 1 (the raw sequence)
+#             seq = uppercase(String(filter(x -> isvalid(Char, x), fields[1])))
+#             seq_sha256 = Mycelia.seq2sha256(seq)
+
+#             # Build a mapping from column names to the extracted field values.
+#             mapped = Dict{String, String}()
+#             idx = 1
+#             for (_, colname) in symbol_header_map
+#                 mapped[colname] = fields[idx]
+#                 idx += 1
+#             end
+
+#             # Construct a NamedTuple which is Arrow-compatible
+#             row = DataFrames.DataFrame(
+#                 sequence_SHA256 = seq_sha256,
+#                 sequence_hash = mapped["sequence hash"],
+#                 sequence_id = mapped["sequence id"],
+#                 accession = mapped["accession"],
+#                 gi = mapped["gi"],
+#                 sequence_title = mapped["sequence title"],
+#                 BLAST_name = mapped["BLAST name"],
+#                 taxid = mapped["taxid"],
+#                 taxonomic_super_kingdom = mapped["taxonomic super kingdom"],
+#                 scientific_name = mapped["scientific name"],
+#                 scientific_names_for_leaf_node_taxids = mapped["scientific names for leaf-node taxids"],
+#                 common_taxonomic_name = mapped["common taxonomic name"],
+#                 common_taxonomic_names_for_leaf_node_taxids = mapped["common taxonomic names for leaf-node taxids"],
+#                 leaf_node_taxids = mapped["leaf-node taxids"],
+#                 membership_integer = mapped["membership integer"],
+#                 ordinal_id = mapped["ordinal id"],
+#                 PIG = mapped["PIG"],
+#                 sequence_length = mapped["sequence length"],
+#                 # sequence = mapped["sequence"]
+#             )
+#             Arrow.write(writer, row)
+            
+#             # Update progress meter
+#             ProgressMeter.next!(progress; showvalues = [
+#                 (:completed, i),
+#                 (:total, total_sequences),
+#                 (:percent, round(i/total_sequences*100, digits=1))
+#             ])
+#         end
+#     end
+
+#     ProgressMeter.finish!(progress)
+#     println("Done! Output saved to $(outfile)")
+#     return outfile
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert a BLAST database to an in-memory table with sequence and taxonomy information.
+
+# # Arguments
+# - `blastdb::String`: Path to the BLAST database
+# - `outfile::String=""`: Optional output file path. If provided, results will be saved to this file
+# - `force::Bool=false`: Whether to overwrite existing output file
+# - `ALL_FIELDS::Bool=true`: If true, include all fields regardless of other flag settings
+# - Field selection flags (default to false unless ALL_FIELDS is true):
+#   - `sequence_sha256::Bool`: Include SHA256 hash of the sequence
+#   - `sequence_hash::Bool`: Include sequence hash
+#   - `sequence_id::Bool`: Include sequence ID
+#   - `accession::Bool`: Include accession number
+#   - `gi::Bool`: Include GI number
+#   - `sequence_title::Bool`: Include sequence title
+#   - `blast_name::Bool`: Include BLAST name
+#   - `taxid::Bool`: Include taxid
+#   - `taxonomic_super_kingdom::Bool`: Include taxonomic super kingdom
+#   - `scientific_name::Bool`: Include scientific name
+#   - `scientific_names_leaf_nodes::Bool`: Include scientific names for leaf-node taxids
+#   - `common_taxonomic_name::Bool`: Include common taxonomic name
+#   - `common_names_leaf_nodes::Bool`: Include common taxonomic names for leaf-node taxids
+#   - `leaf_node_taxids::Bool`: Include leaf-node taxids
+#   - `membership_integer::Bool`: Include membership integer
+#   - `ordinal_id::Bool`: Include ordinal ID
+#   - `pig::Bool`: Include PIG
+#   - `sequence_length::Bool`: Include sequence length
+#   - `sequence::Bool`: Include the full sequence
+
+# # Returns
+# - `DataFrame`: DataFrame containing the requested columns from the BLAST database
+# """
+# function blastdb2table(;
+#     blastdb, 
+#     outfile="", 
+#     force=false,
+#     # Master field selection flag
+#     ALL_FIELDS=true,
+#     # Individual field selection flags
+#     sequence_sha256=false,
+#     sequence_hash=false,
+#     sequence_id=false,
+#     accession=false,
+#     gi=false,
+#     sequence_title=false,
+#     blast_name=false,
+#     taxid=false,
+#     taxonomic_super_kingdom=false,
+#     scientific_name=false,
+#     scientific_names_leaf_nodes=false,
+#     common_taxonomic_name=false,
+#     common_names_leaf_nodes=false,
+#     leaf_node_taxids=false,
+#     membership_integer=false,
+#     ordinal_id=false,
+#     pig=false,
+#     sequence_length=false,
+#     sequence=false
+# )
+#     # If ALL_FIELDS is true, override all field flags to true
+#     if ALL_FIELDS
+#         sequence_sha256 = true
+#         sequence_hash = true
+#         sequence_id = true
+#         accession = true
+#         gi = true
+#         sequence_title = true
+#         blast_name = true
+#         taxid = true
+#         taxonomic_super_kingdom = true
+#         scientific_name = true
+#         scientific_names_leaf_nodes = true
+#         common_taxonomic_name = true
+#         common_names_leaf_nodes = true
+#         leaf_node_taxids = true
+#         membership_integer = true
+#         ordinal_id = true
+#         pig = true
+#         sequence_length = true
+#         sequence = true
+#     end
+    
+#     Mycelia.add_bioconda_env("blast")
+#     blast_db_info = Mycelia.local_blast_database_info()
+#     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+#     @assert DataFrames.nrow(filtered) == 1
+#     blast_db_info = filtered[1, :]
+#     @show blast_db_info
+
+#     # Determine database type
+#     if blast_db_info["BLAST database molecule type"] == "Protein"
+#         extension = ".faa"
+#     elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+#         extension = ".fna"
+#     else
+#         @show blast_db_info["BLAST database molecule type"]
+#         error("unexpected blast database molecule type")
+#     end
+
+#     # Check if output file exists (if specified)
+#     if outfile != "" && isfile(outfile) && filesize(outfile) > 0 && !force
+#         @show Mycelia.filesize_human_readable(outfile)
+#         # Load and return the existing file
+#         return Arrow.Table(outfile) |> DataFrames.DataFrame
+#     end
+
+#     # Check if sequence needs to be extracted for SHA256 calculation
+#     needs_sequence = sequence || sequence_sha256
+
+#     # Define the mapping from outfmt symbols to column names and their inclusion status
+#     field_config = [
+#         # format, column_name, include_flag, dependency (if any)
+#         ("%s", "sequence", needs_sequence, nothing),  # Need sequence for SHA256
+#         ("%a", "accession", accession, nothing),
+#         ("%g", "gi", gi, nothing),
+#         ("%o", "ordinal_id", ordinal_id, nothing),
+#         ("%i", "sequence_id", sequence_id, nothing),
+#         ("%t", "sequence_title", sequence_title, nothing),
+#         ("%l", "sequence_length", sequence_length, nothing),
+#         ("%h", "sequence_hash", sequence_hash, nothing),
+#         ("%T", "taxid", taxid, nothing),
+#         ("%X", "leaf_node_taxids", leaf_node_taxids, nothing),
+#         ("%e", "membership_integer", membership_integer, nothing),
+#         ("%L", "common_taxonomic_name", common_taxonomic_name, nothing),
+#         ("%C", "common_names_leaf_nodes", common_names_leaf_nodes, nothing),
+#         ("%S", "scientific_name", scientific_name, nothing),
+#         ("%N", "scientific_names_leaf_nodes", scientific_names_leaf_nodes, nothing),
+#         ("%B", "blast_name", blast_name, nothing),
+#         ("%K", "taxonomic_super_kingdom", taxonomic_super_kingdom, nothing),
+#         ("%P", "pig", pig, nothing)
+#     ]
+
+#     # Generate format string for fields we need to fetch
+#     formats_to_fetch = [fmt for (fmt, _, include, _) in field_config if include]
+#     outfmt_string = join(formats_to_fetch, '\t')
+
+#     # Create field name mapping for processing
+#     format_to_colname = Dict(fmt => colname for (fmt, colname, _, _) in field_config)
+    
+#     # Create list of field names to include in final output
+#     output_columns = []
+#     if sequence_sha256
+#         push!(output_columns, "sequence_sha256")
+#     end
+    
+#     for (_, colname, include, _) in field_config
+#         if include && colname != "sequence"  # Handle sequence separately
+#             push!(output_columns, colname)
+#         end
+#     end
+    
+#     if sequence
+#         push!(output_columns, "sequence")
+#     end
+
+#     # Create DataFrame to hold results
+#     result_df = DataFrames.DataFrame()
+    
+#     total_sequences = blast_db_info["number of sequences"]
+#     progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+    
+#     # Run blastdbcmd to get data
+#     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+    
+#     # Process results and build DataFrame
+#     rows = []
+    
+#     for (i, line) in enumerate(eachline(cmd))
+#         fields = split(strip(line), '\t')
+#         # Pad fields with empty strings if necessary
+#         if length(fields) < length(formats_to_fetch)
+#             fields = vcat(fields, fill("", length(formats_to_fetch) - length(fields)))
+#         end
+        
+#         # Map fields to column names
+#         field_map = Dict{String, String}()
+#         for (j, fmt) in enumerate(formats_to_fetch)
+#             field_map[format_to_colname[fmt]] = fields[j]
+#         end
+        
+#         # Process sequence if needed (for SHA256 or to include in output)
+#         seq_sha256 = ""
+#         if needs_sequence
+#             seq = uppercase(String(filter(x -> isvalid(Char, x), field_map["sequence"])))
+#             if sequence_sha256
+#                 seq_sha256 = Mycelia.seq2sha256(seq)
+#             end
+#         end
+        
+#         # Create a Dict for this row
+#         row = Dict{String, String}()
+        
+#         # Add sequence_sha256 if requested
+#         if sequence_sha256
+#             row["sequence_sha256"] = seq_sha256
+#         end
+        
+#         # Add other fields if requested
+#         for (_, colname, include, _) in field_config
+#             if include && colname != "sequence"  # Handle sequence separately
+#                 row[colname] = field_map[colname]
+#             end
+#         end
+        
+#         # Add sequence if requested
+#         if sequence
+#             row["sequence"] = field_map["sequence"]
+#         end
+        
+#         push!(rows, row)
+        
+#         # Update progress meter
+#         ProgressMeter.next!(progress; showvalues = [
+#             (:completed, i),
+#             (:total, total_sequences),
+#             (:percent, round(i/total_sequences*100, digits=1))
+#         ])
+#     end
+    
+#     # Convert rows to DataFrame
+#     result_df = DataFrames.DataFrame(rows)
+    
+#     # Reorder columns if necessary to match expected order
+#     final_columns = filter(col -> col in names(result_df), output_columns)
+#     result_df = result_df[:, final_columns]
+    
+#     ProgressMeter.finish!(progress)
+#     return result_df
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Convert a BLAST database to Arrow format with sequence and taxonomy information.
-Uses a simple serial approach with direct Arrow streaming for minimal memory usage.
+Convert a BLAST database to an in-memory table with sequence and taxonomy information.
 
 # Arguments
 - `blastdb::String`: Path to the BLAST database
-- `outfile::String=""`: Output file path. If empty, generates name based on input database
+- `outfile::String=""`: Optional output file path. If provided, results will be saved to this file
 - `force::Bool=false`: Whether to overwrite existing output file
+- `ALL_FIELDS::Bool=true`: If true, include all fields regardless of other flag settings
+- Field selection flags (default to false unless ALL_FIELDS is true):
+  - `sequence_sha256::Bool`: Include SHA256 hash of the sequence
+  - `sequence_hash::Bool`: Include sequence hash
+  - `sequence_id::Bool`: Include sequence ID
+  - `accession::Bool`: Include accession number
+  - `gi::Bool`: Include GI number
+  - `sequence_title::Bool`: Include sequence title
+  - `blast_name::Bool`: Include BLAST name
+  - `taxid::Bool`: Include taxid
+  - `taxonomic_super_kingdom::Bool`: Include taxonomic super kingdom
+  - `scientific_name::Bool`: Include scientific name
+  - `scientific_names_leaf_nodes::Bool`: Include scientific names for leaf-node taxids
+  - `common_taxonomic_name::Bool`: Include common taxonomic name
+  - `common_names_leaf_nodes::Bool`: Include common taxonomic names for leaf-node taxids
+  - `leaf_node_taxids::Bool`: Include leaf-node taxids
+  - `membership_integer::Bool`: Include membership integer
+  - `ordinal_id::Bool`: Include ordinal ID
+  - `pig::Bool`: Include PIG
+  - `sequence_length::Bool`: Include sequence length
+  - `sequence::Bool`: Include the full sequence
 
 # Returns
-- `String`: Path to the generated output file (.arrow)
-
-# Output Format
-Arrow file containing columns (in this order):
-- sequence SHA256
-- sequence hash
-- sequence id
-- accession
-- gi
-- sequence title
-- BLAST name
-- taxid
-- taxonomic super kingdom
-- scientific name
-- scientific names for leaf-node taxids
-- common taxonomic name
-- common taxonomic names for leaf-node taxids
-- leaf-node taxids
-- membership integer
-- ordinal id
-- PIG
-- sequence length
-- sequence
+- `DataFrame`: DataFrame containing the requested columns from the BLAST database
 """
-function blastdb2table(; blastdb, outfile="", force=false)
-    # Set up environment and validate database
+function blastdb2table(;
+    blastdb::String, 
+    # Master field selection flag
+    ALL_FIELDS::Bool=true,
+    # Individual field selection flags
+    sequence_sha256::Bool=false,
+    sequence_hash::Bool=false,
+    sequence_id::Bool=false,
+    accession::Bool=false,
+    gi::Bool=false,
+    sequence_title::Bool=false,
+    blast_name::Bool=false,
+    taxid::Bool=false,
+    taxonomic_super_kingdom::Bool=false,
+    scientific_name::Bool=false,
+    scientific_names_leaf_nodes::Bool=false,
+    common_taxonomic_name::Bool=false,
+    common_names_leaf_nodes::Bool=false,
+    leaf_node_taxids::Bool=false,
+    membership_integer::Bool=false,
+    ordinal_id::Bool=false,
+    pig::Bool=false,
+    sequence_length::Bool=false,
+    sequence::Bool=false
+)
+
+    # If ALL_FIELDS is true, override all field flags to true
+    if ALL_FIELDS
+        sequence_sha256 = true
+        sequence_hash = true
+        sequence_id = true
+        accession = true
+        gi = true
+        sequence_title = true
+        blast_name = true
+        taxid = true
+        taxonomic_super_kingdom = true
+        scientific_name = true
+        scientific_names_leaf_nodes = true
+        common_taxonomic_name = true
+        common_names_leaf_nodes = true
+        leaf_node_taxids = true
+        membership_integer = true
+        ordinal_id = true
+        pig = true
+        sequence_length = true
+        sequence = true
+    end
+    
     Mycelia.add_bioconda_env("blast")
     blast_db_info = Mycelia.local_blast_database_info()
     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
@@ -173,7 +623,7 @@ function blastdb2table(; blastdb, outfile="", force=false)
     blast_db_info = filtered[1, :]
     @show blast_db_info
 
-    # Determine database type and file extension
+    # Determine database type
     if blast_db_info["BLAST database molecule type"] == "Protein"
         extension = ".faa"
     elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
@@ -183,182 +633,185 @@ function blastdb2table(; blastdb, outfile="", force=false)
         error("unexpected blast database molecule type")
     end
 
-    # Set output file name if not provided
-    if outfile == ""
-        outfile = blastdb * extension * ".arrow"
-    end
+    # Check if sequence needs to be extracted for SHA256 calculation
+    needs_sequence = sequence || sequence_sha256
 
-    # Skip processing if output exists (unless forced)
-    if isfile(outfile) && filesize(outfile) > 0 && !force
-        @show Mycelia.filesize_human_readable(outfile)
-        return outfile
-    end
-
-    # Define the mapping from outfmt symbols to column names.
-    symbol_header_map = OrderedCollections.OrderedDict(
-        "%s" => "sequence",            # field 1
-        "%a" => "accession",           # field 2
-        "%g" => "gi",                  # field 3
-        "%o" => "ordinal id",          # field 4
-        "%i" => "sequence id",         # field 5
-        "%t" => "sequence title",      # field 6
-        "%l" => "sequence length",     # field 7
-        "%h" => "sequence hash",       # field 8
-        "%T" => "taxid",               # field 9
-        "%X" => "leaf-node taxids",    # field 10
-        "%e" => "membership integer",  # field 11
-        "%L" => "common taxonomic name",   # field 12
-        "%C" => "common taxonomic names for leaf-node taxids",  # field 13
-        "%S" => "scientific name",     # field 14
-        "%N" => "scientific names for leaf-node taxids",  # field 15
-        "%B" => "BLAST name",          # field 16
-        "%K" => "taxonomic super kingdom", # field 17
-        "%P" => "PIG"                  # field 18
-    )
-    outfmt_string = join(collect(keys(symbol_header_map)), '\t')
-
-    # Define the desired output column order.
-    header_order = [
-        "sequence SHA256",
-        "sequence hash",
-        "sequence id",
-        "accession",
-        "gi",
-        "sequence title",
-        "BLAST name",
-        "taxid",
-        "taxonomic super kingdom",
-        "scientific name",
-        "scientific names for leaf-node taxids",
-        "common taxonomic name",
-        "common taxonomic names for leaf-node taxids",
-        "leaf-node taxids",
-        "membership integer",
-        "ordinal id",
-        "PIG",
-        "sequence length"
-        # "sequence"
+    # Define the mapping from outfmt symbols to column names and their inclusion status
+    # Using a tuple for better performance (less allocations)
+    field_config = [
+        ("%s", "sequence", needs_sequence),  # Need sequence for SHA256
+        ("%a", "accession", accession),
+        ("%g", "gi", gi),
+        ("%o", "ordinal_id", ordinal_id),
+        ("%i", "sequence_id", sequence_id),
+        ("%t", "sequence_title", sequence_title),
+        ("%l", "sequence_length", sequence_length),
+        ("%h", "sequence_hash", sequence_hash),
+        ("%T", "taxid", taxid),
+        ("%X", "leaf_node_taxids", leaf_node_taxids),
+        ("%e", "membership_integer", membership_integer),
+        ("%L", "common_taxonomic_name", common_taxonomic_name),
+        ("%C", "common_names_leaf_nodes", common_names_leaf_nodes),
+        ("%S", "scientific_name", scientific_name),
+        ("%N", "scientific_names_leaf_nodes", scientific_names_leaf_nodes),
+        ("%B", "blast_name", blast_name),
+        ("%K", "taxonomic_super_kingdom", taxonomic_super_kingdom),
+        ("%P", "pig", pig)
     ]
 
-    total_sequences = blast_db_info["number of sequences"]
-    progress = ProgressMeter.Progress(total_sequences, desc="Converting BLAST DB to Arrow: ", dt=1.0)
-    
-    cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    open(Arrow.Writer, outfile) do writer
-        for (i, line) in enumerate(eachline(cmd))
-            fields = split(strip(line), '\t')
-            # Pad fields with empty strings if necessary
-            if length(fields) < length(symbol_header_map)
-                fields = vcat(fields, fill("", length(symbol_header_map) - length(fields)))
-            end
-            # Process sequence: clean and compute SHA256 from field 1 (the raw sequence)
-            seq = uppercase(String(filter(x -> isvalid(Char, x), fields[1])))
-            seq_sha256 = Mycelia.seq2sha256(seq)
+    # Generate format string for fields we need to fetch
+    active_fields = [(fmt, colname) for (fmt, colname, include) in field_config if include]
+    formats_to_fetch = [fmt for (fmt, _) in active_fields]
+    columns_to_fetch = [colname for (_, colname) in active_fields]
+    outfmt_string = join(formats_to_fetch, '\t')
 
-            # Build a mapping from column names to the extracted field values.
-            mapped = Dict{String, String}()
-            idx = 1
-            for (_, colname) in symbol_header_map
-                mapped[colname] = fields[idx]
-                idx += 1
-            end
-
-            # Construct a NamedTuple which is Arrow-compatible
-            row = DataFrames.DataFrame(
-                sequence_SHA256 = seq_sha256,
-                sequence_hash = mapped["sequence hash"],
-                sequence_id = mapped["sequence id"],
-                accession = mapped["accession"],
-                gi = mapped["gi"],
-                sequence_title = mapped["sequence title"],
-                BLAST_name = mapped["BLAST name"],
-                taxid = mapped["taxid"],
-                taxonomic_super_kingdom = mapped["taxonomic super kingdom"],
-                scientific_name = mapped["scientific name"],
-                scientific_names_for_leaf_node_taxids = mapped["scientific names for leaf-node taxids"],
-                common_taxonomic_name = mapped["common taxonomic name"],
-                common_taxonomic_names_for_leaf_node_taxids = mapped["common taxonomic names for leaf-node taxids"],
-                leaf_node_taxids = mapped["leaf-node taxids"],
-                membership_integer = mapped["membership integer"],
-                ordinal_id = mapped["ordinal id"],
-                PIG = mapped["PIG"],
-                sequence_length = mapped["sequence length"],
-                # sequence = mapped["sequence"]
-            )
-            Arrow.write(writer, row)
-            
-            # Update progress meter
-            ProgressMeter.next!(progress; showvalues = [
-                (:completed, i),
-                (:total, total_sequences),
-                (:percent, round(i/total_sequences*100, digits=1))
-            ])
+    # Create mapping of format positions to column indices for faster access
+    format_positions = Dict{Int, Int}()
+    for (i, (fmt, _)) in enumerate(active_fields)
+        format_idx = findfirst(==(fmt), formats_to_fetch)
+        if format_idx !== nothing
+            format_positions[i] = format_idx
         end
     end
 
-    ProgressMeter.finish!(progress)
-    println("Done! Output saved to $(outfile)")
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Convert a BLAST database to Arrow format with taxonomy information.
-
-# Arguments
-- `blastdb::String`: Path to the BLAST database
-- `outfile::String=""`: Output file path. If empty, generates name based on input database
-- `force::Bool=false`: Whether to overwrite existing output file
-
-# Returns
-- `String`: Path to the generated output file (.arrow)
-
-# Output Format
-Arrow file containing columns (in this order):
-- sequence hash
-- sequence id
-- accession
-- gi
-- sequence title
-- BLAST name
-- taxid
-- taxonomic super kingdom
-- scientific name
-- scientific names for leaf-node taxids
-- common taxonomic name
-- common taxonomic names for leaf-node taxids
-- leaf-node taxids
-"""
-function blastdb2tax_table(; blastdb)
-    # Set up environment and validate database
-    Mycelia.add_bioconda_env("blast")
-    blast_db_info = Mycelia.local_blast_database_info()
-    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
-    @assert DataFrames.nrow(filtered) == 1
-    blast_db_info = filtered[1, :]
-    @show blast_db_info
-
-    # Define the mapping from outfmt symbols to column names.
-    symbol_header_map = OrderedCollections.OrderedDict(
-        "%a" => "accession",           # field 2
-        "%g" => "gi",                  # field 3
-        "%i" => "sequence id",         # field 5
-        "%t" => "sequence title",      # field 6
-        "%h" => "sequence hash",       # field 8
-        "%T" => "taxid",               # field 9
-        "%X" => "leaf-node taxids",    # field 10
-        "%L" => "common taxonomic name",   # field 12
-        "%C" => "common taxonomic names for leaf-node taxids",  # field 13
-        "%S" => "scientific name",     # field 14
-        "%N" => "scientific names for leaf-node taxids",  # field 15
-        "%B" => "BLAST name",          # field 16
-        "%K" => "taxonomic super kingdom", # field 17
-    )
-    outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+    # Define output columns
+    output_columns = String[]
+    if sequence_sha256
+        push!(output_columns, "sequence_sha256")
+    end
+    
+    # Add the other active columns
+    for (_, colname, include) in field_config
+        if include && colname != "sequence"  # Handle sequence separately
+            push!(output_columns, colname)
+        end
+    end
+    
+    if sequence
+        push!(output_columns, "sequence")
+    end
+    
+    # Get total sequences for pre-allocation
+    total_sequences = blast_db_info["number of sequences"]
+    
+    # Pre-allocate column vectors for better performance
+    # Using a dictionary of vectors for type flexibility
+    column_data = OrderedCollections.OrderedDict{String, Vector{String}}()
+    for col in output_columns
+        column_data[col] = Vector{String}(undef, total_sequences)
+    end
+    
+    progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+    
+    # Run blastdbcmd to get data
     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    return CSV.read(open(cmd), DataFrames.DataFrame, delim='\t', header=collect(values(symbol_header_map)))
+    
+    # Sequence index in fields (if needed)
+    sequence_idx = findfirst(==("%s"), formats_to_fetch)
+    
+    # Process each line from blastdbcmd
+    for (i, line) in enumerate(eachline(cmd))
+        fields = split(strip(line), '\t')
+        # Pad fields with empty strings if necessary
+        if length(fields) < length(formats_to_fetch)
+            append!(fields, fill("", length(formats_to_fetch) - length(fields)))
+        end
+        
+        # Process sequence if needed (for SHA256 or to include in output)
+        if needs_sequence && sequence_idx !== nothing
+            seq_raw = fields[sequence_idx]
+            seq = uppercase(String(filter(x -> isvalid(Char, x), seq_raw)))
+            
+            if sequence_sha256
+                seq_sha256 = Mycelia.seq2sha256(seq)
+                column_data["sequence_sha256"][i] = seq_sha256
+            end
+            
+            if sequence
+                column_data["sequence"][i] = seq
+            end
+        end
+        
+        # Add other fields directly to column vectors (avoiding dictionary lookups)
+        for (j, colname) in enumerate(columns_to_fetch)
+            if colname != "sequence" || (colname == "sequence" && !needs_sequence)
+                column_data[colname][i] = fields[j]
+            end
+        end
+        
+        # Update progress meter
+        ProgressMeter.next!(progress; showvalues = [
+            (:completed, i),
+            (:total, total_sequences),
+            (:percent, round(i/total_sequences*100, digits=1))
+        ])
+    end
+    
+    # Construct DataFrame directly from column vectors
+    result_df = DataFrames.DataFrame(column_data)
+    
+    ProgressMeter.finish!(progress)
+    return result_df
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert a BLAST database to Arrow format with taxonomy information.
+
+# # Arguments
+# - `blastdb::String`: Path to the BLAST database
+# - `outfile::String=""`: Output file path. If empty, generates name based on input database
+# - `force::Bool=false`: Whether to overwrite existing output file
+
+# # Returns
+# - `String`: Path to the generated output file (.arrow)
+
+# # Output Format
+# Arrow file containing columns (in this order):
+# - sequence hash
+# - sequence id
+# - accession
+# - gi
+# - sequence title
+# - BLAST name
+# - taxid
+# - taxonomic super kingdom
+# - scientific name
+# - scientific names for leaf-node taxids
+# - common taxonomic name
+# - common taxonomic names for leaf-node taxids
+# - leaf-node taxids
+# """
+# function blastdb2tax_table(; blastdb)
+#     # Set up environment and validate database
+#     Mycelia.add_bioconda_env("blast")
+#     blast_db_info = Mycelia.local_blast_database_info()
+#     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
+#     @assert DataFrames.nrow(filtered) == 1
+#     blast_db_info = filtered[1, :]
+#     @show blast_db_info
+
+#     # Define the mapping from outfmt symbols to column names.
+#     symbol_header_map = OrderedCollections.OrderedDict(
+#         "%a" => "accession",           # field 2
+#         "%g" => "gi",                  # field 3
+#         "%i" => "sequence id",         # field 5
+#         "%t" => "sequence title",      # field 6
+#         "%h" => "sequence hash",       # field 8
+#         "%T" => "taxid",               # field 9
+#         "%X" => "leaf-node taxids",    # field 10
+#         "%L" => "common taxonomic name",   # field 12
+#         "%C" => "common taxonomic names for leaf-node taxids",  # field 13
+#         "%S" => "scientific name",     # field 14
+#         "%N" => "scientific names for leaf-node taxids",  # field 15
+#         "%B" => "BLAST name",          # field 16
+#         "%K" => "taxonomic super kingdom", # field 17
+#     )
+#     outfmt_string = join(collect(keys(symbol_header_map)), '\t')
+#     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
+#     return CSV.read(open(cmd), DataFrames.DataFrame, delim='\t', header=collect(values(symbol_header_map)))
+# end
 
 
 """
@@ -728,67 +1181,614 @@ function download_blast_db(;db, dbdir=Mycelia.DEFAULT_BLASTDB_PATH, source="", w
     return "$(dbdir)/$(db)"
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases.
+
+# # Arguments
+# - `db::String`: Database source, must be either "genbank" or "refseq"
+
+# # Returns
+# - `DataFrame`: Parsed metadata table with properly typed columns including:
+#   - Integer columns: taxid, species_taxid, genome metrics, and gene counts
+#   - Float columns: gc_percent
+#   - Date columns: seq_rel_date, annotation_date
+#   - String columns: all other fields
+
+# # Details
+# Downloads the assembly summary file from NCBI's FTP server and processes it by:
+# 1. Parsing the tab-delimited file with commented headers
+# 2. Converting numeric strings to proper Integer/Float types
+# 3. Parsing date strings to Date objects
+# 4. Handling missing values throughout
+# """
+# function load_ncbi_metadata(db)
+#     if !(db in ["genbank", "refseq"])
+#         error()
+#     end
+#     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#     # ncbi_summary_file = basename(ncbi_summary_url)
+#     # if !isfile(ncbi_summary_file)
+#     #     download(ncbi_summary_url, ncbi_summary_file)
+#     # end
+#     buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
+#     # types=[]
+#     # ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', encodings=Dict("na" => missing), allowmissing=true, typedetectrows=100)...)
+#     ncbi_summary_table = DataFrames.DataFrame(uCSV.read(buffer, comment = "## ", header=1, delim='\t', types=String)...)
+#     ints = [
+#         "taxid",
+#         "species_taxid",
+#         "genome_size",
+#         "genome_size_ungapped",
+#         "replicon_count",
+#         "scaffold_count",
+#         "contig_count",
+#         "total_gene_count",
+#         "protein_coding_gene_count",
+#         "non_coding_gene_count"
+#     ]
+#     floats = ["gc_percent"]
+#     dates = ["seq_rel_date", "annotation_date"]
+#     for int in ints
+#         ncbi_summary_table[!, int] = something.(tryparse.(Int, ncbi_summary_table[!, int]), missing)
+#     end
+#     for float in floats
+#         ncbi_summary_table[!, float] = something.(tryparse.(Float64, ncbi_summary_table[!, float]), missing)
+#     end
+#     for date in dates
+#         # ncbi_summary_table[!, date] = Dates.Date.(ncbi_summary_table[!, date], Dates.dateformat"yyyy/mm/dd")
+#         parsed_dates = map(date_string -> tryparse(Dates.Date, date_string, Dates.dateformat"yyyy/mm/dd"), ncbi_summary_table[!, date])
+#         ncbi_summary_table[!, date] = something.(parsed_dates, missing)
+#     end
+#     return ncbi_summary_table
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases using CSV.jl for improved performance.
+
+# # Arguments
+# - `db::String`: Database source, must be either "genbank" or "refseq".
+
+# # Returns
+# - `DataFrames.DataFrame`: Parsed metadata table with columns typed according to NCBI specifications. Handles missing values represented by "na" or empty fields.
+
+# # Details
+# Downloads the assembly summary file directly from NCBI's FTP server via HTTP and parses it efficiently using `CSV.File`.
+# 1.  Fetches data directly from the URL stream.
+# 2.  Skips the initial comment line (`## ...`).
+# 3.  Parses the tab-delimited file, recognizing the header line starting with `# assembly_accession...`.
+# 4.  Uses `CSV.jl`'s type detection and specific type mapping for performance.
+# 5.  Automatically handles missing values ("na", "", "NA").
+# 6.  Parses specified date columns using the format "yyyy/mm/dd".
+# """
+# function load_ncbi_metadata(db::String)
+#     # Validate database input
+#     if !(db in ["genbank", "refseq"])
+#         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+#     end
+
+#     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#     @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+#     try
+#         # Fetch data using HTTP.get, response body is an IO stream
+#         response = HTTP.get(ncbi_summary_url, status_exception = true) # Throw error for non-2xx status
+
+#         # Define column types for direct parsing by CSV.jl
+#         # Let CSV.jl infer non-specified columns (mostly String)
+#         # Specify Int, Float, and Date types for known columns
+#         types_dict = Dict(
+#             :taxid => Int64,
+#             :species_taxid => Int64,
+#             :genome_size => Int64,
+#             :genome_size_ungapped => Int64,
+#             :replicon_count => Int64,
+#             :scaffold_count => Int64,
+#             :contig_count => Int64,
+#             :total_gene_count => Int64,
+#             :protein_coding_gene_count => Int64,
+#             :non_coding_gene_count => Int64,
+#             :gc_percent => Float64,
+#             :seq_rel_date => Dates.Date,
+#             :annotation_date => Dates.Date
+#         )
+
+#         # Parse the stream directly using CSV.File
+#         # skipto=2: Skip the first line starting with "##"
+#         # header=1: The first line *after* skipping is the header (starts with '#')
+#         # delim='\t': Tab-separated values
+#         # missingstrings: Define strings that represent missing data
+#         # types: Apply specific types for efficiency; others inferred
+#         # dateformat: Specify the format for date parsing
+#         # pool=true: Can improve performance for string columns with repeated values
+#         csv_file = CSV.File(
+#             response.body;
+#             skipto=2,
+#             header=1,
+#             delim='\t',
+#             missingstrings=["na", "NA", ""],
+#             types=types_dict,
+#             dateformat="yyyy/mm/dd",
+#             pool=true,
+#             # normalizenames=true could be useful if header names have tricky characters,
+#             # but NCBI headers seem clean after the initial '#'.
+#             # CSV.jl handles the leading '#' in the header line automatically.
+#         )
+
+#         # Materialize the CSV.File into a DataFrame
+#         ncbi_summary_table = DataFrames.DataFrame(csv_file)
+#         @info "Successfully loaded and parsed NCBI assembly summary into a DataFrame."
+
+#         return ncbi_summary_table
+
+#     catch e
+#         @error "Failed to download or parse NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         # Depending on desired behavior, you might rethrow, return an empty DataFrame, or handle specific errors (e.g., HTTP.StatusError)
+#         rethrow(e)
+#     end
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases using CSV.jl for improved performance.
+
+# Handles files with initial comment lines (`##...`) and header lines starting with '#'.
+
+# # Arguments
+# - `db::String`: Database source, must be either "genbank" or "refseq".
+
+# # Returns
+# - `DataFrames.DataFrame`: Parsed metadata table with columns typed according to NCBI specifications. Handles missing values represented by "na" or empty fields.
+
+# # Details
+# Downloads the assembly summary file directly from NCBI's FTP server via HTTP and parses it efficiently using `CSV.File`.
+# 1.  Fetches the entire data into an in-memory buffer.
+# 2.  Manually reads the first line (comment `##`) and second line (header `# ...`).
+# 3.  Cleans the extracted header names (removes leading '#', splits by tab).
+# 4.  Parses the rest of the buffer using `CSV.File`, providing the cleaned header.
+# 5.  Uses `CSV.jl`'s type detection and specific type mapping for performance.
+# 6.  Automatically handles missing values ("na", "", "NA") using `missingstring`.
+# 7.  Parses specified date columns using the format "yyyy/mm/dd".
+# """
+# function load_ncbi_metadata(db::String)
+#     # Validate database input
+#     if !(db in ["genbank", "refseq"])
+#         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+#     end
+
+#     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#     @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+#     local response_body::Vector{UInt8}
+#     try
+#         # Fetch data using HTTP.get
+#         response = HTTP.get(ncbi_summary_url, status_exception=true) # Throw error for non-2xx status
+#         response_body = response.body
+#     catch e
+#         @error "Failed to download NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         rethrow(e)
+#     end
+
+#     try
+#         # Create an IOBuffer from the downloaded body
+#         buffer = IOBuffer(response_body)
+
+#         # Read and discard the first line (## comment)
+#         readline(buffer)
+
+#         # Read the second line (header starting with #)
+#         header_line_raw = readline(buffer)
+
+#         # Clean the header line: remove leading '#', strip whitespace, split by tab
+#         header_string = lstrip(header_line_raw, ['#', ' ']) # Remove leading '#' and potential space
+#         # Using Base Julia string split:
+#         # header_names = String.(Base.split(Base.strip(header_string), '\t'))
+#         # Using StringManipulation for potentially more robust splitting/cleaning:
+#         header_names = split(strip(header_string), '\t')
+
+#         # Convert header names to Symbols for CSV.jl and DataFrames
+#         header_symbols = Symbol.(header_names)
+
+#         # Define column types for direct parsing by CSV.jl
+#         types_dict = Dict(
+#             :taxid => Int,
+#             :species_taxid => Int,
+#             :genome_size => Int,
+#             :genome_size_ungapped => Int,
+#             :replicon_count => Int,
+#             :scaffold_count => Int,
+#             :contig_count => Int,
+#             :total_gene_count => Int,
+#             :protein_coding_gene_count => Int,
+#             :non_coding_gene_count => Int,
+#             :gc_percent => Float64,
+#             :seq_rel_date => String,
+#             :annotation_date => String
+#         )
+
+#         # Parse the rest of the buffer using CSV.File
+#         # The buffer is now positioned at the start of the data (line 3)
+#         # Provide the cleaned header symbols explicitly
+#         # Use 'missingstring' (singular) instead of 'missingstrings' (plural)
+#         csv_file = CSV.File(
+#             buffer; # Pass the buffer, already positioned after the header
+#             header=header_symbols, # Provide the cleaned header names
+#             delim='\t',
+#             missingstring=["na", "NA", ""], # Corrected keyword
+#             types=types_dict,
+#             pool=true,
+#             # No need for skipto, datarow, or numerical header argument now
+#         )
+
+#         # Materialize the CSV.File into a DataFrame
+#         ncbi_summary_table = DataFrames.DataFrame(csv_file) # copycols=true is default but explicit
+#         @info "Successfully loaded and parsed NCBI assembly summary into a DataFrame."
+
+#         return ncbi_summary_table
+
+#     catch e
+#         @error "Failed to parse NCBI metadata buffer from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         # Rethrow the parsing error
+#         rethrow(e)
+#     end
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily cache.
+
+# Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
+# Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
+# from NCBI, caches the result, and then parses.
+
+# Handles NCBI's header format and uses CSV.jl for parsing. Requires necessary
+# modules like Logging and Base.Filesystem to be in scope (e.g., via `using`).
+
+# # Arguments
+# - `db::String`: Database source ("genbank" or "refseq").
+
+# # Returns
+# - `DataFrames.DataFrame`: Parsed metadata table.
+
+# # Errors
+# - Throws `ArgumentError` for invalid `db`.
+# - Throws error if cache directory cannot be created.
+# - Throws error if data cannot be obtained from cache or download.
+# - Rethrows errors from HTTP download or CSV parsing.
+# """
+# function load_ncbi_metadata(db::String)
+#     # Validate database input
+#     if !(db in ["genbank", "refseq"])
+#         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+#     end
+
+#     # --- Cache Path Setup ---
+#     todays_date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
+#     original_filename = "assembly_summary_$(db).txt"
+#     cache_dir = joinpath(homedir(), "workspace", ".ncbi")
+#     cached_filename = "$(todays_date_str).$(original_filename)"
+#     cached_filepath = joinpath(cache_dir, cached_filename)
+
+#     # Ensure cache directory exists
+#     try
+#         mkpath(cache_dir)
+#     catch e
+#         @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+#         rethrow(e)
+#     end
+
+#     # --- Data Loading Logic ---
+#     local response_body::Union{Vector{UInt8}, Nothing} = nothing
+#     source_description = ""
+
+#     # 1. Attempt to load from cache
+#     if isfile(cached_filepath)
+#         @info "Found cached file for today. Attempting to load: $cached_filepath"
+#         try
+#             content = read(cached_filepath)
+#             if isempty(content)
+#                 @warn "Cached file is empty: $cached_filepath. Will attempt download."
+#             else
+#                 response_body = content
+#                 source_description = "cache file: $cached_filepath"
+#                 @info "Successfully loaded non-empty data from cache."
+#             end
+#         catch e
+#             @error "Failed to read cached file: $cached_filepath. Attempting download." exception=(e, catch_backtrace())
+#         end
+#     else
+#         @info "No cached file found for today at: $cached_filepath. Attempting download."
+#     end
+
+#     # 2. If cache loading failed, download
+#     if isnothing(response_body)
+#         ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#         @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+#         try
+#             response = HTTP.get(ncbi_summary_url; status_exception=true)
+#             response_body = response.body
+#             source_description = "NCBI URL: $ncbi_summary_url"
+
+#             try
+#                 open(cached_filepath, "w") do io
+#                     write(io, response_body)
+#                 end
+#                 @info "Successfully cached downloaded data to: $cached_filepath"
+#             catch e
+#                 @warn "Failed to write cache file to $cached_filepath. Proceeding with in-memory data." exception=(e, catch_backtrace())
+#             end
+#         catch e
+#             @error "Failed to download NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         end
+#     end
+
+#     # 3. Final Check: Ensure data was loaded
+#     if isnothing(response_body)
+#         @error "Failed to obtain data from both cache and download for database '$db'."
+#         error("Could not load NCBI metadata for '$db'. Check connection and cache permissions.")
+#     end
+
+#     # --- Parsing Logic ---
+#     @info "Proceeding to parse data obtained from $(source_description)."
+#     try
+#         buffer = IOBuffer(response_body)
+#         readline(buffer) # Skip ## comment line
+#         header_line_raw = readline(buffer) # Read # header line
+
+#         header_string = lstrip(header_line_raw, ['#', ' '])
+#         header_names = split(strip(header_string), '\t')
+#         header_symbols = Symbol.(header_names)
+
+#         # --- CORRECTED and EXPANDED types_dict ---
+#         types_dict = Dict(
+#             # Strings (already present or added based on error)
+#             :assembly_accession => String,
+#             :bioproject => String,
+#             :biosample => String,
+#             :wgs_master => String,
+#             :refseq_category => String,
+#             :organism_name => String,
+#             :infraspecific_name => String,
+#             :isolate => String,
+#             :version_status => String,
+#             :assembly_level => String,
+#             :release_type => String,
+#             :genome_rep => String,
+#             :seq_rel_date => String, # Keep as String unless specific parsing needed
+#             :asm_name => String,
+#             :asm_submitter => String,       # CORRECTED from :submitter
+#             :gbrs_paired_asm => String,
+#             :paired_asm_comp => String,
+#             :ftp_path => String,
+#             :excluded_from_refseq => String,
+#             :relation_to_type_material => String,
+#             :asm_not_live_date => String, # Keep as String unless specific parsing needed
+#             :assembly_type => String,      # Added based on error output
+#             :group => String,              # Added based on error output
+#             :annotation_provider => String,# Added based on error output
+#             :annotation_name => String,    # Added based on error output
+#             :annotation_date => String,    # Added based on error output
+#             :pubmed_id => String,          # Added based on error output (safer as String)
+
+#             # Integers (already present or added based on error)
+#             :taxid => Int,
+#             :species_taxid => Int,
+#             :genome_size => Int,           # Added based on error output
+#             :genome_size_ungapped => Int,  # Added based on error output
+#             :replicon_count => Int,        # Added based on error output
+#             :scaffold_count => Int,        # Added based on error output
+#             :contig_count => Int,          # Added based on error output
+#             :total_gene_count => Int,      # Added based on error output
+#             :protein_coding_gene_count => Int, # Added based on error output
+#             :non_coding_gene_count => Int, # Added based on error output
+
+#             # Floats (added based on error output)
+#             :gc_percent => Float64         # Added based on error output
+#         )
+#         # --- End of types_dict ---
+
+#         # Validate that headers derived match the keys expected (optional but good practice)
+#         # This helps catch discrepancies early if NCBI changes format
+#         if Set(header_symbols) != Set(keys(types_dict))
+#              missing_in_dict = setdiff(Set(header_symbols), Set(keys(types_dict)))
+#              extra_in_dict = setdiff(Set(keys(types_dict)), Set(header_symbols))
+#              if !isempty(missing_in_dict)
+#                  @warn "Headers found in data but not in types_dict: $missing_in_dict"
+#              end
+#              # Don't warn about extra_in_dict usually, as the error already caught the critical case.
+#              # CSV.jl handles extra columns by inferring types.
+#         end
+
+
+#         # Parse using CSV.File
+#         csv_file = CSV.File(
+#             buffer;
+#             header=header_symbols,
+#             delim='\t',
+#             missingstring=["na", "NA", ""],
+#             types=types_dict,
+#             pool=true,
+#             # validate=false # Avoid using this; fixing types_dict is better
+#         )
+
+#         # Materialize into a DataFrame
+#         ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols=true)
+#         @info "Successfully parsed NCBI assembly summary into a DataFrame."
+
+#         return ncbi_summary_table
+
+#     catch e
+#         @error "Failed to parse NCBI metadata buffer from $(source_description)" exception=(e, catch_backtrace())
+#         rethrow(e) # Rethrow parsing error
+#     end
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases.
+Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily cache.
+
+Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
+Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
+from NCBI using `Downloads.download()`, caches the result (replacing any
+previous version for the *same day*), and then parses the cached file.
+
+Handles NCBI's header format and uses CSV.jl for parsing.
 
 # Arguments
-- `db::String`: Database source, must be either "genbank" or "refseq"
+- `db::String`: Database source ("genbank" or "refseq").
 
 # Returns
-- `DataFrame`: Parsed metadata table with properly typed columns including:
-  - Integer columns: taxid, species_taxid, genome metrics, and gene counts
-  - Float columns: gc_percent
-  - Date columns: seq_rel_date, annotation_date
-  - String columns: all other fields
+- `DataFrames.DataFrame`: Parsed metadata table.
 
-# Details
-Downloads the assembly summary file from NCBI's FTP server and processes it by:
-1. Parsing the tab-delimited file with commented headers
-2. Converting numeric strings to proper Integer/Float types
-3. Parsing date strings to Date objects
-4. Handling missing values throughout
+# Errors
+- Throws `ArgumentError` for invalid `db`.
+- Throws error if cache directory cannot be created.
+- Throws error if data cannot be obtained from cache or download.
+- Rethrows errors from `Downloads.download` or CSV parsing.
 """
-function load_ncbi_metadata(db)
+function load_ncbi_metadata(db::String)
+    # Validate database input
     if !(db in ["genbank", "refseq"])
-        error()
+        throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
     end
+
+    # --- Cache Path Setup ---
+    todays_date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
+    original_filename = "assembly_summary_$(db).txt"
+    cache_dir = joinpath(homedir(), "workspace", ".ncbi")
+    cached_filename = "$(todays_date_str).$(original_filename)"
+    cached_filepath = joinpath(cache_dir, cached_filename)
     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
-    # ncbi_summary_file = basename(ncbi_summary_url)
-    # if !isfile(ncbi_summary_file)
-    #     download(ncbi_summary_url, ncbi_summary_file)
-    # end
-    buffer = IOBuffer(HTTP.get(ncbi_summary_url).body)
-    # types=[]
-    # ncbi_summary_table = DataFrames.DataFrame(uCSV.read(ncbi_summary_file, comment = "## ", header=1, delim='\t', encodings=Dict("na" => missing), allowmissing=true, typedetectrows=100)...)
-    ncbi_summary_table = DataFrames.DataFrame(uCSV.read(buffer, comment = "## ", header=1, delim='\t', types=String)...)
-    ints = [
-        "taxid",
-        "species_taxid",
-        "genome_size",
-        "genome_size_ungapped",
-        "replicon_count",
-        "scaffold_count",
-        "contig_count",
-        "total_gene_count",
-        "protein_coding_gene_count",
-        "non_coding_gene_count"
-    ]
-    floats = ["gc_percent"]
-    dates = ["seq_rel_date", "annotation_date"]
-    for int in ints
-        ncbi_summary_table[!, int] = something.(tryparse.(Int, ncbi_summary_table[!, int]), missing)
+
+    # Ensure cache directory exists
+    try
+        mkpath(cache_dir)
+    catch e
+        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+        rethrow(e)
     end
-    for float in floats
-        ncbi_summary_table[!, float] = something.(tryparse.(Float64, ncbi_summary_table[!, float]), missing)
+
+    # --- Data Acquisition Logic ---
+    local source_description::String = ""
+    data_needs_download = false
+
+    # 1. Attempt to use existing cache
+    if isfile(cached_filepath)
+        if filesize(cached_filepath) > 0
+            @info "Found valid cached file for today: $cached_filepath"
+            source_description = "cache file: $cached_filepath"
+        else
+            @warn "Cached file exists but is empty: $cached_filepath. Will attempt download to replace it."
+            data_needs_download = true
+        end
+    else
+        @info "No cached file found for today at: $cached_filepath. Attempting download."
+        data_needs_download = true
     end
-    for date in dates
-        # ncbi_summary_table[!, date] = Dates.Date.(ncbi_summary_table[!, date], Dates.dateformat"yyyy/mm/dd")
-        parsed_dates = map(date_string -> tryparse(Dates.Date, date_string, Dates.dateformat"yyyy/mm/dd"), ncbi_summary_table[!, date])
-        ncbi_summary_table[!, date] = something.(parsed_dates, missing)
+
+    # 2. If cache is missing or empty, download
+    if data_needs_download
+        @info "Downloading NCBI assembly summary from $ncbi_summary_url to $cached_filepath"
+        try
+            # Downloads.download handles writing the file and overwriting if it exists
+            Downloads.download(ncbi_summary_url, cached_filepath)
+            # Verify download success by checking file existence and size again
+            if isfile(cached_filepath) && filesize(cached_filepath) > 0
+                 @info "Successfully downloaded and cached data to: $cached_filepath"
+                 source_description = "downloaded file: $cached_filepath (from $ncbi_summary_url)"
+            else
+                 # This case should ideally be caught by Downloads.download throwing an error,
+                 # but added as a safeguard (e.g., network issues leaving empty file).
+                 @error "Download completed but resulted in an empty or missing file at $cached_filepath."
+                 # We will hit the final check below and error out.
+            end
+        catch e
+            @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(e, catch_backtrace())
+            # Let the final check handle the error state if cache wasn't valid either
+        end
     end
-    return ncbi_summary_table
+
+    # 3. Final Check: Ensure a valid data file exists at the cached path
+    if !isfile(cached_filepath) || filesize(cached_filepath) == 0
+        @error "Failed to obtain valid data for '$db'. Could not use cache and download failed or resulted in empty file."
+        error("Could not load NCBI metadata for '$db' from cache or download. Check path '$cached_filepath', network connection, and permissions.")
+    end
+
+    # --- Parsing Logic ---
+    @info "Proceeding to parse data from $(source_description)."
+    try
+        # Manually read the first two lines to get the correct header
+        header_symbols = Symbol[]
+        open(cached_filepath, "r") do io
+            readline(io) # Skip ## comment line
+            header_line_raw = readline(io) # Read # header line
+            header_string = lstrip(header_line_raw, ['#', ' '])
+            header_names = split(strip(header_string), '\t')
+            header_symbols = Symbol.(header_names)
+        end # File is automatically closed here
+
+        # --- CORRECTED and EXPANDED types_dict ---
+        # (Copied from your original code - assumed correct)
+        types_dict = Dict(
+            :assembly_accession => String, :bioproject => String, :biosample => String,
+            :wgs_master => String, :refseq_category => String, :organism_name => String,
+            :infraspecific_name => String, :isolate => String, :version_status => String,
+            :assembly_level => String, :release_type => String, :genome_rep => String,
+            :seq_rel_date => String, :asm_name => String, :asm_submitter => String,
+            :gbrs_paired_asm => String, :paired_asm_comp => String, :ftp_path => String,
+            :excluded_from_refseq => String, :relation_to_type_material => String,
+            :asm_not_live_date => String, :assembly_type => String, :group => String,
+            :annotation_provider => String, :annotation_name => String, :annotation_date => String,
+            :pubmed_id => String,
+            :taxid => Int, :species_taxid => Int, :genome_size => Int,
+            :genome_size_ungapped => Int, :replicon_count => Int, :scaffold_count => Int,
+            :contig_count => Int, :total_gene_count => Int, :protein_coding_gene_count => Int,
+            :non_coding_gene_count => Int,
+            :gc_percent => Float64
+        )
+        # --- End of types_dict ---
+
+        # Validate that headers derived match the keys expected (optional but good practice)
+        if Set(header_symbols) != Set(keys(types_dict))
+             missing_in_dict = setdiff(Set(header_symbols), Set(keys(types_dict)))
+             extra_in_dict = setdiff(Set(keys(types_dict)), Set(header_symbols))
+             # Only warn if file has headers we didn't define types for.
+             # Extra types_dict entries are okay, CSV.jl ignores them if not in header.
+             if !isempty(missing_in_dict)
+                 @warn "Headers found in data file but not explicitly typed in types_dict (will be inferred by CSV.jl): $missing_in_dict"
+             end
+        end
+
+        # Parse using CSV.File directly from the cached filepath
+        # skipto=3 skips the first two lines (# comment, # header) which we read manually
+        csv_file = CSV.File(
+            cached_filepath;
+            skipto=3,             # Skip the comment and header lines we already processed
+            header=header_symbols, # Provide the headers we extracted
+            delim='\t',
+            missingstring=["na", "NA", ""],
+            types=types_dict,
+            pool=true,
+            strict=true # Be strict about column count matching header after skipping lines
+        )
+
+        # Materialize into a DataFrame
+        ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols=true)
+        @info "Successfully parsed NCBI assembly summary into a DataFrame from $cached_filepath."
+
+        return ncbi_summary_table
+
+    catch e
+        @error "Failed to parse NCBI metadata file: $cached_filepath" exception=(e, catch_backtrace())
+        rethrow(e) # Rethrow parsing error
+    end
 end
 
 """
