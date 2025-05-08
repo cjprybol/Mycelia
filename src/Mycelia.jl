@@ -353,13 +353,13 @@ function scg_sbatch(;
         mail_user::String,
         mail_type::String="ALL",
         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
-        partition::String,
+        partition::String="interactive",
         account::String,
         nodes::Int=1,
         ntasks::Int=1,
         time::String="1-00:00:00",
-        cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 32,
+        cpus_per_task::Int=16,
+        mem_gb::Int=cpus_per_task * 8,
         cmd::String
     )
     submission = 
@@ -2266,7 +2266,9 @@ function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1
     Mycelia.add_bioconda_env("minimap2")
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    index_file = "$(fasta).x" * replace(mapping_type, ":" => "-") * ".I$(index_size).mmi"
+    # if lr:hq, deal with : in the name
+    # index_file = replace(mapping_type, ":" => "-")
     if as_string
         cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)"
     else
@@ -2405,70 +2407,72 @@ function find_matching_prefix(filename1::String, filename2::String; strip_traili
     return matching_prefix
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# Map paired-end reads to a reference sequence using minimap2.
+Map paired-end reads to a reference sequence using minimap2.
 
-# # Arguments
-# - `fasta::String`: Path to reference FASTA file
-# - `forward::String`: Path to forward reads FASTQ file
-# - `reverse::String`: Path to reverse reads FASTQ file
-# - `mem_gb::Integer`: Available system memory in GB
-# - `threads::Integer`: Number of threads to use
-# - `outdir::String`: Output directory (defaults to forward reads directory)
-# - `as_string::Bool=false`: Return command as string instead of Cmd array
-# - `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-# - `denominator::Float64`: Memory scaling factor for index size
+# Arguments
+- `fasta::String`: Path to reference FASTA file
+- `forward::String`: Path to forward reads FASTQ file
+- `reverse::String`: Path to reverse reads FASTQ file
+- `mem_gb::Integer`: Available system memory in GB
+- `threads::Integer`: Number of threads to use
+- `outdir::String`: Output directory (defaults to forward reads directory)
+- `as_string::Bool=false`: Return command as string instead of Cmd array
+- `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+- `denominator::Float64`: Memory scaling factor for index size
 
-# # Returns
-# Named tuple containing:
-# - `cmd`: Command(s) to execute (String or Array{Cmd})
-# - `outfile`: Path to compressed output SAM file (*.sam.gz)
+# Returns
+Named tuple containing:
+- `cmd`: Command(s) to execute (String or Array{Cmd})
+- `outfile`: Path to compressed output SAM file (*.sam.gz)
 
-# # Notes
-# - Requires minimap2, samtools, and pigz conda environments
-# - Automatically compresses output using pigz
-# - Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
-# """
-# function minimap_map_paired_end_with_index(;
-#         fasta,
-#         forward,
-#         reverse,
-#         mem_gb,
-#         threads,
-#         outdir = dirname(forward),
-#         as_string=false,
-#         mapping_type="sr",
-#         denominator=DEFAULT_MINIMAP_DENOMINATOR
-#     )
-#     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-#     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-#     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
-#     # @show index_file
-#     @assert isfile(index_file) "$(index_file) not found!!"
-#     @assert isfile(forward) "$(forward) not found!!"
-#     @assert isfile(reverse) "$(reverse) not found!!"
-#     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
-#     temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
-#     # outfile = temp_sam_outfile
-#     outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-#     Mycelia.add_bioconda_env("minimap2")
-#     Mycelia.add_bioconda_env("samtools")
-#     Mycelia.add_bioconda_env("pigz")
-#     if as_string
-#         cmd =
-#         """
-#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-#         """
-#     else
-#         map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-#         compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-#         cmd = [map, compress]
-#     end
-#     return (;cmd, outfile)
-# end
+# Notes
+- Requires minimap2, samtools, and pigz conda environments
+- Automatically compresses output using pigz
+- Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
+"""
+function minimap_map_paired_end_with_index(;
+        forward,
+        reverse,
+        mem_gb=(Int(Sys.free_memory()) / 1e9),
+        threads=Sys.CPU_THREADS,
+        outdir = dirname(forward),
+        as_string=false,
+        denominator=DEFAULT_MINIMAP_DENOMINATOR,
+        fasta="",
+        index_file = ""
+    )
+    if isempty(index_file)
+        @assert !isempty(fasta) "must supply index file or fasta + mem_gb + denominator values to infer index file"
+        index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+        index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    end
+    # @show index_file
+    @assert isfile(index_file) "$(index_file) not found!!"
+    @assert isfile(forward) "$(forward) not found!!"
+    @assert isfile(reverse) "$(reverse) not found!!"
+    fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
+    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
+    # outfile = temp_sam_outfile
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = pipeline(map, compress)
+    end
+    return (;cmd, outfile)
+end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -14218,6 +14222,76 @@ function upload_dataframe_to_bigquery(;
         println("Error during process: ", e)
         # Add more robust error handling
     end
+end
+
+"""
+    save_df_jld2(df::DataFrames.DataFrame, filename::String; key::String="dataframe")
+
+Save a DataFrame to a JLD2 file.
+
+# Arguments
+- `df`: The DataFrame to save
+- `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
+- `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
+
+# Examples
+```julia
+import DataFrames
+df = DataFrames.DataFrame(x = 1:3, y = ["a", "b", "c"])
+save_df_jld2(df, "mydata")
+```
+"""
+function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
+    # Ensure filename has .jld2 extension
+    if !endswith(lowercase(filename), ".jld2")
+        filename = filename * ".jld2"
+    end
+    
+    # Save the dataframe to the JLD2 file
+    JLD2.jldopen(filename, "w") do file
+        file[key] = df
+    end
+    
+    return filename
+end
+
+"""
+    load_df_jld2(filename::String; key::String="dataframe") -> DataFrames.DataFrame
+
+Load a DataFrame from a JLD2 file.
+
+# Arguments
+- `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
+- `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
+
+# Returns
+- The loaded DataFrame
+
+# Examples
+```julia
+df = load_df_jld2("mydata")
+```
+"""
+function load_df_jld2(filename::String; key::String="dataframe")
+    # Ensure filename has .jld2 extension
+    if !endswith(lowercase(filename), ".jld2")
+        filename = filename * ".jld2"
+    end
+    
+    # Check if file exists
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Load the dataframe from the JLD2 file
+    df = JLD2.jldopen(filename, "r") do file
+        if !haskey(file, key)
+            error("Key '$key' not found in file $filename")
+        end
+        return file[key]
+    end
+    
+    return df
 end
 
 function fasta_to_kmer_and_codon_frequencies(fasta)
