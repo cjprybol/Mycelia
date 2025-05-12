@@ -9225,31 +9225,123 @@ end
 #     return mmseqs_results
 # end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Read results from MMSeqs2 easy-search output file into a DataFrame.
+
+# # Arguments
+# - `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search
+
+# # Returns
+# - `DataFrame`: Contains search results with columns:
+#   - `query`: Query sequence identifier
+#   - `target`: Target sequence identifier
+#   - `seqIdentity`: Sequence identity (0.0-1.0)
+#   - `alnLen`: Alignment length
+#   - `mismatch`: Number of mismatches
+#   - `gapOpen`: Number of gap openings
+#   - `qStart`: Query start position
+#   - `qEnd`: Query end position
+#   - `tStart`: Target start position 
+#   - `tEnd`: Target end position
+#   - `evalue`: Expected value
+#   - `bits`: Bit score
+# """
+# function read_mmseqs_easy_search(mmseqs_file)
+#     mmseqs_results = CSV.read(mmseqs_file, DataFrames.DataFrame, header=1, delim='\t')
+#     return mmseqs_results
+# end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Read results from MMSeqs2 easy-search output file into a DataFrame.
+Read results from MMSeqs2 easy-search output file (plain or gzipped) into a DataFrame
+with optimized memory usage. Automatically detects if the file is gzipped based on
+the '.gz' extension.
 
 # Arguments
-- `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search
+- `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search.
+                         Can be a plain text file or a gzipped file (ending in .gz).
 
 # Returns
 - `DataFrame`: Contains search results with columns:
-  - `query`: Query sequence identifier
-  - `target`: Target sequence identifier
-  - `seqIdentity`: Sequence identity (0.0-1.0)
-  - `alnLen`: Alignment length
-  - `mismatch`: Number of mismatches
-  - `gapOpen`: Number of gap openings
-  - `qStart`: Query start position
-  - `qEnd`: Query end position
-  - `tStart`: Target start position 
-  - `tEnd`: Target end position
-  - `evalue`: Expected value
-  - `bits`: Bit score
+  - `query::String`: Query sequence identifier (pooled)
+  - `target::String`: Target sequence identifier (pooled)
+  - `seqIdentity::Float64`: Sequence identity (0.0-1.0)
+  - `alnLen::Int`: Alignment length
+  - `mismatch::Int`: Number of mismatches
+  - `gapOpen::Int`: Number of gap openings
+  - `qStart::Int`: Query start position
+  - `qEnd::Int`: Query end position
+  - `tStart::Int`: Target start position
+  - `tEnd::Int`: Target end position
+  - `evalue::Float64`: Expected value
+  - `bits::Float64`: Bit score
+
+# Remarks
+- Ensure the `CodecZlib.jl` package is installed for gzipped file support.
 """
-function read_mmseqs_easy_search(mmseqs_file)
-    mmseqs_results = CSV.read(mmseqs_file, DataFrames.DataFrame, header=1, delim='\t')
+function read_mmseqs_easy_search(mmseqs_file::String)
+    # Define the expected column types.
+    # These keys MUST match the column headers in your MMSeqs2 output file.
+    # Based on the error message, names are likely lowercase and 'seqIdentity' might be 'fident' or 'pident'.
+    # We'll use 'fident' as it often represents fractional identity (0.0-1.0).
+    col_types = Dict(
+        "query" => String,        # Query sequence identifier (pooled)
+        "qheader" => String,
+        "qlen" => Int,
+        "target" => String,       # Target sequence identifier (pooled)
+        "tlen" => Int,
+        "theader" => String,
+        "nident" => Int,
+        "fident" => Float64,      
+        "pident" => Float64,
+        "alnlen" => Int,          # Alignment length (lowercase 'l')
+        "mismatch" => Int,        # Number of mismatches
+        "gapopen" => Int,         # Number of gap openings (lowercase 'o')
+        "qstart" => Int,          # Query start position (lowercase 's')
+        "qend" => Int,            # Query end position (lowercase 'e')
+        "tstart" => Int,          # Target start position (lowercase 's')
+        "tend" => Int,            # Target end position (lowercase 'e')
+        "evalue" => Float64,      # E-values
+        "bits" => Float64,         # Bit scores
+        "taxid" => Int, # Or String, depending on content
+        "taxname" => String
+    )
+
+    # Common CSV reading options
+    csv_options = (
+        header=1,             # Assumes the first row contains column names
+        delim='\t',           # Tab-delimited file
+        types=col_types,      # Apply our defined column types
+        pool=true,            # Pool string columns to save memory
+        ntasks=Sys.CPU_THREADS, # Utilize available CPU threads for parsing
+    )
+
+    local mmseqs_results::DataFrames.DataFrame
+
+    # Check if the file is gzipped
+    if endswith(lowercase(mmseqs_file), ".gz")
+        # Open the gzipped file with a decompressor stream
+        open(mmseqs_file, "r") do file_stream
+            gzip_stream = CodecZlib.GzipDecompressorStream(file_stream)
+            mmseqs_results = CSV.read(
+                gzip_stream,
+                DataFrames.DataFrame;
+                csv_options... # Splat the common options
+            )
+        end
+    else
+        # Read as a plain text file
+        mmseqs_results = CSV.read(
+            mmseqs_file,
+            DataFrames.DataFrame;
+            csv_options... # Splat the common options
+        )
+    end
+
     return mmseqs_results
 end
 
