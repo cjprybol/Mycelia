@@ -10226,60 +10226,60 @@ function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     return p
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Convert between different graph file formats.
+# Convert between different graph file formats.
 
-# Arguments
-- `args`: Dictionary with required keys:
-    - `"in"`: Input filepath (supported: .jld2, .gfa, .neo4j)
-    - `"out"`: Output filepath (supported: .jld2, .gfa, .neo4j)
+# # Arguments
+# - `args`: Dictionary with required keys:
+#     - `"in"`: Input filepath (supported: .jld2, .gfa, .neo4j)
+#     - `"out"`: Output filepath (supported: .jld2, .gfa, .neo4j)
 
-# Details
-Performs format conversion based on file extensions. For non-JLD2 to non-JLD2
-conversions, uses JLD2 as an intermediate format.
-"""
-function convert(args)
-    @show args
-    in_type = missing
-    out_type = missing
-    if occursin(r"\.jld2$", args["in"])
-        in_type = :jld2
-    elseif occursin(r"\.gfa$", args["in"])
-        in_type = :gfa
-    elseif occursin(r"\.neo4j$", args["in"])
-        in_type = :neo4j
-    end
+# # Details
+# Performs format conversion based on file extensions. For non-JLD2 to non-JLD2
+# conversions, uses JLD2 as an intermediate format.
+# """
+# function convert(args)
+#     @show args
+#     in_type = missing
+#     out_type = missing
+#     if occursin(r"\.jld2$", args["in"])
+#         in_type = :jld2
+#     elseif occursin(r"\.gfa$", args["in"])
+#         in_type = :gfa
+#     elseif occursin(r"\.neo4j$", args["in"])
+#         in_type = :neo4j
+#     end
 
-    if occursin(r"\.jld2$", args["out"])
-        out_type = :jld2
-    elseif occursin(r"\.gfa$", args["out"])
-        out_type = :gfa
-    elseif occursin(r"\.neo4j$", args["out"])
-        out_type = :neo4j
-    end
+#     if occursin(r"\.jld2$", args["out"])
+#         out_type = :jld2
+#     elseif occursin(r"\.gfa$", args["out"])
+#         out_type = :gfa
+#     elseif occursin(r"\.neo4j$", args["out"])
+#         out_type = :neo4j
+#     end
     
-    if ismissing(in_type) || ismissing(out_type)
-        error("unable to determine in and out types")
-    end
+#     if ismissing(in_type) || ismissing(out_type)
+#         error("unable to determine in and out types")
+#     end
     
-    if (in_type == :jld2) && (out_type == :jld2)
-        # done
-    elseif (in_type == :jld2) && (out_type != :jld2)
-        # convert out of jld2
-        if out_type == :gfa
-            loaded = FileIO.load(args["in"])
-            @assert haskey(loaded, "graph")
-            graph = loaded["graph"]
-            graph_to_gfa(graph, args["out"])
-        end
-    elseif (in_type != :jld2) && (out_type == :jld2)
-        # convert into jld2
-    else
-        # need to convert from input to jld2 as an intermediate first
-    end
-end
+#     if (in_type == :jld2) && (out_type == :jld2)
+#         # done
+#     elseif (in_type == :jld2) && (out_type != :jld2)
+#         # convert out of jld2
+#         if out_type == :gfa
+#             loaded = FileIO.load(args["in"])
+#             @assert haskey(loaded, "graph")
+#             graph = loaded["graph"]
+#             graph_to_gfa(graph, args["out"])
+#         end
+#     elseif (in_type != :jld2) && (out_type == :jld2)
+#         # convert into jld2
+#     else
+#         # need to convert from input to jld2 as an intermediate first
+#     end
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -15025,6 +15025,25 @@ function fastxs2normalized_tables(;fastxs, outdir, force=false)
 
     ProgressMeter.finish!(prog)
     return (;normalized_table_paths, errors)
+end
+
+function can_downcast_column(col::AbstractVector{T}, ::Type{S}) where {T<:AbstractFloat, S<:AbstractFloat}
+    col_vec = collect(col)
+    col2 = convert(Vector{S}, col_vec)
+    return col_vec == convert(Vector{T}, col2)
+end
+
+function downcast_float_columns(df::DataFrames.DataFrame; target_type=Float32)
+    for name in DataFrames.names(df)
+        col = df[!, name]
+        if eltype(col) <: AbstractFloat
+            if can_downcast_column(col, target_type)
+                # Always collect to Vector before converting types
+                df[!, name] = convert(Vector{target_type}, collect(col))
+            end
+        end
+    end
+    return df
 end
 
 # dynamic import of files??
