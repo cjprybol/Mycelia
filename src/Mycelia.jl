@@ -2968,54 +2968,101 @@ end
 #     return mlst_dir
 # end
 
+import JSON
+import DataFrames
+import ProgressMeter
+import CodecZlib
+import Base.Filesystem: stat
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Parse a JSONL (JSON Lines) file into a vector of dictionaries.
+    parse_jsonl(filepath::String) -> Vector{Dict{String,Any}}
 
-# Arguments
-- `filepath::String`: Path to the JSONL file to parse
+Validate and parse a JSON Lines file (either .ndjson/.jsonl, optionally gzipped)
+into a vector of dictionaries, reporting progress in bytes processed.
 
-# Returns
-- `Vector{Dict{String, Any}}`: Vector containing parsed JSON objects, one per line
+Validations performed:
+  • Extension must be one of: .jsonl, .ndjson, .jsonl.gz, .ndjson.gz
+  • File must exist
+  • File size must be non-zero
 
-# Description
-Reads a JSONL file line by line, parsing each line as a separate JSON object.
-Uses pre-allocation and progress tracking for efficient processing of large files.
+Progress meter shows bytes read from the underlying file (compressed bytes
+for .gz). No second full pass is needed.
 """
-function parse_jsonl(filepath::String)
-    # Count the lines first
-    num_lines = countlines(filepath)
-
-    # Pre-allocate the array
-    json_objects = Vector{Dict{String, Any}}(undef, num_lines)
-
-    # Progress meter setup
-    p = ProgressMeter.Progress(num_lines; desc="Parsing JSONL: ", showspeed=true)
-    
-    open(filepath, "r") do file
-        for (i, line) in enumerate(eachline(file))
-            json_objects[i] = JSON.parse(line)
-            ProgressMeter.next!(p) # Update the progress meter
-        end
+function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
+    # --- Validate inputs ---
+    fname = lowercase(filepath)
+    valid_exts = (".jsonl", ".ndjson", ".jsonl.gz", ".ndjson.gz")
+    if !any(endswith(fname, ext) for ext in valid_exts)
+        error("parse_jsonl: unsupported extension. “$(filepath)” must end in $(join(valid_exts, ", "))")
     end
-    return json_objects
+    if !isfile(filepath)
+        error("parse_jsonl: file not found: $filepath")
+    end
+    file_stat = stat(filepath)
+    if file_stat.size == 0
+        error("parse_jsonl: file is empty: $filepath")
+    end
+
+    # --- Open raw and (optionally) decompress ---
+    raw_io = open(filepath, "r")
+    io     = endswith(fname, ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+
+    # --- Set up a byte‐based progress meter ---
+    total_bytes = file_stat.size
+    p = ProgressMeter.Progress(total_bytes, "Parsing JSONL (bytes): ")
+    last_pos = Int64(0)
+
+    # --- Read & parse lines ---
+    results = Vector{Dict{String,Any}}()
+    for line in eachline(io)
+        s = strip(line)
+        if !isempty(s)
+            push!(results, JSON.parse(s))
+        end
+        # track compressed‐byte progress even for gzipped files
+        curr_pos = position(raw_io)
+        delta    = curr_pos - last_pos
+        last_pos = curr_pos
+        ProgressMeter.next!(p; step = delta)
+    end
+
+    close(io)
+    return results
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Parse a JSONL (JSON Lines) file into a vector of dictionaries.
+    jsonl_to_dataframe(filepath::String) -> DataFrame
 
-# Arguments
-- `filepath::String`: Path to the JSONL file to parse
+Parse a JSONL (or gzipped JSONL) file and return a DataFrame.
+Internally calls `parse_jsonl` for validation and parsing.
+Ensures that all rows have the same set of keys by inserting `missing`
+for any absent field before constructing the DataFrame.
+"""
+function jsonl_to_dataframe(filepath::String)::DataFrames.DataFrame
+    rows = parse_jsonl(filepath)
+    # If no rows, return empty DataFrame
+    if isempty(rows)
+        return DataFrames.DataFrame()
+    end
 
-# Returns
-- `Vector{Dict{String, Any}}`: Vector containing parsed JSON objects, one per line
+    # Collect the union of all keys across rows
+    all_keys = reduce(union, map(keys, rows))
+    # Fill missing columns in each row with `missing`
+    ProgressMeter.@showprogress desc="Filling missing values" for row in rows
+        for k in setdiff(all_keys, keys(row))
+            row[k] = missing
+        end
+    end
 
-# Description
-Reads a JSONL file line by line, parsing each line as a separate JSON object.
-Uses pre-allocation and progress tracking for efficient processing of large files.
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 """
 function system_overview(;path=pwd())
     total_memory = Base.format_bytes(Sys.total_memory())
