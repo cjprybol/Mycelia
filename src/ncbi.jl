@@ -1331,28 +1331,327 @@ end
 #     end
 # end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases using CSV.jl for improved performance.
+
+# Handles files with initial comment lines (`##...`) and header lines starting with '#'.
+
+# # Arguments
+# - `db::String`: Database source, must be either "genbank" or "refseq".
+
+# # Returns
+# - `DataFrames.DataFrame`: Parsed metadata table with columns typed according to NCBI specifications. Handles missing values represented by "na" or empty fields.
+
+# # Details
+# Downloads the assembly summary file directly from NCBI's FTP server via HTTP and parses it efficiently using `CSV.File`.
+# 1.  Fetches the entire data into an in-memory buffer.
+# 2.  Manually reads the first line (comment `##`) and second line (header `# ...`).
+# 3.  Cleans the extracted header names (removes leading '#', splits by tab).
+# 4.  Parses the rest of the buffer using `CSV.File`, providing the cleaned header.
+# 5.  Uses `CSV.jl`'s type detection and specific type mapping for performance.
+# 6.  Automatically handles missing values ("na", "", "NA") using `missingstring`.
+# 7.  Parses specified date columns using the format "yyyy/mm/dd".
+# """
+# function load_ncbi_metadata(db::String)
+#     # Validate database input
+#     if !(db in ["genbank", "refseq"])
+#         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+#     end
+
+#     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#     @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+#     local response_body::Vector{UInt8}
+#     try
+#         # Fetch data using HTTP.get
+#         response = HTTP.get(ncbi_summary_url, status_exception=true) # Throw error for non-2xx status
+#         response_body = response.body
+#     catch e
+#         @error "Failed to download NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         rethrow(e)
+#     end
+
+#     try
+#         # Create an IOBuffer from the downloaded body
+#         buffer = IOBuffer(response_body)
+
+#         # Read and discard the first line (## comment)
+#         readline(buffer)
+
+#         # Read the second line (header starting with #)
+#         header_line_raw = readline(buffer)
+
+#         # Clean the header line: remove leading '#', strip whitespace, split by tab
+#         header_string = lstrip(header_line_raw, ['#', ' ']) # Remove leading '#' and potential space
+#         # Using Base Julia string split:
+#         # header_names = String.(Base.split(Base.strip(header_string), '\t'))
+#         # Using StringManipulation for potentially more robust splitting/cleaning:
+#         header_names = split(strip(header_string), '\t')
+
+#         # Convert header names to Symbols for CSV.jl and DataFrames
+#         header_symbols = Symbol.(header_names)
+
+#         # Define column types for direct parsing by CSV.jl
+#         types_dict = Dict(
+#             :taxid => Int,
+#             :species_taxid => Int,
+#             :genome_size => Int,
+#             :genome_size_ungapped => Int,
+#             :replicon_count => Int,
+#             :scaffold_count => Int,
+#             :contig_count => Int,
+#             :total_gene_count => Int,
+#             :protein_coding_gene_count => Int,
+#             :non_coding_gene_count => Int,
+#             :gc_percent => Float64,
+#             :seq_rel_date => String,
+#             :annotation_date => String
+#         )
+
+#         # Parse the rest of the buffer using CSV.File
+#         # The buffer is now positioned at the start of the data (line 3)
+#         # Provide the cleaned header symbols explicitly
+#         # Use 'missingstring' (singular) instead of 'missingstrings' (plural)
+#         csv_file = CSV.File(
+#             buffer; # Pass the buffer, already positioned after the header
+#             header=header_symbols, # Provide the cleaned header names
+#             delim='\t',
+#             missingstring=["na", "NA", ""], # Corrected keyword
+#             types=types_dict,
+#             pool=true,
+#             # No need for skipto, datarow, or numerical header argument now
+#         )
+
+#         # Materialize the CSV.File into a DataFrame
+#         ncbi_summary_table = DataFrames.DataFrame(csv_file) # copycols=true is default but explicit
+#         @info "Successfully loaded and parsed NCBI assembly summary into a DataFrame."
+
+#         return ncbi_summary_table
+
+#     catch e
+#         @error "Failed to parse NCBI metadata buffer from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         # Rethrow the parsing error
+#         rethrow(e)
+#     end
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily cache.
+
+# Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
+# Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
+# from NCBI, caches the result, and then parses.
+
+# Handles NCBI's header format and uses CSV.jl for parsing. Requires necessary
+# modules like Logging and Base.Filesystem to be in scope (e.g., via `using`).
+
+# # Arguments
+# - `db::String`: Database source ("genbank" or "refseq").
+
+# # Returns
+# - `DataFrames.DataFrame`: Parsed metadata table.
+
+# # Errors
+# - Throws `ArgumentError` for invalid `db`.
+# - Throws error if cache directory cannot be created.
+# - Throws error if data cannot be obtained from cache or download.
+# - Rethrows errors from HTTP download or CSV parsing.
+# """
+# function load_ncbi_metadata(db::String)
+#     # Validate database input
+#     if !(db in ["genbank", "refseq"])
+#         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+#     end
+
+#     # --- Cache Path Setup ---
+#     todays_date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
+#     original_filename = "assembly_summary_$(db).txt"
+#     cache_dir = joinpath(homedir(), "workspace", ".ncbi")
+#     cached_filename = "$(todays_date_str).$(original_filename)"
+#     cached_filepath = joinpath(cache_dir, cached_filename)
+
+#     # Ensure cache directory exists
+#     try
+#         mkpath(cache_dir)
+#     catch e
+#         @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+#         rethrow(e)
+#     end
+
+#     # --- Data Loading Logic ---
+#     local response_body::Union{Vector{UInt8}, Nothing} = nothing
+#     source_description = ""
+
+#     # 1. Attempt to load from cache
+#     if isfile(cached_filepath)
+#         @info "Found cached file for today. Attempting to load: $cached_filepath"
+#         try
+#             content = read(cached_filepath)
+#             if isempty(content)
+#                 @warn "Cached file is empty: $cached_filepath. Will attempt download."
+#             else
+#                 response_body = content
+#                 source_description = "cache file: $cached_filepath"
+#                 @info "Successfully loaded non-empty data from cache."
+#             end
+#         catch e
+#             @error "Failed to read cached file: $cached_filepath. Attempting download." exception=(e, catch_backtrace())
+#         end
+#     else
+#         @info "No cached file found for today at: $cached_filepath. Attempting download."
+#     end
+
+#     # 2. If cache loading failed, download
+#     if isnothing(response_body)
+#         ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+#         @info "Fetching NCBI assembly summary from $ncbi_summary_url"
+
+#         try
+#             response = HTTP.get(ncbi_summary_url; status_exception=true)
+#             response_body = response.body
+#             source_description = "NCBI URL: $ncbi_summary_url"
+
+#             try
+#                 open(cached_filepath, "w") do io
+#                     write(io, response_body)
+#                 end
+#                 @info "Successfully cached downloaded data to: $cached_filepath"
+#             catch e
+#                 @warn "Failed to write cache file to $cached_filepath. Proceeding with in-memory data." exception=(e, catch_backtrace())
+#             end
+#         catch e
+#             @error "Failed to download NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+#         end
+#     end
+
+#     # 3. Final Check: Ensure data was loaded
+#     if isnothing(response_body)
+#         @error "Failed to obtain data from both cache and download for database '$db'."
+#         error("Could not load NCBI metadata for '$db'. Check connection and cache permissions.")
+#     end
+
+#     # --- Parsing Logic ---
+#     @info "Proceeding to parse data obtained from $(source_description)."
+#     try
+#         buffer = IOBuffer(response_body)
+#         readline(buffer) # Skip ## comment line
+#         header_line_raw = readline(buffer) # Read # header line
+
+#         header_string = lstrip(header_line_raw, ['#', ' '])
+#         header_names = split(strip(header_string), '\t')
+#         header_symbols = Symbol.(header_names)
+
+#         # --- CORRECTED and EXPANDED types_dict ---
+#         types_dict = Dict(
+#             # Strings (already present or added based on error)
+#             :assembly_accession => String,
+#             :bioproject => String,
+#             :biosample => String,
+#             :wgs_master => String,
+#             :refseq_category => String,
+#             :organism_name => String,
+#             :infraspecific_name => String,
+#             :isolate => String,
+#             :version_status => String,
+#             :assembly_level => String,
+#             :release_type => String,
+#             :genome_rep => String,
+#             :seq_rel_date => String, # Keep as String unless specific parsing needed
+#             :asm_name => String,
+#             :asm_submitter => String,       # CORRECTED from :submitter
+#             :gbrs_paired_asm => String,
+#             :paired_asm_comp => String,
+#             :ftp_path => String,
+#             :excluded_from_refseq => String,
+#             :relation_to_type_material => String,
+#             :asm_not_live_date => String, # Keep as String unless specific parsing needed
+#             :assembly_type => String,      # Added based on error output
+#             :group => String,              # Added based on error output
+#             :annotation_provider => String,# Added based on error output
+#             :annotation_name => String,    # Added based on error output
+#             :annotation_date => String,    # Added based on error output
+#             :pubmed_id => String,          # Added based on error output (safer as String)
+
+#             # Integers (already present or added based on error)
+#             :taxid => Int,
+#             :species_taxid => Int,
+#             :genome_size => Int,           # Added based on error output
+#             :genome_size_ungapped => Int,  # Added based on error output
+#             :replicon_count => Int,        # Added based on error output
+#             :scaffold_count => Int,        # Added based on error output
+#             :contig_count => Int,          # Added based on error output
+#             :total_gene_count => Int,      # Added based on error output
+#             :protein_coding_gene_count => Int, # Added based on error output
+#             :non_coding_gene_count => Int, # Added based on error output
+
+#             # Floats (added based on error output)
+#             :gc_percent => Float64         # Added based on error output
+#         )
+#         # --- End of types_dict ---
+
+#         # Validate that headers derived match the keys expected (optional but good practice)
+#         # This helps catch discrepancies early if NCBI changes format
+#         if Set(header_symbols) != Set(keys(types_dict))
+#              missing_in_dict = setdiff(Set(header_symbols), Set(keys(types_dict)))
+#              extra_in_dict = setdiff(Set(keys(types_dict)), Set(header_symbols))
+#              if !isempty(missing_in_dict)
+#                  @warn "Headers found in data but not in types_dict: $missing_in_dict"
+#              end
+#              # Don't warn about extra_in_dict usually, as the error already caught the critical case.
+#              # CSV.jl handles extra columns by inferring types.
+#         end
+
+
+#         # Parse using CSV.File
+#         csv_file = CSV.File(
+#             buffer;
+#             header=header_symbols,
+#             delim='\t',
+#             missingstring=["na", "NA", ""],
+#             types=types_dict,
+#             pool=true,
+#             # validate=false # Avoid using this; fixing types_dict is better
+#         )
+
+#         # Materialize into a DataFrame
+#         ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols=true)
+#         @info "Successfully parsed NCBI assembly summary into a DataFrame."
+
+#         return ncbi_summary_table
+
+#     catch e
+#         @error "Failed to parse NCBI metadata buffer from $(source_description)" exception=(e, catch_backtrace())
+#         rethrow(e) # Rethrow parsing error
+#     end
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Load and parse the assembly summary metadata from NCBI's FTP server for either GenBank or RefSeq databases using CSV.jl for improved performance.
+Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily cache.
 
-Handles files with initial comment lines (`##...`) and header lines starting with '#'.
+Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
+Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
+from NCBI using `Downloads.download()`, caches the result (replacing any
+previous version for the *same day*), and then parses the cached file.
+
+Handles NCBI's header format and uses CSV.jl for parsing.
 
 # Arguments
-- `db::String`: Database source, must be either "genbank" or "refseq".
+- `db::String`: Database source ("genbank" or "refseq").
 
 # Returns
-- `DataFrames.DataFrame`: Parsed metadata table with columns typed according to NCBI specifications. Handles missing values represented by "na" or empty fields.
+- `DataFrames.DataFrame`: Parsed metadata table.
 
-# Details
-Downloads the assembly summary file directly from NCBI's FTP server via HTTP and parses it efficiently using `CSV.File`.
-1.  Fetches the entire data into an in-memory buffer.
-2.  Manually reads the first line (comment `##`) and second line (header `# ...`).
-3.  Cleans the extracted header names (removes leading '#', splits by tab).
-4.  Parses the rest of the buffer using `CSV.File`, providing the cleaned header.
-5.  Uses `CSV.jl`'s type detection and specific type mapping for performance.
-6.  Automatically handles missing values ("na", "", "NA") using `missingstring`.
-7.  Parses specified date columns using the format "yyyy/mm/dd".
+# Errors
+- Throws `ArgumentError` for invalid `db`.
+- Throws error if cache directory cannot be created.
+- Throws error if data cannot be obtained from cache or download.
+- Rethrows errors from `Downloads.download` or CSV parsing.
 """
 function load_ncbi_metadata(db::String)
     # Validate database input
@@ -1360,83 +1659,137 @@ function load_ncbi_metadata(db::String)
         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
     end
 
+    # --- Cache Path Setup ---
+    todays_date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
+    original_filename = "assembly_summary_$(db).txt"
+    cache_dir = joinpath(homedir(), "workspace", ".ncbi")
+    cached_filename = "$(todays_date_str).$(original_filename)"
+    cached_filepath = joinpath(cache_dir, cached_filename)
     ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
-    @info "Fetching NCBI assembly summary from $ncbi_summary_url"
 
-    local response_body::Vector{UInt8}
+    # Ensure cache directory exists
     try
-        # Fetch data using HTTP.get
-        response = HTTP.get(ncbi_summary_url, status_exception=true) # Throw error for non-2xx status
-        response_body = response.body
+        mkpath(cache_dir)
     catch e
-        @error "Failed to download NCBI metadata from $ncbi_summary_url" exception=(e, catch_backtrace())
+        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
         rethrow(e)
     end
 
+    # --- Data Acquisition Logic ---
+    local source_description::String = ""
+    data_needs_download = false
+
+    # 1. Attempt to use existing cache
+    if isfile(cached_filepath)
+        if filesize(cached_filepath) > 0
+            @info "Found valid cached file for today: $cached_filepath"
+            source_description = "cache file: $cached_filepath"
+        else
+            @warn "Cached file exists but is empty: $cached_filepath. Will attempt download to replace it."
+            data_needs_download = true
+        end
+    else
+        @info "No cached file found for today at: $cached_filepath. Attempting download."
+        data_needs_download = true
+    end
+
+    # 2. If cache is missing or empty, download
+    if data_needs_download
+        @info "Downloading NCBI assembly summary from $ncbi_summary_url to $cached_filepath"
+        try
+            # Downloads.download handles writing the file and overwriting if it exists
+            Downloads.download(ncbi_summary_url, cached_filepath)
+            # Verify download success by checking file existence and size again
+            if isfile(cached_filepath) && filesize(cached_filepath) > 0
+                 @info "Successfully downloaded and cached data to: $cached_filepath"
+                 source_description = "downloaded file: $cached_filepath (from $ncbi_summary_url)"
+            else
+                 # This case should ideally be caught by Downloads.download throwing an error,
+                 # but added as a safeguard (e.g., network issues leaving empty file).
+                 @error "Download completed but resulted in an empty or missing file at $cached_filepath."
+                 # We will hit the final check below and error out.
+            end
+        catch e
+            @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(e, catch_backtrace())
+            # Let the final check handle the error state if cache wasn't valid either
+        end
+    end
+
+    # 3. Final Check: Ensure a valid data file exists at the cached path
+    if !isfile(cached_filepath) || filesize(cached_filepath) == 0
+        @error "Failed to obtain valid data for '$db'. Could not use cache and download failed or resulted in empty file."
+        error("Could not load NCBI metadata for '$db' from cache or download. Check path '$cached_filepath', network connection, and permissions.")
+    end
+
+    # --- Parsing Logic ---
+    @info "Proceeding to parse data from $(source_description)."
     try
-        # Create an IOBuffer from the downloaded body
-        buffer = IOBuffer(response_body)
+        # Manually read the first two lines to get the correct header
+        header_symbols = Symbol[]
+        open(cached_filepath, "r") do io
+            readline(io) # Skip ## comment line
+            header_line_raw = readline(io) # Read # header line
+            header_string = lstrip(header_line_raw, ['#', ' '])
+            header_names = split(strip(header_string), '\t')
+            header_symbols = Symbol.(header_names)
+        end # File is automatically closed here
 
-        # Read and discard the first line (## comment)
-        readline(buffer)
-
-        # Read the second line (header starting with #)
-        header_line_raw = readline(buffer)
-
-        # Clean the header line: remove leading '#', strip whitespace, split by tab
-        header_string = lstrip(header_line_raw, ['#', ' ']) # Remove leading '#' and potential space
-        # Using Base Julia string split:
-        # header_names = String.(Base.split(Base.strip(header_string), '\t'))
-        # Using StringManipulation for potentially more robust splitting/cleaning:
-        header_names = split(strip(header_string), '\t')
-
-        # Convert header names to Symbols for CSV.jl and DataFrames
-        header_symbols = Symbol.(header_names)
-
-        # Define column types for direct parsing by CSV.jl
+        # --- CORRECTED and EXPANDED types_dict ---
+        # (Copied from your original code - assumed correct)
         types_dict = Dict(
-            :taxid => Int,
-            :species_taxid => Int,
-            :genome_size => Int,
-            :genome_size_ungapped => Int,
-            :replicon_count => Int,
-            :scaffold_count => Int,
-            :contig_count => Int,
-            :total_gene_count => Int,
-            :protein_coding_gene_count => Int,
+            :assembly_accession => String, :bioproject => String, :biosample => String,
+            :wgs_master => String, :refseq_category => String, :organism_name => String,
+            :infraspecific_name => String, :isolate => String, :version_status => String,
+            :assembly_level => String, :release_type => String, :genome_rep => String,
+            :seq_rel_date => String, :asm_name => String, :asm_submitter => String,
+            :gbrs_paired_asm => String, :paired_asm_comp => String, :ftp_path => String,
+            :excluded_from_refseq => String, :relation_to_type_material => String,
+            :asm_not_live_date => String, :assembly_type => String, :group => String,
+            :annotation_provider => String, :annotation_name => String, :annotation_date => String,
+            :pubmed_id => String,
+            :taxid => Int, :species_taxid => Int, :genome_size => Int,
+            :genome_size_ungapped => Int, :replicon_count => Int, :scaffold_count => Int,
+            :contig_count => Int, :total_gene_count => Int, :protein_coding_gene_count => Int,
             :non_coding_gene_count => Int,
-            :gc_percent => Float64,
-            :seq_rel_date => String,
-            :annotation_date => String
+            :gc_percent => Float64
         )
+        # --- End of types_dict ---
 
-        # Parse the rest of the buffer using CSV.File
-        # The buffer is now positioned at the start of the data (line 3)
-        # Provide the cleaned header symbols explicitly
-        # Use 'missingstring' (singular) instead of 'missingstrings' (plural)
+        # Validate that headers derived match the keys expected (optional but good practice)
+        if Set(header_symbols) != Set(keys(types_dict))
+             missing_in_dict = setdiff(Set(header_symbols), Set(keys(types_dict)))
+             extra_in_dict = setdiff(Set(keys(types_dict)), Set(header_symbols))
+             # Only warn if file has headers we didn't define types for.
+             # Extra types_dict entries are okay, CSV.jl ignores them if not in header.
+             if !isempty(missing_in_dict)
+                 @warn "Headers found in data file but not explicitly typed in types_dict (will be inferred by CSV.jl): $missing_in_dict"
+             end
+        end
+
+        # Parse using CSV.File directly from the cached filepath
+        # skipto=3 skips the first two lines (# comment, # header) which we read manually
         csv_file = CSV.File(
-            buffer; # Pass the buffer, already positioned after the header
-            header=header_symbols, # Provide the cleaned header names
+            cached_filepath;
+            skipto=3,             # Skip the comment and header lines we already processed
+            header=header_symbols, # Provide the headers we extracted
             delim='\t',
-            missingstring=["na", "NA", ""], # Corrected keyword
+            missingstring=["na", "NA", ""],
             types=types_dict,
             pool=true,
-            # No need for skipto, datarow, or numerical header argument now
+            strict=true # Be strict about column count matching header after skipping lines
         )
 
-        # Materialize the CSV.File into a DataFrame
-        ncbi_summary_table = DataFrames.DataFrame(csv_file) # copycols=true is default but explicit
-        @info "Successfully loaded and parsed NCBI assembly summary into a DataFrame."
+        # Materialize into a DataFrame
+        ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols=true)
+        @info "Successfully parsed NCBI assembly summary into a DataFrame from $cached_filepath."
 
         return ncbi_summary_table
 
     catch e
-        @error "Failed to parse NCBI metadata buffer from $ncbi_summary_url" exception=(e, catch_backtrace())
-        # Rethrow the parsing error
-        rethrow(e)
+        @error "Failed to parse NCBI metadata file: $cached_filepath" exception=(e, catch_backtrace())
+        rethrow(e) # Rethrow parsing error
     end
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

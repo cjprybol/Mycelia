@@ -7,7 +7,6 @@ import Arrow
 import BioAlignments
 import BioSequences
 import BioSymbols
-import CairoMakie
 import Clustering
 # import CodecBase
 # import CodecBzip2
@@ -63,6 +62,8 @@ import UUIDs
 import XAM
 import XMLDict
 
+using CairoMakie
+
 import Pkg
 
 # preserve definitions between code jldoctest code blocks
@@ -104,6 +105,24 @@ const VCF_REGEX = r"\.vcf(\.gz)?$"
 
 ProgressMeter.ijulia_behavior(:clear)
 
+function check_bioconda_env_is_installed(pkg)
+        # ensure conda environment is available
+    if !isfile(CONDA_RUNNER)
+        if (basename(CONDA_RUNNER) == "mamba")
+            Conda.add("mamba")
+        elseif (basename(CONDA_RUNNER) == "conda")
+            Conda.update()
+        end
+    end
+    # try
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+    if pkg in current_environments
+        return true
+    else
+        return false
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -138,23 +157,14 @@ add_bioconda_env("blast", force=true)
 - Cleans conda cache after installation
 """
 function add_bioconda_env(pkg; force=false)
-    # ensure conda environment is available
-    if !isfile(CONDA_RUNNER)
-        if (basename(CONDA_RUNNER) == "mamba")
-            Conda.add("mamba")
-        elseif (basename(CONDA_RUNNER) == "conda")
-            Conda.update()
-        end
-    end
-    # try
-    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
     channel = nothing
     if occursin("::", pkg)
         println("splitting $(pkg)")
         channel, pkg = split(pkg, "::")
         println("into channel:$(channel) pkg:$(pkg)")
     end
-    if !(pkg in current_environments) || force
+    already_installed = check_bioconda_env_is_installed(pkg)
+    if !already_installed || force
         @info "installing conda environment $(pkg)"
         if isnothing(channel)
             run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
@@ -162,20 +172,7 @@ function add_bioconda_env(pkg; force=false)
             run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
         end
         run(`$(CONDA_RUNNER) clean --all -y`)
-    # else
-    #     # @info "conda environment $(pkg) already present; set force=true to update/re-install"
     end
-    # catch
-    #     add_bioconda_envs()
-    #     current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
-    #     if !(pkg in current_environments) || force
-    #         @info "installing conda environment $(pkg)"
-    #         run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-    #         run(`$(CONDA_RUNNER) clean --all -y`)
-    #     else
-    #         # @info "conda environment $(pkg) already present; set force=true to update/re-install"
-    #     end
-    # end
 end
 
 """
@@ -356,13 +353,13 @@ function scg_sbatch(;
         mail_user::String,
         mail_type::String="ALL",
         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
-        partition::String,
+        partition::String="interactive",
         account::String,
         nodes::Int=1,
         ntasks::Int=1,
         time::String="1-00:00:00",
-        cpus_per_task::Int=1,
-        mem_gb::Int=cpus_per_task * 32,
+        cpus_per_task::Int=16,
+        mem_gb::Int=cpus_per_task * 8,
         cmd::String
     )
     submission = 
@@ -1440,6 +1437,87 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Copy files between local and remote storage using rclone with automated retry logic.
+
+# Arguments
+- `source::String`: Source path or remote (e.g. "local/path" or "gdrive:folder")
+- `dest::String`: Destination path or remote (e.g. "gdrive:folder" or "local/path")
+
+# Keywords
+- `config::String=""`: Optional path to rclone config file
+- `max_attempts::Int=3`: Maximum number of retry attempts
+- `sleep_timer::Int=60`: Initial sleep duration between retries in seconds (doubles after each attempt)
+- `includes::Vector{String}=[]`: One or more include patterns (each will be passed using `--include`)
+- `excludes::Vector{String}=[]`: One or more exclude patterns (each will be passed using `--exclude`)
+- `recursive::Bool=false`: If true, adds the flag for recursive traversal
+"""
+function rclone_copy2(source, dest;
+                     config = "",
+                     max_attempts = 3, sleep_timer = 60,
+                     includes = String[],
+                     excludes = String[],
+                     recursive = false)
+    done = false
+    attempts = 0
+    while !done && attempts < max_attempts
+        attempts += 1
+        try
+            # Define base flags optimized for large files
+            flags = ["--drive-chunk-size", "2G",
+                     "--drive-upload-cutoff", "1T",
+                     "--tpslimit", "1",
+                     "--verbose"]
+
+            # Append each include pattern with its flag
+            for pattern in includes
+                push!(flags, "--include")
+                push!(flags, pattern)
+            end
+
+            # Append each exclude pattern with its flag
+            for pattern in excludes
+                push!(flags, "--exclude")
+                push!(flags, pattern)
+            end
+
+            # Optionally add the recursive flag
+            if recursive
+                push!(flags, "--recursive")
+            end
+
+            # Build the full argument list as an array of strings.
+            args = String[]
+            # Add base command and optional config
+            push!(args, "rclone")
+            if !isempty(config)
+                push!(args, "--config")
+                push!(args, config)
+            end
+            push!(args, "copy")
+            # Insert all flags (each flag and its parameter are separate elements)
+            append!(args, flags)
+            # Add source and destination paths
+            push!(args, source)
+            push!(args, dest)
+
+            # Convert the argument vector into a Cmd object
+            cmd = Cmd(args)
+
+            @info "copying $(source) to $(dest) with command: $(cmd)"
+            run(cmd)
+            done = true
+        catch e
+            @info "copying incomplete, sleeping $(sleep_timer) seconds and trying again..."
+            sleep(sleep_timer)
+            sleep_timer *= 2
+        end
+    end
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Identify all columns that have only missing or empty values
 
 Returns as a bit array
@@ -2188,7 +2266,9 @@ function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1
     Mycelia.add_bioconda_env("minimap2")
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    index_file = "$(fasta).x" * replace(mapping_type, ":" => "-") * ".I$(index_size).mmi"
+    # if lr:hq, deal with : in the name
+    # index_file = replace(mapping_type, ":" => "-")
     if as_string
         cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)"
     else
@@ -2327,70 +2407,72 @@ function find_matching_prefix(filename1::String, filename2::String; strip_traili
     return matching_prefix
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# Map paired-end reads to a reference sequence using minimap2.
+Map paired-end reads to a reference sequence using minimap2.
 
-# # Arguments
-# - `fasta::String`: Path to reference FASTA file
-# - `forward::String`: Path to forward reads FASTQ file
-# - `reverse::String`: Path to reverse reads FASTQ file
-# - `mem_gb::Integer`: Available system memory in GB
-# - `threads::Integer`: Number of threads to use
-# - `outdir::String`: Output directory (defaults to forward reads directory)
-# - `as_string::Bool=false`: Return command as string instead of Cmd array
-# - `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-# - `denominator::Float64`: Memory scaling factor for index size
+# Arguments
+- `fasta::String`: Path to reference FASTA file
+- `forward::String`: Path to forward reads FASTQ file
+- `reverse::String`: Path to reverse reads FASTQ file
+- `mem_gb::Integer`: Available system memory in GB
+- `threads::Integer`: Number of threads to use
+- `outdir::String`: Output directory (defaults to forward reads directory)
+- `as_string::Bool=false`: Return command as string instead of Cmd array
+- `mapping_type::String="sr"`: Minimap2 preset ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+- `denominator::Float64`: Memory scaling factor for index size
 
-# # Returns
-# Named tuple containing:
-# - `cmd`: Command(s) to execute (String or Array{Cmd})
-# - `outfile`: Path to compressed output SAM file (*.sam.gz)
+# Returns
+Named tuple containing:
+- `cmd`: Command(s) to execute (String or Array{Cmd})
+- `outfile`: Path to compressed output SAM file (*.sam.gz)
 
-# # Notes
-# - Requires minimap2, samtools, and pigz conda environments
-# - Automatically compresses output using pigz
-# - Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
-# """
-# function minimap_map_paired_end_with_index(;
-#         fasta,
-#         forward,
-#         reverse,
-#         mem_gb,
-#         threads,
-#         outdir = dirname(forward),
-#         as_string=false,
-#         mapping_type="sr",
-#         denominator=DEFAULT_MINIMAP_DENOMINATOR
-#     )
-#     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-#     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-#     index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
-#     # @show index_file
-#     @assert isfile(index_file) "$(index_file) not found!!"
-#     @assert isfile(forward) "$(forward) not found!!"
-#     @assert isfile(reverse) "$(reverse) not found!!"
-#     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
-#     temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
-#     # outfile = temp_sam_outfile
-#     outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-#     Mycelia.add_bioconda_env("minimap2")
-#     Mycelia.add_bioconda_env("samtools")
-#     Mycelia.add_bioconda_env("pigz")
-#     if as_string
-#         cmd =
-#         """
-#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-#         """
-#     else
-#         map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-#         compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-#         cmd = [map, compress]
-#     end
-#     return (;cmd, outfile)
-# end
+# Notes
+- Requires minimap2, samtools, and pigz conda environments
+- Automatically compresses output using pigz
+- Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
+"""
+function minimap_map_paired_end_with_index(;
+        forward,
+        reverse,
+        mem_gb=(Int(Sys.free_memory()) / 1e9),
+        threads=Sys.CPU_THREADS,
+        outdir = dirname(forward),
+        as_string=false,
+        denominator=DEFAULT_MINIMAP_DENOMINATOR,
+        fasta="",
+        index_file = ""
+    )
+    if isempty(index_file)
+        @assert !isempty(fasta) "must supply index file or fasta + mem_gb + denominator values to infer index file"
+        index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+        index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    end
+    # @show index_file
+    @assert isfile(index_file) "$(index_file) not found!!"
+    @assert isfile(forward) "$(forward) not found!!"
+    @assert isfile(reverse) "$(reverse) not found!!"
+    fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
+    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
+    # outfile = temp_sam_outfile
+    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    Mycelia.add_bioconda_env("minimap2")
+    Mycelia.add_bioconda_env("samtools")
+    Mycelia.add_bioconda_env("pigz")
+    if as_string
+        cmd =
+        """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
+        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        """
+    else
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
+        cmd = pipeline(map, compress)
+    end
+    return (;cmd, outfile)
+end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2780,6 +2862,14 @@ function filesize_human_readable(f)
     return Base.format_bytes(filesize(f))
 end
 
+function setup_padloc()
+    padloc_is_already_installed = check_bioconda_env_is_installed("padloc")
+    if !padloc_is_already_installed
+        Mycelia.add_bioconda_env("padlocbio::padloc")
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2795,10 +2885,9 @@ If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist f
 it runs 'padloc' with the specified FASTA file as input.
 """
 function run_padloc(;fasta_file, outdir=dirname(abspath(fasta_file)), threads=Sys.CPU_THREADS)
-    Mycelia.add_bioconda_env("padlocbio::padloc")
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --db-update`)
     padloc_outfile = joinpath(outdir, replace(basename(fasta_file), ".fna" => "") * "_padloc.csv")
     if !isfile(padloc_outfile)
+        setup_padloc()
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file) --outdir $(outdir) --cpu $(threads)`)
     else
         @info "$(padloc_outfile) already present"
@@ -2879,54 +2968,101 @@ end
 #     return mlst_dir
 # end
 
+import JSON
+import DataFrames
+import ProgressMeter
+import CodecZlib
+import Base.Filesystem: stat
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Parse a JSONL (JSON Lines) file into a vector of dictionaries.
+    parse_jsonl(filepath::String) -> Vector{Dict{String,Any}}
 
-# Arguments
-- `filepath::String`: Path to the JSONL file to parse
+Validate and parse a JSON Lines file (either .ndjson/.jsonl, optionally gzipped)
+into a vector of dictionaries, reporting progress in bytes processed.
 
-# Returns
-- `Vector{Dict{String, Any}}`: Vector containing parsed JSON objects, one per line
+Validations performed:
+  • Extension must be one of: .jsonl, .ndjson, .jsonl.gz, .ndjson.gz
+  • File must exist
+  • File size must be non-zero
 
-# Description
-Reads a JSONL file line by line, parsing each line as a separate JSON object.
-Uses pre-allocation and progress tracking for efficient processing of large files.
+Progress meter shows bytes read from the underlying file (compressed bytes
+for .gz). No second full pass is needed.
 """
-function parse_jsonl(filepath::String)
-    # Count the lines first
-    num_lines = countlines(filepath)
-
-    # Pre-allocate the array
-    json_objects = Vector{Dict{String, Any}}(undef, num_lines)
-
-    # Progress meter setup
-    p = ProgressMeter.Progress(num_lines; desc="Parsing JSONL: ", showspeed=true)
-    
-    open(filepath, "r") do file
-        for (i, line) in enumerate(eachline(file))
-            json_objects[i] = JSON.parse(line)
-            ProgressMeter.next!(p) # Update the progress meter
-        end
+function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
+    # --- Validate inputs ---
+    fname = lowercase(filepath)
+    valid_exts = (".jsonl", ".ndjson", ".jsonl.gz", ".ndjson.gz")
+    if !any(endswith(fname, ext) for ext in valid_exts)
+        error("parse_jsonl: unsupported extension. “$(filepath)” must end in $(join(valid_exts, ", "))")
     end
-    return json_objects
+    if !isfile(filepath)
+        error("parse_jsonl: file not found: $filepath")
+    end
+    file_stat = stat(filepath)
+    if file_stat.size == 0
+        error("parse_jsonl: file is empty: $filepath")
+    end
+
+    # --- Open raw and (optionally) decompress ---
+    raw_io = open(filepath, "r")
+    io     = endswith(fname, ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+
+    # --- Set up a byte‐based progress meter ---
+    total_bytes = file_stat.size
+    p = ProgressMeter.Progress(total_bytes, "Parsing JSONL (bytes): ")
+    last_pos = Int64(0)
+
+    # --- Read & parse lines ---
+    results = Vector{Dict{String,Any}}()
+    for line in eachline(io)
+        s = strip(line)
+        if !isempty(s)
+            push!(results, JSON.parse(s))
+        end
+        # track compressed‐byte progress even for gzipped files
+        curr_pos = position(raw_io)
+        delta    = curr_pos - last_pos
+        last_pos = curr_pos
+        ProgressMeter.next!(p; step = delta)
+    end
+
+    close(io)
+    return results
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Parse a JSONL (JSON Lines) file into a vector of dictionaries.
+    jsonl_to_dataframe(filepath::String) -> DataFrame
 
-# Arguments
-- `filepath::String`: Path to the JSONL file to parse
+Parse a JSONL (or gzipped JSONL) file and return a DataFrame.
+Internally calls `parse_jsonl` for validation and parsing.
+Ensures that all rows have the same set of keys by inserting `missing`
+for any absent field before constructing the DataFrame.
+"""
+function jsonl_to_dataframe(filepath::String)::DataFrames.DataFrame
+    rows = parse_jsonl(filepath)
+    # If no rows, return empty DataFrame
+    if isempty(rows)
+        return DataFrames.DataFrame()
+    end
 
-# Returns
-- `Vector{Dict{String, Any}}`: Vector containing parsed JSON objects, one per line
+    # Collect the union of all keys across rows
+    all_keys = reduce(union, map(keys, rows))
+    # Fill missing columns in each row with `missing`
+    ProgressMeter.@showprogress desc="Filling missing values" for row in rows
+        for k in setdiff(all_keys, keys(row))
+            row[k] = missing
+        end
+    end
 
-# Description
-Reads a JSONL file line by line, parsing each line as a separate JSON object.
-Uses pre-allocation and progress tracking for efficient processing of large files.
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 """
 function system_overview(;path=pwd())
     total_memory = Base.format_bytes(Sys.total_memory())
@@ -3489,50 +3625,138 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Determine the optimal number of clusters for a dataset using hierarchical clustering
-and silhouette score analysis.
+Identifies the optimal number of clusters using hierarchical clustering
+and maximizing the average silhouette score, displaying progress.
 
-# Arguments
-- `distance_matrix`: A symmetric matrix of pairwise distances between data points
+Uses Clustering.clustering_quality for score calculation.
 
-# Returns
-A tuple containing:
-- `hcl`: The fitted hierarchical clustering object
-- `optimal_number_of_clusters`: Integer indicating the optimal number of clusters
+Args:
+    distance_matrix: A square matrix of pairwise distances between items.
 
-# Details
-The function:
-1. Performs hierarchical clustering on the distance matrix
-2. Tests cluster counts from 2 to √n (where n is dataset size)
-3. Evaluates each clustering using silhouette scores
-4. Generates a diagnostic plot showing silhouette scores vs cluster counts
-5. Selects the number of clusters that minimizes the silhouette score
-
-The diagnostic plot is displayed automatically during execution.
-
-# See Also
-- `heirarchically_cluster_distance_matrix`
-- `Clustering.silhouettes`
+Returns:
+    A tuple containing:
+    - hcl: The hierarchical clustering result object.
+    - optimal_number_of_clusters: The inferred optimal number of clusters (k).
 """
-function identify_optimal_number_of_clusters(distance_matrix)
-    hcl = heirarchically_cluster_distance_matrix(distance_matrix)
-    ks = 2:Int(ceil(sqrt(length(hcl.labels))))
-    silhouette_scores = Float64[]
-    ProgressMeter.@showprogress for k in ks
-        v = sum(Clustering.silhouettes(Clustering.cutree(hcl, k=k), distance_matrix))
-        push!(silhouette_scores, v)
+function identify_optimal_number_of_clusters(distance_matrix, min_k = Int(ceil(log2(size(distance_matrix, 2)))) * 2, max_k = Int(ceil(sqrt(size(distance_matrix, 2)))))
+    # Ensure the input is a square matrix
+    if size(distance_matrix, 1) != size(distance_matrix, 2)
+         error("Input distance_matrix must be square.")
     end
-    optimal_number_of_clusters = ks[last(findmin(silhouette_scores))]
+    n_items = size(distance_matrix, 1)
+    if n_items < 2
+        error("Need at least 2 items to perform clustering.")
+    end
+
+    # Compute hierarchical clustering using your custom function.
+    println("Performing hierarchical clustering...")
+    hcl = heirarchically_cluster_distance_matrix(distance_matrix)
+    println("Hierarchical clustering complete.")
+
+    # # Determine N based on hcl object or matrix size
+    # local N::Int
+    # if hasfield(typeof(hcl), :labels) && !isempty(hcl.labels)
+    N = length(hcl.labels)
+    if N != n_items
+         @warn "Number of labels in Hclust object ($(N)) does not match distance matrix size ($(n_items)). Using Hclust labels count."
+    end
+    # else
+    #      @warn "Hierarchical clustering result type $(typeof(hcl)) might not have a `.labels` field or it's empty. Using distance matrix size for N."
+    #      N = n_items
+    # end
+    
+    # Define the range of k values to test: 2 to min(N-1, ceil(sqrt(N)))
+    # Cannot have more clusters than N items, and silhouette requires at least 1 item per cluster,
+    # implicitly k <= N. Silhouettes are ill-defined for k=1. Need k < N for non-trivial clustering.
+    if max_k < 2
+        println("Not enough items (N=$N) to test multiple cluster numbers (k >= 2). Cannot determine optimal k.")
+        # Optionally, plot a message or return a specific value indicating failure/trivial case
+        p_trivial = StatsPlots.plot(title="Cannot optimize k (N=$N, max tested k=$(max_k))", xlabel="Number of Clusters", ylabel="Avg Silhouette Score")
+        display(p_trivial)
+        # Returning N clusters (each item its own) might be misleading as optimal
+        # Consider returning nothing or throwing error, or returning k=N with a warning
+        @warn "Returning trivial clustering with k=$N as optimal k could not be determined."
+        return (hcl, N)
+    end
+    ks = min_k:max_k
+    n_ks = length(ks)
+    println("Evaluating average silhouette scores for k from $(min_k) to $(max_k)...")
+
+    # Preallocate an array for average silhouette scores for each value of k.
+    avg_silhouette_scores = zeros(Float64, n_ks)
+
+    # --- ProgressMeter Setup ---
+    pm = ProgressMeter.Progress(n_ks, 1, "Calculating Avg Silhouette Scores: ", 50)
+    # --------------------------
+
+    # Parallel loop: each iteration computes the average silhouette score for a given k.
+    Threads.@threads for i in 1:n_ks
+        k = ks[i]
+        avg_silhouette_scores[i] = Statistics.mean(Clustering.silhouettes(Clustering.cutree(hcl, k=k), distance_matrix))
+        ProgressMeter.next!(pm)
+    end
+
+    # Check if all scores resulted in errors
+    if all(s -> s == Float64(-Inf) || isnan(s), avg_silhouette_scores)
+        error("Failed to calculate valid average silhouette scores for all values of k.")
+    end
+
+    # Determine the optimal number of clusters by finding the MAXIMUM average score
+    # Filter out -Inf/NaN before finding the maximum.
+    valid_indices = findall(s -> !isnan(s) && s != Float64(-Inf), avg_silhouette_scores)
+    if isempty(valid_indices)
+        error("No valid average silhouette scores were computed.")
+    end
+
+    # Find maximum among valid scores
+    max_score_valid, local_max_idx_valid = findmax(avg_silhouette_scores[valid_indices])
+    # Map back to the original index in avg_silhouette_scores and ks
+    max_idx_original = valid_indices[local_max_idx_valid]
+    optimal_number_of_clusters = ks[max_idx_original]
+
+    println("\nOptimal number of clusters inferred (max avg silhouette score): ", optimal_number_of_clusters)
+    println("Maximum average silhouette score: ", max_score_valid)
+
+
+    # Plotting the average silhouette scores.
     p = StatsPlots.scatter(
         ks,
-        silhouette_scores,
-        title = "Clustering Performance vs. Number of Clusters\n(lower is better)",
-        xlabel = "Number of Clusters",
-        ylabel = "Silhouette Score",
-        label = "",
-        ylims=(0, maximum(silhouette_scores) * 1.1)
+        avg_silhouette_scores,
+        title = "Clustering Performance vs. Number of Clusters\n(higher is better)",
+        xlabel = "Number of Clusters (k)",
+        ylabel = "Average Silhouette Score", # Updated label
+        label = "Avg Score",
+        markersize = 5,
+        markerstrokewidth = 0.5
     )
-    p = StatsPlots.vline!([optimal_number_of_clusters], color=:red, label="inferred optimum = $(optimal_number_of_clusters)")
+
+    # Adjust y-limits based on valid scores, keeping [-1, 1] range in mind
+    valid_scores = avg_silhouette_scores[valid_indices]
+    min_val = minimum(valid_scores)
+    max_val = maximum(valid_scores) # This is max_score_valid
+    range = max_val - min_val
+    # Set sensible limits slightly beyond observed range, but clamp to [-1.05, 1.05]
+    ylims_lower = max(-1.05, min_val - range * 0.1)
+    ylims_upper = min(1.05, max_val + range * 0.1)
+    # Ensure lower < upper, handle case where range is 0
+    if isapprox(ylims_lower, ylims_upper)
+         ylims_lower -= 0.1
+         ylims_upper += 0.1
+         # Clamp again if needed
+         ylims_lower = max(-1.05, ylims_lower)
+         ylims_upper = min(1.05, ylims_upper)
+    end
+    StatsPlots.ylims!(p, (ylims_lower, ylims_upper))
+
+    # Add reference line at y=0 (separation between reasonable/poor clusters)
+    StatsPlots.hline!(p, [0], color=:gray, linestyle=:dot, label="Score = 0")
+
+    # Add vertical line for the optimum
+    StatsPlots.vline!(p, [optimal_number_of_clusters], color = :red, linestyle = :dash, label = "Inferred optimum = $(optimal_number_of_clusters)")
+
+    # Display the plot
+    display(p)
+
     return (hcl, optimal_number_of_clusters)
 end
 
@@ -4395,9 +4619,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run the BLASTN (Basic Local Alignment Search Tool for Nucleotides) command with specified parameters.
 
 # Arguments
-- `out_dir::String`: The output directory where the BLASTN results will be saved.
+- `outdir::String`: The output directory where the BLASTN results will be saved.
 - `fasta::String`: The path to the input FASTA file containing the query sequences.
-- `blast_db::String`: The path to the BLAST database to search against.
+- `blastdb::String`: The path to the BLAST database to search against.
 - `task::String`: The BLASTN task to perform. Default is "megablast".
 - `force::Bool`: If true, forces the BLASTN command to run even if the output file already exists. Default is false.
 - `remote::Bool`: If true, runs the BLASTN command remotely. Default is false.
@@ -4411,85 +4635,30 @@ This function constructs and runs a BLASTN command based on the provided paramet
 It creates an output directory if it doesn't exist, constructs the output file path, and checks if the BLASTN command needs to be run based on the existence and size of the output file.
 The function supports running the BLASTN command locally or remotely, with options to force re-running and to wait for completion.
 """
-function run_blastn(;out_dir, fasta, blast_db, task="megablast", force=false, remote=false, wait=true)
-    blast_dir = mkpath(joinpath(out_dir, "blastn"))
-    outfile = "$(blast_dir)/$(basename(fasta)).blastn.$(basename(blast_db)).$(task).txt"
-    # if remote
-        # outfile = replace(outfile, ".txt" => ".remote.txt")
-    # end
+function run_blastn(;outdir=pwd(), fasta, blastdb, threads=min(Sys.CPU_THREADS, 8), task="megablast", force=false, remote=false, wait=true)
+    Mycelia.add_bioconda_env("blast")
+    outdir = mkpath(outdir)
+    outfile = "$(outdir)/$(basename(fasta)).blastn.$(basename(blastdb)).$(task).txt"
     
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
     
     # default max target seqs = 500, which seemed like too much
     # default evalue is 10, which also seems like too much
     
-    # I want to speed this up more but don't know how
-    # 
-    # num_alignments
-    # https://www.ncbi.nlm.nih.gov/books/NBK569845/
-    # Windowmasker masks the over-represented sequence data and it can also mask the low complexity sequence data using the built-in dust algorithm (through the -dust option). To mask low-complexity sequences only, we will need to use dustmasker.
-    # http://ftp.ncbi.nlm.nih.gov/pub/agarwala/dustmasker/README.dustmasker
-    # http://ftp.ncbi.nlm.nih.gov/pub/agarwala/windowmasker/README.windowmasker
-    # ./windowmasker -ustat ustat.15 -in chr1.fa -out chr1.wm -dust true
-    
-    # windowmasker -in hs_chr -infmt blastdb -mk_counts -parse_seqids -out hs_chr_mask.counts
-    # windowmasker -in hs_chr -infmt blastdb -ustat hs_chr_mask.count -outfmt maskinfo_asn1_bin -parse_seqids -out hs_chr_mask.asnb
-    
-    # dustmasker -in hs_chr -infmt blastdb -parse_seqids -outfmt maskinfo_asn1_bin -out hs_chr_dust.asnb
-    
-    # makeblastdb -in hs_chr –input_type blastdb -dbtype nucl -parse_seqids -mask_data hs_chr_mask.asnb -out hs_chr -title "Human Chromosome, Ref B37.1"
-    # blastdbcmd -db hs_chr -info
-    
-    # https://www.ncbi.nlm.nih.gov/IEB/ToolBox/CPP_DOC/lxr/source/src/app/winmasker/README
-
-    # windowmasker -mk_counts -checkdup true -infmt blastdb -in nt -out nt.wm.1
-    # windowmasker -ustat nt.wm.1 -dust true -in nt -infmt blastdb -out nt.wm.2
-    # makeblastdb -in nt –input_type blastdb -dbtype nucl -parse_seqids -mask_data nt.wm.2 -out nt_masked_deduped -title "nt masked and deduped"
-    
-    # windowmasker -mk_counts -infmt blastdb -in nt -out nt.wm.no_dup_check.1
-    # windowmasker -ustat nt.wm.no_dup_check.1 -dust true -in nt -infmt blastdb -out nt.wm.no_dup_check.2
-    # makeblastdb -in nt –input_type blastdb -dbtype nucl -parse_seqids -mask_data nt.wm.no_dup_check.2 -out nt_masked -title "nt masked"
-
-    # windowmasker -convert -in input_file_name -out output_file_name [-sformat output_format] [-smem available_memory]
-    
     if force || need_to_run
-        # if remote
-        #     cmd = 
-        #         `
-        #         blastn
-        #         -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-        #         -query $(fasta)
-        #         -db $(basename(blast_db))
-        #         -out $(outfile)
-        #         -max_target_seqs 10
-        #         -evalue 0.001
-        #         -task $(task)
-        #         -soft_masking true
-        #         -subject_besthit
-        #         -dust
-        #         -remote
-        #         `
-        # else
-        # https://www.ncbi.nlm.nih.gov/books/NBK571452/
-        # cap @ 8 and also use -mt_mode = 1 based on empirical evidence from
-        # above blog post
         cmd = 
         `
-        blastn
-        -num_threads $(min(Sys.CPU_THREADS, 8))
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastn
+        -num_threads $(threads)
         -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
         -query $(fasta)
-        -db $(blast_db)
+        -db $(blastdb)
         -out $(outfile)
         -max_target_seqs 10
         -subject_besthit
         -task $(task)
         -evalue 0.001
         `
-        # end
-#         p = pipeline(cmd, 
-#                 stdout="$(blastn_dir)/$(ID).blastn.out",
-#                 stderr="$(blastn_dir)/$(ID).blastn.err")
         @info "running cmd $(cmd)"
         @time run(pipeline(cmd), wait=wait)
     end
@@ -8891,7 +9060,7 @@ Requires EMBOSS toolkit (installed via Bioconda). The function will:
 2. Run seqret to combine sequence and features
 3. Generate a GenBank format file at the specified location
 """
-function fasta_and_gff_to_genbank(;fasta, gff, genbank)
+function fasta_and_gff_to_genbank(;fasta, gff, genbank=gff * ".genbank")
     add_bioconda_env("emboss")
     # https://www.insdc.org/submitting-standards/feature-table/
     genbank_directory = dirname(genbank)
@@ -8904,7 +9073,7 @@ function fasta_and_gff_to_genbank(;fasta, gff, genbank)
 #     -osname
     # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
     run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
-    # return genbank
+    return genbank
 end
 
 # function gff_to_genbank(gff, genbank)
@@ -9103,31 +9272,123 @@ end
 #     return mmseqs_results
 # end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Read results from MMSeqs2 easy-search output file into a DataFrame.
+
+# # Arguments
+# - `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search
+
+# # Returns
+# - `DataFrame`: Contains search results with columns:
+#   - `query`: Query sequence identifier
+#   - `target`: Target sequence identifier
+#   - `seqIdentity`: Sequence identity (0.0-1.0)
+#   - `alnLen`: Alignment length
+#   - `mismatch`: Number of mismatches
+#   - `gapOpen`: Number of gap openings
+#   - `qStart`: Query start position
+#   - `qEnd`: Query end position
+#   - `tStart`: Target start position 
+#   - `tEnd`: Target end position
+#   - `evalue`: Expected value
+#   - `bits`: Bit score
+# """
+# function read_mmseqs_easy_search(mmseqs_file)
+#     mmseqs_results = CSV.read(mmseqs_file, DataFrames.DataFrame, header=1, delim='\t')
+#     return mmseqs_results
+# end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Read results from MMSeqs2 easy-search output file into a DataFrame.
+Read results from MMSeqs2 easy-search output file (plain or gzipped) into a DataFrame
+with optimized memory usage. Automatically detects if the file is gzipped based on
+the '.gz' extension.
 
 # Arguments
-- `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search
+- `mmseqs_file::String`: Path to the tab-delimited output file from MMSeqs2 easy-search.
+                         Can be a plain text file or a gzipped file (ending in .gz).
 
 # Returns
 - `DataFrame`: Contains search results with columns:
-  - `query`: Query sequence identifier
-  - `target`: Target sequence identifier
-  - `seqIdentity`: Sequence identity (0.0-1.0)
-  - `alnLen`: Alignment length
-  - `mismatch`: Number of mismatches
-  - `gapOpen`: Number of gap openings
-  - `qStart`: Query start position
-  - `qEnd`: Query end position
-  - `tStart`: Target start position 
-  - `tEnd`: Target end position
-  - `evalue`: Expected value
-  - `bits`: Bit score
+  - `query::String`: Query sequence identifier (pooled)
+  - `target::String`: Target sequence identifier (pooled)
+  - `seqIdentity::Float64`: Sequence identity (0.0-1.0)
+  - `alnLen::Int`: Alignment length
+  - `mismatch::Int`: Number of mismatches
+  - `gapOpen::Int`: Number of gap openings
+  - `qStart::Int`: Query start position
+  - `qEnd::Int`: Query end position
+  - `tStart::Int`: Target start position
+  - `tEnd::Int`: Target end position
+  - `evalue::Float64`: Expected value
+  - `bits::Float64`: Bit score
+
+# Remarks
+- Ensure the `CodecZlib.jl` package is installed for gzipped file support.
 """
-function read_mmseqs_easy_search(mmseqs_file)
-    mmseqs_results = CSV.read(mmseqs_file, DataFrames.DataFrame, header=1, delim='\t')
+function read_mmseqs_easy_search(mmseqs_file::String)
+    # Define the expected column types.
+    # These keys MUST match the column headers in your MMSeqs2 output file.
+    # Based on the error message, names are likely lowercase and 'seqIdentity' might be 'fident' or 'pident'.
+    # We'll use 'fident' as it often represents fractional identity (0.0-1.0).
+    col_types = Dict(
+        "query" => String,        # Query sequence identifier (pooled)
+        "qheader" => String,
+        "qlen" => Int,
+        "target" => String,       # Target sequence identifier (pooled)
+        "tlen" => Int,
+        "theader" => String,
+        "nident" => Int,
+        "fident" => Float64,      
+        "pident" => Float64,
+        "alnlen" => Int,          # Alignment length (lowercase 'l')
+        "mismatch" => Int,        # Number of mismatches
+        "gapopen" => Int,         # Number of gap openings (lowercase 'o')
+        "qstart" => Int,          # Query start position (lowercase 's')
+        "qend" => Int,            # Query end position (lowercase 'e')
+        "tstart" => Int,          # Target start position (lowercase 's')
+        "tend" => Int,            # Target end position (lowercase 'e')
+        "evalue" => Float64,      # E-values
+        "bits" => Float64,         # Bit scores
+        "taxid" => Int, # Or String, depending on content
+        "taxname" => String
+    )
+
+    # Common CSV reading options
+    csv_options = (
+        header=1,             # Assumes the first row contains column names
+        delim='\t',           # Tab-delimited file
+        types=col_types,      # Apply our defined column types
+        pool=true,            # Pool string columns to save memory
+        ntasks=Sys.CPU_THREADS, # Utilize available CPU threads for parsing
+    )
+
+    local mmseqs_results::DataFrames.DataFrame
+
+    # Check if the file is gzipped
+    if endswith(lowercase(mmseqs_file), ".gz")
+        # Open the gzipped file with a decompressor stream
+        open(mmseqs_file, "r") do file_stream
+            gzip_stream = CodecZlib.GzipDecompressorStream(file_stream)
+            mmseqs_results = CSV.read(
+                gzip_stream,
+                DataFrames.DataFrame;
+                csv_options... # Splat the common options
+            )
+        end
+    else
+        # Read as a plain text file
+        mmseqs_results = CSV.read(
+            mmseqs_file,
+            DataFrames.DataFrame;
+            csv_options... # Splat the common options
+        )
+    end
+
     return mmseqs_results
 end
 
@@ -9888,9 +10149,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Writes FASTA records to a file, optionally gzipped.
 
 # Arguments
-- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true.
+- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true and ".gz" isn't already the extension.
 - `records::Vector{FASTX.FASTA.Record}`: A vector of FASTA records.
-- `gzip::Bool=false`: Whether to compress the output with gzip.
+- `gzip::Bool`: Optionally force compression of the output with gzip. By default will use the file name to infer.
 
 # Returns
 - `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
@@ -9965,60 +10226,60 @@ function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     return p
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Convert between different graph file formats.
+# Convert between different graph file formats.
 
-# Arguments
-- `args`: Dictionary with required keys:
-    - `"in"`: Input filepath (supported: .jld2, .gfa, .neo4j)
-    - `"out"`: Output filepath (supported: .jld2, .gfa, .neo4j)
+# # Arguments
+# - `args`: Dictionary with required keys:
+#     - `"in"`: Input filepath (supported: .jld2, .gfa, .neo4j)
+#     - `"out"`: Output filepath (supported: .jld2, .gfa, .neo4j)
 
-# Details
-Performs format conversion based on file extensions. For non-JLD2 to non-JLD2
-conversions, uses JLD2 as an intermediate format.
-"""
-function convert(args)
-    @show args
-    in_type = missing
-    out_type = missing
-    if occursin(r"\.jld2$", args["in"])
-        in_type = :jld2
-    elseif occursin(r"\.gfa$", args["in"])
-        in_type = :gfa
-    elseif occursin(r"\.neo4j$", args["in"])
-        in_type = :neo4j
-    end
+# # Details
+# Performs format conversion based on file extensions. For non-JLD2 to non-JLD2
+# conversions, uses JLD2 as an intermediate format.
+# """
+# function convert(args)
+#     @show args
+#     in_type = missing
+#     out_type = missing
+#     if occursin(r"\.jld2$", args["in"])
+#         in_type = :jld2
+#     elseif occursin(r"\.gfa$", args["in"])
+#         in_type = :gfa
+#     elseif occursin(r"\.neo4j$", args["in"])
+#         in_type = :neo4j
+#     end
 
-    if occursin(r"\.jld2$", args["out"])
-        out_type = :jld2
-    elseif occursin(r"\.gfa$", args["out"])
-        out_type = :gfa
-    elseif occursin(r"\.neo4j$", args["out"])
-        out_type = :neo4j
-    end
+#     if occursin(r"\.jld2$", args["out"])
+#         out_type = :jld2
+#     elseif occursin(r"\.gfa$", args["out"])
+#         out_type = :gfa
+#     elseif occursin(r"\.neo4j$", args["out"])
+#         out_type = :neo4j
+#     end
     
-    if ismissing(in_type) || ismissing(out_type)
-        error("unable to determine in and out types")
-    end
+#     if ismissing(in_type) || ismissing(out_type)
+#         error("unable to determine in and out types")
+#     end
     
-    if (in_type == :jld2) && (out_type == :jld2)
-        # done
-    elseif (in_type == :jld2) && (out_type != :jld2)
-        # convert out of jld2
-        if out_type == :gfa
-            loaded = FileIO.load(args["in"])
-            @assert haskey(loaded, "graph")
-            graph = loaded["graph"]
-            graph_to_gfa(graph, args["out"])
-        end
-    elseif (in_type != :jld2) && (out_type == :jld2)
-        # convert into jld2
-    else
-        # need to convert from input to jld2 as an intermediate first
-    end
-end
+#     if (in_type == :jld2) && (out_type == :jld2)
+#         # done
+#     elseif (in_type == :jld2) && (out_type != :jld2)
+#         # convert out of jld2
+#         if out_type == :gfa
+#             loaded = FileIO.load(args["in"])
+#             @assert haskey(loaded, "graph")
+#             graph = loaded["graph"]
+#             graph_to_gfa(graph, args["out"])
+#         end
+#     elseif (in_type != :jld2) && (out_type == :jld2)
+#         # convert into jld2
+#     else
+#         # need to convert from input to jld2 as an intermediate first
+#     end
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -10391,6 +10652,12 @@ function normalize_codon_frequencies(codon_frequencies)
     return normalized_codon_frequencies
 end
 
+function normalize_kmer_counts(kmer_counts)
+    total_kmer_counts = sum(values(kmer_counts))
+    normalized_kmer_frequencies = DataStructures.OrderedDict(k => v/total_kmer_counts for (k,v) in kmer_counts)
+    return normalized_kmer_frequencies
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -10447,7 +10714,8 @@ Optimizes the DNA sequence encoding for a given protein sequence using codon usa
 """
 function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
     best_sequence = reverse_translate(protein_sequence)
-    codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(best_sequence), 3)))
+    # codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(best_sequence), 3)))
+    codons = first.(collect(Kmers.UnambiguousDNAMers{3}(BioSequences.LongDNA{4}(best_sequence))))[1:3:end]
     initial_log_likelihood = -log10(1.0)
     for (codon, amino_acid) in collect(zip(codons, protein_sequence))
         this_codon_likelihood = normalized_codon_frequencies[amino_acid][codon]
@@ -10476,7 +10744,7 @@ function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequ
         end
         @assert BioSequences.translate(this_sequence) == protein_sequence
     end
-    @show (best_likelihood)^-10 / (initial_log_likelihood)^-10
+    # @show (best_likelihood)^-10 / (initial_log_likelihood)^-10
     return best_sequence
 end
 
@@ -10524,11 +10792,11 @@ function generate_all_possible_kmers(k, alphabet)
     kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
     kmer_vectors = collect.(vec(collect(kmer_iterator)))
     if eltype(alphabet) == BioSymbols.AminoAcid
-        kmers = [Kmers.Kmer{BioSequences.AminoAcidAlphabet}(BioSequences.LongAA(kv)) for kv in kmer_vectors]
+        kmers = [Kmers.AAKmer{k}(BioSequences.LongAA(kv)) for kv in kmer_vectors]
     elseif eltype(alphabet) == BioSymbols.DNA
-        kmers = [Kmers.Kmer{BioSequences.DNAAlphabet{2}}(BioSequences.LongDNA{2}(kv)) for kv in kmer_vectors]
+        kmers = [Kmers.DNAKmer{k}(BioSequences.LongDNA{2}(kv)) for kv in kmer_vectors]
     elseif eltype(alphabet) == BioSymbols.RNA
-        kmers = [Kmers.Kmer{BioSequences.RNAAlphabet{2}}(BioSequences.LongRNA{2}(kv)) for kv in kmer_vectors]
+        kmers = [Kmers.RNAKmer{k}(BioSequences.LongRNA{2}(kv)) for kv in kmer_vectors]
     else
         error()
     end
@@ -10613,10 +10881,9 @@ Named tuple containing:
 # Performance
 - Efficient for large numbers of sequences
 - Memory usage grows exponentially with k
-- For k > 13, use `fasta_list_to_sparse_counts_table` instead
 """
-function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet)
-    k > 13 && error("use fasta_list_to_sparse_counts_table")
+function fasta_list_to_dense_counts_table(; fasta_list, k, alphabet)
+    k >= 11 && error("use fasta_list_to_sparse_counts_table")
     if alphabet == :AA
         KMER_TYPE = BioSequences.AminoAcidAlphabet
         sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
@@ -10632,21 +10899,47 @@ function fasta_list_to_dense_counts_table(;fasta_list, k, alphabet)
     else
         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
     end
-    kmer_counts_matrix = zeros(length(sorted_kmers), length(fasta_list))
+
     progress = ProgressMeter.Progress(length(fasta_list))
-    reenrantlock = ReentrantLock()
+    # Prepare thread-safe containers for successful results and error reporting.
+    successful_results = Vector{Vector{Int}}()  # each will be a vector of counts for one file
+    successful_indices = Vector{Int}()
+    errors = Vector{Tuple{Int, String}}()  # (file index, error message)
+    
+    # Use a single lock for both progress updating and pushing into shared arrays.
+    reentrant_lock = ReentrantLock()
+    
     Threads.@threads for (entity_index, fasta_file) in collect(enumerate(fasta_list))
-        # Acquire the lock before updating the progress
-        lock(reenrantlock) do
-            # Update the progress meter
+        # Update the progress meter within the lock so output remains synchronized.
+        lock(reentrant_lock) do
             ProgressMeter.next!(progress)
         end
-        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
-        for (i, kmer) in enumerate(sorted_kmers)
-            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        try
+            # Process the FASTA (or FASTQ) file to count kmers.
+            entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
+            # Build a vector of counts for each sorted kmer.
+            local_counts = [ get(entity_mer_counts, kmer, 0) for kmer in sorted_kmers ]
+            lock(reentrant_lock) do
+                push!(successful_results, local_counts)
+                push!(successful_indices, entity_index)
+            end
+        catch e
+            # Report the issue and save the error details.
+            lock(reentrant_lock) do
+                @warn "Error processing file: $fasta_file. Error: $e"
+                push!(errors, (entity_index, string(e)))
+            end
         end
     end
-    return (;sorted_kmers, kmer_counts_matrix)
+    
+    if isempty(successful_results)
+        error("All files failed to process.")
+    end
+    # Assemble the final counts matrix from the successful results.
+    kmer_counts_matrix = hcat(successful_results...)  # Each column is the count vector for one file
+    successful_fasta_list = fasta_list[successful_indices]
+    
+    return (; sorted_kmers, kmer_counts_matrix, successful_fasta_list)
 end
 
 """
@@ -10667,10 +10960,9 @@ Named tuple containing:
 - For DNA sequences, counts canonical k-mers (both strands)
 - For RNA and protein sequences, counts exact k-mers
 - Uses parallel processing with threads
-- For k > 13, use `fasta_list_to_sparse_counts_table` instead
 """
 function biosequences_to_dense_counts_table(;biosequences, k)
-    k > 13 && error("use fasta_list_to_sparse_counts_table")    
+    k >= 11 && error("use sparse counts to count k >= 11")    
     if eltype(first(biosequences)) == BioSymbols.AminoAcid
         KMER_TYPE = BioSequences.AminoAcidAlphabet
         sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
@@ -10702,48 +10994,6 @@ function biosequences_to_dense_counts_table(;biosequences, k)
     end
     return (;sorted_kmers, kmer_counts_matrix)
 end
-
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Create a sparse kmer counts table in memory for each fasta provided in a list
-# """
-# function fasta_list_to_counts_table(;fasta_list::AbstractVector{<:AbstractString}, k, alphabet)
-#     if alphabet == :AA
-#         KMER_TYPE = Kmers.AAKmer{k}
-#         COUNT = count_kmers
-#     elseif alphabet == :DNA
-#         KMER_TYPE = Kmers.DNAKmer{k}
-#         COUNT = count_canonical_kmers
-#     elseif alphabet == :RNA
-#         KMER_TYPE = Kmers.RNAKmer{k}
-#         COUNT = count_kmers
-#     else
-#         error("invalid alphabet, please choose from :AA, :DNA, :RNA")
-#     end
-    
-#     fasta_kmer_counts_dict = Dict()
-#     progress = ProgressMeter.Progress(length(fasta_list))
-#     reenrantlock = ReentrantLock()
-#     Threads.@threads for fasta_file in fasta_list
-#         # Acquire the lock before updating the progress
-#         these_kmer_counts = COUNT(KMER_TYPE, fasta_file)
-#         lock(reenrantlock) do
-#             # Update the progress meter
-#             ProgressMeter.next!(progress)
-#             fasta_kmer_counts_dict[fasta_file] = these_kmer_counts
-#         end
-#     end
-#     sorted_kmers = sort(collect(union(keys(x) for x in fasta_kmer_counts_dict)))
-#     kmer_counts_matrix = zeros(length(sorted_kmers), length(fasta_list))
-#     @info "populating sparse counts matrix..."
-#     for (col, fasta) in enumerate(fasta_list)
-#         for (row, kmer) in enumerate(sorted_kmers)
-#             kmer_counts_matrix[row, col] = get(fasta_kmer_counts_dict[fasta], kmer, 0)
-#         end
-#     end
-#     return (;sorted_kmers, kmer_counts_matrix)
-# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -13778,9 +14028,6 @@ function get_biosequence_alphabet(s::T) where T<:BioSequences.BioSequence
     return first(T.parameters)
 end
 
-import JLD2
-import DataFrames: DataFrame
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -13879,6 +14126,7 @@ function repr_long(v)
     return String(take!(buf))
 end
 
+
 function rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
     # Create a temporary file for storing file paths
     temp_file = joinpath(tempdir(), "rclone_sources_$(Random.randstring(8)).txt")
@@ -13891,15 +14139,16 @@ function rclone_copy_list(;source::String, destination::String, relative_paths::
             end
         end
         
-        println("Starting download of $(length(relative_paths)) files to $destination...")
+        println("Starting transfer of $(length(relative_paths)) files from $source to $destination...")
         
-        # Make sure the destination directory exists
-        if !isdir(destination)
+        # Make sure the destination directory exists if it's local
+        if !occursin(":", destination) && !isdir(destination)
             mkdir(destination)
         end
         
         # Download files using rclone with progress reporting
-        run(`rclone copy $source $destination --files-from $temp_file --progress`)
+        # --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 
+        run(`rclone copy $source $destination --verbose --files-from $temp_file`)
         
         println("Download completed successfully")
         return true
@@ -13912,6 +14161,8 @@ function rclone_copy_list(;source::String, destination::String, relative_paths::
             rm(temp_file)
             println("Temporary file removed")
         end
+    end
+end
         
 """
     dataframe_to_ndjson(df::DataFrame; outfile::Union{String,Nothing}=nothing)
@@ -14110,6 +14361,689 @@ function upload_dataframe_to_bigquery(;
         println("Error during process: ", e)
         # Add more robust error handling
     end
+end
+
+"""
+    save_df_jld2(df::DataFrames.DataFrame, filename::String; key::String="dataframe")
+
+Save a DataFrame to a JLD2 file.
+
+# Arguments
+- `df`: The DataFrame to save
+- `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
+- `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
+
+# Examples
+```julia
+import DataFrames
+df = DataFrames.DataFrame(x = 1:3, y = ["a", "b", "c"])
+save_df_jld2(df, "mydata")
+```
+"""
+function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
+    # Ensure filename has .jld2 extension
+    if !endswith(lowercase(filename), ".jld2")
+        filename = filename * ".jld2"
+    end
+    
+    # Save the dataframe to the JLD2 file
+    JLD2.jldopen(filename, "w") do file
+        file[key] = df
+    end
+    
+    return filename
+end
+
+"""
+    load_df_jld2(filename::String; key::String="dataframe") -> DataFrames.DataFrame
+
+Load a DataFrame from a JLD2 file.
+
+# Arguments
+- `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
+- `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
+
+# Returns
+- The loaded DataFrame
+
+# Examples
+```julia
+df = load_df_jld2("mydata")
+```
+"""
+function load_df_jld2(filename::String; key::String="dataframe")
+    # Ensure filename has .jld2 extension
+    if !endswith(lowercase(filename), ".jld2")
+        filename = filename * ".jld2"
+    end
+    
+    # Check if file exists
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Load the dataframe from the JLD2 file
+    df = JLD2.jldopen(filename, "r") do file
+        if !haskey(file, key)
+            error("Key '$key' not found in file $filename")
+        end
+        return file[key]
+    end
+    
+    return df
+end
+
+function fasta_to_kmer_and_codon_frequencies(fasta)
+    kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{5}, fasta)
+    pyrodigal_results = Mycelia.run_pyrodigal(fasta_file = fasta)
+    if occursin(r"\.gz$", fasta)
+        unzipped_fasta = replace(fasta, ".gz" => "")
+        run(pipeline(`gzip -dc $(fasta)`, unzipped_fasta))
+        @assert isfile(unzipped_fasta)
+    end
+    genbank = Mycelia.fasta_and_gff_to_genbank(fasta = unzipped_fasta, gff = pyrodigal_results.gff)
+    codon_frequencies = Mycelia.genbank_to_codon_frequencies(genbank)
+    return (;kmer_counts, codon_frequencies)
+end
+
+function calculate_sequence_likelihood_from_kmer_profile(sequence, normalized_kmer_counts)
+    initial_likelihood = 1.0
+    for (k, i) in Kmers.UnambiguousDNAMers{5}(sequence)
+        canonical_k = BioSequences.canonical(k)
+        # # display(k)
+        # try
+        #     @assert BioSequences.iscanonical(k)
+        # catch
+        #     display(k)
+        # end
+        initial_likelihood *= normalized_kmer_counts[canonical_k]
+        # end
+    end
+    initial_likelihood
+end
+
+function load_bvbrc_genome_metadata(; 
+    summary_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
+    metadata_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata")
+    
+    # Create a unique temporary directory
+    temp_dir = joinpath(tempdir(), "bvbrc_temp_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))")
+    mkpath(temp_dir)
+    
+    try
+        # Define temporary file paths
+        summary_file = joinpath(temp_dir, "genome_summary.tsv")
+        metadata_file = joinpath(temp_dir, "genome_metadata.tsv")
+        
+        # Download files to temporary location
+        @info "Downloading genome summary from $(summary_url)"
+        Downloads.download(summary_url, summary_file)
+        
+        @info "Downloading genome metadata from $(metadata_url)"
+        Downloads.download(metadata_url, metadata_file)
+        
+        # Read files into DataFrames
+        @info "Reading genome summary file"
+        genome_summary = CSV.read(summary_file, DataFrames.DataFrame, delim='\t', header=1, 
+                                 types=Dict("genome_id" => String))
+        
+        @info "Reading genome metadata file"
+        genome_metadata = CSV.read(metadata_file, DataFrames.DataFrame, delim='\t', header=1, 
+                                  types=Dict("genome_id" => String))
+        
+        # Join the DataFrames
+        @info "Joining genome summary and metadata"
+        bvbrc_genome_summary = DataFrames.innerjoin(genome_summary, genome_metadata, 
+                                                  on="genome_id", makeunique=true)
+        
+        return bvbrc_genome_summary
+    finally
+        # Clean up temporary files regardless of success or failure
+        @info "Cleaning up temporary files"
+        rm(temp_dir, recursive=true, force=true)
+    end
+end
+
+"""
+    parallel_pyrodigal(normalized_fastas::Vector{String})
+
+Runs Mycelia.run_pyrodigal on a list of FASTA files in parallel using Threads.
+
+Args:
+    normalized_fastas: A vector of strings, where each string is a path to a FASTA file.
+
+Returns:
+    A tuple containing two elements:
+    1. successes (Vector{Tuple{String, Any}}): A vector of tuples, where each tuple contains the
+       filename and the result returned by a successful Mycelia.run_pyrodigal call.
+    2. failures (Vector{Tuple{String, String}}): A vector of tuples, where each tuple contains the
+       filename and the error message string for a failed Mycelia.run_pyrodigal call.
+"""
+function parallel_pyrodigal(normalized_fastas::Vector{String})
+    num_files = Base.length(normalized_fastas)
+    Base.println("Processing $(num_files) FASTA files using $(Threads.nthreads()) threads...")
+
+    # Create a Progress object for manual updates
+    p = ProgressMeter.Progress(num_files, 1, "Running Pyrodigal: ", 50)
+
+    # Use Channels to collect results and failures thread-safely
+    # Channel{Tuple{Filename, ResultType}} - adjust ResultType if known
+    successes = Base.Channel{Tuple{String, Any}}(num_files)
+    failures = Base.Channel{Tuple{String, String}}(num_files)
+
+    # Use Threads.@threads for parallel execution
+    Threads.@threads for fasta_file in normalized_fastas
+        result = nothing # Initialize result variable in the loop's scope
+        try
+            # --- Execute the function ---
+            # Base.println("Thread $(Threads.threadid()) processing: $(fasta_file)") # Optional: for debugging
+            result = Mycelia.run_pyrodigal(fasta_file = fasta_file) # Capture the result
+
+            # --- Store success ---
+            Base.put!(successes, (fasta_file, result))
+
+        catch e
+            # --- Store failure ---
+            err_msg = Base.sprint(Base.showerror, e) # Get the error message as a string
+            Base.println(Base.stderr, "ERROR processing $(fasta_file) on thread $(Threads.threadid()): $(err_msg)")
+            Base.put!(failures, (fasta_file, err_msg))
+        finally
+            # --- Always update progress ---
+            ProgressMeter.next!(p)
+        end
+    end
+
+    # Close channels now that all threads are done writing
+    Base.close(successes)
+    Base.close(failures)
+
+    # Collect results and failures from the channels
+    successful_results = Base.collect(successes)
+    failed_files = Base.collect(failures)
+
+    # --- Report Summary ---
+    Base.println("\n--- Pyrodigal Processing Summary ---")
+    num_success = Base.length(successful_results)
+    num_failed = Base.length(failed_files)
+    Base.println("Successfully processed: $(num_success)")
+    Base.println("Failed: $(num_failed)")
+
+    if !Base.isempty(failed_files)
+        Base.println("\nFailures:")
+        for (file, err) in failed_files
+            Base.println("- File: $(file)\n  Error: $(err)")
+        end
+    end
+    Base.println("------------------------------------")
+
+    return successful_results, failed_files # Return both successes and failures
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a sparse kmer counts table (SparseMatrixCSC) from a list of FASTA files using a 3-pass approach.
+Pass 1 (Parallel): Counts kmers per file and writes to temporary JLD2 files.
+Pass 2 (Serial): Aggregates unique kmers, max count, nnz per file, and rarefaction data from temp files.
+                 Generates and saves a k-mer rarefaction plot.
+Pass 3 (Parallel): Reads temporary counts again to construct the final sparse matrix.
+
+# Arguments
+- `fasta_list::AbstractVector{<:AbstractString}`: A list of paths to FASTA files.
+- `k::Integer`: The length of the kmer.
+- `alphabet::Symbol`: The alphabet type (:AA, :DNA, :RNA).
+- `temp_dir_parent::AbstractString`: Parent directory for creating the temporary working directory. Defaults to `Base.tempdir()`.
+- `count_element_type::Union{Type{<:Unsigned}, Nothing}`: Optional. Specifies the unsigned integer type for the counts. If `nothing` (default), the smallest `UInt` type capable of holding the maximum observed count is used.
+- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. Defaults to "kmer_rarefaction_data_3pass.tsv".
+- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. Defaults to "kmer_rarefaction_curve_3pass".
+- `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
+- `rarefaction_plot_kwargs...`: Keyword arguments to pass to `plot_kmer_rarefaction` for plot customization.
+
+# Returns
+- `NamedTuple{(:kmers, :counts, :rarefaction_data_path)}`:
+    - `kmers`: A sorted `Vector` of unique kmer objects.
+    - `counts`: A `SparseArrays.SparseMatrixCSC{V, Int}` storing kmer counts.
+    - `rarefaction_data_path`: Path to the saved TSV file with rarefaction data.
+
+# Raises
+- `ErrorException`: If input `fasta_list` is empty, alphabet is invalid, or required Kmer/counting functions are not found.
+"""
+function fasta_list_to_sparse_counts_table(;
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol,
+    temp_dir_parent::AbstractString = Base.tempdir(),
+    count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
+    rarefaction_data_filename::AbstractString = "$(normalized_current_datetime()).$(lowercase(string(alphabet)))$(k)mer_rarefaction.tsv",
+    rarefaction_plot_basename::AbstractString = replace(rarefaction_data_filename, ".tsv" => ""),
+    show_rarefaction_plot::Bool = true,
+    rarefaction_plot_kwargs... 
+)
+    # --- 0. Input Validation and Setup ---
+    num_files = length(fasta_list)
+    if num_files == 0
+        error("Input fasta_list is empty.")
+    end
+
+    KMER_TYPE = if alphabet == :AA
+        isdefined(Kmers, :AAKmer) ? Kmers.AAKmer{k} : error("Kmers.AAKmer not found or Kmers.jl not loaded correctly.")
+    elseif alphabet == :DNA
+        isdefined(Kmers, :DNAKmer) ? Kmers.DNAKmer{k} : error("Kmers.DNAKmer not found or Kmers.jl not loaded correctly.")
+    elseif alphabet == :RNA
+        isdefined(Kmers, :RNAKmer) ? Kmers.RNAKmer{k} : error("Kmers.RNAKmer not found or Kmers.jl not loaded correctly.")
+    else
+        error("Invalid alphabet: $alphabet. Choose from :AA, :DNA, :RNA")
+    end
+
+    COUNT_FUNCTION = if alphabet == :DNA
+        func_name = :count_canonical_kmers
+        isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
+    else
+        func_name = :count_kmers
+        isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
+    end
+
+    temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="kmer_counts_3pass_")
+    Base.@info "Using temporary directory for intermediate counts: $temp_dir"
+    temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
+    
+    # --- Pass 1: Count Kmers per file and Write to Temp Files (Parallel) ---
+    Base.@info "Pass 1: Counting $(KMER_TYPE) for $num_files files and writing temps using $(Base.Threads.nthreads()) threads..."
+    progress_pass1 = ProgressMeter.Progress(num_files; desc="Pass 1 (Counting & Writing Temps): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    progress_pass1_lock = Base.ReentrantLock()
+
+    Base.Threads.@threads for original_file_idx in 1:num_files
+        fasta_file = fasta_list[original_file_idx]
+        temp_filename = temp_file_paths[original_file_idx]
+        counts_dict = Dict{KMER_TYPE, Int}()
+        try
+            counts_dict = COUNT_FUNCTION(KMER_TYPE, fasta_file)
+            JLD2.save_object(temp_filename, counts_dict)
+        catch e
+            Base.println("Error processing file $fasta_file (idx $original_file_idx) during Pass 1: $e")
+            # Save an empty dict if error occurred to ensure file exists, simplifying later checks
+            try
+                JLD2.save_object(temp_filename, Dict{KMER_TYPE, Int}())
+            catch save_err
+                 Base.@error "Failed to save empty placeholder for errored file $fasta_file to $temp_filename: $save_err"
+            end
+        end
+        Base.lock(progress_pass1_lock) do
+            ProgressMeter.next!(progress_pass1)
+        end
+    end
+    ProgressMeter.finish!(progress_pass1)
+    Base.@info "Pass 1 finished."
+
+    # --- Pass 2: Aggregate Unique Kmers, Max Count, NNZ per file, Rarefaction Data (Serial) ---
+    Base.@info "Pass 2: Aggregating stats and rarefaction data from temporary files (serially)..."
+    all_kmers_set = Set{KMER_TYPE}()
+    max_observed_count = 0
+    total_non_zero_entries = 0
+    nnz_per_file = Vector{Int}(undef, num_files)
+    rarefaction_points = Vector{Tuple{Int, Int}}() # Grow as we process
+
+    progress_pass2 = ProgressMeter.Progress(num_files; desc="Pass 2 (Aggregating Serially): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:yellow)
+
+    for i in 1:num_files
+        temp_filename = temp_file_paths[i]
+        current_file_nnz = 0
+        try
+            if Base.Filesystem.isfile(temp_filename)
+                counts_dict = JLD2.load_object(temp_filename)
+                current_file_nnz = length(counts_dict)
+                if current_file_nnz > 0
+                    for k in keys(counts_dict)
+                        push!(all_kmers_set, k)
+                    end
+                    current_file_max_val = maximum(values(counts_dict))
+                    if current_file_max_val > max_observed_count
+                        max_observed_count = current_file_max_val
+                    end
+                end
+            else
+                Base.@warn "Temporary file not found during Pass 2: $temp_filename. Assuming 0 counts for this file."
+            end
+        catch e
+            Base.@error "Error reading or processing temporary file $temp_filename (for original file $i) during Pass 2: $e. Assuming 0 counts for this file."
+        end
+        nnz_per_file[i] = current_file_nnz
+        total_non_zero_entries += current_file_nnz
+        push!(rarefaction_points, (i, length(all_kmers_set))) # Record after processing file i
+        ProgressMeter.next!(progress_pass2; showvalues = [(:unique_kmers, length(all_kmers_set))])
+    end
+    ProgressMeter.finish!(progress_pass2)
+    Base.@info "Pass 2 aggregation finished."
+
+    # --- Process and Save/Plot Rarefaction Data (after Pass 2) ---
+    default_output_dir = pwd() 
+    rarefaction_data_path = Base.Filesystem.joinpath(default_output_dir, rarefaction_data_filename)
+    Base.@info "Saving rarefaction data to $rarefaction_data_path..."
+    try
+        data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
+        if !isempty(data_to_write)
+             DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
+        else
+             Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
+             DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
+        end
+    catch e
+        Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
+    end
+    
+    if isfile(rarefaction_data_path) && !isempty(rarefaction_points)
+        Base.@info "Generating k-mer rarefaction plot..."
+        try
+            # Ensure plot_kmer_rarefaction is accessible.
+            # This function must be defined in the current scope or imported.
+            plot_kmer_rarefaction( 
+                rarefaction_data_path;
+                output_dir = default_output_dir,
+                output_basename = rarefaction_plot_basename,
+                display_plot = show_rarefaction_plot,
+                rarefaction_plot_kwargs...
+            )
+        catch e
+            Base.@error "Failed to generate rarefaction plot: $e. Ensure Makie and a backend are correctly set up. Also ensure 'plot_kmer_rarefaction' function is loaded."
+        end
+    else
+        Base.@warn "Skipping rarefaction plot generation as data file is missing or empty."
+    end
+
+    # --- Determine Value Type, Prepare for Pass 3 ---
+    ValType = if isnothing(count_element_type)
+        if max_observed_count <= typemax(UInt8)
+            UInt8
+        elseif max_observed_count <= typemax(UInt16)
+            UInt16
+        elseif max_observed_count <= typemax(UInt32)
+            UInt32
+        else
+            UInt64
+        end
+    else
+        count_element_type
+    end
+    if !isnothing(count_element_type) && max_observed_count > typemax(count_element_type)
+        Base.@warn "User-specified count_element_type ($count_element_type) may be too small for the maximum observed count ($max_observed_count)."
+    end
+    Base.@info "Using element type $ValType for kmer counts. Max observed count: $max_observed_count."
+
+    if isempty(all_kmers_set) && total_non_zero_entries == 0
+        Base.@warn "No kmers found across any files, or errors prevented aggregation."
+        return (; kmers=Vector{KMER_TYPE}(), counts=SparseArrays.spzeros(ValType, Int, 0, num_files), rarefaction_data_path=rarefaction_data_path)
+    end
+
+    sorted_kmers = sort(collect(all_kmers_set))
+    num_kmers = length(sorted_kmers)
+    empty!(all_kmers_set); all_kmers_set = nothing; GC.gc() # Release memory
+
+    kmer_to_row_map = Dict{KMER_TYPE, Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    Base.@info "Found $num_kmers unique kmers. Total non-zero entries: $total_non_zero_entries."
+
+    # --- Pass 3: Prepare Sparse Matrix Data (In Parallel from Temp Files) ---
+    Base.@info "Pass 3: Preparing data for sparse matrix construction using $(Base.Threads.nthreads()) threads..."
+    
+    # Ensure total_non_zero_entries is accurate based on nnz_per_file sum
+    # This is important if any files failed in Pass 2 and nnz_per_file[i] was set to 0 for them.
+    actual_total_nnz_from_files = sum(nnz_per_file)
+    if total_non_zero_entries != actual_total_nnz_from_files
+        Base.@warn "Sum of nnz_per_file ($actual_total_nnz_from_files) differs from serially accumulated total_non_zero_entries ($total_non_zero_entries). Using sum of nnz_per_file."
+        total_non_zero_entries = actual_total_nnz_from_files # Use the more robust sum for allocation
+    end
+    
+    if total_non_zero_entries == 0 && num_kmers > 0
+         Base.@warn "Found $num_kmers unique kmers, but $total_non_zero_entries non-zero entries. Matrix will be empty of values."
+    elseif total_non_zero_entries == 0 && num_kmers == 0
+         Base.@warn "No k-mers and no non-zero entries. Resulting matrix will be empty."
+    end
+
+    row_indices = Vector{Int}(undef, total_non_zero_entries)
+    col_indices = Vector{Int}(undef, total_non_zero_entries)
+    values_vec = Vector{ValType}(undef, total_non_zero_entries)
+
+    write_offsets = Vector{Int}(undef, num_files + 1)
+    write_offsets[1] = 0
+    for i in 1:num_files
+        write_offsets[i+1] = write_offsets[i] + nnz_per_file[i] 
+    end
+    
+    progress_pass3 = ProgressMeter.Progress(num_files; desc="Pass 3 (Filling Sparse Data): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:blue)
+    progress_pass3_lock = Base.ReentrantLock()
+
+    Base.Threads.@threads for original_file_idx in 1:num_files
+        if nnz_per_file[original_file_idx] > 0 
+            temp_filename = temp_file_paths[original_file_idx]
+            file_start_offset = write_offsets[original_file_idx] 
+            current_entry_in_file = 0 
+            try
+                if Base.Filesystem.isfile(temp_filename)
+                    counts_dict_pass3 = JLD2.load_object(temp_filename) 
+                    for (kmer, count_val) in counts_dict_pass3
+                        if count_val > 0
+                            row_idx_val = Base.get(kmer_to_row_map, kmer, 0)
+                            if row_idx_val > 0 
+                                global_idx = file_start_offset + current_entry_in_file + 1 
+                                if global_idx <= total_non_zero_entries # total_non_zero_entries is now sum(nnz_per_file)
+                                    row_indices[global_idx] = row_idx_val
+                                    col_indices[global_idx] = original_file_idx
+                                    values_vec[global_idx] = ValType(count_val)
+                                    current_entry_in_file += 1
+                                else
+                                    Base.@error "Internal error: Exceeded sparse matrix capacity (total_non_zero_entries = $total_non_zero_entries) for file $original_file_idx. Global Idx: $global_idx. Kmer: $kmer."
+                                    break 
+                                end
+                            end
+                        end
+                    end
+                    if current_entry_in_file != nnz_per_file[original_file_idx]
+                        Base.@warn "Mismatch in NNZ for file $original_file_idx ($(fasta_list[original_file_idx])) during Pass 3. Expected $(nnz_per_file[original_file_idx]), wrote $current_entry_in_file."
+                    end
+                else
+                     Base.@warn "Temp file $temp_filename (for original file $original_file_idx) not found in Pass 3, though nnz_per_file was $(nnz_per_file[original_file_idx])."
+                end
+            catch e
+                Base.@error "Error reading or processing temporary file $temp_filename (for original file $original_file_idx) in Pass 3: $e."
+            end
+        end
+        Base.lock(progress_pass3_lock) do
+            ProgressMeter.next!(progress_pass3)
+        end
+    end
+    ProgressMeter.finish!(progress_pass3)
+    Base.@info "Pass 3 finished."
+    
+    Base.@info "Constructing sparse matrix ($num_kmers rows, $num_files columns, $total_non_zero_entries non-zero entries)..."
+    
+    kmer_counts_sparse_matrix = if total_non_zero_entries > 0 && num_kmers > 0
+        SparseArrays.sparse(
+            row_indices[1:total_non_zero_entries], 
+            col_indices[1:total_non_zero_entries], 
+            values_vec[1:total_non_zero_entries], 
+            num_kmers, 
+            num_files
+        )
+    else
+        SparseArrays.spzeros(ValType, Int, num_kmers, num_files)
+    end
+
+    Base.@info "Done. Returning sorted kmer list, sparse counts matrix, and rarefaction data path."
+    final_result = (; kmers=sorted_kmers, counts=kmer_counts_sparse_matrix, rarefaction_data_path=rarefaction_data_path)
+    
+    # Consider adding cleanup for temp_dir here or instructing the user.
+    # Base.@info "Temporary directory $temp_dir can be manually removed."
+    # try
+    #     Base.Filesystem.rm(temp_dir; recursive=true, force=true)
+    #     Base.@info "Successfully removed temporary directory: $temp_dir"
+    # catch e
+    #     Base.@warn "Could not remove temporary directory $temp_dir: $e"
+    # end
+
+    return final_result
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Plots a k-mer rarefaction curve from data stored in a TSV file.
+The TSV file should contain two columns:
+1. Number of FASTA files processed.
+2. Cumulative unique k-mers observed at that point.
+
+The plot is displayed and saved in PNG, PDF, and SVG formats.
+
+# Arguments
+- `rarefaction_data_path::AbstractString`: Path to the TSV file containing rarefaction data.
+- `output_dir::AbstractString`: Directory where the output plots will be saved. Defaults to the directory of `rarefaction_data_path`.
+- `output_basename::AbstractString`: Basename for the output plot files (without extension). Defaults to the basename of `rarefaction_data_path` without its original extension.
+- `display_plot::Bool`: Whether to display the plot interactively. Defaults to `true`.
+
+# Keyword Arguments
+- `fig_size::Tuple{Int, Int}`: Size of the output figure, e.g., `(1000, 750)`.
+- `title::AbstractString`: Title of the plot.
+- `xlabel::AbstractString`: Label for the x-axis.
+- `ylabel::AbstractString`: Label for the y-axis.
+- `line_color`: Color of the plotted line.
+- `line_style`: Style of the plotted line (e.g. `:dash`, `:dot`).
+- `marker`: Marker style for points (e.g. `:circle`, `:xcross`).
+- `markersize::Number`: Size of the markers.
+- Any other keyword arguments will be passed to `Makie.Axis`.
+"""
+function plot_kmer_rarefaction(
+    rarefaction_data_path::AbstractString;
+    output_dir::AbstractString = dirname(rarefaction_data_path),
+    output_basename::AbstractString = first(Base.Filesystem.splitext(basename(rarefaction_data_path))),
+    display_plot::Bool = true,
+    # Makie specific customizations
+    fig_size::Tuple{Int, Int} = (1000, 750),
+    title::AbstractString = "K-mer Rarefaction Curve",
+    xlabel::AbstractString = "Number of FASTA Files Processed",
+    ylabel::AbstractString = "Cumulative Unique K-mers",
+    line_color = :blue,
+    line_style = nothing,
+    marker = nothing,
+    markersize::Number = 10,
+    axis_kwargs... # Capture other axis properties
+)
+    if !isfile(rarefaction_data_path)
+        Base.@error "Rarefaction data file not found: $rarefaction_data_path"
+        return nothing
+    end
+
+    data = try
+        DelimitedFiles.readdlm(rarefaction_data_path, '\t', Int, header=false)
+    catch e
+        Base.@error "Failed to read rarefaction data from $rarefaction_data_path: $e"
+        return nothing
+    end
+
+    if size(data, 2) != 2
+        Base.@error "Rarefaction data file $rarefaction_data_path must have exactly two columns."
+        return nothing
+    end
+
+    files_processed = data[:, 1]
+    unique_kmers = data[:, 2]
+
+    # Sort data by files_processed for a proper line plot,
+    # as the input might be from unordered parallel processing.
+    sort_indices = sortperm(files_processed)
+    files_processed = files_processed[sort_indices]
+    unique_kmers = unique_kmers[sort_indices]
+    
+    Base.mkpath(output_dir) # Ensure output directory exists
+
+    fig = Makie.Figure(size = fig_size)
+    ax = Makie.Axis(
+        fig[1, 1],
+        title = title,
+        xlabel = xlabel,
+        ylabel = ylabel;
+        axis_kwargs... # Pass through other axis settings
+    )
+
+    Makie.lines!(ax, files_processed, unique_kmers, color = line_color, linestyle = line_style)
+    if !isnothing(marker)
+        Makie.scatter!(ax, files_processed, unique_kmers, color = line_color, marker = marker, markersize = markersize)
+    end
+
+
+    if display_plot
+        Base.@info "Displaying rarefaction plot..."
+        Makie.display(fig)
+    end
+
+    output_path_png = Base.Filesystem.joinpath(output_dir, output_basename * ".png")
+    output_path_pdf = Base.Filesystem.joinpath(output_dir, output_basename * ".pdf")
+    output_path_svg = Base.Filesystem.joinpath(output_dir, output_basename * ".svg")
+
+    try
+        Base.@info "Saving plot to $output_path_png"
+        Makie.save(output_path_png, fig)
+        Base.@info "Saving plot to $output_path_pdf"
+        Makie.save(output_path_pdf, fig)
+        Base.@info "Saving plot to $output_path_svg"
+        Makie.save(output_path_svg, fig)
+    catch e
+        Base.@error "Failed to save plot: $e. Make sure a Makie backend (e.g., CairoMakie for saving, GLMakie for display) is active and correctly configured in your environment."
+    end
+    
+    return fig # Return the figure object
+end
+
+                    # convert all genomes into normalized tables
+function fastxs2normalized_tables(;fastxs, outdir, force=false)
+    mkpath(outdir)
+    n = length(fastxs)
+    normalized_table_paths = Vector{Union{String, Nothing}}(undef, n)
+    errors = Vector{Union{Nothing, Tuple{String, Exception}}}(undef, n)
+
+    prog = ProgressMeter.Progress(n, desc = "Processing files")
+
+    Threads.@threads for i in 1:n
+        fastx = fastxs[i]
+        outfile = joinpath(outdir, basename(fastx) * ".tsv.gz")
+        try
+            if !isfile(outfile) || (filesize(outfile) == 0) || force
+                normalized_table = Mycelia.fastx2normalized_table(fastx)
+                open(outfile, "w") do file
+                    io = CodecZlib.GzipCompressorStream(file)
+                    CSV.write(io, normalized_table; delim='\t', bufsize=64*1024*1024)
+                    close(io)
+                end
+            end
+            normalized_table_paths[i] = outfile
+            errors[i] = nothing
+        catch e
+            normalized_table_paths[i] = nothing
+            errors[i] = (fastx, e)
+            @warn "Failed to process $fastx: $e"
+        end
+        ProgressMeter.next!(prog)
+    end
+
+    ProgressMeter.finish!(prog)
+    return (;normalized_table_paths, errors)
+end
+
+function can_downcast_column(col::AbstractVector{T}, ::Type{S}) where {T<:AbstractFloat, S<:AbstractFloat}
+    col_vec = collect(col)
+    col2 = convert(Vector{S}, col_vec)
+    return col_vec == convert(Vector{T}, col2)
+end
+
+function downcast_float_columns(df::DataFrames.DataFrame; target_type=Float32)
+    for name in DataFrames.names(df)
+        col = df[!, name]
+        if eltype(col) <: AbstractFloat
+            if can_downcast_column(col, target_type)
+                # Always collect to Vector before converting types
+                df[!, name] = convert(Vector{target_type}, collect(col))
+            end
+        end
+    end
+    return df
 end
 
 # dynamic import of files??

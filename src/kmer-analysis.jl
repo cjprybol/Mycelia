@@ -1,6 +1,130 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Save the kmer counting results (kmers vector, counts sparse matrix)
+and the input FASTA file list to a JLD2 file for long-term storage
+and reproducibility.
+
+# Arguments
+- `filename::AbstractString`: Path to the output JLD2 file.
+- `kmers::AbstractVector{<:Kmers.Kmer}`: The sorted vector of unique kmer objects.
+- `counts::SparseArrays.SparseMatrixCSC{<:Integer, <:Integer}`: The sparse matrix of kmer counts.
+- `fasta_list::AbstractVector{<:AbstractString}`: The list of FASTA file paths used as input.
+- `k::Integer`: The kmer size used.
+- `alphabet::Symbol`: The alphabet used (:AA, :DNA, :RNA).
+
+"""
+function save_kmer_results(;
+    filename::AbstractString,
+    kmers::AbstractVector{<:Kmers.Kmer},
+    counts::SparseArrays.SparseMatrixCSC{<:Integer, <:Integer},
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol
+    )
+
+    if !endswith(filename, ".jld2")
+        @warn "Filename '$filename' does not end with '.jld2'. Appending it."
+        filename *= ".jld2"
+    end
+
+    @info "Saving kmer results to $filename..."
+    try
+        # Open the file in write mode ('w'). This will create or overwrite the file.
+        JLD2.jldopen(filename, "w") do file
+            # Write each component as a separate dataset within the JLD2 file
+            # The string names ("kmers", "counts", etc.) are how you'll access them upon loading.
+            file["kmers"] = kmers
+            file["counts"] = counts
+            file["fasta_list"] = fasta_list
+            # Store metadata as well
+            file["metadata/k"] = k
+            file["metadata/alphabet"] = string(alphabet) # Store symbol as string for robustness
+            file["metadata/creation_timestamp"] = string(Dates.now())
+            file["metadata/julia_version"] = string(VERSION)
+        end
+        @info "Successfully saved results to $filename."
+    catch e
+        @error "Failed to save results to $filename: $e"
+        rethrow(e)
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Load kmer counting results previously saved with `save_kmer_results`.
+
+# Arguments
+- `filename::AbstractString`: Path to the input JLD2 file.
+
+# Returns
+- `NamedTuple`: Contains the loaded `kmers`, `counts`, `fasta_list`, and `metadata`.
+  Returns `nothing` if the file cannot be loaded or essential keys are missing.
+"""
+function load_kmer_results(filename::AbstractString)
+    if !Base.Filesystem.isfile(filename)
+        @error "File not found: $filename"
+        return nothing
+    end
+    if !endswith(filename, ".jld2")
+        @warn "Filename '$filename' does not end with '.jld2'. Attempting to load anyway."
+    end
+
+    @info "Loading kmer results from $filename..."
+    try
+        # JLD2.load returns a dictionary-like object mapping names to loaded data
+        loaded_data = JLD2.load(filename)
+
+        # Basic validation (check if essential keys exist)
+        required_keys = ["kmers", "counts", "fasta_list"]
+        if !all(haskey(loaded_data, k) for k in required_keys)
+             @error "File $filename is missing one or more required keys: $required_keys"
+             return nothing
+        end
+
+        # Reconstruct metadata if present
+        metadata = Dict{String, Any}()
+        if haskey(loaded_data, "metadata/k")
+            metadata["k"] = loaded_data["metadata/k"]
+        end
+        if haskey(loaded_data, "metadata/alphabet")
+             # Attempt to convert back to Symbol, fallback to string if error
+             try
+                 metadata["alphabet"] = Symbol(loaded_data["metadata/alphabet"])
+             catch
+                 @warn "Could not convert loaded alphabet '$(loaded_data["metadata/alphabet"])' back to Symbol. Storing as String."
+                 metadata["alphabet"] = loaded_data["metadata/alphabet"]
+             end
+        end
+         # Add other metadata fields if they exist
+        for key in keys(loaded_data)
+            if startswith(key, "metadata/") && !haskey(metadata, replace(key, "metadata/" => ""))
+                 metadata[replace(key, "metadata/" => "")] = loaded_data[key]
+            end
+        end
+
+
+        @info "Successfully loaded results from $filename."
+        # Return as a NamedTuple for convenient access
+        return (;
+            kmers=loaded_data["kmers"],
+            counts=loaded_data["counts"],
+            fasta_list=loaded_data["fasta_list"],
+            metadata=metadata
+        )
+
+    catch e
+        @error "Failed to load results from $filename: $e"
+        return nothing
+    end
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Calculate the quality score for a single base given multiple observations.
 
 This function implements the "Converting to Error Probabilities and Combining" method:
@@ -512,7 +636,7 @@ coverage patterns.
 function analyze_kmer_spectra(;out_directory, forward_reads="", reverse_reads="", k=17, target_coverage=0, plot_size=(600,400))
     @info "counting $k-mers"
     user_provided_reads = filter(x -> !isempty(x), [forward_reads, reverse_reads])
-    canonical_kmer_counts = count_canonical_kmers(Kmers.Kmer{BioSequences.DNAAlphabet{4},k}, user_provided_reads)
+    canonical_kmer_counts = count_canonical_kmers(Kmers.DNAKmer{k}, user_provided_reads)
 
     @info "determining max count"
     max_count = maximum(values(canonical_kmer_counts))
