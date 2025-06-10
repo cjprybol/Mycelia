@@ -8,7 +8,7 @@ and reproducibility.
 # Arguments
 - `filename::AbstractString`: Path to the output JLD2 file.
 - `kmers::AbstractVector{<:Kmers.Kmer}`: The sorted vector of unique kmer objects.
-- `counts::SparseArrays.SparseMatrixCSC{<:Integer, <:Integer}`: The sparse matrix of kmer counts.
+- `counts::AbstractMatrix`: The (sparse or dense) matrix of kmer counts.
 - `fasta_list::AbstractVector{<:AbstractString}`: The list of FASTA file paths used as input.
 - `k::Integer`: The kmer size used.
 - `alphabet::Symbol`: The alphabet used (:AA, :DNA, :RNA).
@@ -17,7 +17,7 @@ and reproducibility.
 function save_kmer_results(;
     filename::AbstractString,
     kmers::AbstractVector{<:Kmers.Kmer},
-    counts::SparseArrays.SparseMatrixCSC{<:Integer, <:Integer},
+    counts::AbstractMatrix,
     fasta_list::AbstractVector{<:AbstractString},
     k::Integer,
     alphabet::Symbol
