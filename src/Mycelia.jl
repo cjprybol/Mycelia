@@ -66,6 +66,12 @@ using CairoMakie
 
 import Pkg
 
+import JSON
+import DataFrames
+import ProgressMeter
+import CodecZlib
+import Base.Filesystem: stat
+
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
 # use this to build up a story as we go, where outputs of earlier defined functions feed into
@@ -3050,12 +3056,6 @@ end
 #     run(p)
 #     return mlst_dir
 # end
-
-import JSON
-import DataFrames
-import ProgressMeter
-import CodecZlib
-import Base.Filesystem: stat
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -10946,48 +10946,10 @@ function get_kmer_index(kmers, kmer)
 end
 
 """
-    fasta_list_to_dense_kmer_counts(; 
-        fasta_list,
-        k,
-        alphabet,
-        temp_dir_parent=Base.tempdir(),
-        count_element_type=nothing,
-        rarefaction_data_filename="dense_kmer_rarefaction.tsv",
-        rarefaction_plot_basename="dense_kmer_rarefaction_curve",
-        show_rarefaction_plot=true,
-        dense_counts_result_file=nothing,
-        force=false,
-        diagnostics=true,
-        cleanup_temp=true,
-        rarefaction_plot_kwargs...
-    )
-
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create a dense k-mer counts table for a set of FASTA files, with rarefaction analysis, disk-backed temporary storage, 
+Create a dense k-mer counts table for a set of FASTA files, with disk-backed temporary storage, 
 custom element type, robust error handling, and optional output file caching.
-
-# Arguments
-- `fasta_list`: Vector of FASTA file paths.
-- `k`: K-mer size (Int).
-- `alphabet`: `:DNA`, `:RNA`, or `:AA`.
-- `temp_dir_parent`: (optional) Parent directory for temporary files.
-- `count_element_type`: (optional) Integer type for counts (e.g. `UInt16`). If not set, inferred from data.
-- `rarefaction_data_filename`: (optional) Rarefaction data TSV file name.
-- `rarefaction_plot_basename`: (optional) Rarefaction plot output basename.
-- `show_rarefaction_plot`: (optional) Display rarefaction plot.
-- `result_file`: (optional) If set, load/save results to this file.
-- `force`: (optional) If true, recompute results even if file exists.
-- `diagnostics`: (optional) If true, return diagnostics in output.
-- `cleanup_temp`: (optional) If true, remove temporary directory after computation.
-- `rarefaction_plot_kwargs...`: Additional keyword arguments for rarefaction plotting.
-
-# Returns
-NamedTuple with keys:
-- `kmers`: sorted vector of kmer objects.
-- `counts`: dense matrix (rows: kmers, columns: files).
-- `rarefaction_data_path`: path to rarefaction data TSV.
-- `diagnostics` (if enabled): named tuple with per-file stats and error log.
 """
 function fasta_list_to_dense_kmer_counts(;
     fasta_list::AbstractVector{<:AbstractString},
@@ -10995,33 +10957,24 @@ function fasta_list_to_dense_kmer_counts(;
     alphabet::Symbol,
     temp_dir_parent::AbstractString = Base.tempdir(),
     count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
-    rarefaction_data_filename::AbstractString = "dense_kmer_rarefaction.tsv",
-    rarefaction_plot_basename::AbstractString = "dense_kmer_rarefaction_curve",
-    show_rarefaction_plot::Bool = true,
     result_file::Union{Nothing, AbstractString} = nothing,
     force::Bool = false,
-    diagnostics::Bool = true,
-    cleanup_temp::Bool = true,
-    rarefaction_plot_kwargs...
+    cleanup_temp::Bool = true
 )
-    import Base
-    import ProgressMeter
-    import JLD2
-    import DelimitedFiles
 
     num_files = length(fasta_list)
     if num_files == 0
         error("Input fasta_list is empty.")
     end
-    if !(isa(k, Integer) && k > 0)
-        error("k must be a positive integer.")
+    if !(isa(k, Integer) && 0 < k <= 9)
+        error("k must be a positive integer <= 9. Use sparse counts for larger k")
     end
     if !(alphabet in (:AA, :DNA, :RNA))
         error("alphabet must be :AA, :DNA, or :RNA")
     end
     if any(f -> !Base.Filesystem.isfile(f), fasta_list)
-        missing = [f for f in fasta_list if !Base.Filesystem.isfile(f)]
-        error("Missing FASTA files: $(join(missing, \", \")).")
+        missing_files = [f for f in fasta_list if !Base.Filesystem.isfile(f)]
+        error("Missing FASTA files: $(join(missing_files, ", ")).")
     end
 
     # Output file short-circuit
@@ -11032,31 +10985,22 @@ function fasta_list_to_dense_kmer_counts(;
 
     # KMER TYPE/COUNT/GENERATOR setup
     if alphabet == :AA
-        if !isdefined(Main, :AA_ALPHABET)
-            error("AA_ALPHABET not defined in Main.")
-        end
         KMER_TYPE = Kmers.AAKmer{k}
-        ALPHABET_SEQ = Main.AA_ALPHABET
-        COUNT_FUNCTION = Main.count_kmers
-        GENERATE_KMERS = Main.generate_all_possible_kmers
+        ALPHABET_SEQ = Mycelia.AA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
         sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
     elseif alphabet == :DNA
-        if !isdefined(Main, :DNA_ALPHABET)
-            error("DNA_ALPHABET not defined in Main.")
-        end
         KMER_TYPE = Kmers.DNAKmer{k}
-        ALPHABET_SEQ = Main.DNA_ALPHABET
-        COUNT_FUNCTION = Main.count_canonical_kmers
-        GENERATE_KMERS = Main.generate_all_possible_canonical_kmers
+        ALPHABET_SEQ = Mycelia.DNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_canonical_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_canonical_kmers
         sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
     elseif alphabet == :RNA
-        if !isdefined(Main, :RNA_ALPHABET)
-            error("RNA_ALPHABET not defined in Main.")
-        end
         KMER_TYPE = Kmers.RNAKmer{k}
-        ALPHABET_SEQ = Main.RNA_ALPHABET
-        COUNT_FUNCTION = Main.count_kmers
-        GENERATE_KMERS = Main.generate_all_possible_kmers
+        ALPHABET_SEQ = Mycelia.RNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
         sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
     end
 
@@ -11067,41 +11011,60 @@ function fasta_list_to_dense_kmer_counts(;
     temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="dense_kmer_counts_")
     temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
 
-    # Pass 1: kmer counting, disk-backed
-    progress = ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    # Pass 1: count kmers per file, record max, save to temp
+    progress1 = ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
     lock = Base.ReentrantLock()
-    error_log = Vector{Tuple{Int, String}}(undef, 0)
-    nnz_per_file = zeros(Int, num_files)
-    successful_fasta_list = String[]
+    error_log = Vector{Tuple{Int, String}}()
+    successful_indices = Vector{Int}()
+    max_observed_count_ref = Ref{Int}(0)
 
-    Base.Threads.@threads for idx in 1:num_files
+    Threads.@threads for idx in 1:num_files
         fasta_file = fasta_list[idx]
         temp_file = temp_file_paths[idx]
+        local_max = 0
         try
             kmer_counts = COUNT_FUNCTION(KMER_TYPE, fasta_file)
             JLD2.save_object(temp_file, kmer_counts)
-            nnz_per_file[idx] = sum(val > 0 for val in values(kmer_counts))
-            lock() do push!(successful_fasta_list, fasta_file) end
+            if !isempty(kmer_counts)
+                local_max = maximum(Base.values(kmer_counts))
+            end
+            Base.lock(lock)
+            try
+                push!(successful_indices, idx)
+                if local_max > max_observed_count_ref[]
+                    max_observed_count_ref[] = local_max
+                end
+            finally
+                Base.unlock(lock)
+            end
         catch e
-            lock() do push!(error_log, (idx, string(e))) end
+            Base.lock(lock)
+            try
+                push!(error_log, (idx, string(e)))
+            finally
+                Base.unlock(lock)
+            end
             try JLD2.save_object(temp_file, Dict{KMER_TYPE, Int}()) catch end
         end
-        lock() do ProgressMeter.next!(progress) end
-    end
-    ProgressMeter.finish!(progress)
-
-    # Pass 2: aggregate, determine ValType
-    max_observed_count = 0
-    all_kmers_set = Set{KMER_TYPE}()
-    for i in 1:num_files
+        Base.lock(lock)
         try
-            kmer_counts = JLD2.load_object(temp_file_paths[i])
-            if !isempty(kmer_counts)
-                max_observed_count = max(max_observed_count, maximum(values(kmer_counts)))
-                foreach(k -> push!(all_kmers_set, k), keys(kmer_counts))
-            end
-        catch end
+            ProgressMeter.next!(progress1)
+        finally
+            Base.unlock(lock)
+        end
     end
+    ProgressMeter.finish!(progress1)
+
+    sorted_successful_indices = sort(successful_indices)
+    successful_fasta_list = fasta_list[sorted_successful_indices]
+
+    num_successful_files = length(successful_fasta_list)
+    percent_successful = round((num_successful_files / num_files) * 100, digits=3)
+    Base.@info "$num_successful_files of $num_files ($(percent_successful)%) counted successfully"
+
+    max_observed_count = max_observed_count_ref[]
+
+    # Determine element type for counts
     if isnothing(count_element_type)
         ValType = max_observed_count <= typemax(UInt8) ? UInt8 :
                   max_observed_count <= typemax(UInt16) ? UInt16 :
@@ -11114,63 +11077,37 @@ function fasta_list_to_dense_kmer_counts(;
     end
     Base.@info "Using $ValType for kmer counts"
 
-    kmer_counts_matrix = zeros(ValType, num_kmers, num_files)
-    for i in 1:num_files
+    # Build kmer index for matrix rows
+    kmer_index = Dict{KMER_TYPE,Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    kmer_counts_matrix = zeros(ValType, num_kmers, num_successful_files)
+
+    # Pass 2: fill matrix (multi-threaded, only for successful files)
+    progress2 = ProgressMeter.Progress(num_successful_files; desc="Filling matrix: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:green)
+    Threads.@threads for col in 1:num_successful_files
+        orig_idx = sorted_successful_indices[col]
         try
-            kmer_counts = JLD2.load_object(temp_file_paths[i])
-            for (j, kmer) in enumerate(sorted_kmers)
-                kmer_counts_matrix[j, i] = ValType(get(kmer_counts, kmer, 0))
+            kmer_counts = JLD2.load_object(temp_file_paths[orig_idx])
+            for (kmer, count) in kmer_counts
+                row = kmer_index[kmer]
+                kmer_counts_matrix[row, col] = ValType(count)
             end
-        catch end
-    end
-
-    # Rarefaction: cumulative unique kmers after each file
-    rarefaction_points = Vector{Tuple{Int, Int}}()
-    cumulative_kmers = Set{KMER_TYPE}()
-    for i in 1:num_files
+        catch
+            # Optionally log error
+        end
+        Base.lock(lock)
         try
-            kmer_counts = JLD2.load_object(temp_file_paths[i])
-            foreach(k -> push!(cumulative_kmers, k), keys(kmer_counts))
-        catch end
-        push!(rarefaction_points, (i, length(cumulative_kmers)))
-    end
-    rarefaction_data_path = Base.Filesystem.joinpath(pwd(), rarefaction_data_filename)
-    try
-        DelimitedFiles.writedlm(rarefaction_data_path, [ [pt[1], pt[2]] for pt in rarefaction_points ], '\t')
-    catch e
-        Base.@error "Failed writing rarefaction data: $e"
-    end
-
-    if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
-        try
-            Main.plot_kmer_rarefaction(
-                rarefaction_data_path;
-                output_dir = pwd(),
-                output_basename = rarefaction_plot_basename,
-                display_plot = show_rarefaction_plot,
-                rarefaction_plot_kwargs...
-            )
-        catch e
-            Base.@error "Failed rarefaction plot: $e"
+            ProgressMeter.next!(progress2)
+        finally
+            Base.unlock(lock)
         end
     end
+    ProgressMeter.finish!(progress2)
 
-    # Diagnostics
-    diagnostic_out = diagnostics ? (
-        nnz_per_file=nnz_per_file,
-        successful_fasta_list=successful_fasta_list,
-        error_log=error_log
-    ) : nothing
-
-    # Cleanup
     if cleanup_temp
         try Base.Filesystem.rm(temp_dir; recursive=true, force=true) catch end
     end
 
-    # Return structure
-    result = diagnostics ?
-        (; kmers=sorted_kmers, counts=kmer_counts_matrix, rarefaction_data_path=rarefaction_data_path, diagnostics=diagnostic_out) :
-        (; kmers=sorted_kmers, counts=kmer_counts_matrix, rarefaction_data_path=rarefaction_data_path)
+    result = (;kmers=sorted_kmers, counts=kmer_counts_matrix, successful_fasta_list=successful_fasta_list, error_log=error_log)
 
     if !isnothing(result_file)
         try JLD2.save_object(result_file, result) catch end
@@ -15396,7 +15333,7 @@ function downcast_float_columns(df::DataFrames.DataFrame; target_type=Float32)
     return df
 end
 
-                            """
+"""
 Breadth-first sampling: sample at least one from each group,
 then sample remaining proportionally to group frequencies
 """
@@ -15526,6 +15463,372 @@ function breadth_first_sample_dataframe(df::DataFrames.DataFrame, group_col::Uni
                                          with_replacement=with_replacement)
     return df[sampled_indices, :]
 end
+
+"""
+    choose_top_n_markers(N)
+
+Return a vector of the top N most visually distinct marker symbols for plotting.
+
+# Arguments
+- `N::Int`: Number of distinct markers to return (max 17 for best differentiation).
+
+# Returns
+- `Vector{Symbol}`: Vector of marker symbol names.
+
+# Example
+    markers = choose_top_n_markers(7)
+"""
+function choose_top_n_markers(N::Int)
+    # Priority order, most differentiable to least
+    marker_priority = [
+        :circle,
+        :rect,
+        :diamond,
+        :cross,
+        :utriangle,
+        :dtriangle,
+        :ltriangle,
+        :rtriangle,
+        :star5,
+        :pentagon,
+        :hexagon,
+        :octagon,
+        :xcross,
+        :x,
+        :star4,
+        :star6,
+        :star7,
+        :star8,
+        :heptagon,
+        :pixel,
+        :hline,
+        :vline,
+        :+,
+    ]
+    max_n = min(N, length(marker_priority))
+    return marker_priority[1:max_n]
+end
+
+# import Base: endswith
+# import Random
+
+# """
+#     zip_files(output_file::String, input_files::Vector{String})
+
+# Creates a zip archive from input_files.
+# Handles many files by writing a file list and using `zip -@`.
+# Appends `.zip` if missing.
+# """
+# function zip_files(output_file::String, input_files::Vector{String})
+#     out = endswith(output_file, ".zip") ? output_file : output_file * ".zip"
+#     tmpfile = tempname()
+#     open(tmpfile, "w") do io
+#         for file in input_files
+#             println(io, file)
+#         end
+#     end
+#     cmd = `zip $out -@ < $tmpfile`
+#     run(cmd)
+#     rm(tmpfile)
+#     return out
+# end
+
+"""
+    tar_gz_files(output_file::String, input_files::Vector{String})
+
+Creates a tar.gz archive from input_files.
+Handles many files by writing a file list and using `tar -czf ... -T filelist`.
+Appends `.tar.gz` if missing.
+"""
+function tar_gz_files(output_file::String, input_files::Vector{String})
+    out = endswith(output_file, ".tar.gz") ? output_file : output_file * ".tar.gz"
+    tmpfile = tempname()
+    open(tmpfile, "w") do io
+        for file in input_files
+            println(io, file)
+        end
+    end
+    cmd = `tar -czf $out -T $tmpfile`
+    run(cmd)
+    rm(tmpfile)
+    return out
+end
+
+import DataFrames
+
+"""
+    dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::Bool = true)
+
+Convert a vector of dictionaries (with possibly non-uniform keys and any key type) into a DataFrame.
+Missing keys in a row are filled with `missing`.
+
+# Arguments
+- `dictvec`: Vector of dictionaries.
+- `symbol_columns`: If true (default), columns are named as Symbols (when possible), else as raw keys.
+
+# Returns
+- `DataFrames.DataFrame` with columns as the union of all keys.
+"""
+function dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::Bool = true)
+    # Gather all unique keys from all dictionaries
+    all_keys = Set{eltype(keys(dictvec[1]))}()
+    for d in dictvec
+        union!(all_keys, keys(d))
+    end
+    all_keys = collect(all_keys)
+
+    # Optionally convert column names to Symbols if possible
+    if symbol_columns
+        try
+            columns = Symbol.(all_keys)
+        catch
+            error("Some keys cannot be converted to Symbol. Set `symbol_columns=false`.")
+        end
+    else
+        columns = all_keys
+    end
+
+    # Build rows as NamedTuples with missing for absent keys
+    rows = [
+        NamedTuple{Tuple(columns)}(
+            map(k -> get(d, k, missing), all_keys)
+        )
+        for d in dictvec
+    ]
+    DataFrames.DataFrame(rows)
+end
+
+
+"""
+    pca_transform(
+      M::AbstractMatrix{<:Real};
+      k::Int = 0,
+      var_prop::Float64 = 1.0
+    )
+
+Perform standard PCA on `M` (features × samples), returning enough PCs
+to either:
+
+- match a user‐supplied `k > 0`, or  
+- explain at least `var_prop` of the total variance (0 < var_prop ≤ 1).  
+
+By default (`k=0, var_prop=1.0`), this will capture **all** variance,
+i.e. use `min(n_samples-1, n_features)` components.
+
+# Returns
+A NamedTuple with fields
+- `model`    : the fitted `MultivariateStats.PCA` object  
+- `scores`   : k×n_samples matrix of PC scores  
+- `loadings` : k×n_features matrix of PC loadings  
+- `chosen_k` : the number of components actually used
+"""
+function pca_transform(
+  M::AbstractMatrix{<:Real};
+  k::Int = 0,
+  var_prop::Float64 = 1.0
+)
+  n_feats, n_samps = size(M)
+  # max possible PCs = full rank of X (columns = samples)
+  rank_max = min(n_samps - 1, n_feats)
+
+  # user‐supplied k takes priority
+  if k > 0
+    chosen_k = min(k, rank_max)
+    model = MultivariateStats.fit(
+      MultivariateStats.PCA, M; maxoutdim=chosen_k
+    )
+    Z = MultivariateStats.transform(model, M)           # (n_samples × chosen_k)
+
+  else
+    # need to auto‐select by variance proportion
+    # fit full‐rank PCA to get all eigenvariances
+    full = MultivariateStats.fit(
+      MultivariateStats.PCA, M; maxoutdim=rank_max
+    )
+    vars = MultivariateStats.principalvars(full)        # length = rank_max
+    total = MultivariateStats.tvar(full)               # = sum(vars) :contentReference[oaicite:1]{index=1}
+    # find smallest k so cum‐var / total ≥ var_prop
+    if var_prop < 1.0
+      cum = cumsum(vars) ./ total
+      idx = findfirst(x -> x ≥ var_prop, cum)
+      chosen_k = idx === nothing ? rank_max : idx
+    else
+      chosen_k = rank_max
+    end
+    # slice out the first chosen_k components
+    Z = MultivariateStats.transform(full, M)[:, 1:chosen_k]  # (n_samples × chosen_k)
+    model = full
+  end
+
+  return (
+    model    = model,
+    scores   = transpose(Z),                       # (chosen_k × n_samples)
+    loadings = MultivariateStats.projection(model)'[:, 1:chosen_k],  # (chosen_k × n_features)
+    chosen_k = chosen_k
+  )
+end
+
+"""
+    logistic_pca_epca(M::AbstractMatrix{<:Integer}, k::Int)
+
+Perform Bernoulli (logistic) EPCA on a 0/1 matrix `M` (features × samples).
+
+# Returns
+A NamedTuple with
+- `model`    : the fitted `ExpFamilyPCA.BernoulliEPCA` object  
+- `scores`   : k×n_samples matrix of low‐dimensional sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function logistic_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+    n_features, n_samples = size(M)
+    if k < 1
+        k = min(min(n_samples-1, n_features), 10)
+    end
+    X = transpose(M)                                 # samples × features
+    model = ExpFamilyPCA.BernoulliEPCA(n_features, k)
+    A     = ExpFamilyPCA.fit!(model, X)              # returns (n_samples×k)
+    scores   = transpose(A)                          # k×n_samples
+    loadings = model.V                               # k×n_features
+    return (model=model, scores=scores, loadings=loadings)
+end
+
+"""
+    glm_pca_epca(M::AbstractMatrix{<:Integer}, k::Int)
+
+Perform Poisson EPCA on a count matrix `M` (features × samples).
+
+# Returns
+A NamedTuple with
+- `model`    : the fitted `ExpFamilyPCA.PoissonEPCA` object  
+- `scores`   : k×n_samples matrix of low‐dimensional sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function glm_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+    n_features, n_samples = size(M)
+    if k < 1
+        k = min(min(n_samples-1, n_features), 10)
+    end
+    X = transpose(M)
+    model = ExpFamilyPCA.PoissonEPCA(n_features, k)
+    A     = ExpFamilyPCA.fit!(model, X)
+    scores   = transpose(A)
+    loadings = model.V
+    return (model=model, scores=scores, loadings=loadings)
+end
+
+# ── 1. Negative‐Binomial EPCA ────────────────────────────────────────────────
+
+"""
+    negbin_pca_epca(M::AbstractMatrix{<:Integer};
+                   k::Int=0,
+                   r::Int=1)
+
+Perform Negative-Binomial EPCA on a count matrix `M` (features × samples).
+
+# Keyword arguments
+- `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
+- `r` : known NB “number of successes” parameter
+
+# Returns
+NamedTuple with fields
+- `model`    : the fitted `ExpFamilyPCA.NegativeBinomialEPCA` object  
+- `scores`   : k×n_samples matrix of sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function negbin_pca_epca(
+    M::AbstractMatrix{<:Integer};
+    k::Int = 0,
+    r::Int = 1
+)
+    n_feats, n_samps = size(M)
+    if k < 1
+        k = min(min(n_samps-1, n_feats), 10)
+    end
+
+    # transpose so each row is a sample
+    X = transpose(M)  # (n_samples × n_features)
+
+    # construct and fit NB-EPCA
+    model = ExpFamilyPCA.NegativeBinomialEPCA(n_feats, k, r)
+    A     = ExpFamilyPCA.fit!(model, X)  # returns (n_samples × k)
+
+    return (
+      model    = model,
+      scores   = transpose(A),  # (k × n_samples)
+      loadings = model.V        # (k × n_features)
+    )
+end
+
+
+# ── 4. PCoA from a distance matrix ───────────────────────────────────────────
+
+"""
+    pcoa_from_dist(D::AbstractMatrix{<:Real}; maxoutdim::Int = 2)
+
+Perform Principal Coordinates Analysis directly from a precomputed
+distance matrix `D` (n_samples×n_samples).
+
+# Keyword arguments
+- `maxoutdim` : target embedding dimension (default=2)
+
+# Returns
+NamedTuple with fields
+- `model`      : the fitted `MultivariateStats.MDS` model  
+- `coordinates`: maxoutdim×n_samples matrix of embedded coordinates  
+"""
+function pcoa_from_dist(
+    D::AbstractMatrix{<:Real};
+    maxoutdim::Int = 2
+)
+    @assert size(D, 1) == size(D,2) "size(D,1) != size(D,2) $(size(D))"
+    model = MultivariateStats.fit(
+      MultivariateStats.MDS, D; distances=true, maxoutdim=maxoutdim
+    )
+    Y = MultivariateStats.predict(model)
+
+    return (
+      model       = model,
+      coordinates = Y
+    )
+end
+
+
+"""
+    umap_embed(scores::AbstractMatrix{<:Real};
+               n_neighbors::Int=15,
+               min_dist::Float64=0.1,
+               n_components::Int=2)
+
+Embed your PC/EPCA scores (k×n_samples) into `n_components` via UMAP.
+
+# Arguments
+- `scores`      : (components × samples) matrix  
+- `n_neighbors` : UMAP neighborhood size  
+- `min_dist`    : UMAP min_dist  
+- `n_components`: output dimension (2 or 3)
+
+# Returns
+- `embedding` : n_components×n_samples matrix  
+- `um`        : the trained UMAP.UMAP model  
+"""
+function umap_embed(scores::AbstractMatrix{<:Real};
+                    n_neighbors::Int=15,
+                    min_dist::Float64=0.1,
+                    n_components::Int=2)
+
+    # transpose to (samples × components)
+    X = transpose(scores)
+
+    # build & fit UMAP
+    um = UMAP.UMAP(n_neighbors=n_neighbors,
+                   min_dist=min_dist,
+                   n_components=n_components)
+    embedding = UMAP.fit_transform(um, X)  # returns samples×n_components
+
+    # return embedding in components×samples orientation
+    return transpose(embedding), um
+end
+
 
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))

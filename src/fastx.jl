@@ -739,3 +739,41 @@ function fastx2normalized_table(fastx)
     normalized_table[!, "fastx_sha256"] .= Mycelia.metasha256(normalized_table[!, "record_sha256"])
     return normalized_table[!, ["fastx_path", "fastx_sha256", current_columns...]]
 end
+
+"""
+    write_fastq(;records, filename, gzip=false)
+
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Write FASTQ records to file using FASTX.jl.
+Validates extension: .fastq, .fq, .fastq.gz, or .fq.gz.
+If `gzip` is true or filename endswith .gz, output is gzipped.
+`records` must be an iterable of FASTX.FASTQ.Record.
+"""
+function write_fastq(;records, filename, gzip=false)
+    function is_valid_fastq_ext(fname)
+        any(endswith.(fname, [".fastq", ".fq", ".fastq.gz", ".fq.gz"]))
+    end
+
+    if !is_valid_fastq_ext(filename)
+        error("File extension must be .fastq, .fq, .fastq.gz, or .fq.gz")
+    end
+
+    gzip_out = gzip || endswith(filename, ".gz")
+    if gzip_out
+        io = CodecZlib.GzipCompressorStream(open(filename, "w"))
+    else
+        io = open(filename, "w")
+    end
+
+    try
+        writer = FASTX.FASTQ.Writer(io)
+        for record in records
+            FASTX.write(writer, record)
+        end
+        FASTX.close(writer)
+    finally
+        close(io)
+    end
+    return filename
+end
