@@ -879,6 +879,9 @@ function annotate_fasta(;
     mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file_pyrodigal, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
     
     # Predict terminators using TransTerm on the original sequence copy
+    if occursin(r"\.gz$", f_in_outdir)
+        @warn "transterm doesn't seem to work with gzip compressed fasta files"
+    end
     transterm_results = Mycelia.run_transterm(fasta=f_in_outdir) # Assuming run_transterm returns path or object usable by transterm_output_to_gff
     transterm_gff_file = Mycelia.transterm_output_to_gff(transterm_results)
     
