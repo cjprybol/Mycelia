@@ -29,4 +29,24 @@ const phiX174_assembly_id = "GCF_000819615.1"
     @testset "multi-entity, log-distributed coverage" begin
         @test 1 + 1 == 2
     end
+    @testset "simulate_illumina_paired_reads" begin
+        # Test both forward and reverse files exist
+        # Example: result = Mycelia.simulate_illumina_paired_reads(in_fasta="test.fna", coverage=10)
+        # @test isfile(result.forward_reads)
+        # @test isfile(result.reverse_reads)
+        # @test isfile(result.sam)
+        # @test isfile(result.error_free_sam)
+    end
+    @testset "simulate_pacbio_reads" begin
+        # Test output file exists and is gzipped
+        # Example: result = Mycelia.simulate_pacbio_reads(fasta="test.fna", quantity="10x")
+        # @test isfile(result)
+        # @test endswith(result, ".fq.gz")
+    end
+    @testset "simulate_nanopore_reads" begin
+        # Test output file exists and is gzipped
+        # Example: result = Mycelia.simulate_nanopore_reads(fasta="test.fna", quantity="10x")
+        # @test isfile(result)
+        # @test endswith(result, ".fq.gz")
+    end
 end

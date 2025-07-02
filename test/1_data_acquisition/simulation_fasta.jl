@@ -4,6 +4,27 @@ const phiX174_accession_id = "NC_001422.1"
 const phiX174_assembly_id = "GCF_000819615.1"
 
 @testset "FASTA simulation and acquisition" begin
+    @testset "random_fasta_record" begin
+        # Test correct sequence length and alphabet for DNA, RNA, AA
+        # Example: dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=42, L=10)
+        # @test typeof(dna_record) == FASTX.FASTA.Record
+        # @test length(FASTX.sequence(dna_record)) == 10
+    end
+    @testset "download_genome_by_accession" begin
+        # Test file download and format
+        # Example: result = Mycelia.download_genome_by_accession(accession="NC_001422.1")
+        # @test isfile(result)
+        # @test result endswith ".fna.gz"
+    end
+    @testset "ncbi_genome_download_accession" begin
+        # Test all expected files are present
+        # Example: result = Mycelia.ncbi_genome_download_accession(accession="GCF_000819615.1", include_string="genome,protein")
+        # @test isfile(result.genome)
+        # @test isfile(result.protein)
+    end
+    @testset "get_base_extension" begin
+        # @test Mycelia.get_base_extension("foo.fna.gz") == ".fna.gz"
+    end
     @testset "dna record" begin
         dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=SEED, L = 10)
         @test FASTX.sequence(dna_record) == "CCGCCGCTCA"
