@@ -1,3 +1,6 @@
+# run me from the root of the Mycelia package directory:
+# julia --project -e 'using Pkg; Pkg.test()'
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

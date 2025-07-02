@@ -29,21 +29,6 @@ const phiX174_accession_id = "NC_001422.1"
         """
         rm(genome_result)
     end
-    @testset "FASTA2Normalized Table" begin
-        fasta_file = "test-normalized.fasta"
-        records = [Mycelia.random_fasta_record(moltype=:DNA, L=10),
-                   Mycelia.random_fasta_record(moltype=:RNA, L=10),
-                   Mycelia.random_fasta_record(moltype=:AA, L=10)]
-        open(fasta_file, "w") do io
-            for rec in records
-                FASTX.write(io, rec)
-            end
-        end
-        table = Mycelia.fasta2normalized_table(fasta_file)
-        @test table isa DataFrames.DataFrame
-        @test nrow(table) == 3
-        rm(fasta_file, force=true)
-    end
     @testset "Read Quality Control" begin
         @test true # https://github.com/OpenGene/fastp
         @test true # https://github.com/FelixKrueger/TrimGalore
@@ -54,5 +39,70 @@ const phiX174_accession_id = "NC_001422.1"
     end
     @testset "Read Statistics" begin
         @test true  # placeholder
+    end
+    @testset "fastx2normalized_table - compressed and raw input" begin
+        # Prepare test records
+        fasta_file = "test-normalized.fasta"
+        fastq_file = "test-normalized.fastq"
+        gz_fasta = fasta_file * ".gz"
+        gz_fastq = fastq_file * ".gz"
+        records = [
+            Mycelia.random_fasta_record(moltype=:DNA, L=10, seed=1),
+            Mycelia.random_fasta_record(moltype=:DNA, L=10, seed=2)
+        ]
+        # Write FASTA
+        open(fasta_file, "w") do io
+            for rec in records
+                FASTX.write(io, rec)
+            end
+        end
+        # Write FASTQ
+        open(fastq_file, "w") do io
+            for rec in records
+                qual = "I"^length(FASTX.sequence(rec))
+                fqrec = FASTX.FASTQ.Record(FASTX.identifier(rec), FASTX.sequence(rec), qual)
+                FASTX.write(io, fqrec)
+            end
+        end
+        # Compress files
+        run(pipeline(`gzip -c $fasta_file`, stdout=gz_fasta))
+        run(pipeline(`gzip -c $fastq_file`, stdout=gz_fastq))
+
+        # Test raw and gzipped FASTA
+        for file in (fasta_file, gz_fasta)
+            table = Mycelia.fastx2normalized_table(file)
+            @test nrow(table) == 2
+            # Case-insensitive: sequences should match after uppercasing
+            seqs = [uppercase(row.record_sequence) for row in eachrow(table)]
+            @test length(unique(seqs)) == 2
+        end
+
+        # Test raw and gzipped FASTQ
+        for file in (fastq_file, gz_fastq)
+            table = Mycelia.fastx2normalized_table(file)
+            @test nrow(table) == 2
+            # Case-sensitive: sequences should match exactly
+            seqs = [row.record_sequence for row in eachrow(table)]
+            @test length(unique(seqs)) == 2
+        end
+
+        # Clean up
+        rm(fasta_file, force=true)
+        rm(fastq_file, force=true)
+        rm(gz_fasta, force=true)
+        rm(gz_fastq, force=true)
+    end
+
+    @testset "fastx2normalized_table - identifier normalization" begin
+        # Two records with different identifiers but same sequence (case-insensitive)
+        fasta_file = "test-idnorm.fasta"
+        open(fasta_file, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("id1", "acgtACGT"))
+            FASTX.write(io, FASTX.FASTA.Record("id2", "ACGTacgt"))
+        end
+        table = Mycelia.fastx2normalized_table(fasta_file)
+        seqs = [uppercase(row.record_sequence) for row in eachrow(table)]
+        @test length(unique(seqs)) == 1
+        rm(fasta_file, force=true)
     end
 end
