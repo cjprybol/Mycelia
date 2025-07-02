@@ -29,6 +29,21 @@ const phiX174_accession_id = "NC_001422.1"
         """
         rm(genome_result)
     end
+    @testset "FASTA2Normalized Table" begin
+        fasta_file = "test-normalized.fasta"
+        records = [Mycelia.random_fasta_record(moltype=:DNA, L=10),
+                   Mycelia.random_fasta_record(moltype=:RNA, L=10),
+                   Mycelia.random_fasta_record(moltype=:AA, L=10)]
+        open(fasta_file, "w") do io
+            for rec in records
+                FASTX.write(io, rec)
+            end
+        end
+        table = Mycelia.fasta2normalized_table(fasta_file)
+        @test table isa DataFrames.DataFrame
+        @test nrow(table) == 3
+        rm(fasta_file, force=true)
+    end
     @testset "Read Quality Control" begin
         @test true # https://github.com/OpenGene/fastp
         @test true # https://github.com/FelixKrueger/TrimGalore
