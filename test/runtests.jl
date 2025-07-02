@@ -19,9 +19,23 @@ import uCSV
 import DataFrames
 import Arrow
 
-# Dynamically include all test files in test/sets/
-for testfile in sort(readdir(joinpath(@__DIR__, "sets")))
-    if endswith(testfile, ".jl")
-        include(joinpath("sets", testfile))
+# Recursively include all test files in the new nested structure, in logical order
+function include_all_tests(dir)
+    for (root, dirs, files) in walkdir(dir)
+        for file in sort(files)
+            if endswith(file, ".jl")
+                include(joinpath(root, file))
+            end
+        end
     end
 end
+
+# Include in logical order
+include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
+include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
+include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
+include_all_tests(joinpath(@__DIR__, "4_assembly"))
+include_all_tests(joinpath(@__DIR__, "5_validation"))
+include_all_tests(joinpath(@__DIR__, "6_annotation"))
+include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
+include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
