@@ -16114,7 +16114,7 @@ Generates and saves k-mer counts for a list of FASTA files for a single k.
     `"{Mycelia.normalized_current_date()}.{lowercase(string(bioalphabet))}{k}mers.jld2"`).
 
 # Output
-Saves a .jld2 file with the specified file name in `output_dir/generated_assets` if it does not already exist.
+Saves a .jld2 file with the specified file name in `output_dir` if it does not already exist.
 """
 function generate_and_save_kmer_counts(; 
     alphabet, 
@@ -16130,11 +16130,7 @@ function generate_and_save_kmer_counts(;
             k, "mers.jld2"
         )
     end
-    assets_dir = joinpath(output_dir, "generated_assets")
-    if !isdir(assets_dir)
-        mkpath(assets_dir)
-    end
-    kmer_result_file = joinpath(assets_dir, filename)
+    kmer_result_file = joinpath(output_dir, filename)
     if !isfile(kmer_result_file)
         kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
             fasta_list=fastas,
