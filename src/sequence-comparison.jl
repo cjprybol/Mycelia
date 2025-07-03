@@ -396,3 +396,122 @@ function run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=1
 
     return parsed_result
 end
+
+# always interpret as strings to ensure changes in underlying biosequence representation don't change results
+# results in 64 character string
+# a = "TTANC"
+# b = "ttANc"
+# c = "ttanc"
+# dna_a = BioSequences.LongDNA{4}(a)
+# dna_b = BioSequences.LongDNA{4}(b)
+# dna_c = BioSequences.LongDNA{4}(c)
+# seq2sha256(a) == seq2sha256(dna_a)
+# seq2sha256(b) == seq2sha256(dna_b)
+# seq2sha256(c) == seq2sha256(dna_c)
+# seq2sha256(BioSequences.LongDNA{2}("AAA")) == seq2sha256(BioSequences.LongDNA{4}("AAA"))
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the SHA-256 hash of a sequence string.
+
+# Arguments
+- `seq::AbstractString`: Input sequence to be hashed
+
+# Returns
+- `String`: Hexadecimal representation of the SHA-256 hash
+
+# Details
+The input sequence is converted to uppercase before hashing.
+"""
+function seq2sha256(seq::AbstractString)
+    return SHA.bytes2hex(SHA.sha256(uppercase(seq)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a biological sequence to its SHA256 hash value.
+
+Calculates a cryptographic hash of the sequence by first converting it to a string representation.
+This method dispatches to the string version of `seq2sha256`.
+
+# Arguments
+- `seq::BioSequences.BioSequence`: The biological sequence to hash
+
+# Returns
+- `String`: A 64-character hexadecimal string representing the SHA256 hash
+"""
+function seq2sha256(seq::BioSequences.BioSequence)
+    return seq2sha256(string(seq))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run fastani with a query and reference list
+
+Calculate Average Nucleotide Identity (ANI) between genome sequences using FastANI.
+
+# Arguments
+- `query_list::String`: Path to file containing list of query genome paths (one per line)
+- `reference_list::String`: Path to file containing list of reference genome paths (one per line)
+- `outfile::String`: Path to output file that will contain ANI results
+- `threads::Int=Sys.CPU_THREADS`: Number of parallel threads to use
+- `force::Bool=false`: If true, rerun analysis even if output file exists
+
+# Output
+Generates a tab-delimited file with columns:
+- Query genome
+- Reference genome  
+- ANI value (%)
+- Count of bidirectional fragment mappings
+- Total query fragments
+
+# Notes
+- Requires FastANI to be available via Bioconda
+- Automatically sets up required conda environment
+"""
+function fastani_list(;query_list="", reference_list="", outfile="", threads=Sys.CPU_THREADS, force=false)
+    Mycelia.add_bioconda_env("fastani")
+    if !isfile(outfile) || force
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) --threads $(threads) -o $(outfile)`)
+        # run(
+        # pipeline(
+        #     `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) --threads $(threads) -o $(outfile)`,
+        #     stdout=outfile * "fastani.stdout.txt",
+        #     stderr=outfile * "fastani.stderr.txt"
+        #     )
+        # )
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Average Nucleotide Identity (ANI) between two genomes using FastANI.
+
+# Arguments
+- `query::String`: Path to query genome FASTA file
+- `reference::String`: Path to reference genome FASTA file  
+- `outfile::String`: Path to save FastANI results
+- `force::Bool=false`: If true, overwrite existing output file
+
+# Notes
+- Requires FastANI to be available via Bioconda
+- Stdout and stderr are captured in separate files with '.stdout.txt' and '.stderr.txt' suffixes
+- ANI results are written to the specified outfile
+"""
+# ./fastANI -q [QUERY_GENOME] -r [REFERENCE_GENOME] -o [OUTPUT_FILE] 
+function fastani_pair(;query="", reference="", outfile="", force=false)
+    Mycelia.add_bioconda_env("fastani")
+    if !isfile(outfile) || force
+        run(
+        pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastani fastANI -q $(query) -r $(reference) -o $(outfile)`,
+            stdout=outfile * "fastani.stdout.txt",
+            stderr=outfile * "fastani.stderr.txt"
+            )
+        )
+    end
+end

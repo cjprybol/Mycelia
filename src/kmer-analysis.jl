@@ -1991,3 +1991,9 @@ function ks(;min=0, max=10_000)
     )
     return filter(x -> min <= x <= max, results)
 end
+
+# function observed_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
+#     kmer_count_dict = BioSequences.kmercounts(seq, k)
+#     total_kmers = sum(values(kmer_count_dict))
+#     return Dict(kmer => count / total_kmers for (kmer, count) in kmer_count_dict)
+# end

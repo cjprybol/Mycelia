@@ -988,3 +988,540 @@ function bandage_visualize(;gfa, img=gfa*".png")
     end
     return img
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate `n` colors that are maximally distinguishable from each other.
+
+# Arguments
+- `n::Integer`: The number of distinct colors to generate
+
+# Returns
+A vector of `n` RGB colors that are optimized for maximum perceptual distinction,
+using white (RGB(1,1,1)) and black (RGB(0,0,0)) as anchor colors.
+"""
+function n_maximally_distinguishable_colors(n)
+    return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
+end
+
+# https://www.giantfocal.com/toolkit/font-size-converter
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert pixel measurements to point measurements using the standard 4:3 ratio.
+
+Points are the standard unit for typography (1 point = 1/72 inch), while pixels are 
+used for screen measurements. This conversion uses the conventional 4:3 ratio where 
+3 points equal 4 pixels.
+
+# Arguments
+- `pixels`: The number of pixels to convert
+
+# Returns
+- The equivalent measurement in points
+"""
+function pixels_to_points(pixels)
+    return pixels / 4 * 3
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert typographic points to pixels using a 4:3 ratio (1 point = 4/3 pixels).
+
+# Arguments
+- `points`: Size in typographic points (pt)
+
+# Returns
+- Size in pixels (px)
+"""
+function points_to_pixels(points)
+    return points / 3 * 4
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Draw a dendrogram visualization of hierarchical clustering results stored in a MetaDiGraph.
+
+# Arguments
+- `mg::MetaGraphs.MetaDiGraph`: Graph containing hierarchical clustering results. Must have
+  `:hcl` in graph properties with clustering data and vertex properties containing `:x`, `:y` coordinates.
+
+# Keywords
+- `width::Integer=500`: Width of output image in pixels
+- `height::Integer=500`: Height of output image in pixels 
+- `fontsize::Integer=12`: Font size for node labels in points
+- `margins::Float64`: Margin size in pixels, defaults to min(width,height)/20
+- `mergenodesize::Float64=1`: Size of circular nodes at merge points
+- `lineweight::Float64=1`: Thickness of dendrogram lines
+- `filename::String`: Output filename, defaults to timestamp with .dendrogram.png extension
+
+# Returns
+Nothing, but saves dendrogram image to disk and displays preview.
+"""
+function draw_dendrogram_tree(
+        mg::MetaGraphs.MetaDiGraph;
+        width=500,
+        height=500,
+        fontsize=12,
+        # margins=min(width, height)/25,
+        margins=min(width, height)/20,
+        # margins=20,
+        mergenodesize=1,
+        lineweight=1,
+        filename=Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".dendrogram.png"
+    )
+
+    fontsizebuffer = points_to_pixels(fontsize) / 3
+    available_width = width - 2 * margins
+    available_height = height - 2 * margins
+
+    leaf_nodes = mg.gprops[:hcl].labels
+
+    # Create a new drawing
+    Luxor.Drawing(width, height, filename)
+    # Luxor.origin()  # Set the origin to the center of the drawing
+    # Luxor.background("white")
+    Luxor.sethue("black")
+    Luxor.fontsize(fontsize)
+    Luxor.setline(lineweight)
+
+    for ordered_leaf_node in mg.gprops[:hcl].order
+        x = mg.vprops[ordered_leaf_node][:x] * available_width + margins
+        y = mg.vprops[ordered_leaf_node][:y] * available_height + margins
+        Luxor.circle(x, y, mergenodesize, :fill)
+        # Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y), halign=:center, valign=:middle)
+        Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y + fontsizebuffer), halign=:center, valign=:top)
+    end
+    for (i, (left, right)) in enumerate(eachrow(mg.gprops[:hcl].merges))
+        parent_vertex = mg[string(i), :hclust_id]
+                                        
+        x = mg.vprops[parent_vertex][:x] * available_width + margins
+        y = mg.vprops[parent_vertex][:y] * available_height + margins
+        # Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y), halign=:center, valign=:middle)
+        Luxor.circle(x, y, mergenodesize, :fill)
+
+        left_child_vertex = mg[string(left), :hclust_id]
+        left_child_x = mg.vprops[left_child_vertex][:x] * available_width + margins
+        left_child_y = mg.vprops[left_child_vertex][:y] * available_height + margins
+        # draw horizontal bar
+        Luxor.line(Luxor.Point(left_child_x, y), Luxor.Point(x, y), action=:stroke)
+        # draw vertical bar
+        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(left_child_x, y), action=:stroke)
+
+        right_child_vertex = mg[string(right), :hclust_id]
+        right_child_x = mg.vprops[right_child_vertex][:x] * available_width + margins
+        right_child_y = mg.vprops[right_child_vertex][:y] * available_height + margins
+        # draw horizontal bar
+        Luxor.line(Luxor.Point(x, y), Luxor.Point(right_child_x, y), action=:stroke)
+        # draw vertical bar
+        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(right_child_x, y), action=:stroke)
+    end
+
+    # Finish the drawing and save the file
+    Luxor.finish()
+    Luxor.preview()
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Draw a radial hierarchical clustering tree visualization and save it as an image file.
+
+# Arguments
+- `mg::MetaGraphs.MetaDiGraph`: A meta directed graph containing hierarchical clustering data
+  with required graph properties `:hcl` containing clustering information.
+
+# Keywords
+- `width::Int=500`: Width of the output image in pixels
+- `height::Int=500`: Height of the output image in pixels
+- `fontsize::Int=12`: Font size for node labels
+- `margins::Float64`: Margin size (automatically calculated as min(width,height)/20)
+- `mergenodesize::Float64=1`: Size of the merge point nodes
+- `lineweight::Float64=1`: Thickness of the connecting lines
+- `filename::String`: Output filename (defaults to timestamp with ".radial.png" suffix)
+
+# Details
+The function creates a radial visualization of hierarchical clustering results where:
+- Leaf nodes are arranged in a circle with labels
+- Internal nodes represent merge points
+- Connections show the hierarchical structure through arcs and lines
+
+The visualization is saved as a PNG file and automatically previewed.
+
+# Required Graph Properties
+The input graph must have:
+- `mg.gprops[:hcl].labels`: Vector of leaf node labels
+- `mg.gprops[:hcl].order`: Vector of ordered leaf nodes
+- `mg.gprops[:hcl].merges`: Matrix of merge operations
+- `mg.vprops[v][:x]`: X coordinate for each vertex
+- `mg.vprops[v][:y]`: Y coordinate for each vertex
+"""
+function draw_radial_tree(
+        mg::MetaGraphs.MetaDiGraph;
+        width=500,
+        height=500,
+        fontsize=12,
+        # margins=min(width, height)/25,
+        margins=min(width, height)/20,
+        # margins=20,
+        mergenodesize=1,
+        lineweight=1,
+        filename=Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".radial.png"
+    )
+
+    # check max label size against margin and update as necessary
+    max_radius = (min(width, height) - (margins * 2)) / 2
+
+    # fontsizebuffer = points_to_pixels(fontsize) / 3
+    available_width = width - 2 * margins
+    available_height = height - 2 * margins
+    leaf_nodes = mg.gprops[:hcl].labels
+
+    # Create a new drawing
+    Luxor.Drawing(width, height, filename)
+    Luxor.origin()  # Set the origin to the center of the drawing
+    # Luxor.background("white")
+    Luxor.sethue("black")
+    Luxor.fontsize(fontsize)
+    Luxor.setline(lineweight)
+
+    for ordered_leaf_node in mg.gprops[:hcl].order
+        original_x = mg.vprops[ordered_leaf_node][:x]
+        original_y = mg.vprops[ordered_leaf_node][:y]
+        polar_radian = original_x * 2 * MathConstants.pi
+        adjusted_radius = original_y * max_radius
+        x = cos(polar_radian) * adjusted_radius
+        y = sin(polar_radian) * adjusted_radius
+        Luxor.circle(x, y, mergenodesize, :fill)
+        text_x = cos(polar_radian) * (max_radius + 10)
+        text_y = sin(polar_radian) * (max_radius + 10)
+        Luxor.text(string(ordered_leaf_node), Luxor.Point(text_x, text_y), angle=polar_radian, halign=:left, valign=:middle)
+    end
+    for (i, (left, right)) in enumerate(eachrow(mg.gprops[:hcl].merges))
+        parent_vertex = mg[string(i), :hclust_id]
+
+        original_x = mg.vprops[parent_vertex][:x]
+        original_y = mg.vprops[parent_vertex][:y]
+
+        polar_radian = original_x * 2 * MathConstants.pi
+        adjusted_radius = original_y * max_radius
+        x = cos(polar_radian) * adjusted_radius
+        y = sin(polar_radian) * adjusted_radius
+        Luxor.circle(x, y, mergenodesize, :fill)
+
+        # left child
+        left_child_vertex = mg[string(left), :hclust_id]
+        left_child_original_x = mg.vprops[left_child_vertex][:x]
+        left_child_original_y = mg.vprops[left_child_vertex][:y]
+        left_child_polar_radian = left_child_original_x * 2 * MathConstants.pi
+        left_child_adjusted_radius = left_child_original_y * max_radius
+        left_child_x = cos(left_child_polar_radian) * left_child_adjusted_radius
+        left_child_y = sin(left_child_polar_radian) * left_child_adjusted_radius
+        # # draw horizontal bar
+        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, left_child_polar_radian, polar_radian, action=:stroke)
+        # draw vertical bar
+        join_x = cos(left_child_polar_radian) * adjusted_radius
+        join_y = sin(left_child_polar_radian) * adjusted_radius
+        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(join_x, join_y), action=:stroke)
+
+        # right child
+        right_child_vertex = mg[string(right), :hclust_id]
+        right_child_original_x = mg.vprops[right_child_vertex][:x]
+        right_child_original_y = mg.vprops[right_child_vertex][:y]
+        right_child_polar_radian = right_child_original_x * 2 * MathConstants.pi
+        right_child_adjusted_radius = right_child_original_y * max_radius
+        right_child_x = cos(right_child_polar_radian) * right_child_adjusted_radius
+        right_child_y = sin(right_child_polar_radian) * right_child_adjusted_radius
+        # # draw horizontal bar
+        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, polar_radian, right_child_polar_radian, action=:stroke)
+        # draw vertical bar
+        join_x = cos(right_child_polar_radian) * adjusted_radius
+        join_y = sin(right_child_polar_radian) * adjusted_radius
+        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(join_x, join_y), action=:stroke)
+    end
+
+    # Finish the drawing and save the file
+    Luxor.finish()
+    Luxor.preview()
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a visualization of chromosome coverage data with statistical thresholds.
+
+# Arguments
+- `cdf::DataFrame`: Coverage data frame containing columns:
+  - `index`: Chromosome position indices
+  - `depth`: Coverage depth values
+  - `chromosome`: Chromosome identifier
+  - `mean_coverage`: Mean coverage value
+  - `std_coverage`: Standard deviation of coverage
+  - `3σ`: Boolean vector indicating +3 sigma regions
+  - `-3σ`: Boolean vector indicating -3 sigma regions
+
+# Returns
+- A StatsPlots plot object showing:
+  - Raw coverage data (black line)
+  - Mean coverage and ±1,2,3σ thresholds (rainbow colors)
+  - Highlighted regions exceeding ±3σ thresholds (red vertical lines)
+"""
+function chromosome_coverage_table_to_plot(cdf)
+    p = StatsPlots.plot(
+        xlims = extrema(cdf[!, "index"]),
+        ylims=(1, maximum(cdf[!, "depth"]) * 1.1),
+        title = cdf[1, "chromosome"],
+        xlabel = "chromosome index",
+        ylabel = "depth"
+    )
+    for r in find_true_ranges(cdf[!, "3σ"]; min_length=1000)
+        range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
+        StatsPlots.vline!(p,
+            [r[1], r[2]],
+            # [range_mean, range_mean],
+            seriestype = :path,
+            label="",
+            c=:red,
+            linewidth=3,
+            alpha=0.1
+        )
+    end
+    for r in find_true_ranges(cdf[!, "-3σ"]; min_length=1000)
+        range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
+        StatsPlots.vline!(p,
+            [r[1], r[2]],
+            # [range_mean, range_mean],
+            seriestype = :path,
+            label="",
+            c=:red,
+            linewidth=3,
+            alpha=1/3
+        )
+    end
+
+    color_vec = StatsPlots.cgrad(ColorSchemes.rainbow, 7, categorical = true)
+    
+    
+    
+    StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(cdf[!, "depth"], 10_000), label="coverage", c=:black)
+    # StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(rolling_centered_avg(cdf[!, "depth"], window_size=1001), 10_000), label="101bp sliding window mean", c=:gray)
+    mean_coverage = first(unique(cdf[!, "mean_coverage"]))
+    stddev_coverage = first(unique(cdf[!, "std_coverage"]))
+    StatsPlots.hline!(p, [mean_coverage + 3 * stddev_coverage], label="+3σ", c=color_vec[7])
+    StatsPlots.hline!(p, [mean_coverage + 2 * stddev_coverage], label="+2σ", c=color_vec[6])
+    StatsPlots.hline!(p, [mean_coverage + 1 * stddev_coverage], label="+σ", c=color_vec[5])
+    StatsPlots.hline!(p, unique(cdf[!, "mean_coverage"]), label="mean_coverage", c=color_vec[4])
+    StatsPlots.hline!(p, [mean_coverage + -1 * stddev_coverage], label="-σ", c=color_vec[3])
+    StatsPlots.hline!(p, [mean_coverage + -2 * stddev_coverage], label="-2σ", c=color_vec[2])
+    StatsPlots.hline!(p, [mean_coverage + -3 * stddev_coverage], label="-3σ", c=color_vec[1])
+    return p
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# Arguments
+- `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# Returns
+- `Plots.Figure`: A composite figure with coverage plots for each chromosome
+
+# Details
+Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+distribution across genomic positions for that chromosome.
+"""
+function visualize_genome_coverage(coverage_table)
+    num_plots = length(unique(coverage_table[!, "chromosome"]))
+    meta_figure = StatsPlots.plot(
+        [chromosome_coverage_table_to_plot(cdf) for cdf in DataFrames.groupby(coverage_table, "chromosome")]...,
+        layout = (num_plots, 1),
+        size = (800, 600 * num_plots)) # Adjust size as needed
+    return meta_figure
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Merge two colors by calculating their minimal color difference vector.
+
+# Arguments
+- `c1::Color`: First color input
+- `c2::Color`: Second color input 
+
+# Returns
+- If colors are equal, returns the input color
+- Otherwise returns the color difference vector (c1-c2 or c2-c1) with minimal RGB sum
+
+# Details
+Calculates two difference vectors:
+- mix_a = c1 - c2 
+- mix_b = c2 - c1
+Returns the difference vector with the smallest sum of RGB components.
+"""
+function merge_colors(c1, c2)
+    if c1 == c2
+        return c1
+    else
+        mix_a = c1 - c2
+        mix_b = c2 - c1
+        mix_a_sum = mix_a.r + mix_a.g + mix_a.b
+        mix_b_sum = mix_b.r + mix_b.g + mix_b.b
+        min_value, min_index = findmin([mix_a_sum, mix_b_sum])
+        mixed_color = [mix_a, mix_b][min_index]
+        # return Colors.color_names["black"]
+        return mixed_color
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Visualizes cluster assessment metrics and saves the resulting plots.
+
+# Arguments
+- `clustering_results`: A named tuple containing:
+    * `ks_assessed`: Vector of k values tested
+    * `within_cluster_sum_of_squares`: Vector of WCSS scores
+    * `silhouette_scores`: Vector of silhouette scores
+    * `optimal_number_of_clusters`: Integer indicating optimal k
+
+# Details
+Creates two plots:
+1. Within-cluster sum of squares (WCSS) vs number of clusters
+2. Silhouette scores vs number of clusters
+
+Both plots include a vertical line indicating the optimal number of clusters.
+
+# Outputs
+Saves two SVG files in the project directory:
+- `wcss.svg`: WCSS plot
+- `silhouette.svg`: Silhouette scores plot
+"""
+function plot_optimal_cluster_assessment_results(clustering_results)
+    p1 = StatsPlots.plot(
+        ks_assessed[1:length(within_cluster_sum_of_squares)],
+        within_cluster_sum_of_squares,
+        ylabel = "within cluster sum of squares\n(lower is better)",
+        xlabel = "n clusters",
+        legend=false
+    )
+    StatsPlots.vline!(p1, [optimal_number_of_clusters])
+    p2 = StatsPlots.plot(
+        ks_assessed[1:length(silhouette_scores)],
+        silhouette_scores,
+        ylabel = "silhouette scores\n(higher is better)",
+        xlabel = "n clusters",
+        title = "Optimal n clusters = $(optimal_number_of_clusters)",
+        legend=false
+    )
+    StatsPlots.vline!(p2, [optimal_number_of_clusters])
+    # TODO write me out
+    display(p2)
+    StatsPlots.savefig(p1, "$DIR/wcss.svg")
+    display(p1)
+    StatsPlots.savefig(p2, "$DIR/silhouette.svg")
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# A short description of the function
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function my_plot(graph::KmerGraph)
+#     graph_hash = hash(sort(graph.graph.fadjlist), hash(graph.graph.ne))
+#     filename = "/assets/images/$(graph_hash).svg"
+#     p = plot_graph(graph)
+#     Plots.savefig(p, dirname(pwd()) * filename)
+#     display(p)
+#     display("text/markdown", "![]($filename)")
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a visualization of a kmer graph where nodes represent kmers and their sizes reflect counts.
+
+# Arguments
+- `graph`: A MetaGraph where vertices have `:kmer` and `:count` properties
+
+# Returns
+- A Plots.jl plot object showing the graph visualization
+
+# Details
+- Node sizes are scaled based on kmer counts
+- Plot dimensions scale logarithmically with number of vertices
+- Each node is labeled with its kmer sequence
+"""
+function plot_graph(graph)
+    
+#     kmer_counts = MetaGraphs.get_prop(graph, :kmer_counts)
+    kmers = [MetaGraphs.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)]
+    counts = [MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
+    scale = 150
+    
+    n = Graphs.nv(graph)
+    p = GraphRecipes.graphplot(
+        graph,
+#         markersize = 1/log2(n),
+        markersize = 1/2^2,
+        size = (2 * scale * log(n), scale * log(n)),
+        node_weights = counts,
+        names = kmers)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Plots a histogram of kmer counts against # of kmers with those counts
+
+Returns the plot object for adding additional layers and saving
+
+Creates a scatter plot visualizing the k-mer frequency spectrum - the relationship
+between k-mer frequencies and how many k-mers occur at each frequency.
+
+# Arguments
+- `counts::AbstractVector{<:Integer}`: Vector of k-mer counts/frequencies
+- `log_scale::Union{Function,Nothing} = log2`: Function to apply logarithmic scaling to both axes.
+  Set to `nothing` to use linear scaling.
+- `kwargs...`: Additional keyword arguments passed to `StatsPlots.plot()`
+
+# Returns
+- `Plots.Plot`: A scatter plot object that can be further modified or saved
+
+# Details
+The x-axis shows k-mer frequencies (how many times each k-mer appears),
+while the y-axis shows how many distinct k-mers appear at each frequency.
+Both axes are log-scaled by default using log2.
+"""
+function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
+    kmer_counts_hist = StatsBase.countmap(c for c in counts)
+    xs = collect(keys(kmer_counts_hist))
+    ys = collect(values(kmer_counts_hist))
+    if isa(log_scale, Function)
+        xs = log_scale.(xs)
+        ys = log_scale.(ys)
+    end
+    
+    p = StatsPlots.plot(
+        xs,
+        ys,
+        xlims = (0, maximum(xs) + max(1, ceil(0.1 * maximum(xs)))),
+        ylims = (0, maximum(ys) + max(1, ceil(0.1 * maximum(ys)))),
+        seriestype = :scatter,
+        legend = false,
+        xlabel = isa(log_scale, Function) ? "$(log_scale)(observed frequency)" : "observed frequency",
+        ylabel = isa(log_scale, Function) ? "$(log_scale)(# of kmers)" : "observed frequency",
+        ;kwargs...
+    )
+    return p
+end

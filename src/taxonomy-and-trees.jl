@@ -813,3 +813,137 @@ function names2taxids(names::AbstractVector{<:AbstractString})
     end
     return reduce(vcat, results)
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# ```jldoctest
+# julia> 1 + 1
+# 2
+# ```
+# """
+# function run_mmseqs_easy_taxonomy(;out_dir, query_fasta, target_database, outfile, force=false)
+#     add_bioconda_env("mmseqs2")
+#     out_dir = mkpath(joinpath(out_dir, "mmseqs_easy_taxonomy"))
+#     outfile = joinpath(out_dir, outfile * ".mmseqs_easy_taxonomy." * basename(target_database) * ".txt")
+#     # note I tried adjusting all of the following, and none of them improved overall runtime
+#     # in any meaningful way
+#     # -s FLOAT                         Sensitivity: 1.0 faster; 4.0 fast; 7.5 sensitive [4.000]
+#     # https://github.com/soedinglab/MMseqs2/issues/577#issuecomment-1191584081
+#     # apparently orf-filter 1 speeds up by 50%!
+#     # --orf-filter INT                 Prefilter query ORFs with non-selective search
+#     #                               Only used during nucleotide-vs-protein classification
+#     #                               NOTE: Consider disabling when classifying short reads [0]
+#     # --lca-mode INT                   LCA Mode 1: single search LCA , 2/3: approximate 2bLCA, 4: top hit [3]
+#     # --lca-search BOOL                Efficient search for LCA candidates [0]
+#     # ^ this looks like it actually runs @ 1 with s=1.0 & --orf-filter=1
+    
+#     # 112 days to process 600 samples at this rate....
+#     # 278 minutes or 4.5 hours for a single sample classification!!
+#     # 16688.050696 seconds (1.43 M allocations: 80.966 MiB, 0.02% gc time, 0.00% compilation time)
+#     # this is for default parameters
+#     # lowering sensitivity and taking LCA
+#     # 16590.725343 seconds (1.06 M allocations: 53.487 MiB, 0.00% compilation time)
+#     # took just as long!
+#     # difference was only 10 minutes
+#     # 15903.218456 seconds (969.92 k allocations: 48.624 MiB, 0.01% gc time)
+#     # use default parameters
+    
+#     if force || (!force && !isfile(outfile))
+#         cmd = 
+#         `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
+#          easy-taxonomy
+#          $(query_fasta)
+#          $(target_database)
+#          $(outfile)
+#          $(joinpath(out_dir, "tmp"))
+#         `
+#         @time run(pipeline(cmd))
+#     else
+#         @info "target outfile $(outfile) already exists, remove it or set force=true to re-generate"
+#     end
+#     return outfile
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse an MMseqs2 easy-taxonomy tophit report into a structured DataFrame.
+
+# Arguments
+- `tophit_report::String`: Path to the MMseqs2 easy-taxonomy tophit report file (tab-delimited)
+
+# Returns
+- `DataFrame`: A DataFrame with columns:
+  - `target_id`: Target sequence identifier
+  - `number of sequences aligning to target`: Count of aligned sequences
+  - `unique coverage of target`: Ratio of uniqueAlignedResidues to targetLength
+  - `Target coverage`: Ratio of alignedResidues to targetLength
+  - `Average sequence identity`: Mean sequence identity
+  - `taxon_id`: Taxonomic identifier
+  - `taxon_rank`: Taxonomic rank
+  - `taxon_name`: Species name and lineage
+"""
+function parse_mmseqs_easy_taxonomy_tophit_report(tophit_report)
+    data, header = uCSV.read(tophit_report, delim='\t')
+    # tophit_report
+    # (1) Target identifier 
+    # (2) Number of sequences aligning to target
+    # (3) Unique coverage of target uniqueAlignedResidues / targetLength
+    # (4) Target coverage alignedResidues / targetLength
+    # (5) Average sequence identity
+    # (6) Taxonomical information identifier, species, lineage
+    header = [
+        "target_id",
+        "number of sequences aligning to target",
+        "unique coverage of target (uniqueAlignedResidues / targetLength)",
+        "Target coverage (alignedResidues / targetLength)",
+        "Average sequence identity",
+        "taxon_id",
+        "taxon_rank",
+        "taxon_name"
+    ]
+    DataFrames.DataFrame(data, header)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse the taxonomic Last Common Ancestor (LCA) TSV output from MMseqs2's easy-taxonomy workflow.
+
+# Arguments
+- `lca_tsv`: Path to the TSV file containing MMseqs2 taxonomy results
+
+# Returns
+DataFrame with columns:
+- `contig_id`: Sequence identifier
+- `taxon_id`: NCBI taxonomy identifier 
+- `taxon_rank`: Taxonomic rank (e.g. species, genus)
+- `taxon_name`: Scientific name
+- `fragments_retained`: Number of fragments kept
+- `fragments_taxonomically_assigned`: Number of fragments with taxonomy
+- `fragments_in_agreement_with_assignment`: Fragments matching contig taxonomy
+- `support -log(E-value)`: Statistical support score
+"""
+function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
+    data, header = uCSV.read(lca_tsv, delim='\t')
+    # contig
+    # (1) a single taxonomy numeric identifier
+    # (2) a taxonomic rank column
+    # (3) taxonomic name column
+    # fragments retained
+    # fragments taxonomically assigned
+    # fragments in agreement with the contig label (i.e. same taxid or have it as an ancestor)
+    # the support received -log(E-value)
+    header = [
+        "contig_id",
+        "taxon_id",
+        "taxon_rank",
+        "taxon_name",
+        "fragments_retained",
+        "fragments_taxonomically_assigned",
+        "fragments_in_agreement_with_assignment",
+        "support -log(E-value)"
+    ]
+    return DataFrames.DataFrame(data, header)
+end

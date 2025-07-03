@@ -1135,3 +1135,517 @@ See Also
 function filesize_human_readable(f)
     return Base.format_bytes(filesize(f))
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the longest common prefix between two filenames.
+
+# Arguments
+- `filename1::String`: First filename to compare
+- `filename2::String`: Second filename to compare
+
+# Keywords
+- `strip_trailing_delimiters::Bool=true`: If true, removes trailing dots, hyphens, and underscores from the result
+
+# Returns
+- `String`: The longest common prefix found between the filenames
+"""
+function find_matching_prefix(filename1::String, filename2::String; strip_trailing_delimiters=true)
+    min_length = min(length(filename1), length(filename2))
+    matching_prefix = ""
+    
+    for i in 1:min_length
+        if filename1[i] == filename2[i]
+            matching_prefix *= filename1[i]
+        else
+            break
+        end
+    end
+    if strip_trailing_delimiters
+        matching_prefix = replace(matching_prefix, r"[\.\-_]+$" => "")
+    end
+    
+    return matching_prefix
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+    parse_jsonl(filepath::String) -> Vector{Dict{String,Any}}
+
+Validate and parse a JSON Lines file (either .ndjson/.jsonl, optionally gzipped)
+into a vector of dictionaries, reporting progress in bytes processed.
+
+Validations performed:
+  • Extension must be one of: .jsonl, .ndjson, .jsonl.gz, .ndjson.gz
+  • File must exist
+  • File size must be non-zero
+
+Progress meter shows bytes read from the underlying file (compressed bytes
+for .gz). No second full pass is needed.
+"""
+function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
+    # --- Validate inputs ---
+    fname = lowercase(filepath)
+    valid_exts = (".jsonl", ".ndjson", ".jsonl.gz", ".ndjson.gz")
+    if !any(endswith(fname, ext) for ext in valid_exts)
+        error("parse_jsonl: unsupported extension. “$(filepath)” must end in $(join(valid_exts, ", "))")
+    end
+    if !isfile(filepath)
+        error("parse_jsonl: file not found: $filepath")
+    end
+    file_stat = stat(filepath)
+    if file_stat.size == 0
+        error("parse_jsonl: file is empty: $filepath")
+    end
+
+    # --- Open raw and (optionally) decompress ---
+    raw_io = open(filepath, "r")
+    io     = endswith(fname, ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+
+    # --- Set up a byte‐based progress meter ---
+    total_bytes = file_stat.size
+    p = ProgressMeter.Progress(total_bytes, "Parsing JSONL (bytes): ")
+    last_pos = Int64(0)
+
+    # --- Read & parse lines ---
+    results = Vector{Dict{String,Any}}()
+    for line in eachline(io)
+        s = strip(line)
+        if !isempty(s)
+            push!(results, JSON.parse(s))
+        end
+        # track compressed‐byte progress even for gzipped files
+        curr_pos = position(raw_io)
+        delta    = curr_pos - last_pos
+        last_pos = curr_pos
+        ProgressMeter.next!(p; step = delta)
+    end
+
+    close(io)
+    return results
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+    jsonl_to_dataframe(filepath::String) -> DataFrame
+
+Parse a JSONL (or gzipped JSONL) file and return a DataFrame.
+Internally calls `parse_jsonl` for validation and parsing.
+Ensures that all rows have the same set of keys by inserting `missing`
+for any absent field before constructing the DataFrame.
+"""
+function jsonl_to_dataframe(filepath::String)::DataFrames.DataFrame
+    rows = parse_jsonl(filepath)
+    # If no rows, return empty DataFrame
+    if isempty(rows)
+        return DataFrames.DataFrame()
+    end
+
+    # Collect the union of all keys across rows
+    all_keys = reduce(union, map(keys, rows))
+    # Fill missing columns in each row with `missing`
+    ProgressMeter.@showprogress desc="Filling missing values" for row in rows
+        for k in setdiff(all_keys, keys(row))
+            row[k] = missing
+        end
+    end
+
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+function system_overview(;path=pwd())
+    total_memory = Base.format_bytes(Sys.total_memory())
+    available_memory = Base.format_bytes(Sys.free_memory())
+    occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
+    system_threads = Sys.CPU_THREADS
+    julia_threads = Threads.nthreads()
+    available_storage = Base.format_bytes(Base.diskstat(path).available)
+    total_storage = Base.format_bytes(Base.diskstat(path).total)
+    occupied_storage = Base.format_bytes(Base.diskstat(path).used)
+    return (;
+            system_threads,
+            julia_threads,
+            total_memory,
+            available_memory,
+            occupied_memory,
+            total_storage,
+            available_storage,
+            occupied_storage)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Vertically concatenate DataFrames with different column structures by automatically handling missing values.
+
+# Arguments
+- `dfs`: Variable number of DataFrames to concatenate vertically
+
+# Returns
+- `DataFrame`: Combined DataFrame containing all rows and columns from input DataFrames, 
+  with `missing` values where columns didn't exist in original DataFrames
+"""
+function vcat_with_missing(dfs::Vararg{DataFrames.AbstractDataFrame})
+    # Get all unique column names across all DataFrames
+    all_columns = unique(reduce(vcat, [names(df) for df in dfs]))
+
+    # Add missing columns to each DataFrame and fill with missing
+    for df in dfs
+        for col in all_columns
+            if !(col in names(df))
+                df[!, col] .= missing
+            end
+        end
+    end
+
+    # Now you can safely vcat the DataFrames
+    return vcat(dfs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute a single SHA256 hash from multiple SHA256 hashes.
+
+Takes a vector of hex-encoded SHA256 hashes and produces a new SHA256 hash by:
+1. Sorting the input hashes lexicographically
+2. Concatenating them in sorted order
+3. Computing a new SHA256 hash over the concatenated data
+
+# Arguments
+- `vector_of_sha256s`: Vector of hex-encoded SHA256 hash strings
+
+# Returns
+- A hex-encoded string representing the computed meta-hash
+"""
+function metasha256(vector_of_sha256s::Vector{<:AbstractString})
+    ctx = SHA.SHA2_256_CTX()
+    for sha_hash in sort(vector_of_sha256s)
+        SHA.update!(ctx, collect(codeunits(sha_hash)))
+    end
+    return SHA.bytes2hex(SHA.digest!(ctx))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract the base file extension from a filename, handling compressed files.
+
+For regular files, returns the last extension. For gzipped files, returns the extension
+before .gz.
+"""
+function get_base_extension(filename::String)
+  parts = split(basename(filename), "."; limit=3)  # Limit to 3 to handle 2-part extensions
+  extension = parts[end]  # Get the last part
+  
+  if extension == "gz" && length(parts) > 2  # Check for .gz and more parts
+    extension = parts[end - 1]  # Get the part before .gz
+  end
+  
+  return "." * extension
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Finds contiguous ranges of `true` values in a boolean vector.
+
+# Arguments
+- `bool_vec::AbstractVector{Bool}`: Input boolean vector to analyze
+- `min_length=1`: Minimum length requirement for a range to be included
+
+# Returns
+Vector of tuples `(start, end)` where each tuple represents the indices of a
+contiguous range of `true` values meeting the minimum length requirement.
+"""
+function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
+    indices = findall(bool_vec)  # Get indices of true values
+    if isempty(indices)
+    return []  # Handle the case of no true values
+    end
+    diffs = diff(indices)
+    breakpoints = findall(>(1), diffs)  # Find where the difference is greater than 1
+    starts = [first(indices); indices[breakpoints .+ 1]]
+    ends = [indices[breakpoints]; last(indices)]
+    # true_ranges_table = DataFrames.DataFrame(starts = starts, ends = ends, lengths = ends .- starts)
+    return collect(Iterators.filter(x -> (x[2] - x[1]) >= min_length, zip(starts, ends)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Sample `n` equally spaced elements from `vector`.
+
+# Arguments
+- `vector`: Input vector to sample from
+- `n`: Number of samples to return (must be positive)
+
+# Returns
+A vector containing `n` equally spaced elements from the input vector.
+"""
+function equally_spaced_samples(vector, n)
+    indices = round.(Int, range(1, length(vector), length=n))
+    return vector[indices]
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute a centered moving average over a vector using a sliding window.
+
+# Arguments
+- `data::AbstractVector{T}`: Input vector to be averaged
+- `window_size::Int`: Size of the sliding window (odd number recommended)
+
+# Returns
+- `Vector{Float64}`: Vector of same length as input containing moving averages
+
+# Details
+- For points near the edges, the window is truncated to available data
+- Window is centered on each point, using floor(window_size/2) points on each side
+- Result type is always Float64 regardless of input type T
+"""
+function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
+    half_window = Int(floor(window_size / 2))
+    result = Vector{Float64}(undef, length(data))
+    for i in eachindex(data)
+        start_idx = max(1, i - half_window)
+        end_idx = min(length(data), i + half_window)
+        result[i] = Statistics.mean(data[start_idx:end_idx])
+    end
+    return result
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Select one random row from each group in a grouped DataFrame.
+
+# Arguments
+- `gdf::GroupedDataFrame`: A grouped DataFrame created using `groupby`
+
+# Returns
+- `DataFrame`: A new DataFrame containing exactly one randomly sampled row from each group
+"""
+function rand_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    result = DataFrames.combine(gdf) do sdf
+        sdf[StatsBase.sample(1:DataFrames.nrow(sdf), 1), :]
+    end
+    return result
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a random symmetric distance matrix of size n×n with zeros on the diagonal.
+
+# Arguments
+- `n`: Positive integer specifying the matrix dimensions
+
+# Returns
+- A symmetric n×n matrix with random values in [0,1), zeros on the diagonal
+
+# Details
+- The matrix is symmetric, meaning M[i,j] = M[j,i]
+- Diagonal elements M[i,i] are set to 0.0
+- Off-diagonal elements are uniformly distributed random values
+"""
+function random_symmetric_distance_matrix(n)
+  # Generate a random matrix
+  matrix = rand(n, n)
+
+  # Make the matrix symmetric
+  matrix = (matrix + matrix') / 2
+
+  # Ensure the diagonal is zero
+  for i in 1:n
+    matrix[i, i] = 0.0
+  end
+
+  return matrix
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return a DataFrame containing the first row from each group in a GroupedDataFrame.
+
+# Arguments
+- `gdf::GroupedDataFrame`: A grouped DataFrame created using `groupby`
+
+# Returns
+- `DataFrame`: A new DataFrame containing first row from each group
+"""
+function first_of_each_group(gdf::DataFrames.GroupedDataFrame{DataFrames.DataFrame})
+    return DataFrames.combine(gdf, first)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a type to its string representation, with special handling for Kmer types.
+
+# Arguments
+- `T`: The type to convert to string
+
+# Returns
+- String representation of the type
+  - For Kmer types: Returns "Kmers.DNAKmer{K}" where K is the kmer length
+  - For other types: Returns the standard string representation
+"""
+function type_to_string(T)
+    if T <: Kmers.Kmer
+        return "Kmers.DNAKmer{$(T.parameters[2])}"
+    else
+        return string(T)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Converts an AbstractString type to its string representation.
+
+# Arguments
+- `T::AbstractString`: The string type to convert
+
+# Returns
+A string representation of the input type
+"""
+function type_to_string(T::AbstractString)
+    return string(T)
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Convert between different graph file formats.
+
+# # Arguments
+# - `args`: Dictionary with required keys:
+#     - `"in"`: Input filepath (supported: .jld2, .gfa, .neo4j)
+#     - `"out"`: Output filepath (supported: .jld2, .gfa, .neo4j)
+
+# # Details
+# Performs format conversion based on file extensions. For non-JLD2 to non-JLD2
+# conversions, uses JLD2 as an intermediate format.
+# """
+# function convert(args)
+#     @show args
+#     in_type = missing
+#     out_type = missing
+#     if occursin(r"\.jld2$", args["in"])
+#         in_type = :jld2
+#     elseif occursin(r"\.gfa$", args["in"])
+#         in_type = :gfa
+#     elseif occursin(r"\.neo4j$", args["in"])
+#         in_type = :neo4j
+#     end
+
+#     if occursin(r"\.jld2$", args["out"])
+#         out_type = :jld2
+#     elseif occursin(r"\.gfa$", args["out"])
+#         out_type = :gfa
+#     elseif occursin(r"\.neo4j$", args["out"])
+#         out_type = :neo4j
+#     end
+    
+#     if ismissing(in_type) || ismissing(out_type)
+#         error("unable to determine in and out types")
+#     end
+    
+#     if (in_type == :jld2) && (out_type == :jld2)
+#         # done
+#     elseif (in_type == :jld2) && (out_type != :jld2)
+#         # convert out of jld2
+#         if out_type == :gfa
+#             loaded = FileIO.load(args["in"])
+#             @assert haskey(loaded, "graph")
+#             graph = loaded["graph"]
+#             graph_to_gfa(graph, args["out"])
+#         end
+#     elseif (in_type != :jld2) && (out_type == :jld2)
+#         # convert into jld2
+#     else
+#         # need to convert from input to jld2 as an intermediate first
+#     end
+# end
+
+# Save the distance matrix to a JLD2 file
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Saves a matrix to a JLD2 file format.
+
+# Arguments
+- `matrix`: The matrix to be saved
+- `filename`: String path where the file should be saved
+
+# Returns
+- The filename string that was used to save the matrix
+"""
+function save_matrix_jld2(;matrix, filename)
+    if !isfile(filename) || (filesize(filename) == 0)
+        JLD2.@save filename matrix
+    else
+        @warn "$(filename) already exists and is non-empty, skipping..."
+    end
+    return filename
+end
+
+# Load the distance matrix from a JLD2 file
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Loads a matrix from a JLD2 file.
+
+# Arguments
+- `filename::String`: Path to the JLD2 file containing the matrix under the key "matrix"
+
+# Returns
+- `Matrix`: The loaded matrix data
+"""
+function load_matrix_jld2(filename)
+    return JLD2.load(filename, "matrix")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Load data stored in a JLD2 file format.
+
+# Arguments
+- `filename::String`: Path to the JLD2 file to load
+
+# Returns
+- `Dict`: Dictionary containing the loaded data structures
+"""
+function load_jld2(filename)
+    return JLD2.load(filename)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate and display frequency counts for all columns in a DataFrame.
+
+# Arguments
+- `table::DataFrame`: Input DataFrame to analyze
+
+# Details
+Iterates through each column in the DataFrame and displays:
+1. The column name
+2. A Dict mapping unique values to their frequencies using StatsBase.countmap
+"""
+function countmap_columns(table)
+    for n in names(refseq_metadata)
+        display(n)
+        display(StatsBase.countmap(refseq_metadata[!, n]))
+    end
+end

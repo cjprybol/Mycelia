@@ -1276,3 +1276,107 @@ Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) 
 function fastx_to_contig_lengths(fastx)
     OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Open and return a reader for FASTA or FASTQ format files.
+
+# Arguments
+- `path::AbstractString`: Path to input file. Can be:
+    - Local file path
+    - HTTP/FTP URL
+    - Gzip compressed (.gz extension)
+
+# Supported formats
+- FASTA (.fasta, .fna, .faa, .fa)
+- FASTQ (.fastq, .fq)
+
+# Returns
+- `FASTX.FASTA.Reader` for FASTA files
+- `FASTX.FASTQ.Reader` for FASTQ files
+"""
+function open_fastx(path::AbstractString)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
+    end
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+        path_base = replace(path_base, ".gz" => "")
+    end
+    if occursin(r"\.(fasta|fna|faa|fa|frn)$", path_base)
+        fastx_io = FASTX.FASTA.Reader(io)
+    elseif occursin(r"\.(fastq|fq)$", path_base)
+        fastx_io = FASTX.FASTQ.Reader(io)
+    else
+        error("attempting to open a FASTX file with an unsupported extension: $(path_base)")
+    end
+    return fastx_io
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Writes FASTA records to a file, optionally gzipped.
+
+# Arguments
+- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true and ".gz" isn't already the extension.
+- `records::Vector{FASTX.FASTA.Record}`: A vector of FASTA records.
+- `gzip::Bool`: Optionally force compression of the output with gzip. By default will use the file name to infer.
+
+# Returns
+- `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
+"""
+function write_fasta(;outfile::AbstractString=tempname()*".fna", records::Vector{FASTX.FASTA.Record}, gzip::Bool=false)
+    # Determine if gzip compression should be used based on both the filename and the gzip argument
+    gzip = occursin(r"\.gz$", outfile) || gzip
+
+    # Append ".gz" to the filename if gzip is true and the extension isn't already present
+    outfile = gzip && !occursin(r"\.gz$", outfile) ? outfile * ".gz" : outfile  # More concise way to handle filename modification
+
+    # Use open with do block for automatic resource management (closing the file)
+    open(outfile, "w") do io
+        if gzip
+            io = CodecZlib.GzipCompressorStream(io)  # Wrap the io stream for gzip compression
+        end
+
+        FASTX.FASTA.Writer(io) do fastx_io  # Use do block for automatic closing of the FASTA writer
+            for record in records
+                write(fastx_io, record)
+            end
+        end # fastx_io automatically closed here
+    end # io automatically closed here
+
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GenBank format file to FASTA format using EMBOSS seqret.
+
+# Arguments
+- `genbank`: Path to input GenBank format file
+- `fasta`: Optional output FASTA file path (defaults to input path with .fna extension)
+- `force`: If true, overwrites existing output file (defaults to false)
+
+# Returns
+Path to the output FASTA file
+
+# Notes
+- Requires EMBOSS suite (installed automatically via Conda)
+- Will not regenerate output if it already exists unless force=true
+"""
+function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
+    add_bioconda_env("emboss")
+    if !isfile(fasta) || force
+        run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
+    end
+    return fasta
+end

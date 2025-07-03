@@ -2367,3 +2367,190 @@ function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     # header = ["sequence_id", "taxid"]
     # DataFrames.DataFrame(data, header)
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# ncbi_datasets_genome(; kwargs...)
+
+# Download and rehydrate a data package from [NCBI datasets genome tool](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/)
+
+# Specify the download using either
+
+# - [taxon](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/datasets_download_genome_taxon/)
+
+# or
+
+# - [accession(https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/genome/datasets_download_genome_accession/)
+
+# # Arguments
+# - `annotated::Bool=false`: Limit to annotated genomes.
+# - `api_key::String=""`: Specify an NCBI API key.
+# - `assembly_level::Array{String}=[]`: Limit to genomes at specific assembly levels (e.g., "chromosome", "complete", "contig", "scaffold"). Default is empty (no specific level).
+# - `assembly_source::String="all"`: Limit to 'RefSeq' (GCF_) or 'GenBank' (GCA_) genomes. Default is "all".
+# - `assembly_version::String=""`: Limit to 'latest' assembly accession version or include 'all' (latest + previous versions).
+# - `chromosomes::Array{String}=[]`: Limit to a specified, comma-delimited list of chromosomes, or 'all' for all chromosomes.
+# - `debug::Bool=false`: Emit debugging info.
+# - `dehydrated::Bool=false`: Download a dehydrated zip archive including the data report and locations of data files (use the rehydrate command to retrieve data files).
+# - `exclude_atypical::Bool=false`: Exclude atypical assemblies.
+# - `filename::String=""`: Specify a custom file name for the downloaded data package. Default is "taxon.zip" or "accession.zip" if left blank.
+# - `include::Array{String}=["genome"]`: Specify the data files to include (e.g., "genome", "rna", "protein"). Default includes genomic sequence files only.
+# - `mag::String="all"`: Limit to metagenome assembled genomes (only) or remove them from the results (exclude). Default is "all".
+# - `no_progressbar::Bool=false`: Hide the progress bar.
+# - `preview::Bool=false`: Show information about the requested data package without downloading.
+# - `reference::Bool=false`: Limit to reference genomes.
+# - `released_after::String=""`: Limit to genomes released on or after a specified date (MM/DD/YYYY).
+# - `released_before::String=""`: Limit to genomes released on or before a specified date (MM/DD/YYYY).
+# - `search::Array{String}=[]`: Limit results to genomes with specified text in the searchable fields (e.g., species, assembly name).
+
+# # Returns
+# - The result of the API call.
+# """
+
+# function ncbi_datasets_genome(;
+#         taxon=missing,
+#         accession=missing,
+#         annotated=false,
+#         api_key="",
+#         assembly_level=[],
+#         assembly_source="all",
+#         assembly_version="",
+#         chromosomes=[],
+#         debug=false,
+#         dehydrated=false,
+#         exclude_atypical=false,
+#         filename="",
+#         outdir="",
+#         include=["genome"],
+#         mag="all",
+#         no_progressbar=false,
+#         preview=false,
+#         reference=false,
+#         released_after="",
+#         released_before="",
+#         search=[])
+
+#     # Base command
+#     command = "$(CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome "
+    
+#     if !ismissing(taxon) && !ismissing(accession)
+#         @error "can only provide taxon or accession, not both" taxon accession
+#     elseif ismissing(taxon) && ismissing(accession)
+#         @error "must provide either taxon or accession"
+#     elseif !ismissing(taxon) && ismissing(accession)
+#         command *= "taxon $(taxon) "
+#         if isempty(filename)
+#             filename = string(taxon) * ".zip"
+#         end
+#     elseif !ismissing(accession) && ismissing(taxon)
+#         command *= "accession $(accession) "
+#         if isempty(filename)
+#             filename = string(accession) * ".zip"
+#         end
+#     end
+    
+#     @assert occursin(r"\.zip$", filename)
+    
+#     if !isempty(outdir)
+#         filename = joinpath(outdir, filename)
+#     end
+
+#     annotated && (command *= "--annotated ")
+#     !isempty(api_key) && (command *= "--api-key $api_key ")
+#     !isempty(assembly_level) && (command *= "--assembly-level $(join(assembly_level, ',')) ")
+#     command *= "--assembly-source $assembly_source "
+#     !isempty(assembly_version) && (command *= "--assembly-version $assembly_version ")
+#     !isempty(chromosomes) && (command *= "--chromosomes $(join(chromosomes, ',')) ")
+#     debug && (command *= "--debug ")
+#     dehydrated && (command *= "--dehydrated ")
+#     exclude_atypical && (command *= "--exclude-atypical ")
+#     command *= "--filename $filename "
+#     !isempty(include) && (command *= "--include $(join(include, ',')) ")
+#     command *= "--mag $mag "
+#     no_progressbar && (command *= "--no-progressbar ")
+#     preview && (command *= "--preview ")
+#     reference && (command *= "--reference ")
+#     !isempty(released_after) && (command *= "--released-after $released_after ")
+#     !isempty(released_before) && (command *= "--released-before $released_before ")
+#     for s in search
+#         command *= "--search $s "
+#     end
+
+#     # Execute the command
+#     println("Executing command: $command")
+#     run(`$command`)
+#     if dehydrated
+#         @info "add code to rehydrate here"
+#     end
+#     return true
+# end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads and sets up MMseqs2 reference databases for sequence searching and analysis.
+
+# Arguments
+- `db::String`: Name of database to download (see table below)
+- `dbdir::String`: Directory to store the downloaded database (default: "~/workspace/mmseqs")
+- `force::Bool`: If true, force re-download even if database exists (default: false)
+- `wait::Bool`: If true, wait for download to complete (default: true)
+
+# Returns 
+- Path to the downloaded database as a String
+
+# Available Databases
+
+| Database           | Type       | Taxonomy | Description                               |
+|-------------------|------------|----------|-------------------------------------------|
+| UniRef100         | Aminoacid  | Yes      | UniProt Reference Clusters - 100% identity|
+| UniRef90          | Aminoacid  | Yes      | UniProt Reference Clusters - 90% identity |
+| UniRef50          | Aminoacid  | Yes      | UniProt Reference Clusters - 50% identity |
+| UniProtKB         | Aminoacid  | Yes      | Universal Protein Knowledge Base          |
+| NR               | Aminoacid  | Yes      | NCBI Non-redundant proteins              |
+| NT               | Nucleotide | No       | NCBI Nucleotide collection               |
+| GTDB             | Aminoacid  | Yes      | Genome Taxonomy Database                  |
+| PDB              | Aminoacid  | No       | Protein Data Bank structures             |
+| Pfam-A.full      | Profile    | No       | Protein family alignments                |
+| SILVA            | Nucleotide | Yes      | Ribosomal RNA database                   |
+
+```
+  Name                  Type            Taxonomy        Url                                                           
+- UniRef100             Aminoacid            yes        https://www.uniprot.org/help/uniref
+- UniRef90              Aminoacid            yes        https://www.uniprot.org/help/uniref
+- UniRef50              Aminoacid            yes        https://www.uniprot.org/help/uniref
+- UniProtKB             Aminoacid            yes        https://www.uniprot.org/help/uniprotkb
+- UniProtKB/TrEMBL      Aminoacid            yes        https://www.uniprot.org/help/uniprotkb
+- UniProtKB/Swiss-Prot  Aminoacid            yes        https://uniprot.org
+- NR                    Aminoacid            yes        https://ftp.ncbi.nlm.nih.gov/blast/db/FASTA
+- NT                    Nucleotide             -        https://ftp.ncbi.nlm.nih.gov/blast/db/FASTA
+- GTDB                  Aminoacid            yes        https://gtdb.ecogenomic.org
+- PDB                   Aminoacid              -        https://www.rcsb.org
+- PDB70                 Profile                -        https://github.com/soedinglab/hh-suite
+- Pfam-A.full           Profile                -        https://pfam.xfam.org
+- Pfam-A.seed           Profile                -        https://pfam.xfam.org
+- Pfam-B                Profile                -        https://xfam.wordpress.com/2020/06/30/a-new-pfam-b-is-released
+- CDD                   Profile                -        https://www.ncbi.nlm.nih.gov/Structure/cdd/cdd.shtml
+- eggNOG                Profile                -        http://eggnog5.embl.de
+- VOGDB                 Profile                -        https://vogdb.org
+- dbCAN2                Profile                -        http://bcb.unl.edu/dbCAN2
+- SILVA                 Nucleotide           yes        https://www.arb-silva.de
+- Resfinder             Nucleotide             -        https://cge.cbs.dtu.dk/services/ResFinder
+- Kalamari              Nucleotide           yes        https://github.com/lskatz/Kalamari
+```
+"""
+function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=false, wait=true)
+    Mycelia.add_bioconda_env("mmseqs2")
+    mkpath(dbdir)
+    # sanitized_db = replace(db, "/" => "_")
+    db_path = joinpath(dbdir, db)
+    mkpath(dirname(db_path))
+    if !isfile(db_path) || force
+        cmd = `$(CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(dbdir)/$(db) $(dbdir)/tmp`
+        @time run(cmd, wait=wait)
+    else
+        @info "db $db @ $(db_path) already exists, set force=true to overwrite"
+    end
+    return db_path
+end

@@ -429,3 +429,129 @@ function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
     end
     return fastq
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# function parse_xam(xam; filter_unmapped=false, primary_only=false, min_mapping_quality=0, min_align_length=1)
+#     if occursin(r"\.bam$", xam)
+#         MODULE = XAM.BAM
+#         io = open(xam)
+#     elseif occursin(r"\.sam$", xam)
+#         MODULE = XAM.SAM
+#         io = open(xam)
+#     elseif occursin(r"\.sam.gz$", xam)
+#         MODULE = XAM.SAM
+#         io = CodecZlib.GzipDecompressorStream(open(xam))
+#     else
+#         error("unrecognized file extension in file: $xam")
+#     end
+#     # reader = open(MODULE.Reader, io)
+#     reader = MODULE.Reader(io)
+#     header = reader.header
+#     record_iterator = Iterators.filter(record -> true, reader)
+#     if filter_unmapped
+#         record_iterator = Iterators.filter(record -> MODULE.ismapped(record), record_iterator)
+#     end
+#     if primary_only
+#         record_iterator = Iterators.filter(record -> MODULE.isprimary(record), record_iterator)
+#     end
+#     record_iterator = Iterators.filter(record -> MODULE.mappingquality(record) >= min_mapping_quality, record_iterator)
+#     record_iterator = Iterators.filter(record -> MODULE.alignlength(record) >= min_align_length, record_iterator)
+#     records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
+#     # reset header to specify sorted
+#     header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
+#     close(io)
+#     return (;records, header)
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a SAM/BAM file into a summary DataFrame containing alignment metadata.
+
+# Arguments
+- `xam::AbstractString`: Path to input SAM (.sam), BAM (.bam), or gzipped SAM (.sam.gz) file
+
+# Returns
+DataFrame with columns:
+- `template`: Read name
+- `flag`: SAM flag
+- `reference`: Reference sequence name
+- `position`: Alignment position range (start:end)
+- `mappingquality`: Mapping quality score
+- `alignment_score`: Alignment score (AS tag)
+- `isprimary`: Whether alignment is primary
+- `alignlength`: Length of the alignment
+- `ismapped`: Whether read is mapped
+- `mismatches`: Number of mismatches (NM tag)
+
+Note: Only mapped reads are included in the output DataFrame.
+"""
+function parse_xam_to_summary_table(xam)
+    record_table = DataFrames.DataFrame(
+        template = String[],
+        flag = UInt16[],
+        reference = String[],
+        position = UnitRange{Int}[],
+        mappingquality = UInt8[],
+        alignment_score = Int[],
+        isprimary = Bool[],
+        # cigar = String[],
+        # rnext = String[],
+        # pnext = Int[],
+        # tlen = Int[],
+        # sequence = BioSequences.LongDNA{4}[],
+        # quality = UInt8[],
+        alignlength = Int[],
+        ismapped = Bool[],
+        # alignment = BioAlignments.Alignment[],
+        mismatches = Int[]
+    )
+    if occursin(r"\.bam$", xam)
+        MODULE = XAM.BAM
+        io = open(xam)
+    elseif occursin(r"\.sam$", xam)
+        MODULE = XAM.SAM
+        io = open(xam)
+    elseif occursin(r"\.sam.gz$", xam)
+        MODULE = XAM.SAM
+        io = CodecZlib.GzipDecompressorStream(open(xam))
+    else
+        error("unrecognized file extension in file: $xam")
+    end
+    # reader = open(MODULE.Reader, io)
+    reader = MODULE.Reader(io)
+    header = reader.header
+    for record in reader
+        if XAM.SAM.ismapped(record)
+            # @assert !ismissing()
+            row = (
+                template = XAM.SAM.tempname(record),
+                flag = XAM.flag(record),
+                reference = XAM.SAM.refname(record),
+                position = XAM.SAM.position(record):XAM.SAM.rightposition(record),
+                mappingquality = XAM.SAM.mappingquality(record),
+                # cigar = XAM.SAM.cigar(record),
+                # rnext = XAM.SAM.nextrefname(record),
+                # pnext = XAM.SAM.nextposition(record),
+                # tlen = XAM.SAM.templength(record),
+                # sequence = XAM.SAM.sequence(record),
+                # quality = XAM.SAM.quality(record),
+                alignlength = XAM.SAM.alignlength(record),
+                ismapped = XAM.SAM.ismapped(record),
+                isprimary = XAM.SAM.isprimary(record),
+                # alignment = XAM.SAM.alignment(record),
+                alignment_score = record["AS"],
+                mismatches = record["NM"]
+                )
+            push!(record_table, row, promote=true)
+        end
+    end
+    # records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
+    # reset header to specify sorted
+    # header.metainfo[1] = MODULE.MetaInfo("HD", ["VN" => 1.6, "SO" => "coordinate"])
+    close(io)
+    # return (;records, header)
+    return record_table
+end
