@@ -137,3 +137,122 @@ function dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::B
     ]
     DataFrames.DataFrame(rows)
 end
+
+"""
+Breadth-first sampling: sample at least one from each group,
+then sample remaining proportionally to group frequencies
+"""
+function breadth_first_sample(group_vector, total_sample_size::Int; 
+                            with_replacement::Bool = false)
+    if total_sample_size <= 0
+        throw(ArgumentError("total_sample_size must be positive"))
+    end
+    
+    # Get unique groups and their counts
+    group_counts = StatsBase.countmap(group_vector)
+    unique_groups = collect(keys(group_counts))
+    n_groups = length(unique_groups)
+    
+    if total_sample_size < n_groups
+        throw(ArgumentError("total_sample_size ($total_sample_size) must be >= number of groups ($n_groups)"))
+    end
+    
+    # Create indices for each group
+    group_indices = Dict()
+    for (i, group) in enumerate(group_vector)
+        if !haskey(group_indices, group)
+            group_indices[group] = Int[]
+        end
+        push!(group_indices[group], i)
+    end
+    
+    # Step 1: Sample one from each group (breadth-first)
+    sampled_indices = Int[]
+    remaining_indices_by_group = Dict()
+    
+    for group in unique_groups
+        group_idx = group_indices[group]
+        # Sample one index from this group
+        sampled_idx = StatsBase.sample(group_idx, 1)[1]
+        push!(sampled_indices, sampled_idx)
+        
+        # Store remaining indices for this group
+        if with_replacement
+            remaining_indices_by_group[group] = group_idx
+        else
+            remaining_indices_by_group[group] = filter(x -> x != sampled_idx, group_idx)
+        end
+    end
+    
+    # Step 2: Calculate remaining sample size
+    remaining_sample_size = total_sample_size - n_groups
+    
+    if remaining_sample_size > 0
+        # Calculate total remaining population
+        total_remaining = sum(length(indices) for indices in values(remaining_indices_by_group))
+        
+        if total_remaining == 0 && !with_replacement
+            @warn "No remaining indices to sample from. Consider setting with_replacement=true"
+            return sampled_indices
+        end
+        
+        # Sample proportionally from remaining indices
+        for group in unique_groups
+            remaining_group_indices = remaining_indices_by_group[group]
+            
+            if length(remaining_group_indices) == 0
+                continue  # Skip if no remaining indices in this group
+            end
+            
+            # Calculate proportional sample size for this group
+            if with_replacement
+                group_proportion = group_counts[group] / length(group_vector)
+            else
+                group_proportion = length(remaining_group_indices) / total_remaining
+            end
+            
+            additional_samples = round(Int, remaining_sample_size * group_proportion)
+            
+            if additional_samples > 0
+                if with_replacement || length(remaining_group_indices) >= additional_samples
+                    sampled = StatsBase.sample(remaining_group_indices, additional_samples, 
+                                             replace=with_replacement)
+                    append!(sampled_indices, sampled)
+                else
+                    # Take all remaining if not enough for desired sample size
+                    append!(sampled_indices, remaining_group_indices)
+                end
+            end
+        end
+        
+        # Handle any rounding discrepancies by sampling randomly from all remaining
+        current_sample_size = length(sampled_indices)
+        if current_sample_size < total_sample_size
+            shortfall = total_sample_size - current_sample_size
+            all_remaining = Int[]
+            
+            for indices in values(remaining_indices_by_group)
+                if with_replacement
+                    append!(all_remaining, indices)
+                else
+                    # Only include indices not already sampled
+                    for idx in indices
+                        if !(idx in sampled_indices)
+                            push!(all_remaining, idx)
+                        end
+                    end
+                end
+            end
+            
+            if length(all_remaining) >= shortfall
+                additional = StatsBase.sample(all_remaining, shortfall, replace=with_replacement)
+                append!(sampled_indices, additional)
+            elseif with_replacement && length(all_remaining) > 0
+                additional = StatsBase.sample(all_remaining, shortfall, replace=true)
+                append!(sampled_indices, additional)
+            end
+        end
+    end
+    
+    return sampled_indices
+end
