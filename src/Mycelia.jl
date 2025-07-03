@@ -14852,16 +14852,26 @@ Pass 3 (Parallel): Reads temporary counts again to construct the final sparse ma
 Optionally, a results filename can be provided to save/load the output. If the file exists and `force` is false,
 the result is loaded and returned. If `force` is true or the file does not exist, results are computed and saved.
 
+# Output Directory Behavior
+- All auxiliary output files (e.g., rarefaction data, plots) are written to a common output directory.
+- By default, this is:
+    - The value of `out_dir` if provided.
+    - Otherwise, the directory containing `result_file` (if provided and has a directory component).
+    - Otherwise, the current working directory (`pwd()`).
+- If you provide an absolute path for an output file (e.g. `rarefaction_data_filename`), that path is used directly.
+- If both `out_dir` and a relative filename are given, the file is written to `out_dir`.
+
 # Arguments
 - `fasta_list::AbstractVector{<:AbstractString}`: A list of paths to FASTA files.
 - `k::Integer`: The length of the kmer.
 - `alphabet::Symbol`: The alphabet type (:AA, :DNA, :RNA).
 - `temp_dir_parent::AbstractString`: Parent directory for creating the temporary working directory. Defaults to `Base.tempdir()`.
 - `count_element_type::Union{Type{<:Unsigned}, Nothing}`: Optional. Specifies the unsigned integer type for the counts. If `nothing` (default), the smallest `UInt` type capable of holding the maximum observed count is used.
-- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. Defaults to "kmer_rarefaction_data_3pass.tsv".
-- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. Defaults to "kmer_rarefaction_curve_3pass".
+- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. If a relative path, will be written to `out_dir`.
+- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. If a relative path, will be written to `out_dir`.
 - `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
-- `kmer_counts_result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
+- `result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
+- `out_dir::Union{Nothing, AbstractString}`: Optional. Output directory for auxiliary outputs. Defaults as described above.
 - `force::Bool`: If true, recompute and overwrite the output file even if it exists. Defaults to `false`.
 - `rarefaction_plot_kwargs...`: Keyword arguments to pass to `plot_kmer_rarefaction` for plot customization.
 
@@ -14884,14 +14894,36 @@ function fasta_list_to_sparse_kmer_counts(;
     rarefaction_plot_basename::AbstractString = replace(rarefaction_data_filename, ".tsv" => ""),
     show_rarefaction_plot::Bool = true,
     result_file::Union{Nothing, AbstractString} = nothing,
+    out_dir::Union{Nothing, AbstractString} = nothing,
     force::Bool = false,
     rarefaction_plot_kwargs...
 )
+
+    # --- Determine output directory logic ---
+    function _get_output_dir()
+        if !isnothing(out_dir)
+            return out_dir
+        elseif !isnothing(result_file) && !isempty(Base.Filesystem.dirname(result_file)) && Base.Filesystem.dirname(result_file) != "."
+            return Base.Filesystem.dirname(result_file)
+        else
+            return Base.pwd()
+        end
+    end
+    output_dir = _get_output_dir()
+    if !Base.Filesystem.isdir(output_dir)
+        Base.Filesystem.mkpath(output_dir)
+    end
+    Base.@info "Output directory for auxiliary files: $output_dir"
+
+    # Helper to prepend output_dir only if the path is relative
+    function _resolve_outpath(fname::AbstractString)
+        (Base.Filesystem.isabspath(fname) || isempty(fname)) ? fname : Base.Filesystem.joinpath(output_dir, fname)
+    end
+
     # --- Results File Short Circuit ---
     if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
         Base.@info "result_file already exists at $result_file. Loading and returning results."
         result = JLD2.load_object(result_file)
-        # Try to ensure result is a NamedTuple with required fields
         if all(haskey(result, key) for key in (:kmers, :counts, :rarefaction_data_path))
             return result
         else
@@ -14997,8 +15029,7 @@ function fasta_list_to_sparse_kmer_counts(;
     Base.@info "Pass 2 aggregation finished."
 
     # --- Process and Save/Plot Rarefaction Data (after Pass 2) ---
-    default_output_dir = pwd()
-    rarefaction_data_path = Base.Filesystem.joinpath(default_output_dir, rarefaction_data_filename)
+    rarefaction_data_path = _resolve_outpath(rarefaction_data_filename)
     Base.@info "Saving rarefaction data to $rarefaction_data_path..."
     try
         data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
@@ -15012,13 +15043,14 @@ function fasta_list_to_sparse_kmer_counts(;
         Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
     end
 
+    rarefaction_plot_base = _resolve_outpath(rarefaction_plot_basename)
     if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
         Base.@info "Generating k-mer rarefaction plot..."
         try
             plot_kmer_rarefaction(
                 rarefaction_data_path;
-                output_dir = default_output_dir,
-                output_basename = rarefaction_plot_basename,
+                output_dir = Base.Filesystem.dirname(rarefaction_plot_base),
+                output_basename = Base.Filesystem.basename(rarefaction_plot_base),
                 display_plot = show_rarefaction_plot,
                 rarefaction_plot_kwargs...
             )
@@ -15171,7 +15203,6 @@ function fasta_list_to_sparse_kmer_counts(;
 
     return final_result
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -15516,9 +15547,6 @@ function choose_top_n_markers(N::Int)
     return marker_priority[1:max_n]
 end
 
-# import Base: endswith
-# import Random
-
 # """
 #     zip_files(output_file::String, input_files::Vector{String})
 
@@ -15560,8 +15588,6 @@ function tar_gz_files(output_file::String, input_files::Vector{String})
     rm(tmpfile)
     return out
 end
-
-import DataFrames
 
 """
     dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::Bool = true)
@@ -15927,6 +15953,65 @@ function write_fastas_from_normalized_fastx_tables(
         failed_tables = failed_tables,
         output_files = output_files
     )
+end
+
+"""
+    generate_and_save_kmer_counts(; 
+        bioalphabet, 
+        fastas, 
+        k, 
+        output_dir=pwd(),
+        filename=nothing
+    )
+
+Generates and saves k-mer counts for a list of FASTA files for a single k.
+
+# Keyword Arguments
+- `bioalphabet`: Alphabet type (e.g., :DNA).
+- `fastas`: List of FASTA file paths.
+- `k`: Value of k (e.g., 9).
+- `output_dir`: (optional) Directory to write output files (default: current directory).
+- `filename`: (optional) Full file name for output (default: 
+    `"{Mycelia.normalized_current_date()}.{lowercase(string(bioalphabet))}{k}mers.jld2"`).
+
+# Output
+Saves a .jld2 file with the specified file name in `output_dir/generated_assets` if it does not already exist.
+"""
+function generate_and_save_kmer_counts(; 
+    alphabet, 
+    fastas, 
+    k, 
+    output_dir=pwd(),
+    filename=nothing
+)
+    if filename === nothing
+        filename = string(
+            Mycelia.normalized_current_date(), ".", 
+            lowercase(string(alphabet)), 
+            k, "mers.jld2"
+        )
+    end
+    assets_dir = joinpath(output_dir, "generated_assets")
+    if !isdir(assets_dir)
+        mkpath(assets_dir)
+    end
+    kmer_result_file = joinpath(assets_dir, filename)
+    if !isfile(kmer_result_file)
+        kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
+            fasta_list=fastas,
+            k=k,
+            alphabet=alphabet
+        )
+        Mycelia.save_kmer_results(
+            filename = kmer_result_file,
+            kmers = kmer_count_results.kmers,
+            counts = kmer_count_results.counts,
+            fasta_list = fastas,
+            k = k,
+            alphabet = alphabet
+        )
+    end
+    return kmer_result_file
 end
 
 # dynamic import of files??
