@@ -2225,3 +2225,45 @@ function setup_taxonkit_taxonomy()
     run(`wget -q ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
     Mycelia.tar_extract(tarchive="taxdump.tar.gz", directory=mkpath("$(homedir())/.taxonkit"))
 end
+
+function load_bvbrc_genome_metadata(; 
+    summary_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
+    metadata_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata")
+    
+    # Create a unique temporary directory
+    temp_dir = joinpath(tempdir(), "bvbrc_temp_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))")
+    mkpath(temp_dir)
+    
+    try
+        # Define temporary file paths
+        summary_file = joinpath(temp_dir, "genome_summary.tsv")
+        metadata_file = joinpath(temp_dir, "genome_metadata.tsv")
+        
+        # Download files to temporary location
+        @info "Downloading genome summary from $(summary_url)"
+        Downloads.download(summary_url, summary_file)
+        
+        @info "Downloading genome metadata from $(metadata_url)"
+        Downloads.download(metadata_url, metadata_file)
+        
+        # Read files into DataFrames
+        @info "Reading genome summary file"
+        genome_summary = CSV.read(summary_file, DataFrames.DataFrame, delim='\t', header=1, 
+                                 types=Dict("genome_id" => String))
+        
+        @info "Reading genome metadata file"
+        genome_metadata = CSV.read(metadata_file, DataFrames.DataFrame, delim='\t', header=1, 
+                                  types=Dict("genome_id" => String))
+        
+        # Join the DataFrames
+        @info "Joining genome summary and metadata"
+        bvbrc_genome_summary = DataFrames.innerjoin(genome_summary, genome_metadata, 
+                                                  on="genome_id", makeunique=true)
+        
+        return bvbrc_genome_summary
+    finally
+        # Clean up temporary files regardless of success or failure
+        @info "Cleaning up temporary files"
+        rm(temp_dir, recursive=true, force=true)
+    end
+end

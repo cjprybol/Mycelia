@@ -749,3 +749,95 @@ function write_fastas_from_normalized_fastx_tables(
         output_files = output_files
     )
 end
+
+# convert all genomes into normalized tables
+function fastxs2normalized_tables(;fastxs, outdir, force=false)
+    mkpath(outdir)
+    n = length(fastxs)
+    normalized_table_paths = Vector{Union{String, Nothing}}(undef, n)
+    errors = Vector{Union{Nothing, Tuple{String, Exception}}}(undef, n)
+
+    prog = ProgressMeter.Progress(n, desc = "Processing files")
+
+    Threads.@threads for i in 1:n
+        fastx = fastxs[i]
+        outfile_base = basename(fastx)
+        if occursin(r"\.gz$", outfile_base)
+            outfile_base = replace(outfile_base, r"\.gz$" => "")
+        end
+        outfile = joinpath(outdir, outfile_base * ".tsv.gz")
+        try
+            if !isfile(outfile) || (filesize(outfile) == 0) || force
+                normalized_table = Mycelia.fastx2normalized_table(fastx)
+                open(outfile, "w") do file
+                    io = CodecZlib.GzipCompressorStream(file)
+                    CSV.write(io, normalized_table; delim='\t', bufsize=64*1024*1024)
+                    close(io)
+                end
+            end
+            normalized_table_paths[i] = outfile
+            errors[i] = nothing
+        catch e
+            normalized_table_paths[i] = nothing
+            errors[i] = (fastx, e)
+            @warn "Failed to process $fastx: $e"
+        end
+        ProgressMeter.next!(prog)
+    end
+
+    ProgressMeter.finish!(prog)
+    return (;normalized_table_paths, errors)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect sequence type from input and suggest appropriate file extension.
+
+# Arguments
+- `record`: A FASTA/FASTQ record
+- `sequence`: A string or BioSequence containing sequence data
+
+# Returns
+- `String`: Suggested file extension:
+  - ".fna" for DNA
+  - ".frn" for RNA
+  - ".faa" for protein
+  - ".fa" for unrecognized sequences
+"""
+function detect_sequence_extension(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record})
+    return detect_sequence_extension(FASTX.sequence(record))
+end
+function detect_sequence_extension(sequence::AbstractString)
+    sequence_type = detect_alphabet(sequence)
+    return _detect_sequence_extension(sequence_type::Symbol)
+end
+function detect_sequence_extension(sequence::BioSequences.LongSequence)
+    sequence_type = detect_alphabet(sequence)
+    return _detect_sequence_extension(sequence_type::Symbol)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Internal helper function to convert sequence type to file extension.
+
+Arguments
+- sequence_type: Symbol representing sequence type (:DNA, :RNA, or :AA)
+
+Returns
+- String: Appropriate file extensions
+"""
+function _detect_sequence_extension(sequence_type::Symbol)
+    @assert sequence_type in [:DNA, :RNA, :AA]
+    if sequence_type == :DNA
+        return ".fna"
+    elseif sequence_type == :RNA
+        return ".frn"
+    elseif sequence_type == :AA
+        return ".faa"
+    else
+        @warn "unrecognized sequence type: $(seq_type)"
+        return ".fa"
+    end
+end

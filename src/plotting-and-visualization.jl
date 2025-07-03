@@ -735,3 +735,216 @@ function sankey_visualize_reads_lowest_rank(lowest_ranks; title="")
     )
     return p
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Plots a k-mer rarefaction curve from data stored in a TSV file.
+The TSV file should contain two columns:
+1. Number of FASTA files processed.
+2. Cumulative unique k-mers observed at that point.
+
+The plot is displayed and saved in PNG, PDF, and SVG formats.
+
+# Arguments
+- `rarefaction_data_path::AbstractString`: Path to the TSV file containing rarefaction data.
+- `output_dir::AbstractString`: Directory where the output plots will be saved. Defaults to the directory of `rarefaction_data_path`.
+- `output_basename::AbstractString`: Basename for the output plot files (without extension). Defaults to the basename of `rarefaction_data_path` without its original extension.
+- `display_plot::Bool`: Whether to display the plot interactively. Defaults to `true`.
+
+# Keyword Arguments
+- `fig_size::Tuple{Int, Int}`: Size of the output figure, e.g., `(1000, 750)`.
+- `title::AbstractString`: Title of the plot.
+- `xlabel::AbstractString`: Label for the x-axis.
+- `ylabel::AbstractString`: Label for the y-axis.
+- `line_color`: Color of the plotted line.
+- `line_style`: Style of the plotted line (e.g. `:dash`, `:dot`).
+- `marker`: Marker style for points (e.g. `:circle`, `:xcross`).
+- `markersize::Number`: Size of the markers.
+- Any other keyword arguments will be passed to `Makie.Axis`.
+"""
+function plot_kmer_rarefaction(
+    rarefaction_data_path::AbstractString;
+    output_dir::AbstractString = dirname(rarefaction_data_path),
+    output_basename::AbstractString = first(Base.Filesystem.splitext(basename(rarefaction_data_path))),
+    display_plot::Bool = true,
+    # Makie specific customizations
+    fig_size::Tuple{Int, Int} = (1000, 750),
+    title::AbstractString = "K-mer Rarefaction Curve",
+    xlabel::AbstractString = "Number of FASTA Files Processed",
+    ylabel::AbstractString = "Cumulative Unique K-mers",
+    line_color = :blue,
+    line_style = nothing,
+    marker = nothing,
+    markersize::Number = 10,
+    axis_kwargs... # Capture other axis properties
+)
+    if !isfile(rarefaction_data_path)
+        Base.@error "Rarefaction data file not found: $rarefaction_data_path"
+        return nothing
+    end
+
+    data = try
+        DelimitedFiles.readdlm(rarefaction_data_path, '\t', Int, header=false)
+    catch e
+        Base.@error "Failed to read rarefaction data from $rarefaction_data_path: $e"
+        return nothing
+    end
+
+    if size(data, 2) != 2
+        Base.@error "Rarefaction data file $rarefaction_data_path must have exactly two columns."
+        return nothing
+    end
+
+    files_processed = data[:, 1]
+    unique_kmers = data[:, 2]
+
+    # Sort data by files_processed for a proper line plot,
+    # as the input might be from unordered parallel processing.
+    sort_indices = sortperm(files_processed)
+    files_processed = files_processed[sort_indices]
+    unique_kmers = unique_kmers[sort_indices]
+    
+    Base.mkpath(output_dir) # Ensure output directory exists
+
+    fig = Makie.Figure(size = fig_size)
+    ax = Makie.Axis(
+        fig[1, 1],
+        title = title,
+        xlabel = xlabel,
+        ylabel = ylabel;
+        axis_kwargs... # Pass through other axis settings
+    )
+
+    Makie.lines!(ax, files_processed, unique_kmers, color = line_color, linestyle = line_style)
+    if !isnothing(marker)
+        Makie.scatter!(ax, files_processed, unique_kmers, color = line_color, marker = marker, markersize = markersize)
+    end
+
+
+    if display_plot
+        Base.@info "Displaying rarefaction plot..."
+        Makie.display(fig)
+    end
+
+    output_path_png = Base.Filesystem.joinpath(output_dir, output_basename * ".png")
+    output_path_pdf = Base.Filesystem.joinpath(output_dir, output_basename * ".pdf")
+    output_path_svg = Base.Filesystem.joinpath(output_dir, output_basename * ".svg")
+
+    try
+        Base.@info "Saving plot to $output_path_png"
+        Makie.save(output_path_png, fig)
+        Base.@info "Saving plot to $output_path_pdf"
+        Makie.save(output_path_pdf, fig)
+        Base.@info "Saving plot to $output_path_svg"
+        Makie.save(output_path_svg, fig)
+    catch e
+        Base.@error "Failed to save plot: $e. Make sure a Makie backend (e.g., CairoMakie for saving, GLMakie for display) is active and correctly configured in your environment."
+    end
+    
+    return fig # Return the figure object
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the optimal subsequence length based on error rate distribution.
+
+# Arguments
+- `error_rate`: Single error rate or array of error rates (between 0 and 1)
+- `threshold`: Desired probability that a subsequence is error-free (default: 0.95)
+- `sequence_length`: Maximum sequence length to consider for plotting
+- `plot_result`: If true, returns a plot of probability vs. length
+
+# Returns
+- If `plot_result=false`: Integer representing optimal subsequence length
+- If `plot_result=true`: Tuple of (optimal_length, plot)
+
+# Examples
+```julia
+# Single error rate
+optimal_subsequence_length(error_rate=0.01)
+
+# Array of error rates
+optimal_subsequence_length(error_rate=[0.01, 0.02, 0.01])
+
+# With more stringent threshold
+optimal_subsequence_length(error_rate=0.01, threshold=0.99)
+
+# Generate plot
+length, p = optimal_subsequence_length(error_rate=0.01, plot_result=true)
+Plots.display(p)
+```
+"""
+function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Real}},
+                                   threshold::Float64=0.95,
+                                   sequence_length::Union{Nothing, Int}=nothing,
+                                   plot_result::Bool=false)
+    # Handle array input by calculating mean error rate
+    avg_error_rate = isa(error_rate, AbstractArray) ? Statistics.mean(error_rate) : error_rate
+    
+    # Validate inputs
+    if avg_error_rate <= 0
+        optimal_length = typemax(Int)
+    elseif avg_error_rate >= 1
+        optimal_length = 1
+    else
+        # Calculate optimal length where P(error-free) >= threshold
+        optimal_length = floor(Int, log(threshold) / log(1 - avg_error_rate))
+        optimal_length = max(1, optimal_length)  # Ensure at least length 1
+    end
+
+    # Return early if no plot requested
+    if !plot_result
+        return optimal_length
+    end
+    
+    # For plotting, determine sequence length to display
+    max_length = isnothing(sequence_length) ? 2 * optimal_length : sequence_length
+    
+    # Calculate probabilities for different lengths
+    lengths = 1:max_length
+    probabilities = [(1 - avg_error_rate)^len for len in lengths]
+    
+    # Create DataFrame for plotting
+    df = DataFrames.DataFrame(
+        Length = collect(lengths),
+        Probability = probabilities,
+        Optimal = lengths .== optimal_length
+    )
+
+    quality_score = Mycelia.error_rate_to_q_value(error_rate)
+    rounded_quality_score = Int(floor(quality_score))
+    rounded_error_rate = round(avg_error_rate, digits=4)
+    rounded_threshold_rate = round(threshold, digits=2)
+    plot_title = 
+    """
+    Optimal Kmer Length Inference
+    Error Rate: $(rounded_error_rate * 100)%≈Q$(rounded_quality_score)
+    Threshold: $(rounded_threshold_rate * 100)% of kmers expected to be correct
+    """
+    
+    # Create plot
+    p = Plots.plot(
+        df.Length, df.Probability,
+        linewidth=2, 
+        label="P(error-free)",
+        xlabel="Subsequence Length",
+        ylabel="Probability of Error-free Match",
+        title=plot_title,
+        grid=true,
+        ylims=(0,1),
+        alpha=0.8
+    )
+    
+    # Add horizontal line for threshold
+    Plots.hline!([threshold], linestyle=:dash, color=:red, label="Threshold")
+    
+    # Add vertical line for optimal length
+    Plots.vline!([optimal_length], linestyle=:dash, color=:green, label="Optimal length: $optimal_length")
+    
+    # Highlight optimal point
+    Plots.scatter!([optimal_length], [threshold], color=:orange, markersize=8, label="")
+    
+    return optimal_length, p
+end

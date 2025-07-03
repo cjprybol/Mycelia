@@ -892,3 +892,368 @@ function generate_and_save_kmer_counts(;
     end
     return kmer_result_file
 end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a sparse kmer counts table (SparseMatrixCSC) from a list of FASTA files using a 3-pass approach.
+Pass 1 (Parallel): Counts kmers per file and writes to temporary JLD2 files.
+Pass 2 (Serial): Aggregates unique kmers, max count, nnz per file, and rarefaction data from temp files.
+                 Generates and saves a k-mer rarefaction plot.
+Pass 3 (Parallel): Reads temporary counts again to construct the final sparse matrix.
+
+Optionally, a results filename can be provided to save/load the output. If the file exists and `force` is false,
+the result is loaded and returned. If `force` is true or the file does not exist, results are computed and saved.
+
+# Output Directory Behavior
+- All auxiliary output files (e.g., rarefaction data, plots) are written to a common output directory.
+- By default, this is:
+    - The value of `out_dir` if provided.
+    - Otherwise, the directory containing `result_file` (if provided and has a directory component).
+    - Otherwise, the current working directory (`pwd()`).
+- If you provide an absolute path for an output file (e.g. `rarefaction_data_filename`), that path is used directly.
+- If both `out_dir` and a relative filename are given, the file is written to `out_dir`.
+
+# Arguments
+- `fasta_list::AbstractVector{<:AbstractString}`: A list of paths to FASTA files.
+- `k::Integer`: The length of the kmer.
+- `alphabet::Symbol`: The alphabet type (:AA, :DNA, :RNA).
+- `temp_dir_parent::AbstractString`: Parent directory for creating the temporary working directory. Defaults to `Base.tempdir()`.
+- `count_element_type::Union{Type{<:Unsigned}, Nothing}`: Optional. Specifies the unsigned integer type for the counts. If `nothing` (default), the smallest `UInt` type capable of holding the maximum observed count is used.
+- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. If a relative path, will be written to `out_dir`.
+- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. If a relative path, will be written to `out_dir`.
+- `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
+- `result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
+- `out_dir::Union{Nothing, AbstractString}`: Optional. Output directory for auxiliary outputs. Defaults as described above.
+- `force::Bool`: If true, recompute and overwrite the output file even if it exists. Defaults to `false`.
+- `rarefaction_plot_kwargs...`: Keyword arguments to pass to `plot_kmer_rarefaction` for plot customization.
+
+# Returns
+- `NamedTuple{(:kmers, :counts, :rarefaction_data_path)}`:
+    - `kmers`: A sorted `Vector` of unique kmer objects.
+    - `counts`: A `SparseArrays.SparseMatrixCSC{V, Int}` storing kmer counts.
+    - `rarefaction_data_path`: Path to the saved TSV file with rarefaction data.
+
+# Raises
+- `ErrorException`: If input `fasta_list` is empty, alphabet is invalid, or required Kmer/counting functions are not found.
+"""
+function fasta_list_to_sparse_kmer_counts(;
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol,
+    temp_dir_parent::AbstractString = Base.tempdir(),
+    count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
+    rarefaction_data_filename::AbstractString = "$(normalized_current_datetime()).$(lowercase(string(alphabet)))$(k)mer_rarefaction.tsv",
+    rarefaction_plot_basename::AbstractString = replace(rarefaction_data_filename, ".tsv" => ""),
+    show_rarefaction_plot::Bool = true,
+    result_file::Union{Nothing, AbstractString} = nothing,
+    out_dir::Union{Nothing, AbstractString} = nothing,
+    force::Bool = false,
+    rarefaction_plot_kwargs...
+)
+
+    # --- Determine output directory logic ---
+    function _get_output_dir()
+        if !isnothing(out_dir)
+            return out_dir
+        elseif !isnothing(result_file) && !isempty(Base.Filesystem.dirname(result_file)) && Base.Filesystem.dirname(result_file) != "."
+            return Base.Filesystem.dirname(result_file)
+        else
+            return Base.pwd()
+        end
+    end
+    output_dir = _get_output_dir()
+    if !Base.Filesystem.isdir(output_dir)
+        Base.Filesystem.mkpath(output_dir)
+    end
+    Base.@info "Output directory for auxiliary files: $output_dir"
+
+    # Helper to prepend output_dir only if the path is relative
+    function _resolve_outpath(fname::AbstractString)
+        (Base.Filesystem.isabspath(fname) || isempty(fname)) ? fname : Base.Filesystem.joinpath(output_dir, fname)
+    end
+
+    # --- Results File Short Circuit ---
+    if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
+        Base.@info "result_file already exists at $result_file. Loading and returning results."
+        result = JLD2.load_object(result_file)
+        if all(haskey(result, key) for key in (:kmers, :counts, :rarefaction_data_path))
+            return result
+        else
+            Base.@warn "Loaded file does not have required structure; will recompute."
+        end
+    elseif !isnothing(result_file) && force && Base.Filesystem.isfile(result_file)
+        Base.@info "Force is true. Overwriting $result_file with recomputed results."
+    end
+
+    # --- 0. Input Validation and Setup ---
+    num_files = length(fasta_list)
+    if num_files == 0
+        error("Input fasta_list is empty.")
+    end
+
+    KMER_TYPE = if alphabet == :AA
+        isdefined(Kmers, :AAKmer) ? Kmers.AAKmer{k} : error("Kmers.AAKmer not found or Kmers.jl not loaded correctly.")
+    elseif alphabet == :DNA
+        isdefined(Kmers, :DNAKmer) ? Kmers.DNAKmer{k} : error("Kmers.DNAKmer not found or Kmers.jl not loaded correctly.")
+    elseif alphabet == :RNA
+        isdefined(Kmers, :RNAKmer) ? Kmers.RNAKmer{k} : error("Kmers.RNAKmer not found or Kmers.jl not loaded correctly.")
+    else
+        error("Invalid alphabet: $alphabet. Choose from :AA, :DNA, :RNA")
+    end
+
+    COUNT_FUNCTION = if alphabet == :DNA
+        func_name = :count_canonical_kmers
+        isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
+    else
+        func_name = :count_kmers
+        isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
+    end
+
+    temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="kmer_counts_3pass_")
+    Base.@info "Using temporary directory for intermediate counts: $temp_dir"
+    temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
+
+    # --- Pass 1: Count Kmers per file and Write to Temp Files (Parallel) ---
+    Base.@info "Pass 1: Counting $(KMER_TYPE) for $num_files files and writing temps using $(Base.Threads.nthreads()) threads..."
+    progress_pass1 = ProgressMeter.Progress(num_files; desc="Pass 1 (Counting & Writing Temps): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    progress_pass1_lock = Base.ReentrantLock()
+
+    Base.Threads.@threads for original_file_idx in 1:num_files
+        fasta_file = fasta_list[original_file_idx]
+        temp_filename = temp_file_paths[original_file_idx]
+        counts_dict = Dict{KMER_TYPE, Int}()
+        try
+            counts_dict = COUNT_FUNCTION(KMER_TYPE, fasta_file)
+            JLD2.save_object(temp_filename, counts_dict)
+        catch e
+            Base.println("Error processing file $fasta_file (idx $original_file_idx) during Pass 1: $e")
+            try
+                JLD2.save_object(temp_filename, Dict{KMER_TYPE, Int}())
+            catch save_err
+                Base.@error "Failed to save empty placeholder for errored file $fasta_file to $temp_filename: $save_err"
+            end
+        end
+        Base.lock(progress_pass1_lock) do
+            ProgressMeter.next!(progress_pass1)
+        end
+    end
+    ProgressMeter.finish!(progress_pass1)
+    Base.@info "Pass 1 finished."
+
+    # --- Pass 2: Aggregate Unique Kmers, Max Count, NNZ per file, Rarefaction Data (Serial) ---
+    Base.@info "Pass 2: Aggregating stats and rarefaction data from temporary files (serially)..."
+    all_kmers_set = Set{KMER_TYPE}()
+    max_observed_count = 0
+    total_non_zero_entries = 0
+    nnz_per_file = Vector{Int}(undef, num_files)
+    rarefaction_points = Vector{Tuple{Int, Int}}()
+
+    progress_pass2 = ProgressMeter.Progress(num_files; desc="Pass 2 (Aggregating Serially): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:yellow)
+
+    for i in 1:num_files
+        temp_filename = temp_file_paths[i]
+        current_file_nnz = 0
+        try
+            if Base.Filesystem.isfile(temp_filename)
+                counts_dict = JLD2.load_object(temp_filename)
+                current_file_nnz = length(counts_dict)
+                if current_file_nnz > 0
+                    for k in keys(counts_dict)
+                        push!(all_kmers_set, k)
+                    end
+                    current_file_max_val = maximum(values(counts_dict))
+                    if current_file_max_val > max_observed_count
+                        max_observed_count = current_file_max_val
+                    end
+                end
+            else
+                Base.@warn "Temporary file not found during Pass 2: $temp_filename. Assuming 0 counts for this file."
+            end
+        catch e
+            Base.@error "Error reading or processing temporary file $temp_filename (for original file $i) during Pass 2: $e. Assuming 0 counts for this file."
+        end
+        nnz_per_file[i] = current_file_nnz
+        total_non_zero_entries += current_file_nnz
+        push!(rarefaction_points, (i, length(all_kmers_set)))
+        ProgressMeter.next!(progress_pass2; showvalues = [(:unique_kmers, length(all_kmers_set))])
+    end
+    ProgressMeter.finish!(progress_pass2)
+    Base.@info "Pass 2 aggregation finished."
+
+    # --- Process and Save/Plot Rarefaction Data (after Pass 2) ---
+    rarefaction_data_path = _resolve_outpath(rarefaction_data_filename)
+    Base.@info "Saving rarefaction data to $rarefaction_data_path..."
+    try
+        data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
+        if !isempty(data_to_write)
+            DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
+        else
+            Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
+            DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
+        end
+    catch e
+        Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
+    end
+
+    rarefaction_plot_base = _resolve_outpath(rarefaction_plot_basename)
+    if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
+        Base.@info "Generating k-mer rarefaction plot..."
+        try
+            plot_kmer_rarefaction(
+                rarefaction_data_path;
+                output_dir = Base.Filesystem.dirname(rarefaction_plot_base),
+                output_basename = Base.Filesystem.basename(rarefaction_plot_base),
+                display_plot = show_rarefaction_plot,
+                rarefaction_plot_kwargs...
+            )
+        catch e
+            Base.@error "Failed to generate rarefaction plot: $e. Ensure Makie and a backend are correctly set up. Also ensure 'plot_kmer_rarefaction' function is loaded."
+        end
+    else
+        Base.@warn "Skipping rarefaction plot generation as data file is missing or empty."
+    end
+
+    # --- Determine Value Type, Prepare for Pass 3 ---
+    ValType = if isnothing(count_element_type)
+        if max_observed_count <= typemax(UInt8)
+            UInt8
+        elseif max_observed_count <= typemax(UInt16)
+            UInt16
+        elseif max_observed_count <= typemax(UInt32)
+            UInt32
+        else
+            UInt64
+        end
+    else
+        count_element_type
+    end
+    if !isnothing(count_element_type) && max_observed_count > typemax(count_element_type)
+        Base.@warn "User-specified count_element_type ($count_element_type) may be too small for the maximum observed count ($max_observed_count)."
+    end
+    Base.@info "Using element type $ValType for kmer counts. Max observed count: $max_observed_count."
+
+    if isempty(all_kmers_set) && total_non_zero_entries == 0
+        Base.@warn "No kmers found across any files, or errors prevented aggregation."
+        result = (; kmers=Vector{KMER_TYPE}(), counts=SparseArrays.spzeros(ValType, Int, 0, num_files), rarefaction_data_path=rarefaction_data_path)
+        if !isnothing(result_file)
+            JLD2.save_object(result_file, result)
+            Base.@info "Saved empty results to $result_file"
+        end
+        return result
+    end
+
+    sorted_kmers = sort(collect(all_kmers_set))
+    num_kmers = length(sorted_kmers)
+    empty!(all_kmers_set); all_kmers_set = nothing; GC.gc()
+
+    kmer_to_row_map = Dict{KMER_TYPE, Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    Base.@info "Found $num_kmers unique kmers. Total non-zero entries: $total_non_zero_entries."
+
+    # --- Pass 3: Prepare Sparse Matrix Data (In Parallel from Temp Files) ---
+    Base.@info "Pass 3: Preparing data for sparse matrix construction using $(Base.Threads.nthreads()) threads..."
+
+    actual_total_nnz_from_files = sum(nnz_per_file)
+    if total_non_zero_entries != actual_total_nnz_from_files
+        Base.@warn "Sum of nnz_per_file ($actual_total_nnz_from_files) differs from serially accumulated total_non_zero_entries ($total_non_zero_entries). Using sum of nnz_per_file."
+        total_non_zero_entries = actual_total_nnz_from_files
+    end
+
+    if total_non_zero_entries == 0 && num_kmers > 0
+        Base.@warn "Found $num_kmers unique kmers, but $total_non_zero_entries non-zero entries. Matrix will be empty of values."
+    elseif total_non_zero_entries == 0 && num_kmers == 0
+        Base.@warn "No k-mers and no non-zero entries. Resulting matrix will be empty."
+    end
+
+    row_indices = Vector{Int}(undef, total_non_zero_entries)
+    col_indices = Vector{Int}(undef, total_non_zero_entries)
+    values_vec = Vector{ValType}(undef, total_non_zero_entries)
+
+    write_offsets = Vector{Int}(undef, num_files + 1)
+    write_offsets[1] = 0
+    for i in 1:num_files
+        write_offsets[i+1] = write_offsets[i] + nnz_per_file[i]
+    end
+
+    progress_pass3 = ProgressMeter.Progress(num_files; desc="Pass 3 (Filling Sparse Data): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:blue)
+    progress_pass3_lock = Base.ReentrantLock()
+
+    Base.Threads.@threads for original_file_idx in 1:num_files
+        if nnz_per_file[original_file_idx] > 0
+            temp_filename = temp_file_paths[original_file_idx]
+            file_start_offset = write_offsets[original_file_idx]
+            current_entry_in_file = 0
+            try
+                if Base.Filesystem.isfile(temp_filename)
+                    counts_dict_pass3 = JLD2.load_object(temp_filename)
+                    for (kmer, count_val) in counts_dict_pass3
+                        if count_val > 0
+                            row_idx_val = Base.get(kmer_to_row_map, kmer, 0)
+                            if row_idx_val > 0
+                                global_idx = file_start_offset + current_entry_in_file + 1
+                                if global_idx <= total_non_zero_entries
+                                    row_indices[global_idx] = row_idx_val
+                                    col_indices[global_idx] = original_file_idx
+                                    values_vec[global_idx] = ValType(count_val)
+                                    current_entry_in_file += 1
+                                else
+                                    Base.@error "Internal error: Exceeded sparse matrix capacity (total_non_zero_entries = $total_non_zero_entries) for file $original_file_idx. Global Idx: $global_idx. Kmer: $kmer."
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    if current_entry_in_file != nnz_per_file[original_file_idx]
+                        Base.@warn "Mismatch in NNZ for file $original_file_idx ($(fasta_list[original_file_idx])) during Pass 3. Expected $(nnz_per_file[original_file_idx]), wrote $current_entry_in_file."
+                    end
+                else
+                    Base.@warn "Temp file $temp_filename (for original file $original_file_idx) not found in Pass 3, though nnz_per_file was $(nnz_per_file[original_file_idx])."
+                end
+            catch e
+                Base.@error "Error reading or processing temporary file $temp_filename (for original file $original_file_idx) in Pass 3: $e."
+            end
+        end
+        Base.lock(progress_pass3_lock) do
+            ProgressMeter.next!(progress_pass3)
+        end
+    end
+    ProgressMeter.finish!(progress_pass3)
+    Base.@info "Pass 3 finished."
+
+    Base.@info "Constructing sparse matrix ($num_kmers rows, $num_files columns, $total_non_zero_entries non-zero entries)..."
+
+    kmer_counts_sparse_matrix = if total_non_zero_entries > 0 && num_kmers > 0
+        SparseArrays.sparse(
+            row_indices[1:total_non_zero_entries],
+            col_indices[1:total_non_zero_entries],
+            values_vec[1:total_non_zero_entries],
+            num_kmers,
+            num_files
+        )
+    else
+        SparseArrays.spzeros(ValType, Int, num_kmers, num_files)
+    end
+
+    Base.@info "Done. Returning sorted kmer list, sparse counts matrix, and rarefaction data path."
+    final_result = (; kmers=sorted_kmers, counts=kmer_counts_sparse_matrix, rarefaction_data_path=rarefaction_data_path)
+
+    try
+        Base.Filesystem.rm(temp_dir; recursive=true, force=true)
+        Base.@info "Successfully removed temporary directory: $temp_dir"
+    catch e
+        Base.@warn "Could not remove temporary directory $temp_dir: $e"
+    end
+
+    # Save result if requested
+    if !isnothing(result_file)
+        try
+            JLD2.save_object(result_file, final_result)
+            Base.@info "Saved kmer count results to $result_file"
+        catch e
+            Base.@error "Failed to save kmer count results to $result_file: $e"
+        end
+    end
+
+    return final_result
+end
