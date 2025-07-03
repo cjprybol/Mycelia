@@ -777,3 +777,96 @@ function write_fastq(;records, filename, gzip=false)
     end
     return filename
 end
+
+"""
+    write_fastas_from_normalized_fastx_tables(
+        table_paths::Vector{String};
+        output_dir::String = pwd(),
+        show_progress::Bool = true,
+        overwrite::Bool = false,
+        error_handler = (e, table_path)->display((e, table_path))
+    ) -> NamedTuple
+
+Given a vector of normalized fastx table paths, writes out gzipped FASTA files in parallel.
+Each table must have columns: "fastx_sha256", "record_sha256", "record_sequence".
+Automatically decompresses input files if they end with ".gz".
+Returns a summary NamedTuple with successes, failures, failed tables, and output files.
+
+# Keyword Arguments
+- `output_dir`: Directory to write .fna.gz files to.
+- `show_progress`: Show a progress bar (default: true).
+- `overwrite`: Overwrite existing files (default: false).
+- `error_handler`: Function called with (exception, table_path) on error.
+
+"""
+function write_fastas_from_normalized_fastx_tables(
+    table_paths::Vector{String};
+    output_dir::String = pwd(),
+    show_progress::Bool = true,
+    overwrite::Bool = false,
+    error_handler = (e, table_path)->display((e, table_path))
+)
+    n = length(table_paths)
+    successes = Base.Threads.Atomic{Int}(0)
+    failures = Base.Threads.Atomic{Int}(0)
+    failed_tables = String[]
+    failed_tables_lock = Base.Threads.SpinLock()
+    output_files = String[]
+    output_files_lock = Base.Threads.SpinLock()
+
+    progress = show_progress ? ProgressMeter.Progress(n, 1) : nothing
+
+    Base.Threads.@threads for i in 1:n
+        table_path = table_paths[i]
+        try
+            # Determine if the table should be decompressed based on extension
+            decompress = endswith(table_path, ".gz")
+            io = open(table_path)
+            stream = decompress ? CodecZlib.GzipDecompressorStream(io) : io
+            loaded_table = CSV.read(stream, DataFrames.DataFrame, delim='\t')
+            close(io)
+            # Remove .gz if present in the fastx_sha256 (basename)
+            fastx_basename = loaded_table[1, "fastx_sha256"]
+            if occursin(r"\.gz$", fastx_basename)
+                fastx_basename = replace(fastx_basename, r"\.gz$" => "")
+            end
+            fastx_filename = fastx_basename * ".fna.gz"
+            fastx_file = joinpath(output_dir, fastx_filename)
+            # Write if missing or overwrite specified
+            write_file = overwrite || !isfile(fastx_file)
+            if write_file
+                fastx_records = [
+                    FASTX.FASTA.Record(row["record_sha256"], row["record_sequence"])
+                    for row in DataFrames.eachrow(loaded_table)
+                ]
+                Mycelia.write_fasta(outfile = fastx_file, records = fastx_records)
+            end
+            # Record output file path
+            Base.Threads.lock(output_files_lock) do
+                push!(output_files, fastx_file)
+            end
+            Base.Threads.atomic_add!(successes, 1)
+        catch e
+            error_handler(e, table_path)
+            Base.Threads.atomic_add!(failures, 1)
+            Base.Threads.lock(failed_tables_lock) do
+                push!(failed_tables, table_path)
+            end
+        end
+        if show_progress
+            ProgressMeter.next!(progress)
+        end
+    end
+
+    if show_progress
+        ProgressMeter.finish!(progress)
+    end
+
+    return (
+        total = n,
+        succeeded = successes[],
+        failed = failures[],
+        failed_tables = failed_tables,
+        output_files = output_files
+    )
+end

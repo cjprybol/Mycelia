@@ -409,61 +409,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Calculate the cosine similarity between two k-mer count dictionaries.
-
-# Arguments
-- `kmer_counts_1::Dict{String,Int}`: First dictionary mapping k-mer sequences to their counts
-- `kmer_counts_2::Dict{String,Int}`: Second dictionary mapping k-mer sequences to their counts
-
-# Returns
-- `Float64`: Cosine distance between the two k-mer count vectors, in range [0,1]
-  where 0 indicates identical distributions and 1 indicates maximum dissimilarity
-
-# Details
-Converts k-mer count dictionaries into vectors using a unified set of keys,
-then computes cosine distance. Missing k-mers are treated as count 0.
-Result is invariant to input order and total counts (normalized internally).
-"""
-function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
-    sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
-    a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    # Distances.cosine_dist(a, b) == Distances.cosine_dist(b, a) == Distances.cosine_dist(a ./ sum(a), b ./ sum(b)) == Distances.cosine_dist(b ./ sum(b), a ./ sum(a))
-    return Distances.cosine_dist(a, b)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Calculate the Jensen-Shannon divergence between two k-mer frequency distributions.
-
-# Arguments
-- `kmer_counts_1`: Dictionary mapping k-mers to their counts in first sequence
-- `kmer_counts_2`: Dictionary mapping k-mers to their counts in second sequence
-
-# Returns
-- Normalized Jensen-Shannon divergence score between 0 and 1, where:
-  - 0 indicates identical distributions
-  - 1 indicates maximally different distributions
-
-# Notes
-- The measure is symmetric: JS(P||Q) = JS(Q||P)
-- Counts are automatically normalized to probability distributions
-"""
-function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
-    sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
-    a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    a_norm = a ./ sum(a)
-    b_norm = b ./ sum(b)
-    # Distances.js_divergence(a ./ sum(a), b ./ sum(b)) == Distances.js_divergence(b ./ sum(b), a ./ sum(a))
-    # Distances.js_divergence(a, b) != Distances.js_divergence(a ./ sum(a), b ./ sum(b))
-    return Distances.js_divergence(a_norm, b_norm)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Evaluate genome assembly quality by comparing k-mer distributions between assembled sequences and raw observations.
 
 # Arguments
@@ -508,58 +453,6 @@ end
 
 # function assess_assembly_quality(;assembled_sequence::BioSequences.LongDNA{2}, fastq::String, k::Int)
 #     assess_assembly_quality(assembled_sequence=assembled_sequence, fastq=fastq, ks=[k])
-# end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Compute the Jaccard similarity coefficient between two sets.
-
-The Jaccard similarity is defined as the size of the intersection divided by the size
-of the union of two sets:
-
-    J(A,B) = |A ∩ B| / |A ∪ B|
-
-# Arguments
-- `set1`: First set for comparison
-- `set2`: Second set for comparison
-
-# Returns
-- `Float64`: A value between 0.0 and 1.0, where:
-  * 1.0 indicates identical sets
-  * 0.0 indicates completely disjoint sets
-"""
-function jaccard_similarity(set1, set2)
-    return length(intersect(set1, set2)) / length(union(set1, set2))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Calculate the Jaccard distance between two sets, which is the complement of the Jaccard similarity.
-
-The Jaccard distance is defined as:
-``J_d(A,B) = 1 - J_s(A,B) = 1 - \\frac{|A ∩ B|}{|A ∪ B|}``
-
-# Arguments
-- `set1`: First set to compare
-- `set2`: Second set to compare
-
-# Returns
-- `Float64`: A value in [0,1] where 0 indicates identical sets and 1 indicates disjoint sets
-"""
-function jaccard_distance(set1, set2)
-    return 1.0 - jaccard_similarity(set1, set2)
-end
-
-# function kmer_counts_to_jaccard(kmer_counts_1::AbstractDict{Kmers.DNAKmer{k}, Int64}, kmer_counts_2::AbstractDict{Kmers.DNAKmer{k}, Int64}) where k
-#     # sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
-#     # a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-#     # b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-#     # a_indices = findall(a .> 0)
-#     # b_indices = findall(b .> 0)
-#     # return Distances.jaccard(a_indices, b_indices)
-#     return jaccard(collect(keys(kmer_counts_1)), collect(keys(kmer_counts_2)))
 # end
 
 """
@@ -943,4 +836,59 @@ Analyzes k-mer saturation in a FASTA/FASTQ file to determine optimal k-mer size.
 """
 function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000)
     assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power, kmers_to_assess=kmers_to_assess)
+end
+
+"""
+    generate_and_save_kmer_counts(; 
+        bioalphabet, 
+        fastas, 
+        k, 
+        output_dir=pwd(),
+        filename=nothing
+    )
+
+Generates and saves k-mer counts for a list of FASTA files for a single k.
+
+# Keyword Arguments
+- `bioalphabet`: Alphabet type (e.g., :DNA).
+- `fastas`: List of FASTA file paths.
+- `k`: Value of k (e.g., 9).
+- `output_dir`: (optional) Directory to write output files (default: current directory).
+- `filename`: (optional) Full file name for output (default: 
+    `"{Mycelia.normalized_current_date()}.{lowercase(string(bioalphabet))}{k}mers.jld2"`).
+
+# Output
+Saves a .jld2 file with the specified file name in `output_dir` if it does not already exist.
+"""
+function generate_and_save_kmer_counts(; 
+    alphabet, 
+    fastas, 
+    k, 
+    output_dir=pwd(),
+    filename=nothing
+)
+    if filename === nothing
+        filename = string(
+            Mycelia.normalized_current_date(), ".", 
+            lowercase(string(alphabet)), 
+            k, "mers.jld2"
+        )
+    end
+    kmer_result_file = joinpath(output_dir, filename)
+    if !isfile(kmer_result_file)
+        kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
+            fasta_list=fastas,
+            k=k,
+            alphabet=alphabet
+        )
+        Mycelia.save_kmer_results(
+            filename = kmer_result_file,
+            kmers = kmer_count_results.kmers,
+            counts = kmer_count_results.counts,
+            fasta_list = fastas,
+            k = k,
+            alphabet = alphabet
+        )
+    end
+    return kmer_result_file
 end

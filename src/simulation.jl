@@ -230,3 +230,34 @@ function simulate_nearly_perfect_long_reads()
     # --identity 30,3 --length 40000,20000 --start_adapter_seq "" --end_adapter_seq "" \
     # | gzip > reads.fastq.gz
 end
+
+# src/matrix_generation.jl
+"""
+Generate a binary (Bernoulli) matrix with given dimensions and probability.
+
+# Arguments
+- `n_features::Int`: Number of features (rows)
+- `n_samples::Int`: Number of samples (columns)
+- `p::Float64`: Probability of 1 in the Bernoulli distribution
+
+# Returns
+- `Matrix{Bool}`: Binary matrix with dimensions (n_features, n_samples)
+"""
+function generate_binary_matrix(n_features::Int, n_samples::Int, p::Float64)
+    return rand(Distributions.Bernoulli(p), n_features, n_samples)
+end
+
+"""
+Generate a Poisson matrix with given dimensions and rate parameter.
+
+# Arguments
+- `n_features::Int`: Number of features (rows)
+- `n_samples::Int`: Number of samples (columns)
+- `λ::Float64`: Rate parameter for the Poisson distribution
+
+# Returns
+- `Matrix{Int}`: Poisson matrix with dimensions (n_features, n_samples)
+"""
+function generate_poisson_matrix(n_features::Int, n_samples::Int, λ::Float64)
+    return rand(Distributions.Poisson(λ), n_features, n_samples)
+end

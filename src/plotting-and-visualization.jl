@@ -119,3 +119,48 @@ function visualize_many_timeseries(time_series_data::Vector{Vector{Float64}};
     
     return fig
 end
+
+# src/visualization.jl
+"""
+Plot embeddings with optional true and fitted cluster labels.
+
+# Arguments
+- `embeddings::Matrix{<:Real}`: 2D embedding matrix where each column is a data point
+- `title::String`: Title of the plot
+- `xlabel::String`: Label for the x-axis
+- `ylabel::String`: Label for the y-axis
+- `true_labels::Vector{<:Integer}`: Vector of true cluster labels (optional)
+- `fit_labels::Vector{<:Integer}`: Vector of fitted cluster labels (optional)
+
+# Returns
+- `Plots.Plot`: Plot object that can be displayed or saved
+"""
+function plot_embeddings(embeddings; title="", xlabel="", ylabel="", true_labels=nothing, fit_labels=nothing)
+    scatter(embeddings[1, :], embeddings[2, :],
+           title=title,
+           xlabel=xlabel,
+           ylabel=ylabel,
+           label="",
+           legend=:topright)
+
+    if true_labels !== nothing
+        for i in unique(true_labels)
+            idx = findall(x -> x == i, true_labels)
+            scatter!(embeddings[1, idx], embeddings[2, idx],
+                     label="True Cluster $i",
+                     markershape=:star5,
+                     legend=:topright)
+        end
+    end
+
+    if fit_labels !== nothing
+        for i in unique(fit_labels)
+            idx = findall(x -> x == i, fit_labels)
+            scatter!(embeddings[1, idx], embeddings[2, idx],
+                     label="Fit Cluster $i",
+                     legend=:bottomright)
+        end
+    end
+
+    return plot!
+end
