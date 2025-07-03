@@ -96,39 +96,49 @@ function simulate_illumina_paired_reads(;in_fasta::String,
         error("Either 'coverage' or 'read_count' must be provided.")
     end
 
-    @info "Running ART with command: $(full_cmd)"
-    @time run(full_cmd)
-
-    # Process output FASTQ files: gzip them if not already compressed.
-    # For paired-end, output files are expected as outbase1.fq and outbase2.fq.
-    # For single-end, only outbase1.fq is produced.
     forward_fq = "$(outbase)1.fq"
     forward_gz = forward_fq * ".gz"
-    @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
-    run(`gzip $(forward_fq)`)
-    @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
-
+    
     reverse_fq = "$(outbase)2.fq"
     reverse_gz = reverse_fq * ".gz"
-    @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
-    run(`gzip $(reverse_fq)`)
-    @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
-
-    #  SAM Alignment File:
+    
     samfile = outbase * ".sam"
-    @assert isfile(samfile)
     samfile_gz = samfile * ".gz"
-    if !isfile(samfile_gz)
-        run(`gzip $(samfile)`)
-        @assert isfile(samfile_gz)
-    end
     
     error_free_samfile = outbase * "_errFree.sam"
-    @assert isfile(error_free_samfile)
     error_free_samfile_gz = error_free_samfile * ".gz"
-    if !isfile(error_free_samfile_gz)
-        run(`gzip $(error_free_samfile)`)
-        @assert isfile(error_free_samfile_gz)
+
+    if !(isfile(forward_gz) && isfile(reverse_gz) && isfile(samfile_gz) && isfile(error_free_samfile_gz))
+        @info "Running ART with command: $(full_cmd)"
+        @time run(full_cmd)
+    
+        # Process output FASTQ files: gzip them if not already compressed.
+        # For paired-end, output files are expected as outbase1.fq and outbase2.fq.
+        # For single-end, only outbase1.fq is produced.
+    
+        @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
+        run(`gzip $(forward_fq)`)
+        @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
+    
+        @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
+        run(`gzip $(reverse_fq)`)
+        @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
+    
+        #  SAM Alignment File:
+    
+        @assert isfile(samfile)
+        if !isfile(samfile_gz)
+            run(`gzip $(samfile)`)
+            @assert isfile(samfile_gz)
+        end
+        
+        @assert isfile(error_free_samfile)
+        if !isfile(error_free_samfile_gz)
+            run(`gzip $(error_free_samfile)`)
+            @assert isfile(error_free_samfile_gz)
+        end
+    else
+        @info "All files already present, returning existing paths..."
     end
 
     return (forward_reads = forward_gz, reverse_reads = reverse_gz, sam = samfile_gz, error_free_sam = error_free_samfile_gz)
