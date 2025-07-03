@@ -2,17 +2,11 @@
 // README at: https://github.com/JuliaLang/devcontainer-templates/tree/main/src/julia
 {
     "name": "Mycelia Development Container",
-    "image": "mcr.microsoft.com/devcontainers/universal:2-linux",
-    // "build": {
-    //     "dockerfile": "Dockerfile"
-    // },
+    "image": "mcr.microsoft.com/devcontainers/universal:2",
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
-		"ghcr.io/julialang/devcontainer-features/julia:1": {},
-        "ghcr.io/devcontainers/features/rust:1": {},
-        "ghcr.io/devcontainers/features/python:1": {},
-        "ghcr.io/devcontainers/features/node:1": {}
+		"ghcr.io/julialang/devcontainer-features/julia:1": {}
 	},
     "waitFor": "postCreateCommand",
     // "updateContentCommand": "python3 -m pip install -r requirements.txt",
@@ -40,9 +34,9 @@
                 "vadimcn.vscode-lldb",
                 "ms-python.autopep8"
             ]
-		}
-	}
-    // "postCreateCommand": "julia -e 'using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))'"
+        }
+    },
+    "postCreateCommand": "julia -e 'using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))'"
     // "postCreateCommand": "using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))"
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
