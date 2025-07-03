@@ -873,7 +873,7 @@ Requires:
 - Skips technical reads
 - Handles both paired-end and single-end data automatically
 """
-function fasterq_dump(;outdir="", srr_identifier="")
+function fasterq_dump(;outdir=pwd(), srr_identifier="")
     Mycelia.add_bioconda_env("sra-tools")
     prefetch_results = Mycelia.prefetch(SRR=srr_identifier, outdir=outdir)
     

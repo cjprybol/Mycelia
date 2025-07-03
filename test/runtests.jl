@@ -21,6 +21,7 @@ import CSV
 import uCSV
 import DataFrames
 import Arrow
+import CodecZlib
 
 # Recursively include all test files in the new nested structure, in logical order
 function include_all_tests(dir)
