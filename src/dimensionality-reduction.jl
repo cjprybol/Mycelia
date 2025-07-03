@@ -193,6 +193,8 @@ end
 
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
     umap_embed(scores::AbstractMatrix{<:Real};
                n_neighbors::Int=15,
                min_dist::Float64=0.1,
@@ -207,23 +209,15 @@ Embed your PC/EPCA scores (k×n_samples) into `n_components` via UMAP.
 - `n_components`: output dimension (2 or 3)
 
 # Returns
-- `embedding` : n_components×n_samples matrix  
-- `um`        : the trained UMAP.UMAP model  
+- `model`        : the trained UMAP.UMAP model  
 """
-function umap_embed(scores::AbstractMatrix{<:Real};
-                    n_neighbors::Int=15,
+function umap_embed(X::AbstractMatrix{<:Real};
+                    # n_neighbors::Int=15,
+                    n_neighbors::Int=Mycelia.nearest_prime(Int(round(log(maximum(size(X)))))),
                     min_dist::Float64=0.1,
                     n_components::Int=2)
 
-    # transpose to (samples × components)
-    X = transpose(scores)
+    model = UMAP.UMAP_(X, n_components, n_neighbors=n_neighbors, min_dist=min_dist)
 
-    # build & fit UMAP
-    um = UMAP.UMAP(n_neighbors=n_neighbors,
-                   min_dist=min_dist,
-                   n_components=n_components)
-    embedding = UMAP.fit_transform(um, X)  # returns samples×n_components
-
-    # return embedding in components×samples orientation
-    return transpose(embedding), um
+    return model
 end

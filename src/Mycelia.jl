@@ -60,6 +60,7 @@ import Tar
 # import TopoPlots
 # import TranscodingStreams
 import uCSV
+import UMAP
 import UUIDs
 import XAM
 import XMLDict

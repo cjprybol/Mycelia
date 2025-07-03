@@ -12,94 +12,53 @@ import Clustering
 # Set a random seed for reproducibility
 Random.seed!(42)
 
-# Function to generate binary (Bernoulli) matrices
-function generate_binary_matrix(n_features::Int, n_samples::Int, p::Float64)
-    return rand(Distributions.Bernoulli(p), n_features, n_samples)
-end
+# Parameters
+N = 7      # Number of distributions
+X = 100      # Number of samples per distribution
+L = 1000     # Length of each distribution (number of features)
 
-# Function to generate Poisson matrices
-function generate_poisson_matrix(n_features::Int, n_samples::Int, λ::Float64)
-    return rand(Distributions.Poisson(λ), n_features, n_samples)
-end
+# Step 1: Generate N distributions (each is a vector of probabilities)
+binary_probabilities = [rand(L) for _ in 1:N]  # Each element is a vector of length L with values in [0,1]
 
-# Function to compute Jaccard distance for binary matrices
-function jaccard_distance(M::AbstractMatrix{<:Integer})
-    n_samples = size(M, 2)
-    D = zeros(Float64, n_samples, n_samples)
-    for i in 1:n_samples
-        for j in i+1:n_samples
-            intersection = sum(M[:, i] .& M[:, j])
-            union = sum(M[:, i] .| M[:, j])
-            D[i, j] = 1 - intersection / union
-            D[j, i] = D[i, j]
-        end
-    end
-    return D
-end
+# Step 2: For each distribution, sample X binary vectors (each column is a sample)
+binary_samples = [hcat([rand.(Distributions.Bernoulli.(p)) for _ in 1:X]...) for p in binary_probabilities]
 
-# Function to compute Bray-Curtis distance for count matrices
-function bray_curtis_distance(M::AbstractMatrix{<:Integer})
-    n_samples = size(M, 2)
-    D = zeros(Float64, n_samples, n_samples)
-    for i in 1:n_samples
-        for j in i+1:n_samples
-            sum_abs_diff = sum(abs.(M[:, i] - M[:, j]))
-            sum_total = sum(M[:, i]) + sum(M[:, j])
-            D[i, j] = sum_abs_diff / sum_total
-            D[j, i] = D[i, j]
-        end
-    end
-    return D
-end
+# Concatenate all samples into one matrix (L x (N*X))
+all_samples = hcat(binary_samples...)
 
-# Function to plot embeddings with k-means clustering
-function plot_embeddings(embeddings; title="", xlabel="", ylabel="", true_labels=nothing, fit_labels=nothing)
-    scatter(embeddings[1, :], embeddings[2, :],
-           title=title,
-           xlabel=xlabel,
-           ylabel=ylabel,
-           label="",
-           legend=:topright)
+# Create a label vector: for each distribution, repeat its index X times
+all_labels = repeat(1:N, inner=X)
 
-    if true_labels !== nothing
-        for i in unique(true_labels)
-            idx = findall(x -> x == i, true_labels)
-            scatter!(embeddings[1, idx], embeddings[2, idx],
-                     label="True Cluster $i",
-                     markershape=:star5,
-                     legend=:topright)
-        end
-    end
+# Shuffle columns and labels together
+perm = Random.shuffle(1:size(all_samples, 2))
+shuffled_samples = all_samples[:, perm]
+shuffled_labels = all_labels[perm]
 
-    if fit_labels !== nothing
-        for i in unique(fit_labels)
-            idx = findall(x -> x == i, fit_labels)
-            scatter!(embeddings[1, idx], embeddings[2, idx],
-                     label="Fit Cluster $i",
-                     legend=:bottomright)
-        end
-    end
 
-    display(plot!)
-end
+# Parameters for Poisson λ distribution
+λ_scale = 0.7         # Lower = more bias toward 0
+λ_max = 128.0          # User-defined maximum (set to Inf for no max)
 
-# Test parameters
-n_features = 100
-n_samples = 50
-p_values = [0.1, 0.3, 0.5]
-λ_values = [1.0, 3.0, 5.0]
+# Step 1: Generate N distributions (each is a vector of Poisson means, biased toward 0)
+poisson_means = [
+    clamp.(rand(Distributions.Exponential(λ_scale), L), 0, λ_max)
+    for _ in 1:N
+]
 
-# Generate test matrices
-binary_matrices = [generate_binary_matrix(n_features, n_samples, p) for p in p_values]
-poisson_matrices = [generate_poisson_matrix(n_features, n_samples, λ) for λ in λ_values]
+# Step 2: For each distribution, sample X count vectors (each column is a sample)
+poisson_samples = [hcat([rand.(Distributions.Poisson.(λ)) for _ in 1:X]...) for λ in poisson_means]
 
-# Combine all samples into one matrix for clustering
-combined_binary = hcat(binary_matrices...)
-combined_poisson = hcat(poisson_matrices...)
+# Concatenate all samples into one matrix (L x (N*X))
+all_poisson_samples = hcat(poisson_samples...)
 
-# Create true labels for clustering
-true_labels_binary = repeat(1:length(p_values), inner=n_samples)
-true_labels_poisson = repeat(1:length(λ_values), inner=n_samples)
+# Create a label vector: for each distribution, repeat its index X times
+all_poisson_labels = repeat(1:N, inner=X)
+
+# Shuffle columns and labels together
+perm_poisson = Random.shuffle(1:size(all_poisson_samples, 2))
+shuffled_poisson_samples = all_poisson_samples[:, perm_poisson]
+shuffled_poisson_labels = all_poisson_labels[perm_poisson]
+
 # Test logistic_pca_epca with binary matrices
 Test.@testset "logistic_pca_epca" begin
     for (i, M) in enumerate(binary_matrices)
@@ -111,12 +70,13 @@ Test.@testset "logistic_pca_epca" begin
         fit_labels = Clustering.kmeans(result.scores', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result.scores;
+        plt = Mycelia.plot_embeddings(result.scores;
                        title="Logistic PCA-EPCA - Binary Matrix $i",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=true_labels_binary[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 end
 
@@ -131,12 +91,13 @@ Test.@testset "glm_pca_epca" begin
         fit_labels = Clustering.kmeans(result.scores', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result.scores;
+        plt = Mycelia.plot_embeddings(result.scores;
                        title="GLM PCA-EPCA - Poisson Matrix $i",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=true_labels_poisson[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 end
 
@@ -152,12 +113,13 @@ Test.@testset "pca_transform" begin
         fit_labels = Clustering.kmeans(result_k.scores', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result_k.scores;
+        plt = Mycelia.plot_embeddings(result_k.scores;
                        title="PCA Transform (k=5) - Matrix $i",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=i <= length(p_values) ? true_labels_binary[1:n_samples] : true_labels_poisson[1:n_samples],
                        fit_labels=fit_labels)
+        display(plt)
 
         # Test with var_prop specified
         result_var = Mycelia.pca_transform(M, var_prop=0.95)
@@ -168,12 +130,13 @@ Test.@testset "pca_transform" begin
         fit_labels = Clustering.kmeans(result_var.scores', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result_var.scores;
+        plt = Mycelia.plot_embeddings(result_var.scores;
                        title="PCA Transform (var_prop=0.95) - Matrix $i",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=i <= length(p_values) ? true_labels_binary[1:n_samples] : true_labels_poisson[1:n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 end
 
@@ -188,12 +151,13 @@ Test.@testset "negbin_pca_epca" begin
         fit_labels = Clustering.kmeans(result.scores', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result.scores;
+        plt = Mycelia.plot_embeddings(result.scores;
                        title="Negative Binomial PCA-EPCA - Poisson Matrix $i",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=true_labels_poisson[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 end
 
@@ -208,12 +172,13 @@ Test.@testset "distance_metrics_and_pcoa" begin
         fit_labels = Clustering.kmeans(result.coordinates', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result.coordinates;
+        plt = Mycelia.plot_embeddings(result.coordinates;
                        title="PCoA - Jaccard Distance - Binary Matrix $i",
                        xlabel="Coordinate 1",
                        ylabel="Coordinate 2",
                        true_labels=true_labels_binary[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 
     for (i, M) in enumerate(poisson_matrices)
@@ -225,12 +190,13 @@ Test.@testset "distance_metrics_and_pcoa" begin
         fit_labels = Clustering.kmeans(result.coordinates', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(result.coordinates;
+        plt = Mycelia.plot_embeddings(result.coordinates;
                        title="PCoA - Bray-Curtis Distance - Poisson Matrix $i",
                        xlabel="Coordinate 1",
                        ylabel="Coordinate 2",
                        true_labels=true_labels_poisson[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 end
 
@@ -246,12 +212,13 @@ Test.@testset "umap_embedding" begin
         fit_labels = Clustering.kmeans(umap_result', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(umap_result;
+        plt = Mycelia.plot_embeddings(umap_result;
                        title="UMAP - Logistic PCA-EPCA - Binary Matrix $i",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=true_labels_binary[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
 
     for (i, M) in enumerate(poisson_matrices)
@@ -264,12 +231,13 @@ Test.@testset "umap_embedding" begin
         fit_labels = Clustering.kmeans(umap_result', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(umap_result;
+        plt = Mycelia.plot_embeddings(umap_result;
                        title="UMAP - GLM PCA-EPCA - Poisson Matrix $i",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=true_labels_poisson[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
 
         # Test UMAP on negbin_pca_epca output
         pca_result = Mycelia.negbin_pca_epca(M, k=5, r=2)
@@ -280,12 +248,13 @@ Test.@testset "umap_embedding" begin
         fit_labels = Clustering.kmeans(umap_result', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(umap_result;
+        plt = Mycelia.plot_embeddings(umap_result;
                        title="UMAP - Negative Binomial PCA-EPCA - Poisson Matrix $i",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=true_labels_poisson[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
 
         # Test UMAP on pca_transform output
         pca_result = Mycelia.pca_transform(M, k=5)
@@ -296,11 +265,54 @@ Test.@testset "umap_embedding" begin
         fit_labels = Clustering.kmeans(umap_result', 3).assignments
 
         # Plot embeddings
-        plot_embeddings(umap_result;
+        plt = Mycelia.plot_embeddings(umap_result;
                        title="UMAP - PCA Transform (k=5) - Poisson Matrix $i",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=true_labels_poisson[(i-1)*n_samples+1:i*n_samples],
                        fit_labels=fit_labels)
+        display(plt)
     end
+end
+
+# Example for logistic_pca_epca on shuffled binary data
+Test.@testset "logistic_pca_epca_shuffled" begin
+    result = Mycelia.logistic_pca_epca(shuffled_binary, k=5)
+    Test.@test size(result.scores) == (5, size(shuffled_binary, 2))
+    Test.@test size(result.loadings) == (5, n_features)
+
+    # Fit k-means clustering
+    fit_labels = Clustering.kmeans(result.scores', 3).assignments
+
+    # Plot embeddings with color for fit_labels and marker for known group
+    plt = Mycelia.plot_embeddings(result.scores;
+                   title="Logistic PCA-EPCA - Shuffled Binary Data",
+                   xlabel="PC1",
+                   ylabel="PC2",
+                   true_labels=shuffled_labels_binary,
+                   fit_labels=fit_labels,
+                   legend_title_shape="Known Group",
+                   legend_title_color="K-means Cluster")
+    display(plt)
+end
+
+# Example for glm_pca_epca on shuffled poisson data
+Test.@testset "glm_pca_epca_shuffled" begin
+    result = Mycelia.glm_pca_epca(shuffled_poisson, k=5)
+    Test.@test size(result.scores) == (5, size(shuffled_poisson, 2))
+    Test.@test size(result.loadings) == (5, n_features)
+
+    # Fit k-means clustering
+    fit_labels = Clustering.kmeans(result.scores', 3).assignments
+
+    # Plot embeddings with color for fit_labels and marker for known group
+    plt = Mycelia.plot_embeddings(result.scores;
+                   title="GLM PCA-EPCA - Shuffled Poisson Data",
+                   xlabel="PC1",
+                   ylabel="PC2",
+                   true_labels=shuffled_labels_poisson,
+                   fit_labels=fit_labels,
+                   legend_title_shape="Known Group",
+                   legend_title_color="K-means Cluster")
+    display(plt)
 end

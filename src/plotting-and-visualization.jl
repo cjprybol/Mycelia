@@ -120,9 +120,9 @@ function visualize_many_timeseries(time_series_data::Vector{Vector{Float64}};
     return fig
 end
 
-# src/visualization.jl
 """
-Plot embeddings with optional true and fitted cluster labels using Makie.jl.
+Plot embeddings with optional true and fitted cluster labels using Makie.jl, 
+with legend outside, and color by fit labels, shape by true labels.
 
 # Arguments
 - `embeddings::Matrix{<:Real}`: 2D embedding matrix where each column is a data point
@@ -136,38 +136,40 @@ Plot embeddings with optional true and fitted cluster labels using Makie.jl.
 - `Makie.Figure`: Figure object that can be displayed or saved
 """
 function plot_embeddings(embeddings; title="", xlabel="", ylabel="", true_labels=nothing, fit_labels=nothing)
-    fig = CairoMakie.Figure(size=(600, 400))
-    ax = CairoMakie.Axis(fig[1, 1], 
-                         title=title, 
-                         xlabel=xlabel, 
-                         ylabel=ylabel)
+    fig = CairoMakie.Figure(size=(900, 450))
+    ax = CairoMakie.Axis(fig[1, 1], title=title, xlabel=xlabel, ylabel=ylabel)
+    npoints = size(embeddings, 2)
 
-    # Plot all points as background
-    CairoMakie.scatter!(ax, embeddings[1, :], embeddings[2, :], color=:gray, markersize=10, label="Data")
+    fit_palette = fit_labels !== nothing ? Mycelia.n_maximally_distinguishable_colors(length(unique(fit_labels))) : [:gray]
+    true_markers = true_labels !== nothing ? Mycelia.choose_top_n_markers(length(unique(true_labels))) : [:circle]
+    fit_label_to_color = fit_labels !== nothing ? Dict(lbl => fit_palette[i] for (i, lbl) in enumerate(unique(fit_labels))) : Dict()
+    true_label_to_marker = true_labels !== nothing ? Dict(lbl => true_markers[i] for (i, lbl) in enumerate(unique(true_labels))) : Dict()
 
-    # Overlay true labels if provided
-    if true_labels !== nothing
-        for i in unique(true_labels)
-            idx = findall(x -> x == i, true_labels)
-            CairoMakie.scatter!(ax, embeddings[1, idx], embeddings[2, idx]; 
-                         marker=:star5, 
-                         markersize=20, 
-                         label="True Cluster $i")
-        end
-    end
+    xs = embeddings[1, :]
+    ys = embeddings[2, :]
+    colors = [fit_labels !== nothing ? fit_label_to_color[fit_labels[i]] : :gray for i in 1:npoints]
+    markers = [true_labels !== nothing ? true_label_to_marker[true_labels[i]] : :circle for i in 1:npoints]
+    CairoMakie.scatter!(ax, xs, ys; color=colors, marker=markers, markersize=14, strokewidth=1, strokecolor=:black, label="")
 
-    # Overlay fitted labels if provided
+    # Legend entries (as before) ...
     if fit_labels !== nothing
-        for i in unique(fit_labels)
-            idx = findall(x -> x == i, fit_labels)
-            CairoMakie.scatter!(ax, embeddings[1, idx], embeddings[2, idx]; 
-                         marker=:circle, 
-                         markersize=10, 
-                         label="Fit Cluster $i")
+        for (i, lbl) in enumerate(unique(fit_labels))
+            CairoMakie.scatter!(ax, [NaN], [NaN]; color=fit_palette[i], marker=:circle, markersize=14, label="Fit Cluster $lbl")
+        end
+    end
+    if true_labels !== nothing
+        for (i, lbl) in enumerate(unique(true_labels))
+            CairoMakie.scatter!(ax, [NaN], [NaN]; color=:gray, marker=true_markers[i], markersize=14, label="True Cluster $lbl")
         end
     end
 
-    CairoMakie.axislegend(ax)
+    # Place legend outside
+    CairoMakie.axislegend(ax; position=(1.25, 0.5), nbanks=1)
+    
+    # Print ranges for debugging
+    println("x range: ", minimum(xs), " to ", maximum(xs))
+    println("y range: ", minimum(ys), " to ", maximum(ys))
+
     return fig
 end
 
