@@ -122,7 +122,7 @@ end
 
 # src/visualization.jl
 """
-Plot embeddings with optional true and fitted cluster labels.
+Plot embeddings with optional true and fitted cluster labels using Makie.jl.
 
 # Arguments
 - `embeddings::Matrix{<:Real}`: 2D embedding matrix where each column is a data point
@@ -133,36 +133,42 @@ Plot embeddings with optional true and fitted cluster labels.
 - `fit_labels::Vector{<:Integer}`: Vector of fitted cluster labels (optional)
 
 # Returns
-- `Plots.Plot`: Plot object that can be displayed or saved
+- `Makie.Figure`: Figure object that can be displayed or saved
 """
 function plot_embeddings(embeddings; title="", xlabel="", ylabel="", true_labels=nothing, fit_labels=nothing)
-    scatter(embeddings[1, :], embeddings[2, :],
-           title=title,
-           xlabel=xlabel,
-           ylabel=ylabel,
-           label="",
-           legend=:topright)
+    fig = CairoMakie.Figure(size=(600, 400))
+    ax = CairoMakie.Axis(fig[1, 1], 
+                         title=title, 
+                         xlabel=xlabel, 
+                         ylabel=ylabel)
 
+    # Plot all points as background
+    CairoMakie.scatter!(ax, embeddings[1, :], embeddings[2, :], color=:gray, markersize=10, label="Data")
+
+    # Overlay true labels if provided
     if true_labels !== nothing
         for i in unique(true_labels)
             idx = findall(x -> x == i, true_labels)
-            scatter!(embeddings[1, idx], embeddings[2, idx],
-                     label="True Cluster $i",
-                     markershape=:star5,
-                     legend=:topright)
+            CairoMakie.scatter!(ax, embeddings[1, idx], embeddings[2, idx]; 
+                         marker=:star5, 
+                         markersize=20, 
+                         label="True Cluster $i")
         end
     end
 
+    # Overlay fitted labels if provided
     if fit_labels !== nothing
         for i in unique(fit_labels)
             idx = findall(x -> x == i, fit_labels)
-            scatter!(embeddings[1, idx], embeddings[2, idx],
-                     label="Fit Cluster $i",
-                     legend=:bottomright)
+            CairoMakie.scatter!(ax, embeddings[1, idx], embeddings[2, idx]; 
+                         marker=:circle, 
+                         markersize=10, 
+                         label="Fit Cluster $i")
         end
     end
 
-    return plot!
+    CairoMakie.axislegend(ax)
+    return fig
 end
 
 """

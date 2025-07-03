@@ -1,4 +1,4 @@
-i"""
+"""
     mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
 
 Calculates the Mash distance (an estimate of Average Nucleotide Identity)

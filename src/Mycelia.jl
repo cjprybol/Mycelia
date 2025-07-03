@@ -23,6 +23,7 @@ import Distances
 import Distributions
 import DocStringExtensions
 import Downloads
+import ExpFamilyPCA
 import FASTX
 import FileIO
 import GenomicAnnotations
