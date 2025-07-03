@@ -66,6 +66,12 @@ using CairoMakie
 
 import Pkg
 
+import JSON
+import DataFrames
+import ProgressMeter
+import CodecZlib
+import Base.Filesystem: stat
+
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
 # use this to build up a story as we go, where outputs of earlier defined functions feed into
@@ -732,6 +738,78 @@ function download_bandage(outdir="/usr/local/bin")
     return bandage_executable
 end
 
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Perform comprehensive annotation of a FASTA file including gene prediction, protein homology search,
+# and terminator prediction.
+
+# # Arguments
+# - `fasta::String`: Path to input FASTA file
+# - `identifier::String`: Unique identifier for output directory (default: FASTA filename without extension)
+# - `basedir::String`: Base directory for output (default: current working directory)
+# - `mmseqsdb::String`: Path to MMseqs2 UniRef50 database (default: "~/workspace/mmseqs/UniRef50")
+# - `threads::Int`: Number of CPU threads to use (default: all available)
+
+# # Processing Steps
+# 1. Creates output directory and copies input FASTA
+# 2. Runs Prodigal for gene prediction (nucleotide, amino acid, and GFF output)
+# 3. Performs MMseqs2 homology search against UniRef50
+# 4. Predicts terminators using TransTerm
+# 5. Combines annotations into a unified GFF file
+# 6. Generates GenBank format output
+
+# # Returns
+# - `String`: Path to the output directory containing all generated files
+
+# # Files Generated
+# - `.prodigal.fna`: Predicted genes (nucleotide)
+# - `.prodigal.faa`: Predicted proteins
+# - `.prodigal.gff`: Prodigal GFF annotations
+# - `.gff`: Combined annotations
+# - `.gff.genbank`: Final GenBank format
+# """
+# function annotate_fasta(;
+#         fasta,
+#         identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+#         basedir = pwd(),        
+#         mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
+#         threads=Sys.CPU_THREADS
+#     )
+#     # @show basedir
+#     outdir = joinpath(basedir, identifier)
+#     @assert outdir != fasta
+#     # if !isdir(outdir)
+#     #     @show isdir(outdir)
+#     mkpath(outdir)
+#     f = joinpath(outdir, basename(fasta))
+#     # make this an rclone copy for portability
+#     !isfile(f) && cp(fasta, f)
+#     nucleic_acid_fasta = f * ".prodigal.fna"
+#     amino_acid_fasta = f * ".prodigal.faa"
+#     gff_file = f * ".prodigal.gff"
+#     if !isfile(nucleic_acid_fasta) || !isfile(amino_acid_fasta) || !isfile(gff_file)
+#         Mycelia.run_prodigal(fasta_file=f)
+#     end
+#     mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+#     mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
+#     transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+#     joint_gff = Mycelia.write_gff(
+#         gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
+#         outfile=f * ".gff")
+#     annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
+
+#     transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
+#     joint_gff_raw_fasta = Mycelia.write_gff(
+#         gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
+#         outfile=f * ".transterm_raw.gff")
+#     annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
+#     # else
+#     #     @info "$(outdir) already present, skipping..."
+#     # end
+#     return outdir
+# end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -742,65 +820,79 @@ and terminator prediction.
 - `fasta::String`: Path to input FASTA file
 - `identifier::String`: Unique identifier for output directory (default: FASTA filename without extension)
 - `basedir::String`: Base directory for output (default: current working directory)
-- `mmseqsdb::String`: Path to MMseqs2 UniRef50 database (default: "~/workspace/mmseqs/UniRef50")
-- `threads::Int`: Number of CPU threads to use (default: all available)
+- `mmseqsdb::String`: Path to MMseqs2 UniRef50 database (default: `joinpath(homedir(), "workspace/mmseqs/UniRef50")`)
+- `threads::Int`: Number of CPU threads to use (default: all available). Note: This argument is not explicitly used by Pyrodigal or MMseqs2 in this version of the function, they might use their own defaults or require modifications to `run_pyrodigal` or `run_mmseqs_easy_search` to respect it.
 
 # Processing Steps
-1. Creates output directory and copies input FASTA
-2. Runs Prodigal for gene prediction (nucleotide, amino acid, and GFF output)
-3. Performs MMseqs2 homology search against UniRef50
-4. Predicts terminators using TransTerm
-5. Combines annotations into a unified GFF file
-6. Generates GenBank format output
+1. Creates output directory and copies input FASTA.
+2. Runs Pyrodigal for gene prediction (nucleotide, amino acid, and GFF output).
+3. Performs MMseqs2 homology search against UniRef50.
+4. Predicts terminators using TransTerm.
+5. Combines annotations into a unified GFF file.
+6. Generates GenBank format output.
 
 # Returns
-- `String`: Path to the output directory containing all generated files
+- `String`: Path to the output directory containing all generated files.
 
-# Files Generated
-- `.prodigal.fna`: Predicted genes (nucleotide)
-- `.prodigal.faa`: Predicted proteins
-- `.prodigal.gff`: Prodigal GFF annotations
-- `.gff`: Combined annotations
-- `.gff.genbank`: Final GenBank format
+# Files Generated (within the output directory specified by `identifier`)
+- `(basename(fasta)).pyrodigal.fna`: Predicted genes (nucleotide) from Pyrodigal.
+- `(basename(fasta)).pyrodigal.faa`: Predicted proteins from Pyrodigal.
+- `(basename(fasta)).pyrodigal.gff`: Pyrodigal GFF annotations.
+- `(basename(fasta)).gff`: Combined GFF annotations (MMseqs2 and TransTerm).
+- `(basename(fasta)).gff.genbank`: Final GenBank format from the first combined GFF.
+- `(basename(fasta)).transterm_raw.gff`: Combined GFF (MMseqs2 and a second TransTerm run).
+- `(basename(fasta)).transterm_raw.gff.genbank`: Final GenBank format from the second combined GFF.
 """
 function annotate_fasta(;
-        fasta,
-        identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
-        basedir = pwd(),        
-        mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
-        threads=Sys.CPU_THREADS
+        fasta::String,
+        identifier::String = replace(basename(fasta), Mycelia.FASTA_REGEX => ""), # Assuming Mycelia.FASTA_REGEX is defined
+        basedir::String = pwd(),        
+        mmseqsdb::String = joinpath(homedir(), "workspace/mmseqs/UniRef50"),
+        threads::Int = Sys.CPU_THREADS
     )
-    # @show basedir
+    
     outdir = joinpath(basedir, identifier)
-    @assert outdir != fasta
-    # if !isdir(outdir)
-    #     @show isdir(outdir)
+    @assert outdir != fasta "Output directory cannot be the same as the input FASTA file path."
+    
     mkpath(outdir)
-    f = joinpath(outdir, basename(fasta))
-    # make this an rclone copy for portability
-    !isfile(f) && cp(fasta, f)
-    nucleic_acid_fasta = f * ".prodigal.fna"
-    amino_acid_fasta = f * ".prodigal.faa"
-    gff_file = f * ".prodigal.gff"
-    if !isfile(nucleic_acid_fasta) || !isfile(amino_acid_fasta) || !isfile(gff_file)
-        Mycelia.run_prodigal(fasta_file=f)
+    
+    # Path to the FASTA file copied into the output directory
+    f_in_outdir = joinpath(outdir, basename(fasta))
+    # Copy input FASTA to output directory if it's not already there or needs update
+    if !isfile(f_in_outdir) || mtime(fasta) > mtime(f_in_outdir)
+        cp(fasta, f_in_outdir, force=true)
     end
-    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
-    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
-    transterm_gff_file = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-    joint_gff = Mycelia.write_gff(
-        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"]),
-        outfile=f * ".gff")
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff, genbank = joint_gff * ".genbank")
 
-    transterm_gff_file_raw_fasta = Mycelia.transterm_output_to_gff(Mycelia.run_transterm(fasta=f))
-    joint_gff_raw_fasta = Mycelia.write_gff(
-        gff=sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file_raw_fasta)), ["#seqid", "start", "end"]),
-        outfile=f * ".transterm_raw.gff")
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f, gff=joint_gff_raw_fasta, genbank = joint_gff_raw_fasta * ".genbank")
-    # else
-    #     @info "$(outdir) already present, skipping..."
-    # end
+    # --- Gene Prediction using Pyrodigal ---
+    # Call run_pyrodigal, assuming it's part of the Mycelia module.
+    # run_pyrodigal handles its own output file naming and existence checks.
+    # We direct its output to be within our main `outdir`.
+    pyrodigal_outputs = Mycelia.run_pyrodigal(fasta_file=f_in_outdir, out_dir=outdir)
+    
+    nucleic_acid_fasta = pyrodigal_outputs.fna
+    amino_acid_fasta = pyrodigal_outputs.faa
+    gff_file_pyrodigal = pyrodigal_outputs.gff # Renamed to avoid confusion with later gff_file variables
+    # --- End of Pyrodigal section ---
+
+    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+    # Update GFF with MMseqs results, using Pyrodigal's GFF as base
+    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file_pyrodigal, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
+    
+    # Predict terminators using TransTerm on the original sequence copy
+    if occursin(r"\.gz$", f_in_outdir)
+        @warn "transterm doesn't seem to work with gzip compressed fasta files"
+    end
+    transterm_results = Mycelia.run_transterm(fasta=f_in_outdir) # Assuming run_transterm returns path or object usable by transterm_output_to_gff
+    transterm_gff_file = Mycelia.transterm_output_to_gff(transterm_results)
+    
+    # Combine MMseqs and TransTerm GFFs
+    combined_gff_path = joinpath(outdir, basename(f_in_outdir) * ".gff")
+    joint_gff_df = DataFrames.sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"])
+    Mycelia.write_gff(gff=joint_gff_df, outfile=combined_gff_path)
+    
+    genbank_path = combined_gff_path * ".genbank"
+    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f_in_outdir, gff=combined_gff_path, genbank=genbank_path)
+    
     return outdir
 end
 
@@ -2968,12 +3060,6 @@ end
 #     return mlst_dir
 # end
 
-import JSON
-import DataFrames
-import ProgressMeter
-import CodecZlib
-import Base.Filesystem: stat
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -3638,7 +3724,11 @@ Returns:
     - hcl: The hierarchical clustering result object.
     - optimal_number_of_clusters: The inferred optimal number of clusters (k).
 """
-function identify_optimal_number_of_clusters(distance_matrix, min_k = Int(ceil(log2(size(distance_matrix, 2)))) * 2, max_k = Int(ceil(sqrt(size(distance_matrix, 2)))))
+function identify_optimal_number_of_clusters(
+        distance_matrix;
+        min_k = max(Int(floor(log(size(distance_matrix, 2)))), 2),
+        max_k = min(size(distance_matrix, 2), Int(ceil(sqrt(size(distance_matrix, 2))))),
+    )
     # Ensure the input is a square matrix
     if size(distance_matrix, 1) != size(distance_matrix, 2)
          error("Input distance_matrix must be square.")
@@ -3727,7 +3817,8 @@ function identify_optimal_number_of_clusters(distance_matrix, min_k = Int(ceil(l
         ylabel = "Average Silhouette Score", # Updated label
         label = "Avg Score",
         markersize = 5,
-        markerstrokewidth = 0.5
+        markerstrokewidth = 0.5,
+        # legend=:outertopright
     )
 
     # Adjust y-limits based on valid scores, keeping [-1, 1] range in mind
@@ -3736,7 +3827,7 @@ function identify_optimal_number_of_clusters(distance_matrix, min_k = Int(ceil(l
     max_val = maximum(valid_scores) # This is max_score_valid
     range = max_val - min_val
     # Set sensible limits slightly beyond observed range, but clamp to [-1.05, 1.05]
-    ylims_lower = max(-1.05, min_val - range * 0.1)
+    ylims_lower = max(-1.05, min(0, min_val - range * 0.1))
     ylims_upper = min(1.05, max_val + range * 0.1)
     # Ensure lower < upper, handle case where range is 0
     if isapprox(ylims_lower, ylims_upper)
@@ -3749,7 +3840,7 @@ function identify_optimal_number_of_clusters(distance_matrix, min_k = Int(ceil(l
     StatsPlots.ylims!(p, (ylims_lower, ylims_upper))
 
     # Add reference line at y=0 (separation between reasonable/poor clusters)
-    StatsPlots.hline!(p, [0], color=:gray, linestyle=:dot, label="Score = 0")
+    # StatsPlots.hline!(p, [0], color=:gray, linestyle=:dot, label="Score = 0")
 
     # Add vertical line for the optimum
     StatsPlots.vline!(p, [optimal_number_of_clusters], color = :red, linestyle = :dash, label = "Inferred optimum = $(optimal_number_of_clusters)")
@@ -3757,7 +3848,7 @@ function identify_optimal_number_of_clusters(distance_matrix, min_k = Int(ceil(l
     # Display the plot
     display(p)
 
-    return (hcl, optimal_number_of_clusters)
+    return (;hcl, optimal_number_of_clusters, assignments = Clustering.cutree(hcl, k=optimal_number_of_clusters), figure=p)
 end
 
 """
@@ -4890,8 +4981,7 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
     gff = "$(out_dir)/$(basename(fasta_file)).pyrodigal.gff"
     faa = "$(out_dir)/$(basename(fasta_file)).pyrodigal.faa"
     fna = "$(out_dir)/$(basename(fasta_file)).pyrodigal.fna"
-    # -s $(gene_scores)
-    # gene_scores = "$(out_dir)/$(basename(fasta_file)).pyrodigal.all_potential_gene_scores.txt"
+    gene_scores = "$(out_dir)/$(basename(fasta_file)).pyrodigal.gene_scores.txt"
     std_out = "$(out_dir)/$(basename(fasta_file)).pyrodigal.out"
     std_err = "$(out_dir)/$(basename(fasta_file)).pyrodigal.err"
     mkpath(out_dir)
@@ -4909,12 +4999,15 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
         -i $(fasta_file)
         -a $(faa)
         -d $(fna)
+        -s $(gene_scores)
         --min-gene 33
         --max-overlap 31
         `
         p = pipeline(cmd, stdout=std_out, stderr=std_err)
         run(p)
-        cp(fasta_file, "$(out_dir)/$(basename(fasta_file))", force=true)
+        if fasta_file != "$(out_dir)/$(basename(fasta_file))"
+            cp(fasta_file, "$(out_dir)/$(basename(fasta_file))", force=true)
+        end
         (filesize(std_out) == 0) && rm(std_out)
         (filesize(std_err) == 0) && rm(std_err)
     end
@@ -9410,14 +9503,15 @@ attributes in the GFF file. Only considers top hits from MMseqs2 results. Preser
 GFF attributes while prepending new annotations.
 """
 function update_gff_with_mmseqs(gff_file, mmseqs_file)
-    top_hits = read_mmseqs_easy_search(mmseqs_file, top_hit_only=true)
-
-    id_to_product = Dict{String, String}()
-    for row in DataFrames.eachrow(top_hits)
-        id = Dict(a => b for (a, b) in split.(split(last(split(row["qheader"], " # ")), ';'), '='))["ID"]
-        product = replace(row["theader"], " " => "__")
-        id_to_product[id] = product
-    end
+    mmseqs_results = read_mmseqs_easy_search(mmseqs_file)
+    top_hits = DataFrames.combine(DataFrames.groupby(mmseqs_results, "query"), group -> group[Base.argmax(group.bits), :])
+    # id_to_product = Dict{String, String}()
+    # for row in DataFrames.eachrow(top_hits)
+    #     id = Dict(a => b for (a, b) in split.(split(last(split(row["qheader"], " # ")), ';'), '='))["ID"]
+    #     product = replace(row["theader"], " " => "__")
+    #     id_to_product[id] = product
+    # end
+    id_to_product = Dict{String, String}(row["query"] => replace(row["theader"], " " => "__") for row in DataFrames.eachrow(top_hits))
 
     gff_table = Mycelia.read_gff(gff_file)
     for (i, row) in enumerate(DataFrames.eachrow(gff_table))
@@ -10857,89 +10951,172 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create a dense kmer counts table (canonical for DNA, stranded for RNA & AA) for each fasta provided in a list.
-Scales very well for large numbers of organisms/fasta files, but not for k.
-Recommended for k <= 13, although 17 may still be possible
-
-Generate a dense k-mer frequency matrix from multiple FASTA files.
-
-# Arguments
-- `fasta_list`: Vector of paths to FASTA files
-- `k`: Length of k-mers to count (recommended k ≤ 13)
-- `alphabet`: Symbol specifying sequence type (`:DNA`, `:RNA`, or `:AA`)
-
-# Returns 
-Named tuple containing:
-- `sorted_kmers`: Vector of sorted k-mers
-- `kmer_counts_matrix`: Dense matrix where rows are k-mers and columns are sequences
-
-# Details
-- For DNA: Uses canonical k-mers (strand-neutral)
-- For RNA/AA: Uses stranded k-mers
-- Parallelized using Julia's multi-threading
-
-# Performance
-- Efficient for large numbers of sequences
-- Memory usage grows exponentially with k
+Create a dense k-mer counts table for a set of FASTA files, with disk-backed temporary storage, 
+custom element type, robust error handling, and optional output file caching.
 """
-function fasta_list_to_dense_counts_table(; fasta_list, k, alphabet)
-    k >= 11 && error("use fasta_list_to_sparse_counts_table")
-    if alphabet == :AA
-        KMER_TYPE = BioSequences.AminoAcidAlphabet
-        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
-        COUNT = count_kmers
-    elseif alphabet == :DNA
-        KMER_TYPE = BioSequences.DNAAlphabet{2}
-        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
-        COUNT = count_canonical_kmers
-    elseif alphabet == :RNA
-        KMER_TYPE = BioSequences.RNAAlphabet{2}
-        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
-        COUNT = count_kmers
-    else
-        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+function fasta_list_to_dense_kmer_counts(;
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol,
+    temp_dir_parent::AbstractString = Base.tempdir(),
+    count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
+    result_file::Union{Nothing, AbstractString} = nothing,
+    force::Bool = false,
+    cleanup_temp::Bool = true
+)
+
+    num_files = length(fasta_list)
+    if num_files == 0
+        error("Input fasta_list is empty.")
+    end
+    if !(isa(k, Integer) && 0 < k <= 9)
+        error("k must be a positive integer <= 9. Use sparse counts for larger k")
+    end
+    if !(alphabet in (:AA, :DNA, :RNA))
+        error("alphabet must be :AA, :DNA, or :RNA")
+    end
+    if any(f -> !Base.Filesystem.isfile(f), fasta_list)
+        missing_files = [f for f in fasta_list if !Base.Filesystem.isfile(f)]
+        error("Missing FASTA files: $(join(missing_files, ", ")).")
     end
 
-    progress = ProgressMeter.Progress(length(fasta_list))
-    # Prepare thread-safe containers for successful results and error reporting.
-    successful_results = Vector{Vector{Int}}()  # each will be a vector of counts for one file
+    # Output file short-circuit
+    if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
+        Base.@info "result_file exists at $result_file. Loading and returning."
+        return JLD2.load_object(result_file)
+    end
+
+    # KMER TYPE/COUNT/GENERATOR setup
+    if alphabet == :AA
+        KMER_TYPE = Kmers.AAKmer{k}
+        ALPHABET_SEQ = Mycelia.AA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    elseif alphabet == :DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        ALPHABET_SEQ = Mycelia.DNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_canonical_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_canonical_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    elseif alphabet == :RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        ALPHABET_SEQ = Mycelia.RNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    end
+
+    num_kmers = length(sorted_kmers)
+    Base.@info "Counting $num_kmers $(KMER_TYPE) across $num_files files..."
+
+    # Temp files
+    temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="dense_kmer_counts_")
+    temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
+
+    # Pass 1: count kmers per file, record max, save to temp
+    progress1 = ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    lock = Base.ReentrantLock()
+    error_log = Vector{Tuple{Int, String}}()
     successful_indices = Vector{Int}()
-    errors = Vector{Tuple{Int, String}}()  # (file index, error message)
-    
-    # Use a single lock for both progress updating and pushing into shared arrays.
-    reentrant_lock = ReentrantLock()
-    
-    Threads.@threads for (entity_index, fasta_file) in collect(enumerate(fasta_list))
-        # Update the progress meter within the lock so output remains synchronized.
-        lock(reentrant_lock) do
-            ProgressMeter.next!(progress)
-        end
+    max_observed_count_ref = Ref{Int}(0)
+
+    Threads.@threads for idx in 1:num_files
+        fasta_file = fasta_list[idx]
+        temp_file = temp_file_paths[idx]
+        local_max = 0
         try
-            # Process the FASTA (or FASTQ) file to count kmers.
-            entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, fasta_file)
-            # Build a vector of counts for each sorted kmer.
-            local_counts = [ get(entity_mer_counts, kmer, 0) for kmer in sorted_kmers ]
-            lock(reentrant_lock) do
-                push!(successful_results, local_counts)
-                push!(successful_indices, entity_index)
+            kmer_counts = COUNT_FUNCTION(KMER_TYPE, fasta_file)
+            JLD2.save_object(temp_file, kmer_counts)
+            if !isempty(kmer_counts)
+                local_max = maximum(Base.values(kmer_counts))
+            end
+            Base.lock(lock)
+            try
+                push!(successful_indices, idx)
+                if local_max > max_observed_count_ref[]
+                    max_observed_count_ref[] = local_max
+                end
+            finally
+                Base.unlock(lock)
             end
         catch e
-            # Report the issue and save the error details.
-            lock(reentrant_lock) do
-                @warn "Error processing file: $fasta_file. Error: $e"
-                push!(errors, (entity_index, string(e)))
+            Base.lock(lock)
+            try
+                push!(error_log, (idx, string(e)))
+            finally
+                Base.unlock(lock)
             end
+            try JLD2.save_object(temp_file, Dict{KMER_TYPE, Int}()) catch end
+        end
+        Base.lock(lock)
+        try
+            ProgressMeter.next!(progress1)
+        finally
+            Base.unlock(lock)
         end
     end
-    
-    if isempty(successful_results)
-        error("All files failed to process.")
+    ProgressMeter.finish!(progress1)
+
+    sorted_successful_indices = sort(successful_indices)
+    successful_fasta_list = fasta_list[sorted_successful_indices]
+
+    num_successful_files = length(successful_fasta_list)
+    percent_successful = round((num_successful_files / num_files) * 100, digits=3)
+    Base.@info "$num_successful_files of $num_files ($(percent_successful)%) counted successfully"
+
+    max_observed_count = max_observed_count_ref[]
+
+    # Determine element type for counts
+    if isnothing(count_element_type)
+        ValType = max_observed_count <= typemax(UInt8) ? UInt8 :
+                  max_observed_count <= typemax(UInt16) ? UInt16 :
+                  max_observed_count <= typemax(UInt32) ? UInt32 : UInt64
+    else
+        ValType = count_element_type
+        if max_observed_count > typemax(ValType)
+            Base.@warn "User-specified count_element_type $ValType may be too small for max observed count $max_observed_count"
+        end
     end
-    # Assemble the final counts matrix from the successful results.
-    kmer_counts_matrix = hcat(successful_results...)  # Each column is the count vector for one file
-    successful_fasta_list = fasta_list[successful_indices]
-    
-    return (; sorted_kmers, kmer_counts_matrix, successful_fasta_list)
+    Base.@info "Using $ValType for kmer counts"
+
+    # Build kmer index for matrix rows
+    kmer_index = Dict{KMER_TYPE,Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    kmer_counts_matrix = zeros(ValType, num_kmers, num_successful_files)
+
+    # Pass 2: fill matrix (multi-threaded, only for successful files)
+    progress2 = ProgressMeter.Progress(num_successful_files; desc="Filling matrix: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:green)
+    Threads.@threads for col in 1:num_successful_files
+        orig_idx = sorted_successful_indices[col]
+        try
+            kmer_counts = JLD2.load_object(temp_file_paths[orig_idx])
+            for (kmer, count) in kmer_counts
+                row = kmer_index[kmer]
+                kmer_counts_matrix[row, col] = ValType(count)
+            end
+        catch
+            # Optionally log error
+        end
+        Base.lock(lock)
+        try
+            ProgressMeter.next!(progress2)
+        finally
+            Base.unlock(lock)
+        end
+    end
+    ProgressMeter.finish!(progress2)
+
+    if cleanup_temp
+        try Base.Filesystem.rm(temp_dir; recursive=true, force=true) catch end
+    end
+
+    result = (;kmers=sorted_kmers, counts=kmer_counts_matrix, successful_fasta_list=successful_fasta_list, error_log=error_log)
+
+    if !isnothing(result_file)
+        try JLD2.save_object(result_file, result) catch end
+    end
+
+    return result
 end
 
 """
@@ -11163,6 +11340,90 @@ function distance_matrix_to_newick(;distance_matrix, labels, outfile)
     return outfile
 end
 
+"""
+    pairwise_distance_matrix(
+        matrix;
+        dist_func = Distances.euclidean,
+        show_progress = true,
+        progress_desc = "Computing distances"
+    )
+
+Compute a symmetric pairwise distance matrix between columns of `matrix` using the supplied distance function.
+
+# Arguments
+- `matrix`: Column-major matrix (features as rows, entities as columns)
+- `dist_func`: Function of the form `f(a, b)` returning the distance between two vectors (default: `Distances.euclidean`)
+- `show_progress`: Display progress bar if true (default: true)
+- `progress_desc`: Progress bar description (default: "Computing distances")
+
+# Returns
+- Symmetric N×N matrix of pairwise distances between columns (entities)
+"""
+function pairwise_distance_matrix(
+    matrix;
+    dist_func = Distances.euclidean,
+    show_progress = true,
+    progress_desc = "Computing distances"
+)
+    n_entities = size(matrix, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    total_pairs = n_entities * (n_entities - 1) ÷ 2
+
+    progress = show_progress ? ProgressMeter.Progress(total_pairs, desc = progress_desc, dt = 0.1) : nothing
+
+    Threads.@threads for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = matrix[:, entity_1_index]
+            b = matrix[:, entity_2_index]
+            dist = dist_func(a, b)
+            distance_matrix[entity_1_index, entity_2_index] = dist
+            distance_matrix[entity_2_index, entity_1_index] = dist
+            if show_progress && Threads.threadid() == 1
+                ProgressMeter.next!(progress)
+            end
+        end
+    end
+
+    if show_progress
+        ProgressMeter.finish!(progress)
+    end
+    return distance_matrix
+end
+
+# Wrapper functions
+
+"""
+    frequency_matrix_to_euclidean_distance_matrix(counts_table)
+
+Pairwise Euclidean distance between columns of `counts_table`.
+"""
+frequency_matrix_to_euclidean_distance_matrix(counts_table) =
+    pairwise_distance_matrix(counts_table; dist_func = Distances.euclidean, progress_desc = "Euclidean distances")
+
+"""
+    frequency_matrix_to_cosine_distance_matrix(probability_matrix)
+
+Pairwise cosine distance between columns of `probability_matrix`.
+"""
+frequency_matrix_to_cosine_distance_matrix(probability_matrix) =
+    pairwise_distance_matrix(probability_matrix; dist_func = Distances.cosine_dist, progress_desc = "Cosine distances")
+
+"""
+    frequency_matrix_to_jaccard_distance_matrix(binary_matrix)
+
+Pairwise Jaccard distance between columns of `binary_matrix`.
+"""
+frequency_matrix_to_jaccard_distance_matrix(binary_matrix) =
+    pairwise_distance_matrix(binary_matrix; dist_func = Distances.jaccard, progress_desc = "Jaccard distances")
+
+"""
+    frequency_matrix_to_braycurtis_distance_matrix(counts_table)
+
+Pairwise Bray-Curtis distance between columns of `counts_table`.
+"""
+frequency_matrix_to_braycurtis_distance_matrix(counts_table) =
+    pairwise_distance_matrix(counts_table; dist_func = Distances.braycurtis, progress_desc = "Bray-Curtis distances")
+
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -11213,49 +11474,85 @@ end
 #     return distance_matrix
 # end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Create a Euclidean distance matrix from a column-major counts matrix
-(features as rows and entities as columns), where distance is proportional
-to total feature count magnitude (size).
+# Create a Euclidean distance matrix from a column-major counts matrix
+# (features as rows and entities as columns), where distance is proportional
+# to total feature count magnitude (size).
 
-Compute pairwise Euclidean distances between entity profiles in a counts matrix.
+# Compute pairwise Euclidean distances between entity profiles in a counts matrix.
 
-# Arguments
-- `counts_table`: A matrix where rows represent features and columns represent entities (column-major format).
-  Each column contains the feature counts/frequencies for one entity.
+# # Arguments
+# - `counts_table`: A matrix where rows represent features and columns represent entities (column-major format).
+#   Each column contains the feature counts/frequencies for one entity.
 
-# Returns
-- A symmetric N×N matrix of Euclidean distances between each pair of entities, where N is the number of entities.
+# # Returns
+# - A symmetric N×N matrix of Euclidean distances between each pair of entities, where N is the number of entities.
 
-# Details
-- Parallelized computation using multi-threading
-- Progress tracking via ProgressMeter
-- Memory efficient: only upper triangle is computed, then mirrored
-- Distance between entities increases with total feature magnitude differences
-"""
-function frequency_matrix_to_euclidean_distance_matrix(counts_table)
-    n_entities = size(counts_table, 2)
-    distance_matrix = zeros(n_entities, n_entities)
+# # Details
+# - Parallelized computation using multi-threading
+# - Progress tracking via ProgressMeter
+# - Memory efficient: only upper triangle is computed, then mirrored
+# - Distance between entities increases with total feature magnitude differences
+# """
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
 
-    # Initialize a thread-safe progress meter
-    progress = ProgressMeter.Progress(n_entities * (n_entities - 1) ÷ 2, desc = "Computing distances", dt = 0.1)
+#     # Initialize a thread-safe progress meter
+#     progress = ProgressMeter.Progress(n_entities * (n_entities - 1) ÷ 2, desc = "Computing distances", dt = 0.1)
 
-    Threads.@threads for entity_1_index in 1:n_entities
-        for entity_2_index in entity_1_index+1:n_entities
-            a = counts_table[:, entity_1_index]
-            b = counts_table[:, entity_2_index]
-            dist = Distances.euclidean(a, b)
-            distance_matrix[entity_1_index, entity_2_index] = dist
-            distance_matrix[entity_2_index, entity_1_index] = dist
-            ProgressMeter.next!(progress)  # Update the progress meter
-        end
-    end
+#     Threads.@threads for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             dist = Distances.euclidean(a, b)
+#             distance_matrix[entity_1_index, entity_2_index] = dist
+#             distance_matrix[entity_2_index, entity_1_index] = dist
+#             ProgressMeter.next!(progress)  # Update the progress meter
+#         end
+#     end
 
-    ProgressMeter.finish!(progress)  # Ensure the progress meter completes
-    return distance_matrix
-end
+#     ProgressMeter.finish!(progress)  # Ensure the progress meter completes
+#     return distance_matrix
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Create cosine distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to cosine similarity (relative frequency)
+
+# Compute pairwise cosine distances between entities based on their feature distributions.
+
+# # Arguments
+# - `probability_matrix`: Column-major matrix where rows represent features and columns represent entities.
+#   Each column should contain frequency/probability values for one entity.
+
+# # Returns
+# - Symmetric matrix of size (n_entities × n_entities) containing pairwise cosine distances.
+#   Distance values range from 0 (identical distributions) to 1 (orthogonal distributions).
+
+# # Details
+# - Computes upper triangle and mirrors to lower triangle for efficiency
+# - Uses `Distances.cosine_dist` for the core computation
+# - Time complexity is O(n²) where n is the number of entities
+# """
+# function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
+#     n_entities = size(probability_matrix, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = probability_matrix[:, entity_1_index]
+#             b = probability_matrix[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.cosine_dist(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end
 
 # didn't work
 # function frequency_matrix_to_euclidean_distance_matrix(counts_table)
@@ -11277,42 +11574,6 @@ end
 #     end
 #     return distance_matrix
 # end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Create cosine distance matrix from a column-major counts matrix (features as rows and entities as columns)
-where distance is a proportional to cosine similarity (relative frequency)
-
-Compute pairwise cosine distances between entities based on their feature distributions.
-
-# Arguments
-- `probability_matrix`: Column-major matrix where rows represent features and columns represent entities.
-  Each column should contain frequency/probability values for one entity.
-
-# Returns
-- Symmetric matrix of size (n_entities × n_entities) containing pairwise cosine distances.
-  Distance values range from 0 (identical distributions) to 1 (orthogonal distributions).
-
-# Details
-- Computes upper triangle and mirrors to lower triangle for efficiency
-- Uses `Distances.cosine_dist` for the core computation
-- Time complexity is O(n²) where n is the number of entities
-"""
-function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
-    n_entities = size(probability_matrix, 2)
-    distance_matrix = zeros(n_entities, n_entities)
-    for entity_1_index in 1:n_entities
-        for entity_2_index in entity_1_index+1:n_entities
-            a = probability_matrix[:, entity_1_index]
-            b = probability_matrix[:, entity_2_index]
-            distance_matrix[entity_1_index, entity_2_index] = 
-                distance_matrix[entity_2_index, entity_1_index] = 
-                Distances.cosine_dist(a, b)
-        end
-    end
-    return distance_matrix
-end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -14588,6 +14849,9 @@ Pass 2 (Serial): Aggregates unique kmers, max count, nnz per file, and rarefacti
                  Generates and saves a k-mer rarefaction plot.
 Pass 3 (Parallel): Reads temporary counts again to construct the final sparse matrix.
 
+Optionally, a results filename can be provided to save/load the output. If the file exists and `force` is false,
+the result is loaded and returned. If `force` is true or the file does not exist, results are computed and saved.
+
 # Arguments
 - `fasta_list::AbstractVector{<:AbstractString}`: A list of paths to FASTA files.
 - `k::Integer`: The length of the kmer.
@@ -14597,6 +14861,8 @@ Pass 3 (Parallel): Reads temporary counts again to construct the final sparse ma
 - `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. Defaults to "kmer_rarefaction_data_3pass.tsv".
 - `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. Defaults to "kmer_rarefaction_curve_3pass".
 - `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
+- `kmer_counts_result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
+- `force::Bool`: If true, recompute and overwrite the output file even if it exists. Defaults to `false`.
 - `rarefaction_plot_kwargs...`: Keyword arguments to pass to `plot_kmer_rarefaction` for plot customization.
 
 # Returns
@@ -14608,7 +14874,7 @@ Pass 3 (Parallel): Reads temporary counts again to construct the final sparse ma
 # Raises
 - `ErrorException`: If input `fasta_list` is empty, alphabet is invalid, or required Kmer/counting functions are not found.
 """
-function fasta_list_to_sparse_counts_table(;
+function fasta_list_to_sparse_kmer_counts(;
     fasta_list::AbstractVector{<:AbstractString},
     k::Integer,
     alphabet::Symbol,
@@ -14617,8 +14883,24 @@ function fasta_list_to_sparse_counts_table(;
     rarefaction_data_filename::AbstractString = "$(normalized_current_datetime()).$(lowercase(string(alphabet)))$(k)mer_rarefaction.tsv",
     rarefaction_plot_basename::AbstractString = replace(rarefaction_data_filename, ".tsv" => ""),
     show_rarefaction_plot::Bool = true,
-    rarefaction_plot_kwargs... 
+    result_file::Union{Nothing, AbstractString} = nothing,
+    force::Bool = false,
+    rarefaction_plot_kwargs...
 )
+    # --- Results File Short Circuit ---
+    if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
+        Base.@info "result_file already exists at $result_file. Loading and returning results."
+        result = JLD2.load_object(result_file)
+        # Try to ensure result is a NamedTuple with required fields
+        if all(haskey(result, key) for key in (:kmers, :counts, :rarefaction_data_path))
+            return result
+        else
+            Base.@warn "Loaded file does not have required structure; will recompute."
+        end
+    elseif !isnothing(result_file) && force && Base.Filesystem.isfile(result_file)
+        Base.@info "Force is true. Overwriting $result_file with recomputed results."
+    end
+
     # --- 0. Input Validation and Setup ---
     num_files = length(fasta_list)
     if num_files == 0
@@ -14646,7 +14928,7 @@ function fasta_list_to_sparse_counts_table(;
     temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="kmer_counts_3pass_")
     Base.@info "Using temporary directory for intermediate counts: $temp_dir"
     temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
-    
+
     # --- Pass 1: Count Kmers per file and Write to Temp Files (Parallel) ---
     Base.@info "Pass 1: Counting $(KMER_TYPE) for $num_files files and writing temps using $(Base.Threads.nthreads()) threads..."
     progress_pass1 = ProgressMeter.Progress(num_files; desc="Pass 1 (Counting & Writing Temps): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
@@ -14661,11 +14943,10 @@ function fasta_list_to_sparse_counts_table(;
             JLD2.save_object(temp_filename, counts_dict)
         catch e
             Base.println("Error processing file $fasta_file (idx $original_file_idx) during Pass 1: $e")
-            # Save an empty dict if error occurred to ensure file exists, simplifying later checks
             try
                 JLD2.save_object(temp_filename, Dict{KMER_TYPE, Int}())
             catch save_err
-                 Base.@error "Failed to save empty placeholder for errored file $fasta_file to $temp_filename: $save_err"
+                Base.@error "Failed to save empty placeholder for errored file $fasta_file to $temp_filename: $save_err"
             end
         end
         Base.lock(progress_pass1_lock) do
@@ -14681,7 +14962,7 @@ function fasta_list_to_sparse_counts_table(;
     max_observed_count = 0
     total_non_zero_entries = 0
     nnz_per_file = Vector{Int}(undef, num_files)
-    rarefaction_points = Vector{Tuple{Int, Int}}() # Grow as we process
+    rarefaction_points = Vector{Tuple{Int, Int}}()
 
     progress_pass2 = ProgressMeter.Progress(num_files; desc="Pass 2 (Aggregating Serially): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:yellow)
 
@@ -14709,34 +14990,32 @@ function fasta_list_to_sparse_counts_table(;
         end
         nnz_per_file[i] = current_file_nnz
         total_non_zero_entries += current_file_nnz
-        push!(rarefaction_points, (i, length(all_kmers_set))) # Record after processing file i
+        push!(rarefaction_points, (i, length(all_kmers_set)))
         ProgressMeter.next!(progress_pass2; showvalues = [(:unique_kmers, length(all_kmers_set))])
     end
     ProgressMeter.finish!(progress_pass2)
     Base.@info "Pass 2 aggregation finished."
 
     # --- Process and Save/Plot Rarefaction Data (after Pass 2) ---
-    default_output_dir = pwd() 
+    default_output_dir = pwd()
     rarefaction_data_path = Base.Filesystem.joinpath(default_output_dir, rarefaction_data_filename)
     Base.@info "Saving rarefaction data to $rarefaction_data_path..."
     try
         data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
         if !isempty(data_to_write)
-             DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
+            DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
         else
-             Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
-             DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
+            Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
+            DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
         end
     catch e
         Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
     end
-    
-    if isfile(rarefaction_data_path) && !isempty(rarefaction_points)
+
+    if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
         Base.@info "Generating k-mer rarefaction plot..."
         try
-            # Ensure plot_kmer_rarefaction is accessible.
-            # This function must be defined in the current scope or imported.
-            plot_kmer_rarefaction( 
+            plot_kmer_rarefaction(
                 rarefaction_data_path;
                 output_dir = default_output_dir,
                 output_basename = rarefaction_plot_basename,
@@ -14771,31 +15050,34 @@ function fasta_list_to_sparse_counts_table(;
 
     if isempty(all_kmers_set) && total_non_zero_entries == 0
         Base.@warn "No kmers found across any files, or errors prevented aggregation."
-        return (; kmers=Vector{KMER_TYPE}(), counts=SparseArrays.spzeros(ValType, Int, 0, num_files), rarefaction_data_path=rarefaction_data_path)
+        result = (; kmers=Vector{KMER_TYPE}(), counts=SparseArrays.spzeros(ValType, Int, 0, num_files), rarefaction_data_path=rarefaction_data_path)
+        if !isnothing(result_file)
+            JLD2.save_object(result_file, result)
+            Base.@info "Saved empty results to $result_file"
+        end
+        return result
     end
 
     sorted_kmers = sort(collect(all_kmers_set))
     num_kmers = length(sorted_kmers)
-    empty!(all_kmers_set); all_kmers_set = nothing; GC.gc() # Release memory
+    empty!(all_kmers_set); all_kmers_set = nothing; GC.gc()
 
     kmer_to_row_map = Dict{KMER_TYPE, Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
     Base.@info "Found $num_kmers unique kmers. Total non-zero entries: $total_non_zero_entries."
 
     # --- Pass 3: Prepare Sparse Matrix Data (In Parallel from Temp Files) ---
     Base.@info "Pass 3: Preparing data for sparse matrix construction using $(Base.Threads.nthreads()) threads..."
-    
-    # Ensure total_non_zero_entries is accurate based on nnz_per_file sum
-    # This is important if any files failed in Pass 2 and nnz_per_file[i] was set to 0 for them.
+
     actual_total_nnz_from_files = sum(nnz_per_file)
     if total_non_zero_entries != actual_total_nnz_from_files
         Base.@warn "Sum of nnz_per_file ($actual_total_nnz_from_files) differs from serially accumulated total_non_zero_entries ($total_non_zero_entries). Using sum of nnz_per_file."
-        total_non_zero_entries = actual_total_nnz_from_files # Use the more robust sum for allocation
+        total_non_zero_entries = actual_total_nnz_from_files
     end
-    
+
     if total_non_zero_entries == 0 && num_kmers > 0
-         Base.@warn "Found $num_kmers unique kmers, but $total_non_zero_entries non-zero entries. Matrix will be empty of values."
+        Base.@warn "Found $num_kmers unique kmers, but $total_non_zero_entries non-zero entries. Matrix will be empty of values."
     elseif total_non_zero_entries == 0 && num_kmers == 0
-         Base.@warn "No k-mers and no non-zero entries. Resulting matrix will be empty."
+        Base.@warn "No k-mers and no non-zero entries. Resulting matrix will be empty."
     end
 
     row_indices = Vector{Int}(undef, total_non_zero_entries)
@@ -14805,33 +15087,33 @@ function fasta_list_to_sparse_counts_table(;
     write_offsets = Vector{Int}(undef, num_files + 1)
     write_offsets[1] = 0
     for i in 1:num_files
-        write_offsets[i+1] = write_offsets[i] + nnz_per_file[i] 
+        write_offsets[i+1] = write_offsets[i] + nnz_per_file[i]
     end
-    
+
     progress_pass3 = ProgressMeter.Progress(num_files; desc="Pass 3 (Filling Sparse Data): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:blue)
     progress_pass3_lock = Base.ReentrantLock()
 
     Base.Threads.@threads for original_file_idx in 1:num_files
-        if nnz_per_file[original_file_idx] > 0 
+        if nnz_per_file[original_file_idx] > 0
             temp_filename = temp_file_paths[original_file_idx]
-            file_start_offset = write_offsets[original_file_idx] 
-            current_entry_in_file = 0 
+            file_start_offset = write_offsets[original_file_idx]
+            current_entry_in_file = 0
             try
                 if Base.Filesystem.isfile(temp_filename)
-                    counts_dict_pass3 = JLD2.load_object(temp_filename) 
+                    counts_dict_pass3 = JLD2.load_object(temp_filename)
                     for (kmer, count_val) in counts_dict_pass3
                         if count_val > 0
                             row_idx_val = Base.get(kmer_to_row_map, kmer, 0)
-                            if row_idx_val > 0 
-                                global_idx = file_start_offset + current_entry_in_file + 1 
-                                if global_idx <= total_non_zero_entries # total_non_zero_entries is now sum(nnz_per_file)
+                            if row_idx_val > 0
+                                global_idx = file_start_offset + current_entry_in_file + 1
+                                if global_idx <= total_non_zero_entries
                                     row_indices[global_idx] = row_idx_val
                                     col_indices[global_idx] = original_file_idx
                                     values_vec[global_idx] = ValType(count_val)
                                     current_entry_in_file += 1
                                 else
                                     Base.@error "Internal error: Exceeded sparse matrix capacity (total_non_zero_entries = $total_non_zero_entries) for file $original_file_idx. Global Idx: $global_idx. Kmer: $kmer."
-                                    break 
+                                    break
                                 end
                             end
                         end
@@ -14840,7 +15122,7 @@ function fasta_list_to_sparse_counts_table(;
                         Base.@warn "Mismatch in NNZ for file $original_file_idx ($(fasta_list[original_file_idx])) during Pass 3. Expected $(nnz_per_file[original_file_idx]), wrote $current_entry_in_file."
                     end
                 else
-                     Base.@warn "Temp file $temp_filename (for original file $original_file_idx) not found in Pass 3, though nnz_per_file was $(nnz_per_file[original_file_idx])."
+                    Base.@warn "Temp file $temp_filename (for original file $original_file_idx) not found in Pass 3, though nnz_per_file was $(nnz_per_file[original_file_idx])."
                 end
             catch e
                 Base.@error "Error reading or processing temporary file $temp_filename (for original file $original_file_idx) in Pass 3: $e."
@@ -14852,15 +15134,15 @@ function fasta_list_to_sparse_counts_table(;
     end
     ProgressMeter.finish!(progress_pass3)
     Base.@info "Pass 3 finished."
-    
+
     Base.@info "Constructing sparse matrix ($num_kmers rows, $num_files columns, $total_non_zero_entries non-zero entries)..."
-    
+
     kmer_counts_sparse_matrix = if total_non_zero_entries > 0 && num_kmers > 0
         SparseArrays.sparse(
-            row_indices[1:total_non_zero_entries], 
-            col_indices[1:total_non_zero_entries], 
-            values_vec[1:total_non_zero_entries], 
-            num_kmers, 
+            row_indices[1:total_non_zero_entries],
+            col_indices[1:total_non_zero_entries],
+            values_vec[1:total_non_zero_entries],
+            num_kmers,
             num_files
         )
     else
@@ -14869,15 +15151,23 @@ function fasta_list_to_sparse_counts_table(;
 
     Base.@info "Done. Returning sorted kmer list, sparse counts matrix, and rarefaction data path."
     final_result = (; kmers=sorted_kmers, counts=kmer_counts_sparse_matrix, rarefaction_data_path=rarefaction_data_path)
-    
-    # Consider adding cleanup for temp_dir here or instructing the user.
-    # Base.@info "Temporary directory $temp_dir can be manually removed."
-    # try
-    #     Base.Filesystem.rm(temp_dir; recursive=true, force=true)
-    #     Base.@info "Successfully removed temporary directory: $temp_dir"
-    # catch e
-    #     Base.@warn "Could not remove temporary directory $temp_dir: $e"
-    # end
+
+    try
+        Base.Filesystem.rm(temp_dir; recursive=true, force=true)
+        Base.@info "Successfully removed temporary directory: $temp_dir"
+    catch e
+        Base.@warn "Could not remove temporary directory $temp_dir: $e"
+    end
+
+    # Save result if requested
+    if !isnothing(result_file)
+        try
+            JLD2.save_object(result_file, final_result)
+            Base.@info "Saved kmer count results to $result_file"
+        catch e
+            Base.@error "Failed to save kmer count results to $result_file: $e"
+        end
+    end
 
     return final_result
 end
@@ -15003,7 +15293,11 @@ function fastxs2normalized_tables(;fastxs, outdir, force=false)
 
     Threads.@threads for i in 1:n
         fastx = fastxs[i]
-        outfile = joinpath(outdir, basename(fastx) * ".tsv.gz")
+        outfile_base = basename(fastx)
+        if occursin(r"\.gz$", outfile_base)
+            outfile_base = replace(outfile_base, r"\.gz$" => "")
+        end
+        outfile = joinpath(outdir, outfile_base * ".tsv.gz")
         try
             if !isfile(outfile) || (filesize(outfile) == 0) || force
                 normalized_table = Mycelia.fastx2normalized_table(fastx)
@@ -15183,6 +15477,595 @@ function run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=1
     )
 
     return parsed_result
+end
+
+"""
+Breadth-first sampling: sample at least one from each group,
+then sample remaining proportionally to group frequencies
+"""
+function breadth_first_sample(group_vector, total_sample_size::Int; 
+                            with_replacement::Bool = false)
+    if total_sample_size <= 0
+        throw(ArgumentError("total_sample_size must be positive"))
+    end
+    
+    # Get unique groups and their counts
+    group_counts = StatsBase.countmap(group_vector)
+    unique_groups = collect(keys(group_counts))
+    n_groups = length(unique_groups)
+    
+    if total_sample_size < n_groups
+        throw(ArgumentError("total_sample_size ($total_sample_size) must be >= number of groups ($n_groups)"))
+    end
+    
+    # Create indices for each group
+    group_indices = Dict()
+    for (i, group) in enumerate(group_vector)
+        if !haskey(group_indices, group)
+            group_indices[group] = Int[]
+        end
+        push!(group_indices[group], i)
+    end
+    
+    # Step 1: Sample one from each group (breadth-first)
+    sampled_indices = Int[]
+    remaining_indices_by_group = Dict()
+    
+    for group in unique_groups
+        group_idx = group_indices[group]
+        # Sample one index from this group
+        sampled_idx = StatsBase.sample(group_idx, 1)[1]
+        push!(sampled_indices, sampled_idx)
+        
+        # Store remaining indices for this group
+        if with_replacement
+            remaining_indices_by_group[group] = group_idx
+        else
+            remaining_indices_by_group[group] = filter(x -> x != sampled_idx, group_idx)
+        end
+    end
+    
+    # Step 2: Calculate remaining sample size
+    remaining_sample_size = total_sample_size - n_groups
+    
+    if remaining_sample_size > 0
+        # Calculate total remaining population
+        total_remaining = sum(length(indices) for indices in values(remaining_indices_by_group))
+        
+        if total_remaining == 0 && !with_replacement
+            @warn "No remaining indices to sample from. Consider setting with_replacement=true"
+            return sampled_indices
+        end
+        
+        # Sample proportionally from remaining indices
+        for group in unique_groups
+            remaining_group_indices = remaining_indices_by_group[group]
+            
+            if length(remaining_group_indices) == 0
+                continue  # Skip if no remaining indices in this group
+            end
+            
+            # Calculate proportional sample size for this group
+            if with_replacement
+                group_proportion = group_counts[group] / length(group_vector)
+            else
+                group_proportion = length(remaining_group_indices) / total_remaining
+            end
+            
+            additional_samples = round(Int, remaining_sample_size * group_proportion)
+            
+            if additional_samples > 0
+                if with_replacement || length(remaining_group_indices) >= additional_samples
+                    sampled = StatsBase.sample(remaining_group_indices, additional_samples, 
+                                             replace=with_replacement)
+                    append!(sampled_indices, sampled)
+                else
+                    # Take all remaining if not enough for desired sample size
+                    append!(sampled_indices, remaining_group_indices)
+                end
+            end
+        end
+        
+        # Handle any rounding discrepancies by sampling randomly from all remaining
+        current_sample_size = length(sampled_indices)
+        if current_sample_size < total_sample_size
+            shortfall = total_sample_size - current_sample_size
+            all_remaining = Int[]
+            
+            for indices in values(remaining_indices_by_group)
+                if with_replacement
+                    append!(all_remaining, indices)
+                else
+                    # Only include indices not already sampled
+                    for idx in indices
+                        if !(idx in sampled_indices)
+                            push!(all_remaining, idx)
+                        end
+                    end
+                end
+            end
+            
+            if length(all_remaining) >= shortfall
+                additional = StatsBase.sample(all_remaining, shortfall, replace=with_replacement)
+                append!(sampled_indices, additional)
+            elseif with_replacement && length(all_remaining) > 0
+                additional = StatsBase.sample(all_remaining, shortfall, replace=true)
+                append!(sampled_indices, additional)
+            end
+        end
+    end
+    
+    return sampled_indices
+end
+
+
+"""
+Apply breadth-first sampling to a DataFrame
+"""
+function breadth_first_sample_dataframe(df::DataFrames.DataFrame, group_col::Union{Symbol, String}, 
+                                       total_sample_size::Int; with_replacement::Bool = false)
+
+    sampled_indices = breadth_first_sample(df[!, group_col], total_sample_size, 
+                                         with_replacement=with_replacement)
+    return df[sampled_indices, :]
+end
+
+"""
+    choose_top_n_markers(N)
+
+Return a vector of the top N most visually distinct marker symbols for plotting.
+
+# Arguments
+- `N::Int`: Number of distinct markers to return (max 17 for best differentiation).
+
+# Returns
+- `Vector{Symbol}`: Vector of marker symbol names.
+
+# Example
+    markers = choose_top_n_markers(7)
+"""
+function choose_top_n_markers(N::Int)
+    # Priority order, most differentiable to least
+    marker_priority = [
+        :circle,
+        :rect,
+        :diamond,
+        :cross,
+        :utriangle,
+        :dtriangle,
+        :ltriangle,
+        :rtriangle,
+        :star5,
+        :pentagon,
+        :hexagon,
+        :octagon,
+        :xcross,
+        :x,
+        :star4,
+        :star6,
+        :star7,
+        :star8,
+        :heptagon,
+        :pixel,
+        :hline,
+        :vline,
+        :+,
+    ]
+    max_n = min(N, length(marker_priority))
+    return marker_priority[1:max_n]
+end
+
+# import Base: endswith
+# import Random
+
+# """
+#     zip_files(output_file::String, input_files::Vector{String})
+
+# Creates a zip archive from input_files.
+# Handles many files by writing a file list and using `zip -@`.
+# Appends `.zip` if missing.
+# """
+# function zip_files(output_file::String, input_files::Vector{String})
+#     out = endswith(output_file, ".zip") ? output_file : output_file * ".zip"
+#     tmpfile = tempname()
+#     open(tmpfile, "w") do io
+#         for file in input_files
+#             println(io, file)
+#         end
+#     end
+#     cmd = `zip $out -@ < $tmpfile`
+#     run(cmd)
+#     rm(tmpfile)
+#     return out
+# end
+
+"""
+    tar_gz_files(output_file::String, input_files::Vector{String})
+
+Creates a tar.gz archive from input_files.
+Handles many files by writing a file list and using `tar -czf ... -T filelist`.
+Appends `.tar.gz` if missing.
+"""
+function tar_gz_files(output_file::String, input_files::Vector{String})
+    out = endswith(output_file, ".tar.gz") ? output_file : output_file * ".tar.gz"
+    tmpfile = tempname()
+    open(tmpfile, "w") do io
+        for file in input_files
+            println(io, file)
+        end
+    end
+    cmd = `tar -czf $out -T $tmpfile`
+    run(cmd)
+    rm(tmpfile)
+    return out
+end
+
+import DataFrames
+
+"""
+    dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::Bool = true)
+
+Convert a vector of dictionaries (with possibly non-uniform keys and any key type) into a DataFrame.
+Missing keys in a row are filled with `missing`.
+
+# Arguments
+- `dictvec`: Vector of dictionaries.
+- `symbol_columns`: If true (default), columns are named as Symbols (when possible), else as raw keys.
+
+# Returns
+- `DataFrames.DataFrame` with columns as the union of all keys.
+"""
+function dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::Bool = true)
+    # Gather all unique keys from all dictionaries
+    all_keys = Set{eltype(keys(dictvec[1]))}()
+    for d in dictvec
+        union!(all_keys, keys(d))
+    end
+    all_keys = collect(all_keys)
+
+    # Optionally convert column names to Symbols if possible
+    if symbol_columns
+        try
+            columns = Symbol.(all_keys)
+        catch
+            error("Some keys cannot be converted to Symbol. Set `symbol_columns=false`.")
+        end
+    else
+        columns = all_keys
+    end
+
+    # Build rows as NamedTuples with missing for absent keys
+    rows = [
+        NamedTuple{Tuple(columns)}(
+            map(k -> get(d, k, missing), all_keys)
+        )
+        for d in dictvec
+    ]
+    DataFrames.DataFrame(rows)
+end
+
+
+"""
+    pca_transform(
+      M::AbstractMatrix{<:Real};
+      k::Int = 0,
+      var_prop::Float64 = 1.0
+    )
+
+Perform standard PCA on `M` (features × samples), returning enough PCs
+to either:
+
+- match a user‐supplied `k > 0`, or  
+- explain at least `var_prop` of the total variance (0 < var_prop ≤ 1).  
+
+By default (`k=0, var_prop=1.0`), this will capture **all** variance,
+i.e. use `min(n_samples-1, n_features)` components.
+
+# Returns
+A NamedTuple with fields
+- `model`    : the fitted `MultivariateStats.PCA` object  
+- `scores`   : k×n_samples matrix of PC scores  
+- `loadings` : k×n_features matrix of PC loadings  
+- `chosen_k` : the number of components actually used
+"""
+function pca_transform(
+  M::AbstractMatrix{<:Real};
+  k::Int = 0,
+  var_prop::Float64 = 1.0
+)
+  n_feats, n_samps = size(M)
+  # max possible PCs = full rank of X (columns = samples)
+  rank_max = min(n_samps - 1, n_feats)
+
+  # user‐supplied k takes priority
+  if k > 0
+    chosen_k = min(k, rank_max)
+    model = MultivariateStats.fit(
+      MultivariateStats.PCA, M; maxoutdim=chosen_k
+    )
+    Z = MultivariateStats.transform(model, M)           # (n_samples × chosen_k)
+
+  else
+    # need to auto‐select by variance proportion
+    # fit full‐rank PCA to get all eigenvariances
+    full = MultivariateStats.fit(
+      MultivariateStats.PCA, M; maxoutdim=rank_max
+    )
+    vars = MultivariateStats.principalvars(full)        # length = rank_max
+    total = MultivariateStats.tvar(full)               # = sum(vars) :contentReference[oaicite:1]{index=1}
+    # find smallest k so cum‐var / total ≥ var_prop
+    if var_prop < 1.0
+      cum = cumsum(vars) ./ total
+      idx = findfirst(x -> x ≥ var_prop, cum)
+      chosen_k = idx === nothing ? rank_max : idx
+    else
+      chosen_k = rank_max
+    end
+    # slice out the first chosen_k components
+    Z = MultivariateStats.transform(full, M)[:, 1:chosen_k]  # (n_samples × chosen_k)
+    model = full
+  end
+
+  return (
+    model    = model,
+    scores   = transpose(Z),                       # (chosen_k × n_samples)
+    loadings = MultivariateStats.projection(model)'[:, 1:chosen_k],  # (chosen_k × n_features)
+    chosen_k = chosen_k
+  )
+end
+
+"""
+    logistic_pca_epca(M::AbstractMatrix{<:Integer}, k::Int)
+
+Perform Bernoulli (logistic) EPCA on a 0/1 matrix `M` (features × samples).
+
+# Returns
+A NamedTuple with
+- `model`    : the fitted `ExpFamilyPCA.BernoulliEPCA` object  
+- `scores`   : k×n_samples matrix of low‐dimensional sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function logistic_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+    n_features, n_samples = size(M)
+    if k < 1
+        k = min(min(n_samples-1, n_features), 10)
+    end
+    X = transpose(M)                                 # samples × features
+    model = ExpFamilyPCA.BernoulliEPCA(n_features, k)
+    A     = ExpFamilyPCA.fit!(model, X)              # returns (n_samples×k)
+    scores   = transpose(A)                          # k×n_samples
+    loadings = model.V                               # k×n_features
+    return (model=model, scores=scores, loadings=loadings)
+end
+
+"""
+    glm_pca_epca(M::AbstractMatrix{<:Integer}, k::Int)
+
+Perform Poisson EPCA on a count matrix `M` (features × samples).
+
+# Returns
+A NamedTuple with
+- `model`    : the fitted `ExpFamilyPCA.PoissonEPCA` object  
+- `scores`   : k×n_samples matrix of low‐dimensional sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function glm_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+    n_features, n_samples = size(M)
+    if k < 1
+        k = min(min(n_samples-1, n_features), 10)
+    end
+    X = transpose(M)
+    model = ExpFamilyPCA.PoissonEPCA(n_features, k)
+    A     = ExpFamilyPCA.fit!(model, X)
+    scores   = transpose(A)
+    loadings = model.V
+    return (model=model, scores=scores, loadings=loadings)
+end
+
+# ── 1. Negative‐Binomial EPCA ────────────────────────────────────────────────
+
+"""
+    negbin_pca_epca(M::AbstractMatrix{<:Integer};
+                   k::Int=0,
+                   r::Int=1)
+
+Perform Negative-Binomial EPCA on a count matrix `M` (features × samples).
+
+# Keyword arguments
+- `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
+- `r` : known NB “number of successes” parameter
+
+# Returns
+NamedTuple with fields
+- `model`    : the fitted `ExpFamilyPCA.NegativeBinomialEPCA` object  
+- `scores`   : k×n_samples matrix of sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function negbin_pca_epca(
+    M::AbstractMatrix{<:Integer};
+    k::Int = 0,
+    r::Int = 1
+)
+    n_feats, n_samps = size(M)
+    if k < 1
+        k = min(min(n_samps-1, n_feats), 10)
+    end
+
+    # transpose so each row is a sample
+    X = transpose(M)  # (n_samples × n_features)
+
+    # construct and fit NB-EPCA
+    model = ExpFamilyPCA.NegativeBinomialEPCA(n_feats, k, r)
+    A     = ExpFamilyPCA.fit!(model, X)  # returns (n_samples × k)
+
+    return (
+      model    = model,
+      scores   = transpose(A),  # (k × n_samples)
+      loadings = model.V        # (k × n_features)
+    )
+end
+
+
+# ── 4. PCoA from a distance matrix ───────────────────────────────────────────
+
+"""
+    pcoa_from_dist(D::AbstractMatrix{<:Real}; maxoutdim::Int = 2)
+
+Perform Principal Coordinates Analysis directly from a precomputed
+distance matrix `D` (n_samples×n_samples).
+
+# Keyword arguments
+- `maxoutdim` : target embedding dimension (default=2)
+
+# Returns
+NamedTuple with fields
+- `model`      : the fitted `MultivariateStats.MDS` model  
+- `coordinates`: maxoutdim×n_samples matrix of embedded coordinates  
+"""
+function pcoa_from_dist(
+    D::AbstractMatrix{<:Real};
+    maxoutdim::Int = 2
+)
+    @assert size(D, 1) == size(D,2) "size(D,1) != size(D,2) $(size(D))"
+    model = MultivariateStats.fit(
+      MultivariateStats.MDS, D; distances=true, maxoutdim=maxoutdim
+    )
+    Y = MultivariateStats.predict(model)
+
+    return (
+      model       = model,
+      coordinates = Y
+    )
+end
+
+
+"""
+    umap_embed(scores::AbstractMatrix{<:Real};
+               n_neighbors::Int=15,
+               min_dist::Float64=0.1,
+               n_components::Int=2)
+
+Embed your PC/EPCA scores (k×n_samples) into `n_components` via UMAP.
+
+# Arguments
+- `scores`      : (components × samples) matrix  
+- `n_neighbors` : UMAP neighborhood size  
+- `min_dist`    : UMAP min_dist  
+- `n_components`: output dimension (2 or 3)
+
+# Returns
+- `embedding` : n_components×n_samples matrix  
+- `um`        : the trained UMAP.UMAP model  
+"""
+function umap_embed(scores::AbstractMatrix{<:Real};
+                    n_neighbors::Int=15,
+                    min_dist::Float64=0.1,
+                    n_components::Int=2)
+
+    # transpose to (samples × components)
+    X = transpose(scores)
+
+    # build & fit UMAP
+    um = UMAP.UMAP(n_neighbors=n_neighbors,
+                   min_dist=min_dist,
+                   n_components=n_components)
+    embedding = UMAP.fit_transform(um, X)  # returns samples×n_components
+
+    # return embedding in components×samples orientation
+    return transpose(embedding), um
+end
+
+"""
+    write_fastas_from_normalized_fastx_tables(
+        table_paths::Vector{String};
+        output_dir::String = pwd(),
+        show_progress::Bool = true,
+        overwrite::Bool = false,
+        error_handler = (e, table_path)->display((e, table_path))
+    ) -> NamedTuple
+
+Given a vector of normalized fastx table paths, writes out gzipped FASTA files in parallel.
+Each table must have columns: "fastx_sha256", "record_sha256", "record_sequence".
+Automatically decompresses input files if they end with ".gz".
+Returns a summary NamedTuple with successes, failures, failed tables, and output files.
+
+# Keyword Arguments
+- `output_dir`: Directory to write .fna.gz files to.
+- `show_progress`: Show a progress bar (default: true).
+- `overwrite`: Overwrite existing files (default: false).
+- `error_handler`: Function called with (exception, table_path) on error.
+
+"""
+function write_fastas_from_normalized_fastx_tables(
+    table_paths::Vector{String};
+    output_dir::String = pwd(),
+    show_progress::Bool = true,
+    overwrite::Bool = false,
+    error_handler = (e, table_path)->display((e, table_path))
+)
+    n = length(table_paths)
+    successes = Base.Threads.Atomic{Int}(0)
+    failures = Base.Threads.Atomic{Int}(0)
+    failed_tables = String[]
+    failed_tables_lock = Base.Threads.SpinLock()
+    output_files = String[]
+    output_files_lock = Base.Threads.SpinLock()
+
+    progress = show_progress ? ProgressMeter.Progress(n, 1) : nothing
+
+    Base.Threads.@threads for i in 1:n
+        table_path = table_paths[i]
+        try
+            # Determine if the table should be decompressed based on extension
+            decompress = endswith(table_path, ".gz")
+            io = open(table_path)
+            stream = decompress ? CodecZlib.GzipDecompressorStream(io) : io
+            loaded_table = CSV.read(stream, DataFrames.DataFrame, delim='\t')
+            close(io)
+            # Remove .gz if present in the fastx_sha256 (basename)
+            fastx_basename = loaded_table[1, "fastx_sha256"]
+            if occursin(r"\.gz$", fastx_basename)
+                fastx_basename = replace(fastx_basename, r"\.gz$" => "")
+            end
+            fastx_filename = fastx_basename * ".fna.gz"
+            fastx_file = joinpath(output_dir, fastx_filename)
+            # Write if missing or overwrite specified
+            write_file = overwrite || !isfile(fastx_file)
+            if write_file
+                fastx_records = [
+                    FASTX.FASTA.Record(row["record_sha256"], row["record_sequence"])
+                    for row in DataFrames.eachrow(loaded_table)
+                ]
+                Mycelia.write_fasta(outfile = fastx_file, records = fastx_records)
+            end
+            # Record output file path
+            Base.Threads.lock(output_files_lock) do
+                push!(output_files, fastx_file)
+            end
+            Base.Threads.atomic_add!(successes, 1)
+        catch e
+            error_handler(e, table_path)
+            Base.Threads.atomic_add!(failures, 1)
+            Base.Threads.lock(failed_tables_lock) do
+                push!(failed_tables, table_path)
+            end
+        end
+        if show_progress
+            ProgressMeter.next!(progress)
+        end
+    end
+
+    if show_progress
+        ProgressMeter.finish!(progress)
+    end
+
+    return (
+        total = n,
+        succeeded = successes[],
+        failed = failures[],
+        failed_tables = failed_tables,
+        output_files = output_files
+    )
 end
 
 # dynamic import of files??

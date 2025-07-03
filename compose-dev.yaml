@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      platforms:
+        - linux/arm64
+    entrypoint:
+      - sleep
+      - infinity
+    init: true
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+

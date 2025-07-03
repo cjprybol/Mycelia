@@ -1020,6 +1020,31 @@ function download_genome_by_ftp(;ftp, outdir=pwd())
     end
 end
 
+function download_genomes_by_ftp(;
+    ftp_paths,
+    outdir=pwd()
+)
+    results = DataFrames.DataFrame(ftp_path=String[], fna_path=String[])
+    n = length(ftp_paths)
+    p = ProgressMeter.Progress(n; desc="Downloading genomes: ", dt=0.5)
+    prog_lock = Threads.ReentrantLock()
+    df_lock = Threads.ReentrantLock()
+
+    Threads.@threads for i in 1:n
+        ftp = ftp_paths[i]
+        fna_file = Mycelia.download_genome_by_ftp(ftp=ftp, outdir=outdir)
+        Threads.lock(df_lock) do
+            push!(results, (ftp_path=ftp, fna_path=fna_file))
+        end
+        Threads.lock(prog_lock) do
+            ProgressMeter.next!(p)
+        end
+    end
+
+    return results
+end
+
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
