@@ -2267,3 +2267,49 @@ function load_bvbrc_genome_metadata(;
         rm(temp_dir, recursive=true, force=true)
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Export sequences from a BLAST database to a gzipped FASTA file.
+
+# Arguments
+- `path_to_db`: Path to the BLAST database
+- `fasta`: Output path for the gzipped FASTA file (default: `path_to_db * ".fna.gz"`)
+
+# Details
+Uses conda's BLAST environment to extract sequences using `blastdbcmd`.
+The output is automatically compressed using `pigz`.
+If the output file already exists, the function will skip extraction.
+
+"""
+function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
+    Mycelia.add_bioconda_env("blast")
+    if !isfile(fasta)
+        # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
+        @time run(pipeline(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt '%f' -db $(path_to_db)`, `pigz`), fasta))
+    else
+        @info "$(fasta) already present"
+    end
+end
+
+# https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/taxonomy/
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Retrieve taxonomic information for a given NCBI taxonomy ID.
+
+# Arguments
+- `taxa_id`: NCBI taxonomy identifier (integer)
+
+# Returns
+- `DataFrame`: Taxonomy summary containing fields like tax_id, rank, species, etc.
+"""
+function ncbi_taxon_summary(taxa_id)
+    Mycelia.add_bioconda_env("ncbi-datasets")
+    p = pipeline(
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets datasets summary taxonomy taxon $(taxa_id) --as-json-lines`,
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets dataformat tsv taxonomy --template tax-summary`
+        )
+    return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
+end

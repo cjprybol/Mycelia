@@ -373,44 +373,6 @@ function repr_long(v)
     println(buf, "]")
     return String(take!(buf))
 end
-
-
-function rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
-    # Create a temporary file for storing file paths
-    temp_file = joinpath(tempdir(), "rclone_sources_$(Random.randstring(8)).txt")
-    
-    try
-        # Write paths to temp file
-        open(temp_file, "w") do file
-            for path in relative_paths
-                println(file, path)
-            end
-        end
-        
-        println("Starting transfer of $(length(relative_paths)) files from $source to $destination...")
-        
-        # Make sure the destination directory exists if it's local
-        if !occursin(":", destination) && !isdir(destination)
-            mkdir(destination)
-        end
-        
-        # Download files using rclone with progress reporting
-        # --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 
-        run(`rclone copy $source $destination --verbose --files-from $temp_file`)
-        
-        println("Download completed successfully")
-        return true
-    catch e
-        println("Error: $e")
-        return false
-    finally
-        # Clean up temp file
-        if isfile(temp_file)
-            rm(temp_file)
-            println("Temporary file removed")
-        end
-    end
-end
         
 """
     dataframe_to_ndjson(df::DataFrame; outfile::Union{String,Nothing}=nothing)
@@ -749,4 +711,178 @@ unix_time = current_unix_datetime()
 """
 function current_unix_datetime()
     return Int(floor(Dates.datetime2unix(Dates.now())))
+end
+
+# seqkit concat $(cat fasta_files.txt) > merged.fasta
+# seqtk seq -L $(cat fasta_files.txt) > merged.fasta
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Join fasta files without any regard to record uniqueness.
+
+A cross-platform version of `cat *.fasta > joint.fasta`
+
+See merge_fasta_files
+
+Concatenate multiple FASTA files into a single output file by simple appending.
+
+# Arguments
+- `files`: Vector of paths to input FASTA files
+- `file`: Path where the concatenated output will be written
+
+# Returns
+- Path to the output concatenated file
+
+# Details
+Platform-independent implementation of `cat *.fasta > combined.fasta`.
+Files are processed sequentially with a progress indicator.
+"""
+function concatenate_files(;files, file)
+    close(open(file, "w"))
+    ProgressMeter.@showprogress for f in files
+        # stderr=file_path
+        run(pipeline(`cat $(f)`, stdout=file, append=true))
+    end
+    return file
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate reaction velocity using Michaelis-Menten enzyme kinetics equation.
+
+# Arguments
+- `s::Vector{Float64}`: Substrate concentration(s) [mol/L]
+- `p::Vector{Float64}`: Parameters vector where:
+    - `p[1]`: vmax - Maximum reaction velocity [mol/(L⋅s)]
+    - `p[2]`: km - Michaelis constant [mol/L]
+
+# Returns
+- `v::Vector{Float64}`: Reaction velocity [mol/(L⋅s)]
+
+# Description
+Implements the Michaelis-Menten equation: v = (vmax * s)/(km + s)
+
+# Reference
+Michaelis L., Menten M.L. (1913). Die Kinetik der Invertinwirkung. 
+Biochem Z 49:333-369.
+"""
+# Michaelis–Menten
+function calculate_v(s,p)
+    vmax = p[1]
+    km = p[2]
+    v = (vmax .* s) ./ (km .+ s)
+    return v
+end
+
+#outdir="$(homedir())/software/bandage"
+# I don't think that this is very portable - assumes sudo and linux
+# can make a bandage_jll to fix this longer term
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Downloads and installs Bandage, a bioinformatics visualization tool for genome assembly graphs.
+
+# Arguments
+- `outdir="/usr/local/bin"`: Target installation directory for the Bandage executable
+
+# Returns
+- Path to the installed Bandage executable
+
+# Details
+- Downloads Bandage v0.8.1 for Ubuntu
+- Installs required system dependencies (libxcb-glx0, libx11-xcb-dev, libfontconfig, libgl1-mesa-glx)
+- Attempts installation with sudo, falls back to root if sudo fails
+- Skips download if Bandage is already installed at target location
+
+# Dependencies
+Requires system commands: wget, unzip, apt
+"""
+function download_bandage(outdir="/usr/local/bin")
+    bandage_executable = joinpath(outdir, "Bandage")
+    if !isfile(bandage_executable)
+        run(`wget https://github.com/rrwick/Bandage/releases/download/v0.8.1/Bandage_Ubuntu_static_v0_8_1.zip`)
+        run(`unzip Bandage_Ubuntu_static_v0_8_1.zip`)
+        isfile("sample_LastGraph") && rm("sample_LastGraph")
+        isfile("Bandage_Ubuntu_static_v0_8_1.zip") && rm("Bandage_Ubuntu_static_v0_8_1.zip")
+        try # not root
+            run(`sudo mv Bandage $(outdir)`)
+            run(`sudo apt install libxcb-glx0 libx11-xcb-dev libfontconfig libgl1-mesa-glx -y`)
+        catch # root
+            run(`mv Bandage $(outdir)`)
+            run(`apt install libxcb-glx0 libx11-xcb-dev libfontconfig libgl1-mesa-glx -y`)
+        end
+    end
+    return bandage_executable
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a copy of a file in a temporary directory while preserving the original filename.
+
+# Arguments
+- `file_path::String`: Path to the source file to be copied
+
+# Returns
+- `String`: Path to the newly created temporary file
+"""
+function copy_to_tempdir(file_path::String)
+    # Create a temporary directory
+    temp_dir = mktempdir()
+
+    # Get the file name from the original file path
+    file_name = basename(file_path)
+
+    # Create the new file path within the temporary directory
+    temp_file_path = joinpath(temp_dir, file_name)
+
+    # Copy the original file to the new path
+    cp(file_path, temp_file_path)
+
+    # Return the path of the temporary file
+    return temp_file_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the current date and time as a normalized string with all non-word characters removed.
+
+The output format is based on ISO datetime (YYYYMMDDThhmmss) but strips any special characters
+like hyphens, colons or dots.
+"""
+function normalized_current_datetime()
+    return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the current date as a normalized string with all non-word characters removed.
+
+The output format is based on ISO datetime (YYYYMMDD) but strips any special characters
+like hyphens, colons or dots.
+"""
+function normalized_current_date()
+    return replace(Dates.format(Dates.today(), Dates.ISODateFormat), r"[^\w]" => "")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Returns the current git commit hash of the repository.
+
+# Arguments
+- `short::Bool=false`: If true, returns abbreviated 8-character hash
+
+# Returns
+A string containing the git commit hash (full 40 characters by default)
+"""
+function githash(;short=false)
+    git_hash = rstrip(read(`git rev-parse HEAD`, String))
+    if short
+        git_hash = git_hash[1:8]
+    end
+    return git_hash
 end

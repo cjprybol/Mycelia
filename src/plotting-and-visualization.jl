@@ -948,3 +948,22 @@ function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Rea
     
     return optimal_length, p
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Add random noise to create a vector of jittered values.
+
+Generates `n` values by adding random noise to the input value `x`. 
+The noise is uniformly distributed between -1/3 and 1/3.
+
+# Arguments
+- `x`: Base value to add jitter to
+- `n`: Number of jittered values to generate
+
+# Returns
+- Vector of length `n` containing jittered values around `x`
+"""
+function jitter(x, n)
+    return [x + rand() / 3 * (ifelse(rand(Bool), 1, -1)) for i in 1:n]
+end

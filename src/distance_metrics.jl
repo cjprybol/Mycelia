@@ -152,3 +152,352 @@ end
 #     # return Distances.jaccard(a_indices, b_indices)
 #     return jaccard(collect(keys(kmer_counts_1)), collect(keys(kmer_counts_2)))
 # end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Normalize a distance matrix by dividing all elements by the maximum non-NaN value.
+
+# Arguments
+- `distance_matrix`: A matrix of distance values that may contain `NaN`, `nothing`, or `missing` values
+
+# Returns
+- Normalized distance matrix with values scaled to [0, 1] range
+
+# Details
+- Filters out `NaN`, `nothing`, and `missing` values when finding the maximum
+- All elements are divided by the same maximum value to preserve relative distances
+- If all values are NaN/nothing/missing, may return NaN values
+"""
+function normalize_distance_matrix(distance_matrix)
+    max_non_nan_value = maximum(filter(x -> !isnan(x) && !isnothing(x) && !ismissing(x), vec(distance_matrix)))
+    return distance_matrix ./ max_non_nan_value
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+# """
+# function count_matrix_to_probability_matrix(
+#         counts_matrix,
+#         probability_matrix_file = replace(counts_matrix_file, ".bin" => ".probability_matrix.bin")
+#     )
+#     probability_matrix = Mmap.mmap(probability_matrix_file, Array{Float64, 2}, size(counts_matrix))
+#     if !isfile(probability_matrix_file)
+#         println("creating new probability matrix $probability_matrix_file")
+#         # probability_matrix .= count_matrix_to_probability_matrix(counts_matrix)
+#         for (i, col) in enumerate(eachcol(counts_matrix))
+#             probability_matrix[:, i] .= col ./ sum(col)
+#         end
+#     else
+#         println("probability matrix found $probability_matrix_file")
+#     end
+#     return probability_matrix, probability_matrix_file
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a matrix of counts into a probability matrix by normalizing each column to sum to 1.0.
+
+# Arguments
+- `counts_matrix::Matrix{<:Number}`: Input matrix where each column represents counts/frequencies
+
+# Returns
+- `Matrix{Float64}`: Probability matrix where each column sums to 1.0
+"""
+function count_matrix_to_probability_matrix(counts_matrix)
+    probability_matrix = zeros(size(counts_matrix))
+    for (i, col) in enumerate(eachcol(counts_matrix))
+        probability_matrix[:, i] .= col ./ sum(col)
+    end
+    return probability_matrix
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Convert a distance matrix into a Newick tree format using UPGMA hierarchical clustering.
+
+# Arguments
+- `distance_matrix`: Square matrix of pairwise distances between entities
+- `labels`: Vector of labels corresponding to the entities in the distance matrix
+- `outfile`: Path where the Newick tree file will be written
+
+# Returns
+- Path to the generated Newick tree file
+
+# Details
+Performs hierarchical clustering using the UPGMA (average linkage) method and 
+converts the resulting dendrogram into Newick tree format. The branch lengths 
+in the tree represent the heights from the clustering.
+"""
+function distance_matrix_to_newick(;distance_matrix, labels, outfile)
+    # phage_names = phage_host_table[indices, :name]
+    # this is equivalent to UPGMA
+    tree = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
+    # reference_phage_indices = findall(x -> x in reference_phages, phage_names)
+    newick = Dict()
+    for row in 1:size(tree.merges, 1)
+        left, right = tree.merges[row, :]
+        if left < 0
+            l = string(labels[abs(left)])
+        else
+            l = newick[left]
+        end
+        if right < 0
+            r = string(labels[abs(right)])
+        else
+            r = newick[right]
+        end
+        height = tree.heights[row]
+        newick[row] = "($l:$height, $r:$height)"
+    end
+    open(outfile, "w") do io
+        println(io, newick[size(tree.merges, 1)] * ";")
+    end
+    return outfile
+end
+
+"""
+    pairwise_distance_matrix(
+        matrix;
+        dist_func = Distances.euclidean,
+        show_progress = true,
+        progress_desc = "Computing distances"
+    )
+
+Compute a symmetric pairwise distance matrix between columns of `matrix` using the supplied distance function.
+
+# Arguments
+- `matrix`: Column-major matrix (features as rows, entities as columns)
+- `dist_func`: Function of the form `f(a, b)` returning the distance between two vectors (default: `Distances.euclidean`)
+- `show_progress`: Display progress bar if true (default: true)
+- `progress_desc`: Progress bar description (default: "Computing distances")
+
+# Returns
+- Symmetric N×N matrix of pairwise distances between columns (entities)
+"""
+function pairwise_distance_matrix(
+    matrix;
+    dist_func = Distances.euclidean,
+    show_progress = true,
+    progress_desc = "Computing distances"
+)
+    n_entities = size(matrix, 2)
+    distance_matrix = zeros(n_entities, n_entities)
+    total_pairs = n_entities * (n_entities - 1) ÷ 2
+
+    progress = show_progress ? ProgressMeter.Progress(total_pairs, desc = progress_desc, dt = 0.1) : nothing
+
+    Threads.@threads for entity_1_index in 1:n_entities
+        for entity_2_index in entity_1_index+1:n_entities
+            a = matrix[:, entity_1_index]
+            b = matrix[:, entity_2_index]
+            dist = dist_func(a, b)
+            distance_matrix[entity_1_index, entity_2_index] = dist
+            distance_matrix[entity_2_index, entity_1_index] = dist
+            if show_progress && Threads.threadid() == 1
+                ProgressMeter.next!(progress)
+            end
+        end
+    end
+
+    if show_progress
+        ProgressMeter.finish!(progress)
+    end
+    return distance_matrix
+end
+
+# Wrapper functions
+
+"""
+    frequency_matrix_to_euclidean_distance_matrix(counts_table)
+
+Pairwise Euclidean distance between columns of `counts_table`.
+"""
+frequency_matrix_to_euclidean_distance_matrix(counts_table) =
+    pairwise_distance_matrix(counts_table; dist_func = Distances.euclidean, progress_desc = "Euclidean distances")
+
+"""
+    frequency_matrix_to_cosine_distance_matrix(probability_matrix)
+
+Pairwise cosine distance between columns of `probability_matrix`.
+"""
+frequency_matrix_to_cosine_distance_matrix(probability_matrix) =
+    pairwise_distance_matrix(probability_matrix; dist_func = Distances.cosine_dist, progress_desc = "Cosine distances")
+
+"""
+    frequency_matrix_to_jaccard_distance_matrix(binary_matrix)
+
+Pairwise Jaccard distance between columns of `binary_matrix`.
+"""
+frequency_matrix_to_jaccard_distance_matrix(binary_matrix) =
+    pairwise_distance_matrix(binary_matrix; dist_func = Distances.jaccard, progress_desc = "Jaccard distances")
+
+"""
+    frequency_matrix_to_braycurtis_distance_matrix(counts_table)
+
+Pairwise Bray-Curtis distance between columns of `counts_table`.
+"""
+frequency_matrix_to_braycurtis_distance_matrix(counts_table) =
+    pairwise_distance_matrix(counts_table; dist_func = Distances.braycurtis, progress_desc = "Bray-Curtis distances")
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# DEPRECATED: THIS WAS THE MEASURE WITH THE LEAST AGREEMENT TO EXISTING MEASURES LIKE BLAST AND % AVERAGE NUCLEOTIDE IDENTITY
+# Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+# """
+# function counts_matrix_to_size_normalized_cosine_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             sa = sum(a)
+#             sb = sum(b)
+#             size_dist = 1-(min(sa, sb)/max(sa, sb))
+#             cosine_dist = Distances.cosine_dist(a, b)
+#             distances = filter(x -> x > 0, (size_dist, cosine_dist))
+#             if isempty(distances)
+#                 dist = 0.0
+#             else
+#                 dist = reduce(*, distances)
+#             end
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = dist
+#         end
+#     end
+#     return distance_matrix
+# end
+
+# """
+# Create euclidean distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to total feature count magnitude (size)
+# """
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     ProgressMeter.@showprogress for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.euclidean(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Create a Euclidean distance matrix from a column-major counts matrix
+# (features as rows and entities as columns), where distance is proportional
+# to total feature count magnitude (size).
+
+# Compute pairwise Euclidean distances between entity profiles in a counts matrix.
+
+# # Arguments
+# - `counts_table`: A matrix where rows represent features and columns represent entities (column-major format).
+#   Each column contains the feature counts/frequencies for one entity.
+
+# # Returns
+# - A symmetric N×N matrix of Euclidean distances between each pair of entities, where N is the number of entities.
+
+# # Details
+# - Parallelized computation using multi-threading
+# - Progress tracking via ProgressMeter
+# - Memory efficient: only upper triangle is computed, then mirrored
+# - Distance between entities increases with total feature magnitude differences
+# """
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+
+#     # Initialize a thread-safe progress meter
+#     progress = ProgressMeter.Progress(n_entities * (n_entities - 1) ÷ 2, desc = "Computing distances", dt = 0.1)
+
+#     Threads.@threads for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             dist = Distances.euclidean(a, b)
+#             distance_matrix[entity_1_index, entity_2_index] = dist
+#             distance_matrix[entity_2_index, entity_1_index] = dist
+#             ProgressMeter.next!(progress)  # Update the progress meter
+#         end
+#     end
+
+#     ProgressMeter.finish!(progress)  # Ensure the progress meter completes
+#     return distance_matrix
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Create cosine distance matrix from a column-major counts matrix (features as rows and entities as columns)
+# where distance is a proportional to cosine similarity (relative frequency)
+
+# Compute pairwise cosine distances between entities based on their feature distributions.
+
+# # Arguments
+# - `probability_matrix`: Column-major matrix where rows represent features and columns represent entities.
+#   Each column should contain frequency/probability values for one entity.
+
+# # Returns
+# - Symmetric matrix of size (n_entities × n_entities) containing pairwise cosine distances.
+#   Distance values range from 0 (identical distributions) to 1 (orthogonal distributions).
+
+# # Details
+# - Computes upper triangle and mirrors to lower triangle for efficiency
+# - Uses `Distances.cosine_dist` for the core computation
+# - Time complexity is O(n²) where n is the number of entities
+# """
+# function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
+#     n_entities = size(probability_matrix, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     for entity_1_index in 1:n_entities
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = probability_matrix[:, entity_1_index]
+#             b = probability_matrix[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.cosine_dist(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end
+
+# didn't work
+# function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+#     n_entities = size(counts_table, 2)
+#     distance_matrix = zeros(n_entities, n_entities)
+#     progress = ProgressMeter.Progress(n_entities)
+#     reenrantlock = ReentrantLock()
+#     Threads.@threads for entity_1_index in 1:n_entities
+#         lock(reenrantlock) do
+#             ProgressMeter.next!(progress)
+#         end
+#         for entity_2_index in entity_1_index+1:n_entities
+#             a = counts_table[:, entity_1_index]
+#             b = counts_table[:, entity_2_index]
+#             distance_matrix[entity_1_index, entity_2_index] = 
+#                 distance_matrix[entity_2_index, entity_1_index] = 
+#                 Distances.euclidean(a, b)
+#         end
+#     end
+#     return distance_matrix
+# end

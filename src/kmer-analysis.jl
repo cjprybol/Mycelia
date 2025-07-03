@@ -1257,3 +1257,658 @@ function fasta_list_to_sparse_kmer_counts(;
 
     return final_result
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the maximum number of possible canonical k-mers for a given alphabet.
+
+# Arguments
+- `k::Integer`: Length of k-mer
+- `ALPHABET::Vector{Char}`: Character set (nucleotides or amino acids)
+
+# Returns
+- `Int`: Maximum number of possible canonical k-mers
+
+# Details
+- For amino acids (AA_ALPHABET): returns total possible k-mers
+- For nucleotides: returns half of total possible k-mers (canonical form)
+- Requires odd k-mer length for nucleotide alphabets
+"""
+function determine_max_canonical_kmers(k, ALPHABET)
+    max_possible_kmers = determine_max_possible_kmers(k, ALPHABET)
+    if ALPHABET == AA_ALPHABET
+        return max_possible_kmers
+    else
+        @assert isodd(k) "this calculation is not valid for even length kmers"
+        return Int(max_possible_kmers / 2)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the total number of possible unique k-mers that can be generated from a given alphabet.
+
+# Arguments
+- `k`: Length of k-mers to consider
+- `ALPHABET`: Vector containing the allowed characters/symbols
+
+# Returns
+- Integer representing the maximum number of possible unique k-mers (|Σ|ᵏ)
+"""
+function determine_max_possible_kmers(k, ALPHABET)
+    return length(ALPHABET)^k
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Canonicalizes the k-mer counts in the given dictionary.
+
+This function iterates over the provided dictionary `kmer_counts`, which maps k-mers to their respective counts. For each k-mer that is not in its canonical form, it converts the k-mer to its canonical form and updates the count in the dictionary accordingly. If the canonical form of the k-mer already exists in the dictionary, their counts are summed. The original non-canonical k-mer is then removed from the dictionary.
+
+# Arguments
+- `kmer_counts::Dict{BioSequences.Kmer, Int}`: A dictionary where keys are k-mers and values are their counts.
+
+# Returns
+- The input dictionary `kmer_counts` with all k-mers in their canonical form, sorted by k-mers.
+"""
+function canonicalize_kmer_counts!(kmer_counts)
+    for (kmer, count) in kmer_counts
+        if !BioSequences.iscanonical(kmer)
+            canonical_kmer = BioSequences.canonical(kmer)
+            if haskey(kmer_counts, canonical_kmer)
+                kmer_counts[canonical_kmer] += count
+            else
+                kmer_counts[canonical_kmer] = count
+            end
+            delete!(kmer_counts, kmer)
+        end
+    end
+    return sort!(kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize k-mer counts into a canonical form by creating a non-mutating copy.
+
+# Arguments
+- `kmer_counts`: Dictionary or collection of k-mer count data
+
+# Returns
+- A new normalized k-mer count collection
+"""
+function canonicalize_kmer_counts(kmer_counts)
+    return canonicalize_kmer_counts!(copy(kmer_counts))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical k-mers in biological sequences. A canonical k-mer is the lexicographically 
+smaller of a DNA sequence and its reverse complement, ensuring strand-independent counting.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer size and structure
+- `sequences`: Iterator of biological sequences to analyze
+
+# Returns
+- `Dict{KMER_TYPE,Int}`: Dictionary mapping canonical k-mers to their counts
+"""
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
+    kmer_counts = count_kmers(KMER_TYPE, sequences)
+    return canonicalize_kmer_counts!(kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of each k-mer in a DNA sequence.
+
+# Arguments
+- `::Type{Kmers.Kmer{A,K}}`: K-mer type with alphabet A and length K
+- `sequence::BioSequences.LongSequence`: Input DNA sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+
+# Type Parameters
+- `A <: BioSequences.DNAAlphabet`: DNA alphabet type
+- `K`: Length of k-mers
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.DNAAlphabet, K}
+    # return sort(StatsBase.countmap(Kmers.FwDNAMers{K}(sequence)))
+    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousDNAMers{K}(sequence)]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of each k-mer in an RNA sequence.
+
+# Arguments
+- `Kmer`: Type parameter specifying the k-mer length K and RNA alphabet
+- `sequence`: Input RNA sequence to analyze
+
+# Returns
+- `Dict{Kmers.Kmer, Int}`: Sorted dictionary mapping each k-mer to its frequency count
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
+    # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
+    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousRNAMers{K}(sequence)]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of amino acid k-mers in a biological sequence.
+
+# Arguments
+- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
+- `sequence`: Input biological sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.AminoAcidAlphabet, K}
+    return sort(StatsBase.countmap(Kmers.FwAAMers{K}(sequence)))
+end
+
+# TODO add a way to handle ambiguity or not
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of amino acid k-mers in a biological sequence.
+
+# Arguments
+- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
+- `sequence`: Input biological sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+"""
+function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    # TODO: need to figure out how to infer the sequence type
+    if eltype(KMER_TYPE) == BioSymbols.DNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.RNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongRNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.AminoAcid
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongAA, record))
+    else
+        @error KMER_TYPE
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers across multiple sequence records and return a sorted frequency table.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{3}` for 3-mers)
+- `records`: Vector of FASTA/FASTQ records to analyze
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Sorted dictionary mapping k-mers to their frequencies
+"""
+function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    kmer_counts = count_kmers(KMER_TYPE, first(records))
+    for record in records[2:end]
+        _kmer_counts = count_kmers(KMER_TYPE, record)
+        merge!(+, kmer_counts, _kmer_counts)
+    end
+    sort!(kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts k-mer occurrences in biological sequences from a FASTA/FASTQ reader.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length and encoding (e.g., `DNAKmer{4}` for 4-mers)
+- `sequences`: A FASTA or FASTQ reader containing the biological sequences to analyze
+
+# Returns
+A dictionary mapping k-mers to their counts in the input sequences
+"""
+function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
+    return count_kmers(KMER_TYPE, collect(sequences))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers across multiple FASTA/FASTQ files and merge the results.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{4}` for 4-mers)
+- `fastx_files`: Vector of paths to FASTA/FASTQ files
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Dictionary mapping k-mers to their total counts across all files
+"""
+function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {KMER_TYPE, T <: AbstractString}
+    kmer_counts = count_kmers(KMER_TYPE, first(fastx_files))
+    for file in fastx_files[2:end]
+        _kmer_counts = count_kmers(KMER_TYPE, file)
+        kmer_counts = merge!(+, kmer_counts, _kmer_counts)
+    end
+    return kmer_counts
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers in a FASTA/FASTQ file and return their frequencies.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer type (e.g., `DNAKmer{K}`)
+- `fastx_file`: Path to input FASTA/FASTQ file
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Dictionary mapping each k-mer to its frequency
+"""
+function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_TYPE}
+    fastx_io = open_fastx(fastx_file)
+    kmer_counts = count_kmers(KMER_TYPE, fastx_io)
+    close(fastx_io)
+    return kmer_counts
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a dense k-mer counts table for a set of FASTA files, with disk-backed temporary storage, 
+custom element type, robust error handling, and optional output file caching.
+"""
+function fasta_list_to_dense_kmer_counts(;
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol,
+    temp_dir_parent::AbstractString = Base.tempdir(),
+    count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
+    result_file::Union{Nothing, AbstractString} = nothing,
+    force::Bool = false,
+    cleanup_temp::Bool = true
+)
+
+    num_files = length(fasta_list)
+    if num_files == 0
+        error("Input fasta_list is empty.")
+    end
+    if !(isa(k, Integer) && 0 < k <= 9)
+        error("k must be a positive integer <= 9. Use sparse counts for larger k")
+    end
+    if !(alphabet in (:AA, :DNA, :RNA))
+        error("alphabet must be :AA, :DNA, or :RNA")
+    end
+    if any(f -> !Base.Filesystem.isfile(f), fasta_list)
+        missing_files = [f for f in fasta_list if !Base.Filesystem.isfile(f)]
+        error("Missing FASTA files: $(join(missing_files, ", ")).")
+    end
+
+    # Output file short-circuit
+    if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
+        Base.@info "result_file exists at $result_file. Loading and returning."
+        return JLD2.load_object(result_file)
+    end
+
+    # KMER TYPE/COUNT/GENERATOR setup
+    if alphabet == :AA
+        KMER_TYPE = Kmers.AAKmer{k}
+        ALPHABET_SEQ = Mycelia.AA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    elseif alphabet == :DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        ALPHABET_SEQ = Mycelia.DNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_canonical_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_canonical_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    elseif alphabet == :RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        ALPHABET_SEQ = Mycelia.RNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    end
+
+    num_kmers = length(sorted_kmers)
+    Base.@info "Counting $num_kmers $(KMER_TYPE) across $num_files files..."
+
+    # Temp files
+    temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="dense_kmer_counts_")
+    temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
+
+    # Pass 1: count kmers per file, record max, save to temp
+    progress1 = ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    lock = Base.ReentrantLock()
+    error_log = Vector{Tuple{Int, String}}()
+    successful_indices = Vector{Int}()
+    max_observed_count_ref = Ref{Int}(0)
+
+    Threads.@threads for idx in 1:num_files
+        fasta_file = fasta_list[idx]
+        temp_file = temp_file_paths[idx]
+        local_max = 0
+        try
+            kmer_counts = COUNT_FUNCTION(KMER_TYPE, fasta_file)
+            JLD2.save_object(temp_file, kmer_counts)
+            if !isempty(kmer_counts)
+                local_max = maximum(Base.values(kmer_counts))
+            end
+            Base.lock(lock)
+            try
+                push!(successful_indices, idx)
+                if local_max > max_observed_count_ref[]
+                    max_observed_count_ref[] = local_max
+                end
+            finally
+                Base.unlock(lock)
+            end
+        catch e
+            Base.lock(lock)
+            try
+                push!(error_log, (idx, string(e)))
+            finally
+                Base.unlock(lock)
+            end
+            try JLD2.save_object(temp_file, Dict{KMER_TYPE, Int}()) catch end
+        end
+        Base.lock(lock)
+        try
+            ProgressMeter.next!(progress1)
+        finally
+            Base.unlock(lock)
+        end
+    end
+    ProgressMeter.finish!(progress1)
+
+    sorted_successful_indices = sort(successful_indices)
+    successful_fasta_list = fasta_list[sorted_successful_indices]
+
+    num_successful_files = length(successful_fasta_list)
+    percent_successful = round((num_successful_files / num_files) * 100, digits=3)
+    Base.@info "$num_successful_files of $num_files ($(percent_successful)%) counted successfully"
+
+    max_observed_count = max_observed_count_ref[]
+
+    # Determine element type for counts
+    if isnothing(count_element_type)
+        ValType = max_observed_count <= typemax(UInt8) ? UInt8 :
+                  max_observed_count <= typemax(UInt16) ? UInt16 :
+                  max_observed_count <= typemax(UInt32) ? UInt32 : UInt64
+    else
+        ValType = count_element_type
+        if max_observed_count > typemax(ValType)
+            Base.@warn "User-specified count_element_type $ValType may be too small for max observed count $max_observed_count"
+        end
+    end
+    Base.@info "Using $ValType for kmer counts"
+
+    # Build kmer index for matrix rows
+    kmer_index = Dict{KMER_TYPE,Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    kmer_counts_matrix = zeros(ValType, num_kmers, num_successful_files)
+
+    # Pass 2: fill matrix (multi-threaded, only for successful files)
+    progress2 = ProgressMeter.Progress(num_successful_files; desc="Filling matrix: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:green)
+    Threads.@threads for col in 1:num_successful_files
+        orig_idx = sorted_successful_indices[col]
+        try
+            kmer_counts = JLD2.load_object(temp_file_paths[orig_idx])
+            for (kmer, count) in kmer_counts
+                row = kmer_index[kmer]
+                kmer_counts_matrix[row, col] = ValType(count)
+            end
+        catch
+            # Optionally log error
+        end
+        Base.lock(lock)
+        try
+            ProgressMeter.next!(progress2)
+        finally
+            Base.unlock(lock)
+        end
+    end
+    ProgressMeter.finish!(progress2)
+
+    if cleanup_temp
+        try Base.Filesystem.rm(temp_dir; recursive=true, force=true) catch end
+    end
+
+    result = (;kmers=sorted_kmers, counts=kmer_counts_matrix, successful_fasta_list=successful_fasta_list, error_log=error_log)
+
+    if !isnothing(result_file)
+        try JLD2.save_object(result_file, result) catch end
+    end
+
+    return result
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a collection of biological sequences into a dense k-mer count matrix.
+
+# Arguments
+- `biosequences`: Collection of DNA, RNA, or amino acid sequences (BioSequence types)
+- `k::Integer`: Length of k-mers to count (must be ≤ 13)
+
+# Returns
+Named tuple containing:
+- `sorted_kmers`: Vector of all possible k-mers in sorted order
+- `kmer_counts_matrix`: Dense matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA sequences, counts canonical k-mers (both strands)
+- For RNA and protein sequences, counts exact k-mers
+- Uses parallel processing with threads
+"""
+function biosequences_to_dense_counts_table(;biosequences, k)
+    k >= 11 && error("use sparse counts to count k >= 11")    
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = BioSequences.AminoAcidAlphabet
+        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = BioSequences.DNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = BioSequences.RNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+    end
+    kmer_counts_matrix = zeros(length(sorted_kmers), length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for (entity_index, biosequence) in collect(enumerate(biosequences))
+        # Acquire the lock before updating the progress
+        lock(reenrantlock) do
+            # Update the progress meter
+            ProgressMeter.next!(progress)
+        end
+        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, biosequence)
+        for (i, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        end
+    end
+    return (;sorted_kmers, kmer_counts_matrix)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a collection of biological sequences into a k-mer count matrix.
+
+# Arguments
+- `biosequences`: Vector of biological sequences (DNA, RNA, or Amino Acids)
+- `k`: Length of k-mers to count
+
+# Returns
+Named tuple with:
+- `sorted_kmers`: Vector of all unique k-mers found, lexicographically sorted
+- `kmer_counts_matrix`: Sparse matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA sequences, counts canonical k-mers (both strands)
+- Uses parallel processing with Thread-safe progress tracking
+- Memory efficient sparse matrix representation
+- Supports DNA, RNA and Amino Acid sequences
+"""
+function biosequences_to_counts_table(;biosequences, k)
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = Kmers.AAKmer{k}
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+    end
+    
+    kmer_counts = Vector{OrderedCollections.OrderedDict{KMER_TYPE, Int}}(undef, length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for i in eachindex(biosequences)
+        lock(reenrantlock) do
+            ProgressMeter.next!(progress)
+        end
+        kmer_counts[i] = COUNT(KMER_TYPE, biosequences[i])
+    end
+    sorted_kmers = sort(collect(reduce(union, keys.(kmer_counts))))
+    kmer_counts_matrix = SparseArrays.spzeros(Int, length(sorted_kmers), length(biosequences))
+    @info "populating sparse counts matrix..."
+    for (col, biosequence) in enumerate(biosequences)
+        for (row, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[row, col] = get(kmer_counts[col], kmer, 0)
+        end
+    end
+    return (;sorted_kmers, kmer_counts_matrix)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a dictionary of k-mer counts to a fixed-length numeric vector based on a predefined mapping.
+
+# Arguments
+- `kmer_to_index_map`: Dictionary mapping k-mer sequences to their corresponding vector indices
+- `kmer_counts`: Dictionary containing k-mer sequences and their occurrence counts
+
+# Returns
+- A vector where each position corresponds to a k-mer count, with zeros for absent k-mers
+"""
+function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
+    kmer_counts_vector = zeros(length(kmer_to_index_map))
+    for (kmer, count) in kmer_counts
+        kmer_index = kmer_to_index_map[kmer]
+        kmer_counts_vector[kmer_index] = count
+    end
+    return kmer_counts_vector
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Generate a sorted list of all possible k-mers for a given alphabet.
+
+# Arguments
+- `k::Integer`: Length of k-mers to generate
+- `alphabet`: Collection of symbols (DNA, RNA, or amino acids) from BioSymbols
+
+# Returns
+- Sorted Vector of Kmers of the appropriate type (DNA, RNA, or amino acid)
+"""
+function generate_all_possible_kmers(k, alphabet)
+    kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
+    kmer_vectors = collect.(vec(collect(kmer_iterator)))
+    if eltype(alphabet) == BioSymbols.AminoAcid
+        kmers = [Kmers.AAKmer{k}(BioSequences.LongAA(kv)) for kv in kmer_vectors]
+    elseif eltype(alphabet) == BioSymbols.DNA
+        kmers = [Kmers.DNAKmer{k}(BioSequences.LongDNA{2}(kv)) for kv in kmer_vectors]
+    elseif eltype(alphabet) == BioSymbols.RNA
+        kmers = [Kmers.RNAKmer{k}(BioSequences.LongRNA{2}(kv)) for kv in kmer_vectors]
+    else
+        error()
+    end
+    return sort!(kmers)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Generate all possible canonical k-mers of length `k` from the given `alphabet`.
+
+For DNA/RNA sequences, returns unique canonical k-mers where each k-mer is represented by
+the lexicographically smaller of itself and its reverse complement.
+For amino acid sequences, returns all possible k-mers without canonicalization.
+
+# Arguments
+- `k`: Length of k-mers to generate
+- `alphabet`: Vector of BioSymbols (DNA, RNA or AminoAcid)
+
+# Returns
+- Vector of k-mers, canonicalized for DNA/RNA alphabets
+"""
+function generate_all_possible_canonical_kmers(k, alphabet)
+    kmers = generate_all_possible_kmers(k, alphabet)
+    if eltype(alphabet) == BioSymbols.AminoAcid
+        return kmers
+    elseif eltype(alphabet) in (BioSymbols.DNA, BioSymbols.RNA)
+        return unique!(BioSequences.canonical.(kmers))
+    else
+        error()
+    end
+end
+
+# CSV is too memory inefficient, the others too slow :(
+# # using uCSV
+# # k=11
+# # 3.444974 seconds (24.58 M allocations: 1.374 GiB, 34.65% gc time, 16.90% compilation time)
+# # k=13
+# # 362.285866 seconds (357.11 M allocations: 20.550 GiB, 91.60% gc time)
+
+# # using DelimitedFiles.readdlm
+# # k=11
+# # 2.386620 seconds (16.11 M allocations: 632.732 MiB, 34.16% gc time, 24.25% compilation time)
+# # k=13
+# # 82.888552 seconds (227.49 M allocations: 8.766 GiB, 82.01% gc time)
+
+# # CSV
+# # k=11
+# # 12.328422 seconds (7.62 M allocations: 732.639 MiB, 19091.67% compilation time: <1% of which was recompilation)
+# # k=13
+# # 37.098948 seconds (89.38 k allocations: 2.354 GiB, 93.56% gc time)
+
+# function parse_jellyfish_counts(tabular_counts)
+#     # load in the data
+#     @assert occursin(r"\.gz$", tabular_counts) "this expects gzipped jellyfish tabular counts"
+#     io = CodecZlib.GzipDecompressorStream(open(tabular_counts))
+#     canonical_kmer_counts_table = DataFrames.DataFrame(CSV.File(io; delim='\t', header=false))
+#     DataFrames.rename!(canonical_kmer_counts_table, [:Column1 => :kmer, :Column2 => :count])
+    
+#     # recode the kmers from strings to fixed sized kmer types
+#     unique_kmer_lengths = unique(length.(canonical_kmer_counts_table[!, "kmer"]))
+#     @assert length(unique_kmer_lengths) == 1
+#     k = first(unique_kmer_lengths)
+#     canonical_kmer_counts_table[!, "kmer"] = Kmers.DNAKmer{k}.(canonical_kmer_counts_table[!, "kmer"])
+    
+#     return canonical_kmer_counts_table
+# end

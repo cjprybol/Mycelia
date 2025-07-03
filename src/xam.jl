@@ -369,3 +369,31 @@ function xam_to_contig_mapping_stats(xam)
     end
     return contig_mapping_stats
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate per-base genomic coverage from a BAM file using bedtools.
+
+# Arguments
+- `bam::String`: Path to input BAM file
+
+# Returns
+- `String`: Path to the generated coverage file (`.coverage.txt`)
+
+# Details
+Uses bedtools genomecov to compute per-base coverage. Creates a coverage file 
+with the format: <chromosome> <position> <coverage_depth>. 
+If the coverage file already exists, returns the existing file path.
+
+# Dependencies
+Requires bedtools (automatically installed in conda environment)
+"""
+function determine_fasta_coverage_from_bam(bam)
+    Mycelia.add_bioconda_env("bedtools")
+    genome_coverage_file = bam * ".coverage.txt"
+    if !isfile(genome_coverage_file)
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
+    end
+    return genome_coverage_file
+end

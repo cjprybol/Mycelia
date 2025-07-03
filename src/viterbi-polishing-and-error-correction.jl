@@ -485,3 +485,305 @@
 #     close(fastq_writer)
 #     return output_fastq_file
 # end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Finds maximum likelihood paths through a stranded k-mer graph using the Viterbi algorithm
+to correct sequencing errors.
+
+# Arguments
+- `stranded_kmer_graph`: A directed graph where vertices represent k-mers and edges represent overlaps
+- `error_rate::Float64`: Expected per-base error rate (default: 1/(k+1)). Must be < 0.5
+- `verbosity::String`: Output detail level ("debug", "reads", or "dataset")
+
+# Returns
+Vector of FASTX.FASTA.Record containing error-corrected sequences
+
+# Details
+- Uses dynamic programming to find most likely path through k-mer graph
+- Accounts for matches, mismatches, insertions and deletions
+- State likelihoods based on k-mer coverage counts
+- Transition probabilities derived from error rate
+- Progress tracking based on verbosity level
+
+# Notes
+- Error rate should be probability of error (e.g. 0.01 for 1%), not accuracy
+- Higher verbosity levels ("debug", "reads") provide detailed path finding information
+- "dataset" verbosity shows only summary statistics
+"""
+function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
+                                               error_rate::Float64=1/(stranded_kmer_graph.gprops[:k] + 1),
+                                               verbosity::String="dataset")
+    @assert verbosity in ["debug", "reads", "dataset"]
+    if error_rate >= .5
+        error("Error rate >= 50%. Did you enter the accuracy by mistake?")
+    end
+
+    if verbosity in ["debug", "reads", "dataset"]
+        println("computing kmer counts...")
+    end
+    stranded_kmer_counts = [length(stranded_kmer_graph.vprops[vertex][:coverage]) for vertex in Graphs.vertices(stranded_kmer_graph)]
+    if verbosity in ["debug", "reads", "dataset"]
+        println("computing kmer state likelihoods...")
+    end
+    stranded_kmer_likelihoods = stranded_kmer_counts ./ sum(stranded_kmer_counts)
+    accuracy = 1 - error_rate
+
+    if verbosity in ["debug"]
+        println("STATE LIKELIHOODS:")
+        println("\tkmer\tcount\tlikelihood")
+        for vertex in Graphs.vertices(stranded_kmer_graph)
+            kmer = stranded_kmer_graph.gprops[:stranded_kmers][vertex]
+            count = stranded_kmer_counts[vertex]
+            likelihood = stranded_kmer_likelihoods[vertex]
+            println("\t$kmer\t$count\t$likelihood")
+        end
+    end
+    if verbosity in ["debug", "reads", "dataset"]
+        println("finding shortest paths between kmers...")
+    end
+    shortest_paths = Graphs.enumerate_paths(Graphs.floyd_warshall_shortest_paths(stranded_kmer_graph))
+    K = stranded_kmer_graph.gprops[:K]
+    for K1 in 1:K
+        for K2 in 1:K
+            if K1 != K2
+                shortest_path = shortest_paths[K1][K2]
+                path_likelihood = 1.0
+                for ui in 1:length(shortest_path)-1
+                    u = shortest_path[ui]
+                    v = shortest_path[ui + 1]
+                    # likelihood of the transition
+                    path_likelihood *= edge_probability(stranded_kmer_graph, Graphs.Edge(u, v))
+                end
+                if path_likelihood == 0.0
+                    shortest_paths[K1][K2] = Vector{Int}()
+                end
+            elseif K1 == K2
+                # the shortest path from a kmer to itself is an insertion (no edge)
+                # so need to manually check for self loops
+                if Graphs.has_edge(stranded_kmer_graph, Graphs.Edge(K1, K2))
+                    if edge_probability(stranded_kmer_graph, Graphs.Edge(K1, K2)) != 0.0
+                        shortest_paths[K1][K2] = [K1, K2]
+                    else
+                        shortest_paths[K1][K2] = Vector{Int}()
+                    end
+                # otherwise, check to see if any outneighbors connect back to the kmer
+                else
+                    connected_outneighbors = filter(outneighbor -> Graphs.has_path(stranded_kmer_graph, outneighbor, K2), Graphs.outneighbors(stranded_kmer_graph, K1))
+                    if !isempty(connected_outneighbors)
+                        outneighbor_cycles = [[K1, shortest_paths[outneighbor][K2]...] for outneighbor in connected_outneighbors]
+                        cycle_likelihoods = ones(length(outneighbor_cycles))
+                        for (i, cycle) in enumerate(outneighbor_cycles)
+                            for ui in 1:length(cycle)-1
+                                u = cycle[ui]
+                                v = cycle[ui + 1]
+                                # likelihood of the transition
+                                cycle_likelihoods[i] *= edge_probability(stranded_kmer_graph, Graphs.Edge(u, v))
+                            end
+                            # include likelihoods of states
+                            for vertex in cycle[2:end-1]
+                                cycle_likelihoods[i] *= stranded_kmer_likelihoods[vertex]
+                            end
+                        end
+                        path_likelihood = maximum(cycle_likelihoods)
+                        max_likelihood_cycle_indices = findall(cycle_likelihoods .== path_likelihood)
+                        shortest_paths[K1][K2] = outneighbor_cycles[first(max_likelihood_cycle_indices)]
+                    else
+                        shortest_paths[K1][K2] = Vector{Int}()
+                    end
+                end
+            end
+            if length(shortest_paths[K1][K2]) == 1
+                shortest_paths[K1][K2] = Vector{Int}()
+            end
+        end
+    end
+
+    if verbosity in ["debug"]
+        for K1 in 1:K
+            for K2 in 1:K
+                println("\t$K1\t$K2\t$(shortest_paths[K1][K2])")
+            end
+        end
+    end
+
+    total_bases_observed = 0
+    total_edits_accepted = 0
+
+    corrected_observations = FASTX.FASTA.Record[]
+    if verbosity in ["debug", "reads", "dataset"]
+        println("finding viterbi maximum likelihood paths for observed sequences...")
+    end
+    # p = Progress(length(stranded_kmer_graph.gprops[:observed_paths]))
+    for (observation_index, observed_path) in enumerate(stranded_kmer_graph.gprops[:observed_paths])
+        if verbosity in ["debug", "reads"]
+            println("\nevaluating sequence $observation_index of $(length(stranded_kmer_graph.gprops[:observed_paths]))")
+        end
+        # consider switching to log transform
+        kmer_likelihoods = zeros(Graphs.nv(stranded_kmer_graph), length(observed_path))
+        kmer_arrival_paths = Array{Vector{Int}}(undef, Graphs.nv(stranded_kmer_graph), length(observed_path))
+        edit_distances = zeros(Int, Graphs.nv(stranded_kmer_graph), length(observed_path))
+        # changed here!!
+        observed_kmer_index, observed_kmer_orientation = observed_path[1]
+        
+        observed_kmer_sequence = stranded_kmer_graph.gprops[:stranded_kmers][observed_kmer_index]
+        for hidden_kmer_index in Graphs.vertices(stranded_kmer_graph)
+            hidden_kmer_sequence = stranded_kmer_graph.gprops[:stranded_kmers][hidden_kmer_index]
+            alignment_result = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(), observed_kmer_sequence, hidden_kmer_sequence)
+            number_of_matches = BioAlignments.count_matches(BioAlignments.alignment(alignment_result))
+            number_of_edits = stranded_kmer_graph.gprops[:k] - number_of_matches
+            kmer_likelihoods[hidden_kmer_index, 1] = stranded_kmer_likelihoods[hidden_kmer_index]
+            for match in 1:number_of_matches
+                kmer_likelihoods[hidden_kmer_index, 1] *= accuracy
+            end
+            for edit in 1:number_of_edits
+                kmer_likelihoods[hidden_kmer_index, 1] *= error_rate
+            end
+            kmer_arrival_paths[hidden_kmer_index, 1] = Vector{Int}()
+            edit_distances[hidden_kmer_index, 1] = number_of_edits
+        end
+        kmer_likelihoods[:, 1] ./= sum(kmer_likelihoods[:, 1])
+        # from here on, all probabilities are log transformed
+        kmer_likelihoods[:, 1] .= log.(kmer_likelihoods[:, 1])
+        if verbosity in ["debug"]
+            println("\tconsidering path state 1")
+            println("\t\tobserved kmer $observed_kmer_sequence")
+            println("\t\tInitial state log likelihoods:")
+            for line in split(repr(MIME("text/plain"), kmer_likelihoods[:, 1]), '\n')
+                println("\t\t\t$line")
+            end
+        end
+        for observed_path_index in 2:length(observed_path)
+            # changed!!
+            observed_kmer_index, observed_kmer_orientation = observed_path[observed_path_index]
+            observed_base = stranded_kmer_graph.gprops[:stranded_kmers][observed_kmer_index][end]
+
+            if verbosity in ["debug"]
+                println("\tconsidering path state $observed_path_index")
+                println("\t\tobserved base $observed_base")
+            end
+
+            MATCH = 1
+            MISMATCH = 2
+            DELETION = 3
+            INSERTION = 4
+            arrival_likelihoods = ones(K, 4)
+            arrival_paths = fill(Vector{Int}(), K, 4)
+
+            for K2 in 1:K
+                kmer_base = stranded_kmer_graph.gprops[:stranded_kmers][K2][end]
+                base_is_match = kmer_base == observed_base
+
+                maximum_likelihood = log(0.0)
+                maximum_likelihood_path = Vector{Int}()
+                maximum_likelihood_edit_distance = 0
+
+                for K1 in 1:K
+                    shortest_path = shortest_paths[K1][K2]
+                    if length(shortest_path) >= 2
+                        edit_distance = Int(!base_is_match) + length(shortest_path) - 2
+                        if edit_distance == 0
+                            p = kmer_likelihoods[K1, observed_path_index-1] +
+                                log(accuracy) + log(stranded_kmer_likelihoods[K2])
+                        else
+                            p = kmer_likelihoods[K1, observed_path_index-1] +
+                                log(error_rate^edit_distance) + log(stranded_kmer_likelihoods[K2])
+                        end
+                        edit_distance += edit_distances[K1, observed_path_index-1]
+                    else
+                        p = log(0.0)
+                    end
+                    if K1 == K2 # consider insertion
+                        # in theory, I don't think we should care if the base
+                        # matches or not because it's an inserted & erroneous
+                        # base, but in practice it's necessary to balance
+                        # insertion probabilities with deletion probabilities
+                        insertion_p = kmer_likelihoods[K1, observed_path_index-1] +
+                                      log(error_rate^(1 + Int(!base_is_match))) + log(stranded_kmer_likelihoods[K2])
+                        if insertion_p > p
+                            p = insertion_p
+                            edit_distance = edit_distances[K1, observed_path_index-1] + 1
+                            shortest_path = [K2]
+                        end
+                    end
+                    if p > maximum_likelihood
+                        maximum_likelihood = p
+                        maximum_likelihood_path = shortest_path
+                        maximum_likelihood_edit_distance = edit_distance
+                    end
+                end
+                kmer_likelihoods[K2, observed_path_index] = maximum_likelihood
+                kmer_arrival_paths[K2, observed_path_index] = maximum_likelihood_path
+                edit_distances[K2, observed_path_index] = maximum_likelihood_edit_distance
+            end
+
+            if verbosity in ["debug"]
+                println("\t\tkmer log likelihoods")
+                for line in split(repr(MIME("text/plain"), kmer_likelihoods), '\n')
+                    println("\t\t\t$line")
+                end
+                println("\t\tarrival paths")
+                for line in split(repr(MIME("text/plain"), kmer_arrival_paths), '\n')
+                    println("\t\t\t$line")
+                end
+            end
+        end
+
+        if verbosity in ["debug"]
+            println("\n\tInputs for viterbi maximum likelihood traversal evaluation:")
+            println("\t\tkmer log likelihoods")
+            for line in split(repr(MIME("text/plain"), kmer_likelihoods), '\n')
+                println("\t\t\t$line")
+            end
+            println("\t\tkmer arrival paths")
+            for line in split(repr(MIME("text/plain"), kmer_arrival_paths), '\n')
+                println("\t\t\t$line")
+            end
+            println("\t\tedit distances")
+            for line in split(repr(MIME("text/plain"), edit_distances), '\n')
+                println("\t\t\t$line")
+            end
+        end
+
+        ## backtrack
+        maximum_likelihood_path_value = maximum(kmer_likelihoods[:, end])
+        maximum_likelihood_path_indices = findall(kmer_likelihoods[:, end] .== maximum_likelihood_path_value)
+        # if multiple paths are tied, randomly choose one
+        maximum_likelihood_path_index = rand(maximum_likelihood_path_indices)
+        maximum_likelihood_edit_distance = edit_distances[maximum_likelihood_path_index, end]
+
+        if length(kmer_arrival_paths[maximum_likelihood_path_index, end]) > 0
+            maximum_likelihood_path = last(kmer_arrival_paths[maximum_likelihood_path_index, end])
+            for observed_path_index in length(observed_path):-1:1
+                maximum_likelihood_arrival_path = kmer_arrival_paths[maximum_likelihood_path_index, observed_path_index]
+                maximum_likelihood_path = vcat(maximum_likelihood_arrival_path[1:end-1], maximum_likelihood_path)
+                maximum_likelihood_path_index = first(maximum_likelihood_path)
+            end
+        else
+            maximum_likelihood_path = [maximum_likelihood_path_index]
+        end
+        observed_sequence = path_to_sequence(stranded_kmer_graph.gprops[:stranded_kmers], observed_path)
+        maximum_likelihood_sequence = path_to_sequence(stranded_kmer_graph.gprops[:stranded_kmers], maximum_likelihood_path)
+        if verbosity in ["debug", "reads"]
+            println("\tobserved sequence                 $observed_sequence")
+            println("\tmaximum likelihood sequence       $maximum_likelihood_sequence")
+            println("\tmaximum likelihood edit distance  $maximum_likelihood_edit_distance")
+        end
+        total_bases_observed += length(observed_sequence)
+        total_edits_accepted += maximum_likelihood_edit_distance
+        id = stranded_kmer_graph.gprops[:observation_ids][observation_index]
+        kmer_stamped_id = id * "_" * string(stranded_kmer_graph.gprops[:k])
+        push!(corrected_observations, FASTX.FASTA.Record(kmer_stamped_id, maximum_likelihood_sequence))
+        # progress meter
+        # next!(p)
+    end
+    if verbosity in ["debug", "reads", "dataset"]
+        println("\nDATASET STATISTICS:")
+        println("\tassumed error rate    $(error_rate * 100)%")
+        println("\ttotal bases observed  $total_bases_observed")
+        println("\ttotal edits accepted  $total_edits_accepted")
+        println("\tinferred error rate   $((total_edits_accepted/total_bases_observed) * 100)%")
+    end
+    return corrected_observations
+end

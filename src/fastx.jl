@@ -841,3 +841,364 @@ function _detect_sequence_extension(sequence_type::Symbol)
         return ".fa"
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compare two FASTA files to determine if they contain the same set of sequences,
+regardless of sequence order.
+
+# Arguments
+- `fasta_1::String`: Path to first FASTA file
+- `fasta_2::String`: Path to second FASTA file
+
+# Returns
+- `Bool`: `true` if both files contain exactly the same sequences, `false` otherwise
+
+# Details
+Performs a set-based comparison of DNA sequences by hashing each sequence.
+Sequence order differences between files do not affect the result.
+"""
+function equivalent_fasta_sequences(fasta_1, fasta_2)
+    fasta_1_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_1))
+    fasta_2_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_2))
+    @show setdiff(fasta_1_hashes, fasta_2_hashes)
+    @show setdiff(fasta_2_hashes, fasta_1_hashes)
+    return fasta_1_hashes == fasta_2_hashes
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Join fasta files while adding origin prefixes to the identifiers.
+
+Does not guarantee uniqueness but will warn if conflicts arise
+"""
+function merge_fasta_files(;fasta_files, fasta_file)
+    @info "merging $(length(fasta_files)) files..."
+    identifiers = Set{String}()
+    open(fasta_file, "w") do io
+        fastx_io = FASTX.FASTA.Writer(io)
+        ProgressMeter.@showprogress for f in fasta_files
+            f_id = replace(basename(f), Mycelia.FASTA_REGEX => "")
+            for record in Mycelia.open_fastx(f)
+                new_record_id = f_id * "__" * FASTX.identifier(record)
+                if new_record_id in identifiers
+                    @warn "new identifier $(new_record_id) already in identifiers!!!"
+                end
+                push!(identifiers, new_record_id)
+                new_record = FASTX.FASTA.Record(new_record_id, FASTX.sequence(record))
+                write(fastx_io, new_record)
+            end
+        end
+    end
+    @info "$(length(identifiers)) records merged..."
+    return fasta_file
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove duplicate sequences from a FASTA file while preserving headers.
+
+# Arguments
+- `in_fasta`: Path to input FASTA file
+- `out_fasta`: Path where deduplicated FASTA will be written
+
+# Returns
+Path to the output FASTA file (same as `out_fasta` parameter)
+
+# Details
+- Sequences are considered identical if they match exactly (case-sensitive)
+- For duplicate sequences, keeps the first header encountered
+- Input sequences are sorted by identifier before deduplication
+- Preserves the original sequence formatting
+"""
+function deduplicate_fasta_file(in_fasta, out_fasta)
+    fasta_df = fasta_to_table(collect(open_fastx(in_fasta)))
+    sort!(fasta_df, "identifier")
+    unique_sequences = DataFrames.combine(DataFrames.groupby(fasta_df, "sequence"), first)
+    fasta = fasta_table_to_fasta(unique_sequences)
+    open(out_fasta, "w") do io
+        writer = FASTX.FASTA.Writer(io)
+        for record in fasta
+            write(writer, record)
+        end
+        close(writer)
+    end
+    return out_fasta
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Translates nucleic acid sequences from a FASTA file into amino acid sequences.
+
+# Arguments
+- `fasta_nucleic_acid_file::String`: Path to input FASTA file containing nucleic acid sequences
+- `fasta_amino_acid_file::String`: Path where the translated amino acid sequences will be written
+
+# Returns
+- `String`: Path to the output FASTA file containing translated amino acid sequences
+"""
+function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_file)
+    open(fasta_amino_acid_file, "w") do io
+        writer = FASTX.FASTA.Writer(io)
+        for record in FASTX.FASTA.Reader(open(fasta_nucleic_acid_file))
+            try
+                raw_seq = FASTX.sequence(record)
+                pruned_seq_length = Int(floor(length(raw_seq)/3)) * 3
+                truncated_seq = raw_seq[1:pruned_seq_length]
+                amino_acid_seq = BioSequences.translate(truncated_seq)
+                amino_acid_record = FASTX.FASTA.Record(FASTX.identifier(record), FASTX.description(record), amino_acid_seq)
+                write(writer, amino_acid_record)
+            catch
+                @warn "unable to translate record", record
+            end
+        end
+        close(writer)
+    end
+    return fasta_amino_acid_file
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a FASTA file/record iterator to a DataFrame.
+
+# Arguments
+- `fasta`: FASTA record iterator from FASTX.jl
+
+# Returns
+- `DataFrame` with columns:
+  - `identifier`: Sequence identifiers
+  - `description`: Full sequence descriptions 
+  - `sequence`: Biological sequences as strings
+"""
+function fasta_to_table(fasta)
+    collected_fasta = collect(fasta)
+    fasta_df = DataFrames.DataFrame(
+        identifier = FASTX.identifier.(collected_fasta),
+        description = FASTX.description.(collected_fasta),
+        sequence = FASTX.sequence.(collected_fasta)
+    )
+    return fasta_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a DataFrame containing FASTA sequence information into a vector of FASTA records.
+
+# Arguments
+- `fasta_df::DataFrame`: DataFrame with columns "identifier", "description", and "sequence"
+
+# Returns
+- `Vector{FASTX.FASTA.Record}`: Vector of FASTA records
+"""
+function fasta_table_to_fasta(fasta_df)
+    records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
+    for (i, row) in enumerate(DataFrames.eachrow(fasta_df))
+        record = FASTX.FASTA.Record(row["identifier"], row["description"], row["sequence"])
+        records[i] = record
+    end
+    return records
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+This turns a 4-line FASTQ entry into a single tab separated line,
+adds a column with the length of each read, passes it to Unix sort,
+removes the length column, and converts it back into a FASTQ file.
+
+sorts longest to shortest!!
+
+http://thegenomefactory.blogspot.com/2012/11/sorting-fastq-files-by-sequence-length.html
+"""
+function sort_fastq(input_fastq, output_fastq="")
+    
+    if endswith(input_fastq, ".gz")
+        p = pipeline(
+                `gzip -dc $input_fastq`,
+                `paste - - - -`,
+                `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
+                `sort -nr`,
+                `cut -f2-`,
+                `tr "\t" "\n"`,
+                `gzip`
+                )
+    else
+        p = pipeline(
+                `cat $input_fastq`,
+                `paste - - - -`,
+                `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
+                `sort -nr`,
+                `cut -f2-`,
+                `tr "\t" "\n"`
+                )
+    end
+    run(pipeline(p, output_fastq))
+    return output_fastq
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts the total number of records in a FASTA/FASTQ file.
+
+# Arguments
+- `fastx`: Path to a FASTA or FASTQ file (can be gzipped)
+
+# Returns
+- Number of records (sequences) in the file
+"""
+function count_records(fastx)
+    n_records = 0
+    for record in open_fastx(fastx)
+        n_records += 1
+    end
+    return n_records
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate sequence lengths for reads in a FASTQ file.
+
+# Arguments
+- `fastq_file::String`: Path to input FASTQ file
+- `total_reads::Integer=Inf`: Number of reads to process (defaults to all reads)
+
+# Returns
+- `Vector{Int}`: Array containing the length of each sequence read
+"""
+function determine_read_lengths(fastq_file; total_reads = Inf)
+    if total_reads == Inf
+        total_reads = count_records(fastq_file)
+    end
+    read_lengths = zeros(Int, total_reads)
+    @info "determining read lengths"
+    p = ProgressMeter.Progress(total_reads, 1)
+    for (i, record) in enumerate(open_fastx(fastq_file))
+#         push!(read_lengths, length(FASTX.sequence(record)))
+        read_lengths[i] = length(FASTX.sequence(record))
+        ProgressMeter.next!(p)
+    end
+    return read_lengths
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a Phred quality score (Q-value) to a probability of error.
+
+# Arguments
+- `q_value`: Phred quality score, typically ranging from 0 to 40
+
+# Returns
+- Error probability in range [0,1], where 0 indicates highest confidence
+
+A Q-value of 10 corresponds to an error rate of 0.1 (10%), while a Q-value of 
+30 corresponds to an error rate of 0.001 (0.1%).
+"""
+function q_value_to_error_rate(q_value)
+    error_rate = 10^(q_value/(-10))
+    return error_rate
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a sequencing error probability to a Phred quality score (Q-value).
+
+The calculation uses the standard Phred formula: Q = -10 * log₁₀(error_rate)
+
+# Arguments
+- `error_rate::Float64`: Probability of error (between 0 and 1)
+
+# Returns
+- `q_value::Float64`: Phred quality score
+"""
+function error_rate_to_q_value(error_rate)
+    q_value = -10 * log10(error_rate)
+    return q_value
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the total size (in bases) of all sequences in a FASTA file.
+
+# Arguments
+- `fasta_file::AbstractString`: Path to the FASTA file
+
+# Returns
+- `Int`: Sum of lengths of all sequences in the FASTA file
+"""
+function fasta_genome_size(fasta_file)
+    return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Subsample reads from a FASTQ file using seqkit.
+
+# Arguments
+- `in_fastq::String`: Path to input FASTQ file
+- `out_fastq::String=""`: Path to output FASTQ file. If empty, auto-generated based on input filename
+- `n_reads::Union{Missing,Int}=missing`: Number of reads to sample
+- `proportion_reads::Union{Missing,Float64}=missing`: Proportion of reads to sample (0.0-1.0)
+
+# Returns
+- `String`: Path to the output FASTQ file
+"""
+function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+    Mycelia.add_bioconda_env("seqkit")
+    if ismissing(n_reads) && ismissing(proportion_reads)
+        error("please specify the number or proportion of reads")
+    elseif !ismissing(n_reads)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --two-pass --number $(n_reads) $(in_fastq)`, `gzip`)
+        if isempty(out_fastq)
+            out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.N$(n_reads).fq.gz")
+        end
+    elseif !ismissing(proportion_reads)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --proportion $(proportion_reads) $(in_fastq)`, `gzip`)
+        if isempty(out_fastq)
+            out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.P$(proportion_reads).fq.gz")
+        end
+    end
+    @assert !isempty(out_fastq)
+    if !isfile(out_fastq)
+        run(pipeline(p, out_fastq))
+    else
+        @info "$(out_fastq) already present"
+    end
+    return out_fastq
+end
+
+# function subsample_reads_seqtk(;in_fastq::String, out_fastq="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+#     Mycelia.add_bioconda_env("seqtk")
+#     if ismissing(n_reads) && ismissing(proportion_reads)
+#         error("please specify the number or proportion of reads")
+#     elseif !ismissing(n_reads)
+#         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqtk seqtk sample -2 $(n_reads) $(in_fastq)`, `gzip`)
+#         if isempty(out_fastq)
+#             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqtk.N$(n_reads).fq.gz")
+#         end
+#     elseif !ismissing(proportion_reads)
+#         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqtk seqtk sample -2 $(proportion_reads) $(in_fastq)`, `gzip`)
+#         if isempty(out_fastq)
+#             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqtk.P$(proportion_reads).fq.gz")
+#         end
+#     end
+#     @assert !isempty(out_fastq)
+#     run(pipeline(p, out_fastq))
+#     return out_fastq
+# end
+
+# subsample_reads_seqtk(in_fastq = fastq, n_reads=10)
+
+# function filter_short_reads()
+# end
