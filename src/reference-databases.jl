@@ -2313,3 +2313,57 @@ function ncbi_taxon_summary(taxa_id)
         )
     return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Exports a taxonomy mapping table from a BLAST database in seqid2taxid format.
+
+# Arguments
+- `path_to_db::String`: Path to the BLAST database
+- `outfile::String`: Output file path (defaults to input path + ".seqid2taxid.txt.gz")
+
+# Returns
+- `String`: Path to the created output file
+
+# Details
+Creates a compressed tab-delimited file mapping sequence IDs to taxonomy IDs.
+Uses blastdbcmd without GI identifiers for better cross-referencing compatibility.
+If the output file already exists, returns the path without regenerating.
+
+# Dependencies
+Requires BLAST+ tools installed via Bioconda.
+"""
+function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".seqid2taxid.txt.gz")
+    Mycelia.add_bioconda_env("blast")
+    if !isfile(outfile)
+        # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
+        @time run(pipeline(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt "%a %T" -db $(path_to_db)`, `gzip`), outfile))
+    else
+        @info "$(outfile) already present"
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Loads a BLAST database taxonomy mapping table from a gzipped file into a DataFrame.
+
+# Arguments
+- `compressed_blast_db_taxonomy_table_file::String`: Path to a gzipped file containing BLAST taxonomy mappings
+
+# Returns
+- `DataFrame`: A DataFrame with columns `:sequence_id` and `:taxid` containing the sequence-to-taxonomy mappings
+
+# Format
+Input file should be a space-delimited text file (gzipped) with two columns:
+1. sequence identifier
+2. taxonomy identifier (taxid)
+"""
+function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
+    return CSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ', header=["sequence_id", "taxid"], DataFrames.DataFrame)
+    # data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
+    # header = ["sequence_id", "taxid"]
+    # DataFrames.DataFrame(data, header)
+end

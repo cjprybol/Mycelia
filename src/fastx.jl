@@ -1252,3 +1252,27 @@ function fastq_record(;identifier, sequence, quality_scores)
     record_string = join(["@" * identifier, sequence, "+", join([Char(x+33) for x in quality_scores])], "\n")
     return FASTX.parse(FASTX.FASTQRecord, record_string)
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate detailed mapping statistics for each reference sequence/contig in a XAM (SAM/BAM/CRAM) file.
+
+# Arguments
+- `xam`: Path to XAM file or XAM object
+
+# Returns
+A DataFrame with per-contig statistics including:
+- `n_aligned_reads`: Number of aligned reads
+- `total_aligned_bases`: Sum of alignment lengths
+- `total_alignment_score`: Sum of alignment scores
+- Mapping quality statistics (mean, std, median)
+- Alignment length statistics (mean, std, median)
+- Alignment score statistics (mean, std, median)
+- Percent mismatches statistics (mean, std, median)
+
+Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) are considered.
+"""
+function fastx_to_contig_lengths(fastx)
+    OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
+end

@@ -543,3 +543,116 @@ function build_directed_kmer_graph(;fastq, k=1, plot=false)
     end
     return graph
 end
+
+# not a very good function yet, but good enough for the pinches I need it for
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse a GFA (Graphical Fragment Assembly) file into a MetaGraph representation.
+
+# Arguments
+- `gfa`: Path to GFA format file
+
+# Returns
+A `MetaGraph` where:
+- Vertices represent segments (contigs)
+- Edges represent links between segments
+- Vertex properties include `:id` with segment identifiers
+- Graph property `:records` contains the original FASTA records
+
+# Format Support
+Handles standard GFA v1 lines:
+- `H`: Header lines (skipped)
+- `S`: Segments (stored as nodes with FASTA records)
+- `L`: Links (stored as edges)
+- `P`: Paths (stored in paths dictionary)
+- `A`: HiFiAsm specific lines (skipped)
+"""
+function parse_gfa(gfa)
+    segments = Vector{FASTX.FASTA.Record}()
+    links = Vector{Pair{String, String}}()
+    paths = Dict{String, Vector{String}}()
+    for l in eachline(open(gfa))
+        s = split(l, '\t')
+        if first(s) == "H"
+            # header line
+            continue
+        elseif first(s) == "S"
+            # segment
+            # push!(segments, string(s[2]))
+            identifier = string(s[2])
+            description = string(s[4])
+            sequence = string(s[3])
+            push!(segments, FASTX.FASTA.Record("$(identifier) $(description)", sequence))
+        elseif first(s) == "L"
+            # link
+            push!(links, string(s[2]) => string(s[4]))
+        elseif first(s) == "P"
+            # path
+            paths[string(s[2])] = string.(split(replace(s[3], r"[+-]" => ""), ','))
+        elseif first(s) == "A" # hifiasm https://hifiasm.readthedocs.io/en/latest/interpreting-output.html#output-file-formats
+            continue
+        else
+            println(l)
+            error("unexpected line encountered while parsing GFA")
+        end
+    end
+
+    g = MetaGraphs.MetaGraph(length(segments))
+
+    for link in links
+        (u, v) = link
+        ui = findfirst(FASTX.identifier.(segments) .== u)
+        vi = findfirst(FASTX.identifier.(segments) .== v)
+        Graphs.add_edge!(g, ui => vi)
+    end
+    for (i, segment) in enumerate(segments)
+        MetaGraphs.set_prop!(g, i, :id, FASTX.identifier(segment))
+    end
+    MetaGraphs.set_prop!(g, :records, segments)
+    return g
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GFA (Graphical Fragment Assembly) file into a structured representation.
+
+# Arguments
+- `gfa`: Path to GFA file or GFA content as string
+
+# Returns
+Named tuple containing:
+- `contig_table`: DataFrame with columns:
+  - `connected_component`: Integer ID for each component
+  - `contigs`: Comma-separated list of contig IDs
+  - `is_circular`: Boolean indicating if component forms a cycle
+  - `is_closed`: Boolean indicating if single contig forms a cycle
+  - `lengths`: Comma-separated list of contig lengths
+- `records`: FASTA records from the GFA
+"""
+function gfa_to_structure_table(gfa)
+    gfa_metagraph = parse_gfa(gfa)
+    contig_table = DataFrames.DataFrame()
+    records = MetaGraphs.get_prop(gfa_metagraph, :records)
+    contig_lengths = Dict(FASTX.identifier(record) => length(FASTX.sequence(record)) for record in records)
+    # @show String.(FASTX.description.(records))
+    # try
+    # contig_depths = Dict(FASTX.identifier(record) => first(match(r"^.*?dp:i:(\d+).*$", String(FASTX.description(record))).captures) for record in records)
+    for (i, connected_component) in enumerate(Graphs.connected_components(gfa_metagraph))
+        subgraph, node_map = Graphs.induced_subgraph(gfa_metagraph, connected_component)
+        # display(subgraph)
+        contigs = [MetaGraphs.get_prop(subgraph, v, :id) for v in Graphs.vertices(subgraph)]
+        row = (
+            connected_component = i,
+            contigs = join(contigs, ","),
+            is_circular = Graphs.is_cyclic(subgraph),
+            is_closed = (length(contigs) == 1) && Graphs.is_cyclic(subgraph),
+            lengths = join([contig_lengths[contig] for contig in contigs], ","),
+            # depths = join([contig_depths[contig] for contig in contigs], ","),
+            )
+        push!(contig_table, row)
+    end
+    
+    return (;contig_table, records)
+end

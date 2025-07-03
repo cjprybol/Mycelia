@@ -1038,3 +1038,100 @@ function tar_extract(;tarchive, directory=dirname(tarchive))
     run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
     return directory
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract biosample and barcode information from a PacBio XML metadata file.
+
+# Arguments
+- `xml`: Path to PacBio XML metadata file
+
+# Returns
+DataFrame with two columns:
+- `BioSampleName`: Name of the biological sample
+- `BarcodeName`: Associated DNA barcode identifier
+"""
+function extract_pacbiosample_information(xml)
+    xml_dict = XMLDict.parse_xml(read(xml, String))
+    wellsample = xml_dict["ExperimentContainer"]["Runs"]["Run"]["Outputs"]["SubreadSets"]["SubreadSet"]["DataSetMetadata"]["Collections"]["CollectionMetadata"]["WellSample"]
+
+    # Initialize empty arrays to store the data
+    biosample_names = []
+    barcode_names = []
+    
+    if haskey(wellsample, "BioSamples")
+        # display(wellsample)
+        for bs in wellsample["BioSamples"]["BioSample"]
+            push!(biosample_names, bs[:Name])
+            push!(barcode_names, bs["DNABarcodes"]["DNABarcode"][:Name])
+        end
+    end
+
+    # Create the DataFrame
+    df = DataFrames.DataFrame(BioSampleName=biosample_names, BarcodeName=barcode_names)
+    return df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a dictionary of counts into a probability distribution where values sum to 1.0.
+
+# Arguments
+- `countmap::Dict`: Dictionary mapping keys to count values
+
+# Returns
+- `Dict`: New dictionary with same keys but values normalized by total sum
+"""
+function normalize_countmap(countmap)
+    sum_total = sum(values(countmap))
+    return Dict(k => v/sum_total for (k, v) in countmap)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Copy a file to a new location with a unique identifier prepended to the filename.
+
+# Arguments
+- `infile::AbstractString`: Path to the source file to copy
+- `out_directory::AbstractString`: Destination directory for the copied file
+- `unique_identifier::AbstractString`: String to prepend to the filename
+- `force::Bool=true`: If true, overwrite existing files
+
+# Returns
+- `String`: Path to the newly created file
+"""
+function copy_with_unique_identifier(infile, out_directory, unique_identifier; force=true)
+    outfile = joinpath(out_directory, unique_identifier * "." * basename(infile))
+    cp(infile, outfile, force=force)
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Gets the size of a file and returns it in a human-readable format.
+
+# Arguments
+- `f`: The path to the file, either as a `String` or an `AbstractString`.
+
+# Returns
+A string representing the file size in a human-readable format (e.g., "3.40 MB").
+
+# Details
+This function internally uses `filesize(f)` to get the file size in bytes, then leverages `Base.format_bytes` to convert it into a human-readable format with appropriate units (KB, MB, GB, etc.).
+
+# Examples
+```julia
+julia> filesize_human_readable("my_image.jpg")
+"2.15 MB"
+```
+See Also
+* filesize: Gets the size of a file in bytes.
+* Base.format_bytes: Converts a byte count into a human-readable string. 
+"""
+function filesize_human_readable(f)
+    return Base.format_bytes(filesize(f))
+end

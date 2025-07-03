@@ -27,4 +27,10 @@ const FASTQ_REGEX = r"\.(fq|fastq)(\.gz)?$"
 const XAM_REGEX = r"\.(sam|bam|cram|sam\.gz)$"
 const VCF_REGEX = r"\.vcf(\.gz)?$"
 
+# smaller, higher diversity databases do better with >=5 as the denominator - w/ <=4 they run out of memory
+# denominator = 5 # produced OOM for NT on NERSC
+# denominator = 8 # produced OOM for NT on Lawrencium
+# denominator = 10 was only 56% efficient for NT on NERSC
+const DEFAULT_MINIMAP_DENOMINATOR=10
+
 ProgressMeter.ijulia_behavior(:clear)

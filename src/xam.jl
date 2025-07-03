@@ -397,3 +397,35 @@ function determine_fasta_coverage_from_bam(bam)
     end
     return genome_coverage_file
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a BAM file to FASTQ format with gzip compression.
+
+# Arguments
+- `bam`: Path to input BAM file
+- `fastq`: Optional output path. Defaults to input path with ".fq.gz" extension
+
+# Returns
+- Path to the generated FASTQ file
+
+# Details
+- Uses samtools through conda environment
+- Automatically skips if output file exists
+- Output is gzip compressed
+- Requires samtools to be available via conda
+
+"""
+function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
+    Mycelia.add_bioconda_env("samtools")
+    bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
+    gzip_cmd = `gzip`
+    p = pipeline(bam_to_fastq_cmd, gzip_cmd)
+    if !isfile(fastq)
+        @time run(pipeline(p, fastq))
+    else
+        @info "$(fastq) already exists"
+    end
+    return fastq
+end

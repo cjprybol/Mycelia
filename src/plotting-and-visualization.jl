@@ -967,3 +967,24 @@ The noise is uniformly distributed between -1/3 and 1/3.
 function jitter(x, n)
     return [x + rand() / 3 * (ifelse(rand(Bool), 1, -1)) for i in 1:n]
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a visualization of a genome assembly graph using Bandage.
+
+# Arguments
+- `gfa`: Path to input GFA (Graphical Fragment Assembly) file
+- `img`: Optional output image path. Defaults to GFA filename with .png extension
+
+# Returns
+- Path to the generated image file
+"""
+function bandage_visualize(;gfa, img=gfa*".png")
+    # run(`$(bandage) image --helpall`)
+    bandage = Mycelia.download_bandage()
+    if !isfile(img)
+        run(`$(bandage) image $(gfa) $(img)`)
+    end
+    return img
+end
