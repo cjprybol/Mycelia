@@ -787,3 +787,255 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
     end
     return corrected_observations
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Process and error-correct a FASTQ sequence record using a kmer graph and path resampling.
+
+# Arguments
+- `record`: FASTQ record containing the sequence to process
+- `kmer_graph`: MetaGraph containing the kmer network and associated properties
+- `yen_k_shortest_paths_and_weights`: Cache of pre-computed k-shortest paths between nodes
+- `yen_k`: Number of alternative paths to consider during resampling (default: 3)
+
+# Description
+Performs error correction by:
+1. Trimming low-quality sequence ends
+2. Identifying stretches requiring resampling between solid branching kmers
+3. Selecting alternative paths through the kmer graph based on:
+   - Path quality scores
+   - Transition likelihoods
+   - Path length similarity to original sequence
+
+# Returns
+- Modified FASTQ record with error-corrected sequence and updated quality scores
+- Original record if no error correction was needed
+
+# Required Graph Properties
+The kmer_graph must contain the following properties:
+- :ordered_kmers
+- :likely_valid_kmer_indices  
+- :kmer_indices
+- :branching_nodes
+- :assembly_k
+- :transition_likelihoods
+- :kmer_mean_quality
+- :kmer_total_quality
+"""
+function process_fastq_record(;record, kmer_graph, yen_k_shortest_paths_and_weights, yen_k=3)
+    ordered_kmers = MetaGraphs.get_prop(kmer_graph, :ordered_kmers)
+    likely_valid_kmers = Set(ordered_kmers[MetaGraphs.get_prop(kmer_graph, :likely_valid_kmer_indices)])
+    kmer_to_index_map = MetaGraphs.get_prop(kmer_graph, :kmer_indices)
+    branching_nodes_set = MetaGraphs.get_prop(kmer_graph, :branching_nodes)
+    assembly_k = MetaGraphs.get_prop(kmer_graph, :assembly_k)
+    transition_likelihoods = MetaGraphs.get_prop(kmer_graph, :transition_likelihoods)
+    kmer_mean_quality = MetaGraphs.get_prop(kmer_graph, :kmer_mean_quality)
+    kmer_total_quality = MetaGraphs.get_prop(kmer_graph, :kmer_total_quality)
+    
+    new_record_identifier = FASTX.identifier(record) * ".k$(assembly_k)"
+    record_sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
+
+    kmer_type = Kmers.DNAKmer{assembly_k}
+    record_kmers = last.(collect(Kmers.EveryKmer{kmer_type}(record_sequence)))
+    record_quality_scores = collect(FASTX.quality_scores(record))
+    record_kmer_quality_scores = [record_quality_scores[i:i+assembly_k-1] for i in 1:length(record_quality_scores)-assembly_k+1]
+    
+    record_kmer_solidity = map(kmer -> kmer in likely_valid_kmers, record_kmers)
+    record_branching_kmers = [kmer_to_index_map[kmer] in branching_nodes_set for kmer in record_kmers]
+    record_solid_branching_kmers = record_kmer_solidity .& record_branching_kmers
+    
+    # trim beginning of fastq
+    initial_solid_kmer = findfirst(record_kmer_solidity)
+    if isnothing(initial_solid_kmer)
+        return record
+    elseif initial_solid_kmer > 1
+        record_kmers = record_kmers[initial_solid_kmer:end]
+        record_kmer_quality_scores = record_kmer_quality_scores[initial_solid_kmer:end]
+        record_kmer_solidity = map(kmer -> kmer in likely_valid_kmers, record_kmers)
+        record_branching_kmers = [kmer_to_index_map[kmer] in branching_nodes_set for kmer in record_kmers]
+        record_solid_branching_kmers = record_kmer_solidity .& record_branching_kmers
+    end
+    initial_solid_kmer = 1
+    
+    # trim end of fastq
+    last_solid_kmer = findlast(record_kmer_solidity)
+    if last_solid_kmer != length(record_kmer_solidity)
+        record_kmers = record_kmers[1:last_solid_kmer]
+        record_kmer_quality_scores = record_kmer_quality_scores[1:last_solid_kmer]
+        record_kmer_solidity = map(kmer -> kmer in likely_valid_kmers, record_kmers)
+        record_branching_kmers = [kmer_to_index_map[kmer] in branching_nodes_set for kmer in record_kmers]
+        record_solid_branching_kmers = record_kmer_solidity .& record_branching_kmers
+    end
+    
+    # identify low quality runs and the solid branchpoints we will use for resampling
+    solid_branching_kmer_indices = findall(record_solid_branching_kmers)
+    resampling_stretches = find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_indices)
+
+    # nothing to do
+    if isempty(resampling_stretches)
+        return record
+    end
+    trusted_range = 1:max(first(first(resampling_stretches))-1, 1)
+    
+    new_record_kmers = record_kmers[trusted_range]
+    new_record_kmer_qualities = record_kmer_quality_scores[trusted_range]
+    
+    
+    for (i, resampling_stretch) in enumerate(resampling_stretches)
+        starting_solid_kmer = record_kmers[first(resampling_stretch)]
+        ending_solid_kmer = record_kmers[last(resampling_stretch)]
+        
+        current_quality_scores = record_quality_scores[resampling_stretch]
+        u = kmer_to_index_map[starting_solid_kmer]
+        v = kmer_to_index_map[ending_solid_kmer]
+        if !haskey(yen_k_shortest_paths_and_weights, u => v)
+            yen_k_result = Graphs.yen_k_shortest_paths(kmer_graph, u, v, Graphs.weights(kmer_graph), yen_k)
+            yen_k_shortest_paths_and_weights[u => v] = Vector{Pair{Vector{Int}, Float64}}()
+            for path in yen_k_result.paths
+                path_weight = Statistics.mean([kmer_total_quality[ordered_kmers[node]] for node in path])
+                path_transition_likelihoods = 1.0
+                for (a, b) in zip(path[1:end-1], path[2:end])
+                    path_transition_likelihoods *= transition_likelihoods[a, b]
+                end
+                joint_weight = path_weight * path_transition_likelihoods
+                push!(yen_k_shortest_paths_and_weights[u => v], path => joint_weight)
+            end
+        end
+        yen_k_path_weights = yen_k_shortest_paths_and_weights[u => v]      
+        if length(yen_k_path_weights) > 1
+            current_distance = length(resampling_stretch)
+            initial_weights = last.(yen_k_path_weights)
+            path_lengths = length.(first.(yen_k_path_weights))
+            deltas = map(l -> abs(l-current_distance), path_lengths)
+            adjusted_weights = initial_weights .* map(d -> exp(-d * log(2)), deltas)
+            # make it more severe?
+            # adjusted_weights = adjusted_weights.^2
+            
+            # and a bonus for usually being correct
+            
+            selected_path_index = StatsBase.sample(StatsBase.weights(adjusted_weights))
+            selected_path, selected_path_weights = yen_k_path_weights[selected_path_index]
+            selected_path_kmers = [ordered_kmers[kmer_index] for kmer_index in selected_path]
+            
+            if last(new_record_kmers) == first(selected_path_kmers)
+                selected_path_kmers = selected_path_kmers[2:end]
+            end
+            append!(new_record_kmers, selected_path_kmers)
+            selected_kmer_qualities = [Int8.(min.(typemax(Int8), floor.(kmer_mean_quality[kmer]))) for kmer in selected_path_kmers]
+            append!(new_record_kmer_qualities, selected_kmer_qualities)
+        else
+            selected_path_kmers = record_kmers[resampling_stretch]
+            if last(new_record_kmers) == first(selected_path_kmers)
+                selected_path_kmers = selected_path_kmers[2:end]
+            end
+            append!(new_record_kmers, selected_path_kmers)
+            selected_kmer_qualities = [Int8.(min.(typemax(Int8), floor.(kmer_mean_quality[kmer]))) for kmer in selected_path_kmers]
+            append!(new_record_kmer_qualities, selected_kmer_qualities)
+        end
+        if i < length(resampling_stretches) # append high quality gap
+            next_solid_start = last(resampling_stretch)+1
+            next_resampling_stretch = resampling_stretches[i+1]
+            next_solid_stop = first(next_resampling_stretch)-1
+            if !isempty(next_solid_start:next_solid_stop)
+                selected_path_kmers = record_kmers[next_solid_start:next_solid_stop]
+                append!(new_record_kmers, selected_path_kmers)
+                selected_kmer_qualities = record_kmer_quality_scores[next_solid_start:next_solid_stop]
+                append!(new_record_kmer_qualities, selected_kmer_qualities)
+            end
+        else # append remainder of sequence
+            @assert i == length(resampling_stretches)
+            next_solid_start = last(resampling_stretch)+1
+            if next_solid_start < length(record_kmers)
+                selected_path_kmers = record_kmers[next_solid_start:end]
+                append!(new_record_kmers, selected_path_kmers)
+                selected_kmer_qualities = record_kmer_quality_scores[next_solid_start:end]
+                append!(new_record_kmer_qualities, selected_kmer_qualities)
+            end
+        end
+    end
+    
+    for (a, b) in zip(new_record_kmers[1:end-1], new_record_kmers[2:end])
+        @assert a != b
+    end
+    new_record_sequence = Mycelia.kmer_path_to_sequence(new_record_kmers)
+    new_record_quality_scores = new_record_kmer_qualities[1]
+    for new_record_kmer_quality in new_record_kmer_qualities[2:end]
+        push!(new_record_quality_scores, last(new_record_kmer_quality))
+    end
+    new_record = fastq_record(identifier=new_record_identifier, sequence=new_record_sequence, quality_scores=new_record_quality_scores)
+    return new_record
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Polish FASTQ reads using a k-mer graph-based approach to correct potential sequencing errors.
+
+# Arguments
+- `fastq::String`: Path to input FASTQ file
+- `k::Int=1`: Initial k-mer size parameter. Final assembly k-mer size may differ.
+
+# Process
+1. Builds a directed k-mer graph from input reads
+2. Processes each read through the graph to find optimal paths
+3. Writes corrected reads to a new FASTQ file
+4. Automatically compresses output with gzip
+
+# Returns
+Named tuple with:
+- `fastq::String`: Path to output gzipped FASTQ file
+- `k::Int`: Final assembly k-mer size used
+"""
+function polish_fastq(;fastq, k=1)
+    kmer_graph = build_directed_kmer_graph(fastq=fastq, k=k)
+    assembly_k = MetaGraphs.get_prop(kmer_graph, :assembly_k)
+    @info "polishing with k = $(assembly_k)"
+    revised_records = []
+    yen_k_shortest_paths_and_weights = Dict{Pair{Int, Int}, Vector{Pair{Vector{Int}, Float64}}}()
+    ProgressMeter.@showprogress for record in collect(Mycelia.open_fastx(fastq))
+        revised_record = process_fastq_record(;record, kmer_graph, yen_k_shortest_paths_and_weights)
+        push!(revised_records, revised_record)
+    end
+    
+    fastq_out = replace(fastq, Mycelia.FASTQ_REGEX => ".k$(assembly_k).fq")
+    open(fastq_out, "w") do io
+        fastx_io = FASTX.FASTQ.Writer(io)
+        for record in revised_records
+            write(fastx_io, record)
+        end
+        close(fastx_io)
+    end
+    run(`gzip --force $(fastq_out)`)
+    return (fastq = fastq_out * ".gz", k=assembly_k)
+end
+
+# selected after trialing previous and next ks and finding those to be too unstable
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Performs iterative error correction on FASTQ sequences using progressively larger k-mer sizes.
+
+Starting with the default k-mer size, this function repeatedly applies polishing steps,
+incrementing the k-mer size until either reaching max_k or encountering instability.
+
+# Arguments
+- `fastq`: Path to input FASTQ file or FastqRecord object
+- `max_k`: Maximum k-mer size to attempt (default: 89)
+- `plot`: Whether to generate diagnostic plots (default: false)
+
+# Returns
+Vector of polishing results, where each element contains:
+- k: k-mer size used
+- fastq: resulting polished sequences
+"""
+function iterative_polishing(fastq, max_k = 89, plot=false)
+    # initial polishing
+    polishing_results = [polish_fastq(fastq=fastq)]
+    while (!ismissing(last(polishing_results).k)) && (last(polishing_results).k < max_k)
+        next_k = first(filter(k -> k > last(polishing_results).k, Mycelia.ks()))
+        # @show next_k
+        push!(polishing_results, polish_fastq(fastq=last(polishing_results).fastq, k=next_k))
+    end
+    return polishing_results
+end

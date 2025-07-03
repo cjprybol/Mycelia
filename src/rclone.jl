@@ -51,3 +51,132 @@ function rclone_copy_list(;source::String, destination::String, relative_paths::
         end
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Copy files between local and remote storage using rclone with automated retry logic.
+
+# Arguments
+- `source::String`: Source path or remote (e.g. "local/path" or "gdrive:folder")
+- `dest::String`: Destination path or remote (e.g. "gdrive:folder" or "local/path")
+
+# Keywords
+- `config::String=""`: Optional path to rclone config file
+- `max_attempts::Int=3`: Maximum number of retry attempts
+- `sleep_timer::Int=60`: Initial sleep duration between retries in seconds (doubles after each attempt)
+
+# Details
+Uses optimized rclone settings for large files:
+- 2GB chunk size
+- 1TB upload cutoff
+- Rate limited to 1 transaction per second
+"""
+function rclone_copy(source, dest; config="", max_attempts=3, sleep_timer=60)
+    done = false
+    attempts = 0
+    while !done && attempts < max_attempts
+        attempts += 1
+        try
+            # https://forum.rclone.org/t/google-drive-uploads-failing-http-429/34147/9
+            # --tpslimit                                       Limit HTTP transactions per second to this
+            # --drive-chunk-size SizeSuffix                    Upload chunk size (default 8Mi)
+            # --drive-upload-cutoff SizeSuffix                 Cutoff for switching to chunked upload (default 8Mi)
+            # not currently using these but they may become helpful
+            # --drive-pacer-burst int                          Number of API calls to allow without sleeping (default 100)
+            # --drive-pacer-min-sleep Duration                 Minimum time to sleep between API calls (default 100ms)
+            if isempty(config)
+                cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            else
+                cmd = `rclone --config $(config) copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
+            end
+            @info "copying $(source) to $(dest) with command: $(cmd)"
+            run(cmd)
+            done = true
+        catch
+            @info "copying incomplete, sleeping $(sleep_timer) seconds and trying again..."
+            sleep(sleep_timer)
+            sleep_timer *= 2
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Copy files between local and remote storage using rclone with automated retry logic.
+
+# Arguments
+- `source::String`: Source path or remote (e.g. "local/path" or "gdrive:folder")
+- `dest::String`: Destination path or remote (e.g. "gdrive:folder" or "local/path")
+
+# Keywords
+- `config::String=""`: Optional path to rclone config file
+- `max_attempts::Int=3`: Maximum number of retry attempts
+- `sleep_timer::Int=60`: Initial sleep duration between retries in seconds (doubles after each attempt)
+- `includes::Vector{String}=[]`: One or more include patterns (each will be passed using `--include`)
+- `excludes::Vector{String}=[]`: One or more exclude patterns (each will be passed using `--exclude`)
+- `recursive::Bool=false`: If true, adds the flag for recursive traversal
+"""
+function rclone_copy2(source, dest;
+                     config = "",
+                     max_attempts = 3, sleep_timer = 60,
+                     includes = String[],
+                     excludes = String[],
+                     recursive = false)
+    done = false
+    attempts = 0
+    while !done && attempts < max_attempts
+        attempts += 1
+        try
+            # Define base flags optimized for large files
+            flags = ["--drive-chunk-size", "2G",
+                     "--drive-upload-cutoff", "1T",
+                     "--tpslimit", "1",
+                     "--verbose"]
+
+            # Append each include pattern with its flag
+            for pattern in includes
+                push!(flags, "--include")
+                push!(flags, pattern)
+            end
+
+            # Append each exclude pattern with its flag
+            for pattern in excludes
+                push!(flags, "--exclude")
+                push!(flags, pattern)
+            end
+
+            # Optionally add the recursive flag
+            if recursive
+                push!(flags, "--recursive")
+            end
+
+            # Build the full argument list as an array of strings.
+            args = String[]
+            # Add base command and optional config
+            push!(args, "rclone")
+            if !isempty(config)
+                push!(args, "--config")
+                push!(args, config)
+            end
+            push!(args, "copy")
+            # Insert all flags (each flag and its parameter are separate elements)
+            append!(args, flags)
+            # Add source and destination paths
+            push!(args, source)
+            push!(args, dest)
+
+            # Convert the argument vector into a Cmd object
+            cmd = Cmd(args)
+
+            @info "copying $(source) to $(dest) with command: $(cmd)"
+            run(cmd)
+            done = true
+        catch e
+            @info "copying incomplete, sleeping $(sleep_timer) seconds and trying again..."
+            sleep(sleep_timer)
+            sleep_timer *= 2
+        end
+    end
+end

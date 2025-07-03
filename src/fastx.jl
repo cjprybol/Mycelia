@@ -1202,3 +1202,53 @@ end
 
 # function filter_short_reads()
 # end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates an index file (.fai) for a FASTA reference sequence using samtools.
+
+The FASTA index allows efficient random access to the reference sequence. This is 
+required by many bioinformatics tools that need to quickly fetch subsequences 
+from the reference.
+
+# Arguments
+- `fasta`: Path to the input FASTA file
+
+# Side Effects
+- Creates a `{fasta}.fai` index file in the same directory as input
+- Installs samtools via conda if not already present
+"""
+function samtools_index_fasta(;fasta)
+    Mycelia.add_bioconda_env("samtools")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Construct a FASTX FASTQ record from its components.
+
+# Arguments
+- `identifier::String`: The sequence identifier without the '@' prefix
+- `sequence::String`: The nucleotide sequence
+- `quality_scores::Vector{Int}`: Quality scores (0-93) as raw integers
+
+# Returns
+- `FASTX.FASTQRecord`: A parsed FASTQ record
+
+# Notes
+- Quality scores are automatically capped at 93 to ensure FASTQ compatibility
+- Quality scores are converted to ASCII by adding 33 (Phred+33 encoding)
+- The record is constructed in standard FASTQ format with four lines:
+  1. Header line (@ + identifier)
+  2. Sequence
+  3. Plus line
+  4. Quality scores (ASCII encoded)
+"""
+function fastq_record(;identifier, sequence, quality_scores)
+    # Fastx wont parse anything higher than 93
+    quality_scores = min.(quality_scores, 93)
+    record_string = join(["@" * identifier, sequence, "+", join([Char(x+33) for x in quality_scores])], "\n")
+    return FASTX.parse(FASTX.FASTQRecord, record_string)
+end

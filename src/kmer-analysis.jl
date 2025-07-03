@@ -1912,3 +1912,82 @@ end
     
 #     return canonical_kmer_counts_table
 # end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the closest prime number to the given integer `n`.
+
+Returns the nearest prime number to `n`. If two prime numbers are equally distant 
+from `n`, returns the smaller one.
+
+# Arguments
+- `n::Int`: The input integer to find the nearest prime for
+
+# Returns
+- `Int`: The closest prime number to `n`
+"""
+function nearest_prime(n::Int)
+    if n < 2
+        return 2
+    end
+    next_p = Primes.nextprime(n)
+    prev_p = Primes.prevprime(n)
+    if n - prev_p <= next_p - n
+        return prev_p
+    else
+        return next_p
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a sequence of Fibonacci numbers strictly less than the input value.
+
+# Arguments
+- `n::Int`: Upper bound (exclusive) for the Fibonacci sequence
+
+# Returns
+- `Vector{Int}`: Array containing Fibonacci numbers less than n
+"""
+function fibonacci_numbers_less_than(n::Int)
+    if n <= 0
+        return []
+    elseif n == 1
+        return [0]
+    else
+        fib = [0, 1]
+        next_fib = fib[end] + fib[end-1]
+        while next_fib < n
+            push!(fib, next_fib)
+            next_fib = fib[end] + fib[end-1]
+        end
+        return fib
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generates a specialized sequence of prime numbers combining:
+- Odd primes up to 23 (flip_point)
+- Primes nearest to Fibonacci numbers above 23 up to max
+
+# Arguments
+- `min::Int=0`: Lower bound for the sequence
+- `max::Int=10_000`: Upper bound for the sequence
+
+# Returns
+Vector of Int containing the specialized prime sequence
+"""
+function ks(;min=0, max=10_000)
+    # flip from all odd primes to only nearest to fibonnaci primes
+    flip_point = 23
+    # skip 19 because it is so similar to 17
+    results = vcat(
+        filter(x -> x != 19, filter(isodd, Primes.primes(0, flip_point))),
+        filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max*10)))
+    )
+    return filter(x -> min <= x <= max, results)
+end

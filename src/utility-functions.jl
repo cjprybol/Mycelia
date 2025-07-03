@@ -886,3 +886,155 @@ function githash(;short=false)
     end
     return git_hash
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values
+
+Returns as a bit array
+
+See also: drop_empty_columns, drop_empty_columns!
+"""
+function find_nonempty_columns(df)
+    non_empty_columns = [eltype(col) != Missing || !all(v -> isnothing(v) || ismissing(v) || (!isa(v, Date) && isempty(v)), col) for col in DataFrames.eachcol(df)]
+    return non_empty_columns
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values, and remove those columns from the dataframe.
+
+Returns a modified copy of the dataframe.
+
+See also: drop_empty_columns!
+"""
+function drop_empty_columns(df::DataFrames.AbstractDataFrame)
+    # Filter the DataFrame columns by checking if not all values in the column are missing or empty
+    non_empty_columns = find_nonempty_columns(df)
+    filtered_df = df[:, non_empty_columns]
+    return filtered_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify all columns that have only missing or empty values, and remove those columns from the dataframe *in-place*.
+
+Returns a modified version of the original dataframe. 
+
+See also: drop_empty_columns
+"""
+function drop_empty_columns!(df::DataFrames.AbstractDataFrame)
+    # Filter the DataFrame columns by checking if not all values in the column are missing or empty
+    non_empty_columns = find_nonempty_columns(df)
+    # df = df[!, non_empty_columns]
+    DataFrames.select!(df, non_empty_columns)
+    return df
+end
+
+# # Need to add hashdeep & logging
+# function tarchive(;directory, tarchive=directory * ".tar.gz")
+#     run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+#     return tarchive
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Ensures the hashdeep utility is installed on the system.
+
+Checks if hashdeep is available in PATH and attempts to install it via apt package manager
+if not found. Will try with sudo privileges first, then without sudo if that fails.
+
+# Details
+- Checks PATH for existing hashdeep executable
+- Attempts installation using apt package manager
+- Requires a Debian-based Linux distribution
+
+# Returns
+- Nothing, but prints status messages during execution
+"""
+function install_hashdeep()
+    if Sys.which("hashdeep") !== nothing
+        println("hashdeep executable found")
+    else
+        println("hashdeep executable not found in PATH, installing")
+        try
+            run(`sudo apt install hashdeep -y`)
+        catch
+            run(`apt install hashdeep -y`)
+        end
+    end
+end
+
+# Need to add hashdeep & logging
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a gzipped tar archive of the specified directory along with verification files.
+
+# Arguments
+- `directory`: Source directory path to archive
+- `tarchive`: Optional output archive path (defaults to directory name with .tar.gz extension)
+
+# Generated Files
+- `{tarchive}`: The compressed tar archive
+- `{tarchive}.log`: Contents listing of the archive
+- `{tarchive}.hashdeep.dfxml`: Cryptographic hashes (MD5, SHA1, SHA256) of the archive
+
+# Returns
+- Path to the created tar archive file
+"""
+function create_tarchive(;directory, tarchive=directory * ".tar.gz")
+    directory = normpath(directory)
+    tarchive = normpath(tarchive)
+    output_dir = mkpath(dirname(tarchive))
+    
+    install_hashdeep()
+
+
+    working_dir, source = splitdir(directory)
+    if isempty(source)
+        source = working_dir
+        working_dir = pwd()
+    end
+    if isempty(working_dir)
+        working_dir = pwd()
+    end
+    println("output_dir: $output_dir\n" *
+            "working_dir: $working_dir\n" *
+            "source: $source\n" *
+            "target_file: $tarchive")
+    log_file = tarchive * ".log"
+    hashdeep_file = tarchive * ".hashdeep.dfxml"
+    
+    if !isfile(tarchive)
+        run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
+    end
+    if !isfile(log_file)
+        run(pipeline(`tar -tvf $(tarchive)`,log_file))
+    end
+    if !isfile(hashdeep_file)
+        run(pipeline(`hashdeep -c md5,sha1,sha256 -b -d $(tarchive)`,hashdeep_file))
+    end
+    return tarchive
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract contents of a gzipped tar archive file to a specified directory.
+
+# Arguments
+- `tarchive::AbstractString`: Path to the .tar.gz file to extract
+- `directory::AbstractString=dirname(tarchive)`: Target directory for extraction (defaults to the archive's directory)
+
+# Returns
+- `AbstractString`: Path to the directory where contents were extracted
+"""
+function tar_extract(;tarchive, directory=dirname(tarchive))
+    run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+    return directory
+end

@@ -318,3 +318,228 @@ function gfa_to_fasta(;gfa, fasta=gfa * ".fna")
     #     close(fastx_io)
     # end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identifies sequence regions that require resampling based on kmer solidity patterns.
+
+# Arguments
+- `record_kmer_solidity::BitVector`: Boolean array where `true` indicates solid kmers
+- `solid_branching_kmer_indices::Vector{Int}`: Indices of solid branching kmers
+
+# Returns
+- `Vector{UnitRange{Int64}}`: Array of ranges (start:stop) indicating stretches that need resampling
+
+# Details
+Finds continuous stretches of non-solid kmers and extends them to the nearest solid branching
+kmers on either side. These stretches represent regions that need resampling.
+
+If a stretch doesn't have solid branching kmers on both sides, it is excluded from the result.
+Duplicate ranges are removed from the final output.
+"""
+function find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_indices)
+    indices = findall(.!record_kmer_solidity)  # Find the indices of false values
+    if isempty(indices)
+        return UnitRange{Int64}[]
+    end
+    
+    diffs = diff(indices)  # Calculate the differences between consecutive indices
+    # @show diffs
+    range_starts = [indices[1]]  # Start with the first false index
+    range_ends = Int[]
+    
+    for (i, d) in enumerate(diffs)
+        if d > 1
+            push!(range_ends, indices[i])
+            push!(range_starts, indices[i+1])
+        end
+    end
+    
+    push!(range_ends, indices[end])  # Add the last false index as a range end
+    
+    low_quality_runs = [(start, stop) for (start, stop) in zip(range_starts, range_ends)]
+    
+    resampling_stretches = UnitRange{Int64}[]
+    
+    for low_quality_run in low_quality_runs
+        unders = filter(solid_branching_kmer -> solid_branching_kmer < first(low_quality_run), solid_branching_kmer_indices)
+        overs = filter(solid_branching_kmer -> solid_branching_kmer > last(low_quality_run), solid_branching_kmer_indices)
+        if isempty(overs) || isempty(unders)
+            continue
+        else
+            nearest_under = maximum(unders)
+            nearest_over = minimum(overs)
+            push!(resampling_stretches, nearest_under:nearest_over)
+        end
+    end
+    if !allunique(resampling_stretches)
+        resampling_stretches = unique!(resampling_stretches)
+    end
+    return resampling_stretches
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Constructs a directed graph representation of k-mer transitions from FASTQ sequencing data.
+
+# Arguments
+- `fastq`: Path to input FASTQ file
+- `k`: K-mer size (default: 1). Must be odd and prime. If k=1, optimal size is auto-determined
+- `plot`: Boolean to display quality distribution plot (default: false)
+
+# Returns
+MetaDiGraph with properties:
+- assembly_k: k-mer size used
+- kmer_counts: frequency of each k-mer
+- transition_likelihoods: edge weights between k-mers
+- kmer_mean_quality, kmer_total_quality: quality metrics
+- branching_nodes, unbranching_nodes: topological classification
+- likely_valid_kmer_indices: k-mers above mean quality threshold
+- likely_sequencing_artifact_indices: potential erroneous k-mers
+
+# Note
+For DNA assembly, quality scores are normalized across both strands.
+"""
+function build_directed_kmer_graph(;fastq, k=1, plot=false)
+    if k == 1
+        assembly_k = Mycelia.assess_dnamer_saturation([fastq])
+    else
+        @assert isodd(k)
+        @assert Primes.isprime(k)
+        assembly_k = k
+    end
+    kmer_type = Kmers.DNAKmer{assembly_k}
+
+    # initializing the graph with kmer counts
+    kmer_counts = Mycelia.count_kmers(kmer_type, fastq)
+    ordered_kmers = collect(keys(kmer_counts))
+    total_states = length(ordered_kmers)
+    graph = MetaGraphs.MetaDiGraph(total_states)
+    MetaGraphs.set_prop!(graph, :assembly_k, assembly_k)
+    MetaGraphs.set_prop!(graph, :kmer_counts, kmer_counts)
+    MetaGraphs.set_prop!(graph, :total_states, total_states)
+    MetaGraphs.set_prop!(graph, :ordered_kmers, ordered_kmers)
+    kmer_indices = sort(Dict(kmer => i for (i, kmer) in enumerate(keys(kmer_counts))))
+    MetaGraphs.set_prop!(graph, :kmer_indices, kmer_indices)
+    canonical_kmer_counts = Mycelia.count_canonical_kmers(kmer_type, fastq)
+    MetaGraphs.set_prop!(graph, :canonical_kmer_counts, canonical_kmer_counts)
+    canonical_kmer_indices = sort(Dict(kmer => i for (i, kmer) in enumerate(keys(canonical_kmer_counts))))
+    MetaGraphs.set_prop!(graph, :canonical_kmer_indices, canonical_kmer_indices)
+    
+    
+    # kmer quality and likelihoods
+    
+    records = collect(Mycelia.open_fastx(fastq))
+    read_quality_scores = [collect(FASTX.quality_scores(record)) for record in records]
+    all_kmer_quality_support = Dict{kmer_type, Vector{Float64}}()
+    for record in records
+        record_quality_scores = collect(FASTX.quality_scores(record))
+        record_quality_score_slices = [record_quality_scores[i:i+assembly_k-1] for i in 1:length(record_quality_scores)-assembly_k+1]
+        sequence = BioSequences.LongDNA{2}(FASTX.sequence(record))
+        for ((i, kmer), kmer_base_qualities) in zip(Kmers.EveryKmer{kmer_type}(sequence), record_quality_score_slices)
+            if haskey(all_kmer_quality_support, kmer)
+                all_kmer_quality_support[kmer] = all_kmer_quality_support[kmer] .+ kmer_base_qualities
+            else
+                all_kmer_quality_support[kmer] = kmer_base_qualities
+            end
+        end
+    end
+    
+    # strand normalization shares observational quality across strands - only relevant for non-stranded DNA genome assembly
+    strand_normalized_quality_support = Dict{kmer_type, Vector{Float64}}()
+    for (kmer, support) in all_kmer_quality_support
+        strand_normalized_quality_support[kmer] = support
+        if haskey(all_kmer_quality_support, BioSequences.reverse_complement(kmer))
+            strand_normalized_quality_support[kmer] .+= all_kmer_quality_support[BioSequences.reverse_complement(kmer)]
+        end
+    end
+    strand_normalized_quality_support
+    kmer_mean_quality = sort(Dict(kmer => strand_normalized_quality_support[kmer] ./ canonical_kmer_counts[BioSequences.canonical(kmer)] for kmer in ordered_kmers))
+    MetaGraphs.set_prop!(graph, :kmer_mean_quality, kmer_mean_quality)
+    kmer_total_quality = sort(Dict(kmer => sum(quality_values) for (kmer, quality_values) in strand_normalized_quality_support))
+    MetaGraphs.set_prop!(graph, :kmer_total_quality, kmer_total_quality)
+    state_likelihoods = sort(Dict(kmer => total_quality / sum(values(kmer_total_quality)) for (kmer, total_quality) in kmer_total_quality))
+    MetaGraphs.set_prop!(graph, :state_likelihoods, state_likelihoods)
+
+
+    # all transition likelihood calculation
+    transition_likelihoods = SparseArrays.spzeros(total_states, total_states)
+    for record in records
+        sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
+        sources = Kmers.EveryKmer{kmer_type}(sequence[1:end-1])
+        destinations = Kmers.EveryKmer{kmer_type}(sequence[2:end])
+        for ((source_i, source), (destination_i, destination)) in zip(sources, destinations)
+            source_index = kmer_indices[source]
+            destination_index = kmer_indices[destination]
+            transition_likelihoods[source_index, destination_index] += 1
+        end
+    end
+    for source in 1:total_states
+        outgoing_transition_counts = transition_likelihoods[source, :]
+        if sum(outgoing_transition_counts) > 0
+            transition_likelihoods[source, :] .= transition_likelihoods[source, :] ./ sum(transition_likelihoods[source, :]) 
+        end
+    end
+    row_indices, column_indices, cell_values = SparseArrays.findnz(transition_likelihoods)
+    for (row, col, value) in zip(row_indices, column_indices, cell_values)
+        Graphs.add_edge!(graph, row, col)
+        MetaGraphs.set_prop!(graph, row, col, :transition_likelihood, value)
+    end
+    MetaGraphs.set_prop!(graph, :transition_likelihoods, transition_likelihoods)
+
+    # helpful for downstream processing
+    unbranching_nodes = Set(Int[])
+    for node in Graphs.vertices(graph)
+        if (Graphs.indegree(graph, node) <= 1) && (Graphs.outdegree(graph, node) <= 1)
+            push!(unbranching_nodes, node)
+        end
+    end
+    branching_nodes = Set(setdiff(Graphs.vertices(graph), unbranching_nodes))
+    MetaGraphs.set_prop!(graph, :unbranching_nodes, unbranching_nodes)
+    MetaGraphs.set_prop!(graph, :branching_nodes, branching_nodes)
+    
+    
+    # total_strand_normalized_quality_support = sum.(collect(values(strand_normalized_quality_support)))
+    mean_total_support = Statistics.mean(collect(values(kmer_total_quality)))
+    sorted_kmer_total_quality_values = collect(values(kmer_total_quality))
+    mean_quality_value = Statistics.mean(sorted_kmer_total_quality_values)
+    threshold = mean_quality_value
+
+    xs = [
+        [i for (i, y) in enumerate(sorted_kmer_total_quality_values) if y > threshold],
+        [i for (i, y) in enumerate(sorted_kmer_total_quality_values) if y <= threshold]
+        ]
+    
+    likely_valid_kmer_indices = xs[1]
+    MetaGraphs.set_prop!(graph, :likely_valid_kmer_indices, likely_valid_kmer_indices)
+    likely_sequencing_artifact_indices = xs[2]
+    MetaGraphs.set_prop!(graph, :likely_sequencing_artifact_indices, likely_sequencing_artifact_indices)
+    # likely_sequencing_artifact_kmers = Set(ordered_kmers[likely_sequencing_artifact_indices])
+    # likely_valid_kmers = Set(ordered_kmers[likely_valid_kmer_indices])
+    # kmer_to_index_map = Dict(kmer => i for (i, kmer) in enumerate(ordered_kmers))
+    
+    
+    if plot
+        ys = [
+            [y for y in sorted_kmer_total_quality_values if y > threshold],
+            [y for y in sorted_kmer_total_quality_values if y <= threshold]
+        ]
+
+        p = StatsPlots.scatter(
+            xs,
+            ys,
+            title = "kmer qualities",
+            ylabel = "canonical kmer cumulative QUAL value",
+            label = ["above" "below"],
+            legend = :outertopright,
+            # size = (900, 500),
+            margins=10StatsPlots.Plots.PlotMeasures.mm,
+            xticks = false
+        )
+        p = StatsPlots.hline!(p, [mean_quality_value], label="mean")
+        display(p)
+    end
+    return graph
+end
