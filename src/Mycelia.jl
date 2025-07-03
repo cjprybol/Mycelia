@@ -15046,6 +15046,145 @@ function downcast_float_columns(df::DataFrames.DataFrame; target_type=Float32)
     return df
 end
 
+"""
+    mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
+
+Calculates the Mash distance (an estimate of Average Nucleotide Identity)
+from a given Jaccard Index and k-mer size.
+
+# Arguments
+- `jaccard_index::Float64`: The Jaccard similarity between the two k-mer sets. Must be between 0.0 and 1.0.
+- `kmer_size::Int`: The length of k-mers used to calculate the Jaccard index.
+
+# Returns
+- `Float64`: The estimated Mash distance `D`. The estimated ANI would be `1.0 - D`.
+
+# Example
+```jldoctest
+julia> # Example: Two genomes with a Jaccard index of 0.2, using k=21
+julia> mash_distance_from_jaccard(0.2, 21)
+0.08053896775831388
+```
+"""
+function mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
+    # --- Input Validation ---
+    if !(0.0 <= jaccard_index <= 1.0)
+    error("Jaccard index must be between 0.0 and 1.0")
+    end
+    if kmer_size <= 0
+    error("k-mer size must be a positive integer")
+    end
+
+    # --- Edge Case Handling ---
+    # If Jaccard is 0, the genomes share no k-mers. The distance is effectively infinite,
+    # conventionally represented as 1.0 (100% divergent). The formula would fail due to log(0).
+    if jaccard_index == 0.0
+        return 1.0
+    end
+
+    # If Jaccard is 1, the genomes are identical. Distance is 0.
+    if jaccard_index == 1.0
+        return 0.0
+    end
+
+    # --- Core Mash Formula ---
+    # D = - (1/k) * ln(2J / (1+J))
+    # In Julia, log() is the natural logarithm (ln).
+    mash_dist = - (1 / kmer_size) * log(2 * jaccard_index / (1 + jaccard_index))
+
+    return mash_dist
+end
+
+"""
+    run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=10000, mash_path::String="mash")
+
+Runs a genome-by-genome comparison using the `mash` command-line tool.
+
+This function first creates sketch files for each FASTA input and then
+calculates the distance between them, capturing and parsing the result.
+
+# Arguments
+- `fasta1::String`: Path to the first FASTA file.
+- `fasta2::String`: Path to the second FASTA file.
+
+# Keyword Arguments
+- `k::Int=21`: The k-mer size to use for sketching. Default is 21.
+- `s::Int=10000`: The sketch size (number of hashes to keep). Default is 10000.
+- `mash_path::String="mash"`: The path to the mash executable if not in the system PATH.
+
+# Returns
+- `NamedTuple`: A named tuple containing the parsed results, e.g.,
+  `(reference=..., query=..., distance=..., p_value=..., shared_hashes=...)`
+- `nothing`: Returns `nothing` if the `mash` command fails.
+"""
+function run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=10000, mash_path::String="mash")
+    # --- Step 1: Check if input files exist ---
+    if !isfile(fasta1) || !isfile(fasta2)
+        error("One or both FASTA files not found.")
+    end
+
+    # --- Step 2: Create sketch files for each genome ---
+    sketch1 = fasta1 * ".msh"
+    sketch2 = fasta2 * ".msh"
+
+    println("Sketching $fasta1 (k=$k, s=$s)...")
+    sketch_cmd1 = pipeline(`$mash_path sketch -k $k -s $s -o $sketch1 $fasta1`, stdout=devnull, stderr=devnull)
+
+    println("Sketching $fasta2 (k=$k, s=$s)...")
+    sketch_cmd2 = pipeline(`$mash_path sketch -k $k -s $s -o $sketch2 $fasta2`, stdout=devnull, stderr=devnull)
+
+    try
+        run(sketch_cmd1)
+        run(sketch_cmd2)
+    catch e
+        println("Error: Failed to run 'mash sketch'. Is mash installed and in your PATH?")
+        println(e)
+        return nothing
+    end
+
+    # --- Step 3: Run 'mash dist' on the two sketches and capture output ---
+    println("Calculating distance between sketches...")
+    dist_cmd = `$mash_path dist $sketch1 $sketch2`
+
+    output = ""
+    try
+        # read() captures the standard output of the command
+        output = read(dist_cmd, String)
+    catch e
+        println("Error: Failed to run 'mash dist'.")
+        println(e)
+        return nothing
+    finally
+        # --- Step 4: Clean up the sketch files ---
+        rm(sketch1, force=true)
+        rm(sketch2, force=true)
+    end
+
+    # --- Step 5: Parse the tab-separated output from mash ---
+    if isempty(output)
+        println("Warning: Mash command produced no output.")
+        return nothing
+    end
+
+    # Example output: "genomeA.fasta\tgenomeB.fasta\t0.080539\t0.0\t491/1000"
+    parts = split(strip(output), '\t')
+
+    if length(parts) != 5
+        println("Error: Unexpected output format from Mash: ", output)
+        return nothing
+    end
+
+    parsed_result = (
+        reference = parts[1],
+        query = parts[2],
+        distance = parse(Float64, parts[3]),
+        p_value = parse(Float64, parts[4]),
+        shared_hashes = parts[5]
+    )
+
+    return parsed_result
+end
+
 # dynamic import of files??
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
 # don't recusively import this file
