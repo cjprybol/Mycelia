@@ -74,7 +74,7 @@ function pca_transform(
 end
 
 """
-    logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
+  bernoulli_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
 
 Perform Bernoulli (logistic) EPCA on a 0/1 matrix `M` (features × samples).
 
@@ -87,21 +87,21 @@ A NamedTuple with
 - `scores`   : k×n_samples matrix of low‐dimensional sample scores  
 - `loadings` : k×n_features matrix of feature loadings  
 """
-function logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
-    n_features, n_samples = size(M)
-    if k < 1
-        k = min(min(n_samples-1, n_features), 10)
-    end
-    X = transpose(M)                                 # samples × features
-    model = ExpFamilyPCA.BernoulliEPCA(n_features, k)
-    A     = ExpFamilyPCA.fit!(model, X)              # returns (n_samples×k)
-    scores   = transpose(A)                          # k×n_samples
-    loadings = model.V                               # k×n_features
-    return (model=model, scores=scores, loadings=loadings)
+function bernoulli_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
+  n_features, n_samples = size(M)
+  if k < 1
+    k = min(min(n_samples-1, n_features), 10)
+  end
+  X = transpose(M)                                 # samples × features
+  model = ExpFamilyPCA.BernoulliEPCA(n_features, k)
+  A     = ExpFamilyPCA.fit!(model, X)              # returns (n_samples×k)
+  scores   = transpose(A)                          # k×n_samples
+  loadings = model.V                               # k×n_features
+  return (model=model, scores=scores, loadings=loadings)
 end
 
 """
-    glm_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+  poisson_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
 
 Perform Poisson EPCA on a count matrix `M` (features × samples).
 
@@ -114,20 +114,20 @@ A NamedTuple with
 - `scores`   : k×n_samples matrix of low‐dimensional sample scores  
 - `loadings` : k×n_features matrix of feature loadings  
 """
-function glm_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
-    if any(M .< 0)
-        throw(ArgumentError("Poisson EPCA requires non-negative integer counts."))
-    end
-    n_features, n_samples = size(M)
-    if k < 1
-        k = min(min(n_samples-1, n_features), 10)
-    end
-    X = transpose(M)
-    model = ExpFamilyPCA.PoissonEPCA(n_features, k)
-    A     = ExpFamilyPCA.fit!(model, X)
-    scores   = transpose(A)
-    loadings = model.V
-    return (model=model, scores=scores, loadings=loadings)
+function poisson_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+  if any(M .< 0)
+    throw(ArgumentError("Poisson EPCA requires non-negative integer counts."))
+  end
+  n_features, n_samples = size(M)
+  if k < 1
+    k = min(min(n_samples-1, n_features), 10)
+  end
+  X = transpose(M)
+  model = ExpFamilyPCA.PoissonEPCA(n_features, k)
+  A     = ExpFamilyPCA.fit!(model, X)
+  scores   = transpose(A)
+  loadings = model.V
+  return (model=model, scores=scores, loadings=loadings)
 end
 
 # ── 1. Negative‐Binomial EPCA ────────────────────────────────────────────────
