@@ -14,6 +14,9 @@ to either:
 By default (`k=0, var_prop=1.0`), this will capture **all** variance,
 i.e. use `min(n_samples-1, n_features)` components.
 
+# When to use
+Use for real-valued, continuous, and approximately Gaussian data. PCA is most suitable when features are linearly related and data is centered and scaled. Not ideal for count, binary, or highly skewed data.
+
 # Returns
 A NamedTuple with fields
 - `model`    : the fitted `MultivariateStats.PCA` object  
@@ -26,6 +29,9 @@ function pca_transform(
   k::Int = 0,
   var_prop::Float64 = 1.0
 )
+  if any(!isfinite, M)
+    throw(ArgumentError("PCA input contains non-finite values (NaN or Inf)."))
+  end
   n_feats, n_samps = size(M)
   # max possible PCs = full rank of X (columns = samples)
   rank_max = min(n_samps - 1, n_feats)
@@ -68,9 +74,12 @@ function pca_transform(
 end
 
 """
-    logistic_pca_epca(M::AbstractMatrix{<:Integer}, k::Int)
+    logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
 
 Perform Bernoulli (logistic) EPCA on a 0/1 matrix `M` (features × samples).
+
+# When to use
+Use for binary (0/1) data, such as presence/absence or yes/no features.
 
 # Returns
 A NamedTuple with
@@ -78,7 +87,7 @@ A NamedTuple with
 - `scores`   : k×n_samples matrix of low‐dimensional sample scores  
 - `loadings` : k×n_features matrix of feature loadings  
 """
-function logistic_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+function logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
     n_features, n_samples = size(M)
     if k < 1
         k = min(min(n_samples-1, n_features), 10)
@@ -92,9 +101,12 @@ function logistic_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
 end
 
 """
-    glm_pca_epca(M::AbstractMatrix{<:Integer}, k::Int)
+    glm_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
 
 Perform Poisson EPCA on a count matrix `M` (features × samples).
+
+# When to use
+Use for non-negative integer count data, such as raw event or read counts.
 
 # Returns
 A NamedTuple with
@@ -103,6 +115,9 @@ A NamedTuple with
 - `loadings` : k×n_features matrix of feature loadings  
 """
 function glm_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
+    if any(M .< 0)
+        throw(ArgumentError("Poisson EPCA requires non-negative integer counts."))
+    end
     n_features, n_samples = size(M)
     if k < 1
         k = min(min(n_samples-1, n_features), 10)
@@ -124,6 +139,9 @@ end
 
 Perform Negative-Binomial EPCA on a count matrix `M` (features × samples).
 
+# When to use
+Use for overdispersed count data (variance > mean), such as RNA-seq or metagenomic counts.
+
 # Keyword arguments
 - `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
 - `r` : known NB “number of successes” parameter
@@ -139,6 +157,9 @@ function negbin_pca_epca(
     k::Int = 0,
     r::Int = 1
 )
+    if any(M .< 0)
+        throw(ArgumentError("Negative Binomial EPCA requires non-negative integer counts."))
+    end
     n_feats, n_samps = size(M)
     if k < 1
         k = min(min(n_samps-1, n_feats), 10)
@@ -202,6 +223,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Embed your PC/EPCA scores (k×n_samples) into `n_components` via UMAP.
 
+# When to use
+Use for visualizing high-dimensional data in 2 or 3 dimensions, especially when the data may have nonlinear structure. UMAP is suitable for both continuous and discrete data, and is robust to non-Gaussian distributions. Input should be a matrix of features or dimensionally-reduced scores (e.g., from PCA or EPCA).
+
 # Arguments
 - `scores`      : (components × samples) matrix  
 - `n_neighbors` : UMAP neighborhood size  
@@ -212,12 +236,172 @@ Embed your PC/EPCA scores (k×n_samples) into `n_components` via UMAP.
 - `model`        : the trained UMAP.UMAP model  
 """
 function umap_embed(X::AbstractMatrix{<:Real};
-                    # n_neighbors::Int=15,
                     n_neighbors::Int=Mycelia.nearest_prime(Int(round(log(maximum(size(X)))))),
                     min_dist::Float64=0.1,
                     n_components::Int=2)
+    if any(!isfinite, X)
+        throw(ArgumentError("UMAP input contains non-finite values (NaN or Inf)."))
+    end
 
     model = UMAP.UMAP_(X, n_components, n_neighbors=n_neighbors, min_dist=min_dist)
 
     return model
+end
+
+# ── Binomial EPCA ──────────────────────────────────────────────────────────
+"""
+    binomial_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0, ntrials::Int=1)
+
+Perform Binomial EPCA on a count matrix `M` (features × samples).
+
+# When to use
+Use for integer count data representing the number of successes out of a fixed number of trials (e.g., number of mutated alleles out of total alleles).
+
+# Keyword arguments
+- `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
+- `ntrials` : number of trials for the Binomial distribution (default=1)
+
+# Returns
+NamedTuple with fields
+- `model`    : the fitted `ExpFamilyPCA.BinomialEPCA` object  
+- `scores`   : k×n_samples matrix of sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function binomial_pca_epca(
+    M::AbstractMatrix{<:Integer};
+    k::Int = 0,
+    ntrials::Int = 1
+)
+    if any(M .< 0) || any(M .> ntrials)
+        throw(ArgumentError("Binomial EPCA requires integer counts in 0:ntrials for each entry."))
+    end
+    n_feats, n_samps = size(M)
+    if k < 1
+        k = min(min(n_samps-1, n_feats), 10)
+    end
+    X = transpose(M)  # (n_samples × n_features)
+    model = ExpFamilyPCA.BinomialEPCA(n_feats, k, ntrials)
+    A     = ExpFamilyPCA.fit!(model, X)
+    return (
+      model    = model,
+      scores   = transpose(A),  # (k × n_samples)
+      loadings = model.V        # (k × n_features)
+    )
+end
+
+# ── Continuous Bernoulli EPCA ───────────────────────────────────────────────
+"""
+    contbernoulli_pca_epca(M::AbstractMatrix{<:Real}; k::Int=0)
+
+Perform Continuous Bernoulli EPCA on a matrix `M` (features × samples).
+
+# When to use
+Use for continuous data in the open interval (0, 1), such as probabilities or normalized intensities.
+
+# Keyword arguments
+- `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
+
+# Returns
+NamedTuple with fields
+- `model`    : the fitted `ExpFamilyPCA.ContinuousBernoulliEPCA` object  
+- `scores`   : k×n_samples matrix of sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function contbernoulli_pca_epca(
+    M::AbstractMatrix{<:Real};
+    k::Int = 0
+)
+    if any(M .<= 0) || any(M .>= 1)
+        throw(ArgumentError("Continuous Bernoulli EPCA requires all entries strictly in (0, 1)."))
+    end
+    n_feats, n_samps = size(M)
+    if k < 1
+        k = min(min(n_samps-1, n_feats), 10)
+    end
+    X = transpose(M)  # (n_samples × n_features)
+    model = ExpFamilyPCA.ContinuousBernoulliEPCA(n_feats, k)
+    A     = ExpFamilyPCA.fit!(model, X)
+    return (
+      model    = model,
+      scores   = transpose(A),  # (k × n_samples)
+      loadings = model.V        # (k × n_features)
+    )
+end
+
+# ── Gamma EPCA ──────────────────────────────────────────────────────────────
+"""
+    gamma_pca_epca(M::AbstractMatrix{<:Real}; k::Int=0)
+
+Perform Gamma EPCA on a matrix `M` (features × samples).
+
+# When to use
+Use for positive continuous data, such as rates, times, or strictly positive measurements.
+
+# Keyword arguments
+- `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
+
+# Returns
+NamedTuple with fields
+- `model`    : the fitted `ExpFamilyPCA.GammaEPCA` object  
+- `scores`   : k×n_samples matrix of sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function gamma_pca_epca(
+    M::AbstractMatrix{<:Real};
+    k::Int = 0
+)
+    if any(M .<= 0)
+        throw(ArgumentError("Gamma EPCA requires all entries to be strictly positive."))
+    end
+    n_feats, n_samps = size(M)
+    if k < 1
+        k = min(min(n_samps-1, n_feats), 10)
+    end
+    X = transpose(M)  # (n_samples × n_features)
+    model = ExpFamilyPCA.GammaEPCA(n_feats, k)
+    A     = ExpFamilyPCA.fit!(model, X)
+    return (
+      model    = model,
+      scores   = transpose(A),  # (k × n_samples)
+      loadings = model.V        # (k × n_features)
+    )
+end
+
+# ── Gaussian EPCA ───────────────────────────────────────────────────────────
+"""
+    gaussian_pca_epca(M::AbstractMatrix{<:Real}; k::Int=0)
+
+Perform Gaussian EPCA on a matrix `M` (features × samples).
+
+# When to use
+Use for real-valued continuous data (centered, can be negative or positive), such as normalized or standardized measurements.
+
+# Keyword arguments
+- `k` : desired number of latent dimensions; if `k<1` defaults to `min(n_samples-1, n_features, 10)`
+
+# Returns
+NamedTuple with fields
+- `model`    : the fitted `ExpFamilyPCA.GaussianEPCA` object  
+- `scores`   : k×n_samples matrix of sample scores  
+- `loadings` : k×n_features matrix of feature loadings  
+"""
+function gaussian_pca_epca(
+    M::AbstractMatrix{<:Real};
+    k::Int = 0
+)
+    if any(!isfinite, M)
+        throw(ArgumentError("Gaussian EPCA input contains non-finite values (NaN or Inf)."))
+    end
+    n_feats, n_samps = size(M)
+    if k < 1
+        k = min(min(n_samps-1, n_feats), 10)
+    end
+    X = transpose(M)  # (n_samples × n_features)
+    model = ExpFamilyPCA.GaussianEPCA(n_feats, k)
+    A     = ExpFamilyPCA.fit!(model, X)
+    return (
+      model    = model,
+      scores   = transpose(A),  # (k × n_samples)
+      loadings = model.V        # (k × n_features)
+    )
 end

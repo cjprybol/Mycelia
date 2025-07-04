@@ -336,12 +336,26 @@ frequency_matrix_to_cosine_distance_matrix(probability_matrix) =
     pairwise_distance_matrix(probability_matrix; dist_func = Distances.cosine_dist, progress_desc = "Cosine distances")
 
 """
-    frequency_matrix_to_jaccard_distance_matrix(binary_matrix)
+    binary_matrix_to_jaccard_distance_matrix(binary_matrix::Union{BitMatrix, Matrix{Bool}})
 
-Pairwise Jaccard distance between columns of `binary_matrix`.
+Pairwise Jaccard distance between columns of a binary matrix (BitMatrix or Matrix{Bool}).
+Throws an error if the input is not strictly a binary matrix.
 """
-frequency_matrix_to_jaccard_distance_matrix(binary_matrix) =
-    pairwise_distance_matrix(binary_matrix; dist_func = Distances.jaccard, progress_desc = "Jaccard distances")
+function binary_matrix_to_jaccard_distance_matrix(binary_matrix::Union{BitMatrix, Matrix{Bool}})
+    return pairwise_distance_matrix(binary_matrix; dist_func = Distances.jaccard, progress_desc = "Jaccard distances")
+end
+
+"""
+    frequency_matrix_to_jaccard_distance_matrix(matrix)
+
+Thresholds the input matrix at `>0` to obtain a binary matrix, then computes pairwise Jaccard distance between columns.
+Accepts any numeric matrix.
+"""
+function frequency_matrix_to_jaccard_distance_matrix(matrix)
+    # Convert to binary (Bool) matrix, then call the binary version
+    binary_matrix = matrix .> 0
+    return binary_matrix_to_jaccard_distance_matrix(binary_matrix)
+end
 
 """
     frequency_matrix_to_braycurtis_distance_matrix(counts_table)
