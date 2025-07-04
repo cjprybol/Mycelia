@@ -1,4 +1,104 @@
 """
+    sanity_check_matrix(M::AbstractMatrix)
+
+Checks matrix shape, value types, and distributional properties.
+Suggests the most appropriate ePCA function and distance metric.
+
+Returns a NamedTuple with fields:
+- `n_features`, `n_samples`
+- `value_type`
+- `range`
+- `is_binary`
+- `is_integer`
+- `is_nonnegative`
+- `is_strictly_positive`
+- `is_in_01`
+- `is_centered`
+- `is_overdispersed`
+- `suggested_epca`
+- `suggested_distance`
+"""
+function sanity_check_matrix(M::AbstractMatrix)
+    # Check dimensions
+    ndims(M) == 2 || throw(ArgumentError("Input must be a 2D matrix"))
+    n_features, n_samples = size(M)
+    summary = Dict{Symbol,Any}()
+    summary[:n_features] = n_features
+    summary[:n_samples] = n_samples
+
+    # Value checks
+    elty = eltype(M)
+    summary[:value_type] = elty
+    summary[:is_integer] = elty <: Integer
+    summary[:is_binary] = all(x -> x == 0 || x == 1, M)
+    summary[:is_nonnegative] = all(x -> x >= 0, M)
+    summary[:is_strictly_positive] = all(x -> x > 0, M)
+    summary[:is_in_01] = all(x -> 0 < x < 1, M)
+    summary[:range] = (minimum(M), maximum(M))
+
+    # Probability vector check: each column non-negative, sums to 1 (within tolerance)
+    function is_probability_vector_matrix(M)
+        all(x -> x >= 0, M) && all(abs.(sum(M, dims=1) .- 1) .< 1e-8)
+    end
+    summary[:is_probability_vector] = is_probability_vector_matrix(M)
+
+    # Centering
+    feature_means = mapslices(Statistics.mean, M; dims=2)
+    centered = all(abs.(feature_means) .< 1e-6)
+    summary[:is_centered] = centered
+
+    # Overdispersion (for count data)
+    feature_vars = mapslices(Statistics.var, M; dims=2)
+    feature_means_vec = vec(feature_means)
+    feature_vars_vec = vec(feature_vars)
+    overdispersion = summary[:is_integer] && summary[:is_nonnegative] &&
+                     Statistics.mean(feature_vars_vec .- feature_means_vec) > 1.0
+    summary[:is_overdispersed] = overdispersion
+
+    # Suggest ePCA and distance
+    if summary[:is_binary]
+        suggested_epca = :bernoulli_pca_epca
+        suggested_distance = :jaccard_distance
+    elseif summary[:is_integer] && summary[:is_nonnegative]
+        if overdispersion
+            suggested_epca = :negbin_pca_epca
+            suggested_distance = :bray_curtis_distance
+        else
+            suggested_epca = :poisson_pca_epca
+            suggested_distance = :bray_curtis_distance
+        end
+    elseif summary[:is_probability_vector]
+        suggested_epca = nothing  # No direct EPCA for probability vectors
+        suggested_distance = :jensen_shannon_divergence
+    elseif summary[:is_in_01]
+        suggested_epca = :contbernoulli_pca_epca
+        suggested_distance = :cosine_distance
+    elseif summary[:is_strictly_positive]
+        suggested_epca = :gamma_pca_epca
+        suggested_distance = :cosine_distance
+    elseif centered
+        suggested_epca = :gaussian_pca_epca
+        suggested_distance = :euclidean_distance
+    else
+        suggested_epca = :pca_transform
+        suggested_distance = :euclidean_distance
+    end
+    summary[:suggested_epca] = suggested_epca
+    summary[:suggested_distance] = suggested_distance
+
+    # Print warnings for assumption violations
+    if suggested_epca == :poisson_pca_epca && overdispersion
+        @warn "Data appears overdispersed (variance > mean); consider using negbin_pca_epca."
+    elseif suggested_epca == :negbin_pca_epca && !overdispersion
+        @warn "Data does not appear overdispersed (variance ≈ mean); consider using poisson_pca_epca."
+    elseif suggested_epca in [:gaussian_pca_epca, :pca_transform] && !centered
+        @warn "Data is not centered (mean ≠ 0); consider centering before PCA."
+    end
+
+    return summary
+end
+
+"""
     pca_transform(
       M::AbstractMatrix{<:Real};
       k::Int = 0,
@@ -33,6 +133,11 @@ function pca_transform(
     throw(ArgumentError("PCA input contains non-finite values (NaN or Inf)."))
   end
   n_feats, n_samps = size(M)
+  # Warn if not centered
+  feature_means = mapslices(Statistics.mean, M; dims=2)
+  if any(abs.(feature_means) .> 1e-6)
+    @warn "PCA assumes centered data (mean ≈ 0 for each feature); consider centering before PCA."
+  end
   # max possible PCs = full rank of X (columns = samples)
   rank_max = min(n_samps - 1, n_feats)
 
@@ -74,6 +179,15 @@ function pca_transform(
 end
 
 """
+    logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
+
+Synonym for `bernoulli_pca_epca(M; k=k)`.
+"""
+function logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
+    bernoulli_pca_epca(M; k=k)
+end
+
+"""
   bernoulli_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
 
 Perform Bernoulli (logistic) EPCA on a 0/1 matrix `M` (features × samples).
@@ -88,6 +202,10 @@ A NamedTuple with
 - `loadings` : k×n_features matrix of feature loadings  
 """
 function bernoulli_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
+  # Assert all values are 0 or 1
+  if !all(x -> x == 0 || x == 1, M)
+    throw(ArgumentError("Bernoulli EPCA requires all entries to be 0 or 1."))
+  end
   n_features, n_samples = size(M)
   if k < 1
     k = min(min(n_samples-1, n_features), 10)
@@ -119,6 +237,15 @@ function poisson_pca_epca(M::AbstractMatrix{<:Integer}; k::Int=0)
     throw(ArgumentError("Poisson EPCA requires non-negative integer counts."))
   end
   n_features, n_samples = size(M)
+  # Warn if overdispersed
+  feature_means = mapslices(Statistics.mean, M; dims=2)
+  feature_vars = mapslices(Statistics.var, M; dims=2)
+  feature_means_vec = vec(feature_means)
+  feature_vars_vec = vec(feature_vars)
+  overdispersion = Statistics.mean(feature_vars_vec .- feature_means_vec) > 1.0
+  if overdispersion
+    @warn "Poisson EPCA assumes variance ≈ mean; data appears overdispersed (variance > mean). Consider using negbin_pca_epca."
+  end
   if k < 1
     k = min(min(n_samples-1, n_features), 10)
   end
@@ -155,12 +282,21 @@ NamedTuple with fields
 function negbin_pca_epca(
     M::AbstractMatrix{<:Integer};
     k::Int = 0,
-    r::Int = 1
+    r::Int = 10
 )
     if any(M .< 0)
         throw(ArgumentError("Negative Binomial EPCA requires non-negative integer counts."))
     end
     n_feats, n_samps = size(M)
+    # Warn if not overdispersed
+    feature_means = mapslices(Statistics.mean, M; dims=2)
+    feature_vars = mapslices(Statistics.var, M; dims=2)
+    feature_means_vec = vec(feature_means)
+    feature_vars_vec = vec(feature_vars)
+    overdispersion = Statistics.mean(feature_vars_vec .- feature_means_vec) > 1.0
+    if !overdispersion
+        @warn "Negative Binomial EPCA assumes overdispersed data (variance > mean); data does not appear overdispersed. Consider using poisson_pca_epca."
+    end
     if k < 1
         k = min(min(n_samps-1, n_feats), 10)
     end
@@ -198,7 +334,7 @@ NamedTuple with fields
 """
 function pcoa_from_dist(
     D::AbstractMatrix{<:Real};
-    maxoutdim::Int = 2
+    maxoutdim::Int = 3
 )
     @assert size(D, 1) == size(D,2) "size(D,1) != size(D,2) $(size(D))"
     model = MultivariateStats.fit(
@@ -393,6 +529,11 @@ function gaussian_pca_epca(
         throw(ArgumentError("Gaussian EPCA input contains non-finite values (NaN or Inf)."))
     end
     n_feats, n_samps = size(M)
+    # Warn if not centered
+    feature_means = mapslices(Statistics.mean, M; dims=2)
+    if any(abs.(feature_means) .> 1e-6)
+        @warn "Gaussian EPCA assumes centered data (mean ≈ 0 for each feature); consider centering before use."
+    end
     if k < 1
         k = min(min(n_samps-1, n_feats), 10)
     end

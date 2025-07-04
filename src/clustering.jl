@@ -141,7 +141,7 @@ Returns:
 """
 function identify_optimal_number_of_clusters(
         distance_matrix;
-        min_k = max(Int(floor(log(size(distance_matrix, 2)))), 2),
+        min_k = max(Int(floor(log10(size(distance_matrix, 2)))), 2),
         max_k = min(size(distance_matrix, 2), Int(ceil(sqrt(size(distance_matrix, 2))))),
     )
     # Ensure the input is a square matrix
@@ -278,114 +278,114 @@ end
 #     return "$(output).tsv"
 # end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Determines the optimal number of clusters for k-means clustering by maximizing the silhouette score.
+# Determines the optimal number of clusters for k-means clustering by maximizing the silhouette score.
 
-# Algorithm
-- Starts by evaluating the first 5 k values
-- Continues evaluation if optimal k is at the edge of evaluated range
-- Refines search by evaluating midpoints between k values around the current optimum
-- Iterates until convergence (optimal k remains stable)
+# # Algorithm
+# - Starts by evaluating the first 5 k values
+# - Continues evaluation if optimal k is at the edge of evaluated range
+# - Refines search by evaluating midpoints between k values around the current optimum
+# - Iterates until convergence (optimal k remains stable)
 
-# Arguments
-- `distance_matrix::Matrix`: Square matrix of pairwise distances between points
-- `ks_to_try::Vector{Int}`: Vector of k values to evaluate. Defaults to [1, 2, ...] up to matrix size
+# # Arguments
+# - `distance_matrix::Matrix`: Square matrix of pairwise distances between points
+# - `ks_to_try::Vector{Int}`: Vector of k values to evaluate. Defaults to [1, 2, ...] up to matrix size
 
-# Returns
-Named tuple containing:
-- `optimal_number_of_clusters::Int`: The k value giving highest silhouette score
-- `ks_assessed::Vector{Int}`: All k values that were evaluated
-- `within_cluster_sum_of_squares::Vector{Float64}`: WCSS for each k assessed
-- `silhouette_scores::Vector{Float64}`: Silhouette scores for each k assessed
-"""
-function fit_optimal_number_of_clusters(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
-    # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
-    # N = size(distance_matrix, 1)
-    # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
+# # Returns
+# Named tuple containing:
+# - `optimal_number_of_clusters::Int`: The k value giving highest silhouette score
+# - `ks_assessed::Vector{Int}`: All k values that were evaluated
+# - `within_cluster_sum_of_squares::Vector{Float64}`: WCSS for each k assessed
+# - `silhouette_scores::Vector{Float64}`: Silhouette scores for each k assessed
+# """
+# function fit_optimal_number_of_clusters(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
+#     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
+#     # N = size(distance_matrix, 1)
+#     # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
     
-    # Int(round(size(distance_matrix, 1)/2))
-    # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
-    # ks_to_try = vcat([2^i for i in 0:Int(floor(log2(size(distance_matrix, 1))))], size(distance_matrix, 1))
-    # @info "ks = $(ks_to_try)"
-    @show ks_to_try
+#     # Int(round(size(distance_matrix, 1)/2))
+#     # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
+#     # ks_to_try = vcat([2^i for i in 0:Int(floor(log2(size(distance_matrix, 1))))], size(distance_matrix, 1))
+#     # @info "ks = $(ks_to_try)"
+#     @show ks_to_try
     
-    # can calculate this for k >= 1
-    # within_cluster_sum_of_squares = Union{Float64, Missing}[]
-    within_cluster_sum_of_squares = Float64[]
-    # these are only valid for k >= 2 so set initial value to missing
-    # between_cluster_sum_of_squares = [missing, zeros(length(ks_to_try)-1)...]
-    # silhouette_scores = Union{Float64, Missing}[]
-    silhouette_scores = Float64[]
+#     # can calculate this for k >= 1
+#     # within_cluster_sum_of_squares = Union{Float64, Missing}[]
+#     within_cluster_sum_of_squares = Float64[]
+#     # these are only valid for k >= 2 so set initial value to missing
+#     # between_cluster_sum_of_squares = [missing, zeros(length(ks_to_try)-1)...]
+#     # silhouette_scores = Union{Float64, Missing}[]
+#     silhouette_scores = Float64[]
 
-    for k in ks_to_try[1:5]
-        @show k
-        @time this_clustering = Clustering.kmeans(distance_matrix, k)
-        push!(within_cluster_sum_of_squares, wcss(this_clustering))
-        if k == 1
-            this_silhouette_score = 0
-        else
-            this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+#     for k in ks_to_try[1:5]
+#         @show k
+#         @time this_clustering = Clustering.kmeans(distance_matrix, k)
+#         push!(within_cluster_sum_of_squares, wcss(this_clustering))
+#         if k == 1
+#             this_silhouette_score = 0
+#         else
+#             this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
             
-        end
-        push!(silhouette_scores, this_silhouette_score)
-        @show this_silhouette_score
-    end      
-    optimal_silhouette, optimal_index = findmax(silhouette_scores)
-    while (optimal_index == length(silhouette_scores)) && (optimal_index != length(ks_to_try))
-        k = ks_to_try[optimal_index+1]
-        @show k
-        @time this_clustering = Clustering.kmeans(distance_matrix, k)
-        push!(within_cluster_sum_of_squares, wcss(this_clustering))
-        this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-        push!(silhouette_scores, this_silhouette_score)
-        @show this_silhouette_score
-        optimal_silhouette, optimal_index = findmax(silhouette_scores)
-    end
-    previous_optimal_number_of_clusters = 0
-    optimal_number_of_clusters = ks_to_try[optimal_index]
-    done = false
-    while optimal_number_of_clusters != previous_optimal_number_of_clusters
-        @show optimal_number_of_clusters
-        if optimal_index == 1
-            window_of_focus = ks_to_try[optimal_index:optimal_index+1]
-            insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
-        elseif optimal_index == length(ks_to_try)
-            window_of_focus = ks_to_try[optimal_index-1:optimal_index]
-            insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
-        else
-            window_of_focus = ks_to_try[optimal_index-1:optimal_index+1]
-        end
-        # @show window_of_focus
-        midpoints = [
-            Int(round(Statistics.mean(window_of_focus[1:2]))),
-            Int(round(Statistics.mean(window_of_focus[2:3])))
-            ]
-        # @show sort(vcat(midpoints, window_of_focus))
-        @show midpoints
+#         end
+#         push!(silhouette_scores, this_silhouette_score)
+#         @show this_silhouette_score
+#     end      
+#     optimal_silhouette, optimal_index = findmax(silhouette_scores)
+#     while (optimal_index == length(silhouette_scores)) && (optimal_index != length(ks_to_try))
+#         k = ks_to_try[optimal_index+1]
+#         @show k
+#         @time this_clustering = Clustering.kmeans(distance_matrix, k)
+#         push!(within_cluster_sum_of_squares, wcss(this_clustering))
+#         this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+#         push!(silhouette_scores, this_silhouette_score)
+#         @show this_silhouette_score
+#         optimal_silhouette, optimal_index = findmax(silhouette_scores)
+#     end
+#     previous_optimal_number_of_clusters = 0
+#     optimal_number_of_clusters = ks_to_try[optimal_index]
+#     done = false
+#     while optimal_number_of_clusters != previous_optimal_number_of_clusters
+#         @show optimal_number_of_clusters
+#         if optimal_index == 1
+#             window_of_focus = ks_to_try[optimal_index:optimal_index+1]
+#             insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
+#         elseif optimal_index == length(ks_to_try)
+#             window_of_focus = ks_to_try[optimal_index-1:optimal_index]
+#             insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
+#         else
+#             window_of_focus = ks_to_try[optimal_index-1:optimal_index+1]
+#         end
+#         # @show window_of_focus
+#         midpoints = [
+#             Int(round(Statistics.mean(window_of_focus[1:2]))),
+#             Int(round(Statistics.mean(window_of_focus[2:3])))
+#             ]
+#         # @show sort(vcat(midpoints, window_of_focus))
+#         @show midpoints
         
-        for k in midpoints
-            insertion_index = first(searchsorted(ks_to_try, k))
-            if ks_to_try[insertion_index] != k
-                insert!(ks_to_try, insertion_index, k)
-                @show k
-                @time this_clustering = Clustering.kmeans(distance_matrix, k)
-                insert!(within_cluster_sum_of_squares, insertion_index, wcss(this_clustering))
-                this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-                insert!(silhouette_scores, insertion_index, this_silhouette_score)
-                @show this_silhouette_score
-            end
-        end
+#         for k in midpoints
+#             insertion_index = first(searchsorted(ks_to_try, k))
+#             if ks_to_try[insertion_index] != k
+#                 insert!(ks_to_try, insertion_index, k)
+#                 @show k
+#                 @time this_clustering = Clustering.kmeans(distance_matrix, k)
+#                 insert!(within_cluster_sum_of_squares, insertion_index, wcss(this_clustering))
+#                 this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+#                 insert!(silhouette_scores, insertion_index, this_silhouette_score)
+#                 @show this_silhouette_score
+#             end
+#         end
         
-        previous_optimal_number_of_clusters = optimal_number_of_clusters
-        optimal_silhouette, optimal_index = findmax(silhouette_scores)
-        optimal_number_of_clusters = ks_to_try[optimal_index]
-    end
-    @assert length(within_cluster_sum_of_squares) == length(silhouette_scores)
-    ks_assessed = ks_to_try[1:length(within_cluster_sum_of_squares)]
-    return (;optimal_number_of_clusters, ks_assessed, within_cluster_sum_of_squares, silhouette_scores)
-end
+#         previous_optimal_number_of_clusters = optimal_number_of_clusters
+#         optimal_silhouette, optimal_index = findmax(silhouette_scores)
+#         optimal_number_of_clusters = ks_to_try[optimal_index]
+#     end
+#     @assert length(within_cluster_sum_of_squares) == length(silhouette_scores)
+#     ks_assessed = ks_to_try[1:length(within_cluster_sum_of_squares)]
+#     return (;optimal_number_of_clusters, ks_assessed, within_cluster_sum_of_squares, silhouette_scores)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -442,119 +442,119 @@ function wcss(clustering_result)
     return total_squared_cost
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Determine the optimal number of clusters using hierarchical clustering with iterative refinement.
+# Determine the optimal number of clusters using hierarchical clustering with iterative refinement.
 
-# Arguments
-- `distance_matrix::Matrix`: Square matrix of pairwise distances between observations
-- `ks_to_try::Vector{Int}`: Vector of cluster counts to evaluate (default: 1, 2, and sequence from `Mycelia.ks()`)
+# # Arguments
+# - `distance_matrix::Matrix`: Square matrix of pairwise distances between observations
+# - `ks_to_try::Vector{Int}`: Vector of cluster counts to evaluate (default: 1, 2, and sequence from `Mycelia.ks()`)
 
-# Returns
-Named tuple containing:
-- `optimal_number_of_clusters::Int`: Best number of clusters found
-- `ks_assessed::Vector{Int}`: All cluster counts that were evaluated
-- `silhouette_scores::Vector{Float64}`: Silhouette scores for each k assessed
-- `hclust_result`: Hierarchical clustering result object
+# # Returns
+# Named tuple containing:
+# - `optimal_number_of_clusters::Int`: Best number of clusters found
+# - `ks_assessed::Vector{Int}`: All cluster counts that were evaluated
+# - `silhouette_scores::Vector{Float64}`: Silhouette scores for each k assessed
+# - `hclust_result`: Hierarchical clustering result object
 
-# Details
-Uses Ward's linkage method and silhouette scores to evaluate cluster quality. 
-Implements an adaptive search that focuses on promising regions between initially tested k values.
-For k=1, silhouette score is set to 0 as a special case.
-"""
-function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
-    # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
-    # N = size(distance_matrix, 1)
-    # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
+# # Details
+# Uses Ward's linkage method and silhouette scores to evaluate cluster quality. 
+# Implements an adaptive search that focuses on promising regions between initially tested k values.
+# For k=1, silhouette score is set to 0 as a special case.
+# """
+# function fit_optimal_number_of_clusters_hclust(distance_matrix, ks_to_try=[1, 2, Mycelia.ks(max=size(distance_matrix, 1))...])
+#     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
+#     # N = size(distance_matrix, 1)
+#     # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
     
-    # Int(round(size(distance_matrix, 1)/2))
-    # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
-    # ks_to_try = vcat([2^i for i in 0:Int(floor(log2(size(distance_matrix, 1))))], size(distance_matrix, 1))
-    # @info "ks = $(ks_to_try)"
-    @show ks_to_try
+#     # Int(round(size(distance_matrix, 1)/2))
+#     # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
+#     # ks_to_try = vcat([2^i for i in 0:Int(floor(log2(size(distance_matrix, 1))))], size(distance_matrix, 1))
+#     # @info "ks = $(ks_to_try)"
+#     @show ks_to_try
     
-    # can calculate this for k >= 1
-    # within_cluster_sum_of_squares = Union{Float64, Missing}[]
-    # within_cluster_sum_of_squares = Float64[]
-    # these are only valid for k >= 2 so set initial value to missing
-    # between_cluster_sum_of_squares = [missing, zeros(length(ks_to_try)-1)...]
-    # silhouette_scores = Union{Float64, Missing}[]
-    silhouette_scores = Float64[]
-    # wcss_scores = Float64[]
+#     # can calculate this for k >= 1
+#     # within_cluster_sum_of_squares = Union{Float64, Missing}[]
+#     # within_cluster_sum_of_squares = Float64[]
+#     # these are only valid for k >= 2 so set initial value to missing
+#     # between_cluster_sum_of_squares = [missing, zeros(length(ks_to_try)-1)...]
+#     # silhouette_scores = Union{Float64, Missing}[]
+#     silhouette_scores = Float64[]
+#     # wcss_scores = Float64[]
 
 
 
-    @show "initial heirarchical clustering"
-    @time hclust_result = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
-    # for k in ks_to_try[1:3]
-    for k in ks_to_try
-        @show k
-        this_clustering = Clustering.cutree(hclust_result, k=k)
-        # push!(within_cluster_sum_of_squares, wcss(this_clustering))
-        if k == 1
-            this_silhouette_score = 0
-            # this_wcss = Inf
-        else
-            this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-            # this_wcss = wcss(this_clustering)
-        end
-        push!(silhouette_scores, this_silhouette_score)
-        # push!(within_cluster_sum_of_squares, this_wcss)
-        @show this_silhouette_score
-    end      
-    optimal_silhouette, optimal_index = findmax(silhouette_scores)
-    # while (optimal_index == length(silhouette_scores)) && (optimal_index != length(ks_to_try))
-    #     k = ks_to_try[optimal_index+1]
-    #     @show k
-    #     this_clustering = Clustering.cutree(hclust_result, k=k)
-    #     # push!(within_cluster_sum_of_squares, wcss(this_clustering))
-    #     this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-    #     push!(silhouette_scores, this_silhouette_score)
-    #     @show this_silhouette_score
-    #     optimal_silhouette, optimal_index = findmax(silhouette_scores)
-    # end
-    previous_optimal_number_of_clusters = 0
-    optimal_number_of_clusters = ks_to_try[optimal_index]
-    done = false
-    while optimal_number_of_clusters != previous_optimal_number_of_clusters
-        @show optimal_number_of_clusters
-        if optimal_index == 1
-            window_of_focus = ks_to_try[optimal_index:optimal_index+1]
-            insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
-        elseif optimal_index == length(ks_to_try)
-            window_of_focus = ks_to_try[optimal_index-1:optimal_index]
-            insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
-        else
-            window_of_focus = ks_to_try[optimal_index-1:optimal_index+1]
-        end
-        # @show window_of_focus
-        midpoints = [
-            Int(round(Statistics.mean(window_of_focus[1:2]))),
-            Int(round(Statistics.mean(window_of_focus[2:3])))
-            ]
-        # @show sort(vcat(midpoints, window_of_focus))
-        @show midpoints
+#     @show "initial heirarchical clustering"
+#     @time hclust_result = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
+#     # for k in ks_to_try[1:3]
+#     for k in ks_to_try
+#         @show k
+#         this_clustering = Clustering.cutree(hclust_result, k=k)
+#         # push!(within_cluster_sum_of_squares, wcss(this_clustering))
+#         if k == 1
+#             this_silhouette_score = 0
+#             # this_wcss = Inf
+#         else
+#             this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+#             # this_wcss = wcss(this_clustering)
+#         end
+#         push!(silhouette_scores, this_silhouette_score)
+#         # push!(within_cluster_sum_of_squares, this_wcss)
+#         @show this_silhouette_score
+#     end      
+#     optimal_silhouette, optimal_index = findmax(silhouette_scores)
+#     # while (optimal_index == length(silhouette_scores)) && (optimal_index != length(ks_to_try))
+#     #     k = ks_to_try[optimal_index+1]
+#     #     @show k
+#     #     this_clustering = Clustering.cutree(hclust_result, k=k)
+#     #     # push!(within_cluster_sum_of_squares, wcss(this_clustering))
+#     #     this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+#     #     push!(silhouette_scores, this_silhouette_score)
+#     #     @show this_silhouette_score
+#     #     optimal_silhouette, optimal_index = findmax(silhouette_scores)
+#     # end
+#     previous_optimal_number_of_clusters = 0
+#     optimal_number_of_clusters = ks_to_try[optimal_index]
+#     done = false
+#     while optimal_number_of_clusters != previous_optimal_number_of_clusters
+#         @show optimal_number_of_clusters
+#         if optimal_index == 1
+#             window_of_focus = ks_to_try[optimal_index:optimal_index+1]
+#             insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
+#         elseif optimal_index == length(ks_to_try)
+#             window_of_focus = ks_to_try[optimal_index-1:optimal_index]
+#             insert!(window_of_focus, 2, Int(round(Statistics.mean(window_of_focus))))
+#         else
+#             window_of_focus = ks_to_try[optimal_index-1:optimal_index+1]
+#         end
+#         # @show window_of_focus
+#         midpoints = [
+#             Int(round(Statistics.mean(window_of_focus[1:2]))),
+#             Int(round(Statistics.mean(window_of_focus[2:3])))
+#             ]
+#         # @show sort(vcat(midpoints, window_of_focus))
+#         @show midpoints
         
-        for k in midpoints
-            insertion_index = first(searchsorted(ks_to_try, k))
-            if ks_to_try[insertion_index] != k
-                insert!(ks_to_try, insertion_index, k)
-                @show k
-                this_clustering = Clustering.cutree(hclust_result, k=k)
-                this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-                insert!(silhouette_scores, insertion_index, this_silhouette_score)
-                # this_wcss = wcss(this_clustering)
-                # insert!(within_cluster_sum_of_squares, insertion_index, this_wcss)
-                @show this_silhouette_score
-            end
-        end
+#         for k in midpoints
+#             insertion_index = first(searchsorted(ks_to_try, k))
+#             if ks_to_try[insertion_index] != k
+#                 insert!(ks_to_try, insertion_index, k)
+#                 @show k
+#                 this_clustering = Clustering.cutree(hclust_result, k=k)
+#                 this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
+#                 insert!(silhouette_scores, insertion_index, this_silhouette_score)
+#                 # this_wcss = wcss(this_clustering)
+#                 # insert!(within_cluster_sum_of_squares, insertion_index, this_wcss)
+#                 @show this_silhouette_score
+#             end
+#         end
         
-        previous_optimal_number_of_clusters = optimal_number_of_clusters
-        optimal_silhouette, optimal_index = findmax(silhouette_scores)
-        optimal_number_of_clusters = ks_to_try[optimal_index]
-    end
-    # @assert length(within_cluster_sum_of_squares) == length(silhouette_scores)
-    ks_assessed = ks_to_try[1:length(silhouette_scores)]
-    return (;optimal_number_of_clusters, ks_assessed, silhouette_scores, hclust_result)
-end
+#         previous_optimal_number_of_clusters = optimal_number_of_clusters
+#         optimal_silhouette, optimal_index = findmax(silhouette_scores)
+#         optimal_number_of_clusters = ks_to_try[optimal_index]
+#     end
+#     # @assert length(within_cluster_sum_of_squares) == length(silhouette_scores)
+#     ks_assessed = ks_to_try[1:length(silhouette_scores)]
+#     return (;optimal_number_of_clusters, ks_assessed, silhouette_scores, hclust_result)
+# end

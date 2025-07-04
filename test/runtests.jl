@@ -1,9 +1,10 @@
 # run me from the root of the Mycelia package directory:
 # julia --project -e 'using Pkg; Pkg.test()'
+# julia --project=test -e 'using Pkg; Pkg.test()'
 
 import Pkg
 if isinteractive()
-    Pkg.activate("..")
+    Pkg.activate(".")
 else
     # this should be set via the `--project=` flag
 end
