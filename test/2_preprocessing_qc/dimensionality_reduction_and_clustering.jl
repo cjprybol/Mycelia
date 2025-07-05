@@ -122,8 +122,8 @@ end
     binary_method_accuracies = []
 
     # Distance clustering
-    @testset "Distance Clustering (Jaccard + Optimal Clusters)" begin
-        println("[Binary] Testing: Distance Clustering (Jaccard + Optimal Clusters)")
+    @testset "Distance Clustering (Jaccard Distance + Optimal Clusters)" begin
+        println("[Binary] Testing: Distance Clustering (Jaccard Distance + Optimal Clusters)")
         binary_distance_matrix = Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix)
         binary_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(binary_distance_matrix)
         @test binary_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
@@ -133,7 +133,7 @@ end
         @test evaluation_result.macro_precision >= .95
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
-        push!(binary_method_accuracies, ("Distance Clustering (Jaccard + Optimal Clusters)", evaluation_result.accuracy))
+        push!(binary_method_accuracies, ("Distance Clustering (Jaccard Distance + Optimal Clusters)", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -141,13 +141,13 @@ end
     end
 
     # Distance + PCoA
-    @testset "Distance + PCoA + KMeans" begin
-        println("[Binary] Testing: Distance + PCoA + KMeans")
+    @testset "Distance + PCoA (Jaccard Distance) + KMeans" begin
+        println("[Binary] Testing: Distance + PCoA (Jaccard Distance) + KMeans")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
         pcoa_fit_binary_labels = Clustering.kmeans(pcoa_binary_result.coordinates, n_distributions).assignments
         pcoa_fit_binary_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, pcoa_fit_binary_labels)
         plt = Mycelia.plot_embeddings(pcoa_binary_result.coordinates;
-                       title="PCoA - Jaccard Distance - Binary Matrix",
+                       title="Distance + PCoA (Jaccard Distance) + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_binary_labels,
@@ -158,7 +158,7 @@ end
         @test evaluation_result.macro_precision >= .5
         @test evaluation_result.macro_recall >= .5
         @test evaluation_result.accuracy >= .5
-        push!(binary_method_accuracies, ("Distance + PCoA + KMeans", evaluation_result.accuracy))
+        push!(binary_method_accuracies, ("Distance + PCoA (Jaccard Distance) + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -166,15 +166,15 @@ end
     end
 
     # Distance + PCoA + UMAP
-    @testset "Distance + PCoA + UMAP + KMeans" begin
-        println("[Binary] Testing: Distance + PCoA + UMAP + KMeans")
+    @testset "Distance + PCoA (Jaccard Distance) + UMAP + KMeans" begin
+        println("[Binary] Testing: Distance + PCoA (Jaccard Distance) + UMAP + KMeans")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         @test size(pcoa_binary_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_binary_umap_fit_labels = Clustering.kmeans(pcoa_binary_umap_model.embedding, n_distributions).assignments
         pcoa_binary_umap_fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, pcoa_binary_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_binary_umap_model.embedding;
-                       title="PCoA - Jaccard Distance - Binary Matrix - UMAP",
+                       title="Distance + PCoA (Jaccard Distance) + UMAP + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_binary_labels,
@@ -185,7 +185,7 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(binary_method_accuracies, ("Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
+        push!(binary_method_accuracies, ("Distance + PCoA (Jaccard Distance) + UMAP + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -199,7 +199,7 @@ end
         fit_labels = Clustering.kmeans(logistic_pca_result.scores, n_distributions).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, fit_labels)
         plt = Mycelia.plot_embeddings(logistic_pca_result.scores;
-                       title="Logistic PCA-EPCA - Binary Matrix",
+                       title="logisticPCA-EPCA + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_binary_labels,
@@ -225,7 +225,7 @@ end
         fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, fit_labels)
         plt = Mycelia.plot_embeddings(umap_model.embedding;
-                       title="UMAP - Logistic PCA-EPCA - Binary Matrix",
+                       title="logisticPCA-EPCA + UMAP + KMeans",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=shuffled_binary_labels,
@@ -285,8 +285,8 @@ end
         @test summary[:suggested_distance] == :bray_curtis_distance
     end
     # Distance clustering
-    @testset "Distance Clustering (Bray-Curtis + Optimal Clusters)" begin
-        println("[Poisson] Testing: Distance Clustering (Bray-Curtis + Optimal Clusters)")
+    @testset "Distance Clustering (Bray-Curtis Distance + Optimal Clusters)" begin
+        println("[Poisson] Testing: Distance Clustering (Bray-Curtis Distance + Optimal Clusters)")
         poisson_distance_matrix = Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_poisson_matrix)
         poisson_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(poisson_distance_matrix)
         @test poisson_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
@@ -296,7 +296,7 @@ end
         @test evaluation_result.macro_precision >= .95
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
-        push!(poisson_method_accuracies, ("Distance Clustering (Bray-Curtis + Optimal Clusters)", evaluation_result.accuracy))
+        push!(poisson_method_accuracies, ("Distance Clustering (Bray-Curtis Distance + Optimal Clusters)", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -304,13 +304,13 @@ end
     end
     
     # Distance + PCoA + KMeans
-    @testset "Distance + PCoA + KMeans" begin
-        println("[Poisson] Testing: Distance + PCoA + KMeans")
+    @testset "Distance + PCoA (Bray-Curtis Distance) + KMeans" begin
+        println("[Poisson] Testing: Distance + PCoA (Bray-Curtis Distance) + KMeans")
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_poisson_matrix))
         pcoa_fit_poisson_labels = Clustering.kmeans(pcoa_poisson_result.coordinates, n_distributions).assignments
         pcoa_fit_poisson_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, pcoa_fit_poisson_labels)
         plt = Mycelia.plot_embeddings(pcoa_poisson_result.coordinates;
-                       title="PCoA - Bray-Curtis Distance - Poisson Matrix",
+                       title="Distance + PCoA (Bray-Curtis Distance) + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_poisson_labels,
@@ -321,23 +321,23 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(poisson_method_accuracies, ("Distance + PCoA + KMeans", evaluation_result.accuracy))
+        push!(poisson_method_accuracies, ("Distance + PCoA (Bray-Curtis Distance) + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
         display(evaluation_result.recall_plot)
     end
     
-    # Distance + PCoA + UMAP + KMeans
-    @testset "Distance + PCoA + UMAP + KMeans" begin
-        println("[Poisson] Testing: Distance + PCoA + UMAP + KMeans")
+    # Distance + PCoA + UMAP
+    @testset "Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans" begin
+        println("[Poisson] Testing: Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans")
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_poisson_matrix))
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         @test size(pcoa_poisson_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_poisson_umap_fit_labels = Clustering.kmeans(pcoa_poisson_umap_model.embedding, n_distributions).assignments
         pcoa_poisson_umap_fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_poisson_umap_model.embedding;
-                       title="PCoA - Bray-Curtis Distance - Poisson Matrix - UMAP",
+                       title="Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_poisson_labels,
@@ -348,7 +348,7 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(poisson_method_accuracies, ("Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
+        push!(poisson_method_accuracies, ("Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -362,7 +362,7 @@ end
         fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
         plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="Poisson PCA-EPCA - Poisson Matrix",
+                       title="PoissonPCA-EPCA + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_poisson_labels,
@@ -388,7 +388,7 @@ end
         fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
         plt = Mycelia.plot_embeddings(umap_model.embedding;
-                       title="UMAP - Poisson PCA-EPCA - Poisson Matrix",
+                       title="PoissonPCA-EPCA + UMAP + KMeans",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=shuffled_poisson_labels,
@@ -449,8 +449,8 @@ end
         @test summary[:suggested_distance] == :bray_curtis_distance
     end
     # Distance clustering
-    @testset "Distance Clustering (Bray-Curtis + Optimal Clusters)" begin
-        println("[NegBin] Testing: Distance Clustering (Bray-Curtis + Optimal Clusters)")
+    @testset "Distance Clustering (Bray-Curtis Distance + Optimal Clusters)" begin
+        println("[NegBin] Testing: Distance Clustering (Bray-Curtis Distance + Optimal Clusters)")
         nb_distance_matrix = Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_nb_matrix)
         nb_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(nb_distance_matrix)
         @test nb_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
@@ -460,7 +460,7 @@ end
         @test evaluation_result.macro_precision >= .95
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
-        push!(nb_method_accuracies, ("Distance Clustering (Bray-Curtis + Optimal Clusters)", evaluation_result.accuracy))
+        push!(nb_method_accuracies, ("Distance Clustering (Bray-Curtis Distance + Optimal Clusters)", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -468,13 +468,13 @@ end
     end
     
     # Distance + PCoA + KMeans
-    @testset "Distance + PCoA + KMeans" begin
-        println("[NegBin] Testing: Distance + PCoA + KMeans")
+    @testset "Distance + PCoA (Bray-Curtis Distance) + KMeans" begin
+        println("[NegBin] Testing: Distance + PCoA (Bray-Curtis Distance) + KMeans")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_nb_matrix))
         pcoa_fit_nb_labels = Clustering.kmeans(pcoa_nb_result.coordinates, n_distributions).assignments
         pcoa_fit_nb_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, pcoa_fit_nb_labels)
         plt = Mycelia.plot_embeddings(pcoa_nb_result.coordinates;
-                       title="PCoA - Bray-Curtis Distance - Negative Binomial Matrix",
+                       title="Distance + PCoA (Bray-Curtis Distance) + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_nb_labels,
@@ -485,7 +485,7 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(nb_method_accuracies, ("Distance + PCoA + KMeans", evaluation_result.accuracy))
+        push!(nb_method_accuracies, ("Distance + PCoA (Bray-Curtis Distance) + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -493,15 +493,15 @@ end
     end
     
     # Distance + PCoA + UMAP + KMeans
-    @testset "Distance + PCoA + UMAP + KMeans" begin
-        println("[NegBin] Testing: Distance + PCoA + UMAP + KMeans")
+    @testset "Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans" begin
+        println("[NegBin] Testing: Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_nb_matrix))
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         @test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_nb_umap_fit_labels = Clustering.kmeans(pcoa_nb_umap_model.embedding, n_distributions).assignments
         pcoa_nb_umap_fit_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, pcoa_nb_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_nb_umap_model.embedding;
-                       title="PCoA - Bray-Curtis Distance - Negative Binomial Matrix - UMAP",
+                       title="Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_nb_labels,
@@ -512,7 +512,7 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(nb_method_accuracies, ("Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
+        push!(nb_method_accuracies, ("Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -566,6 +566,12 @@ end
     #     display(evaluation_result.precision_plot)
     #     display(evaluation_result.recall_plot)
     # end
+
+    # Report ranked list by accuracy
+    println("\n[NegBin] Accuracy ranking:")
+    for (i, (name, acc)) in enumerate(sort(nb_method_accuracies, by=x->-x[2]))
+        println("$(i). $(name): $(round(acc, digits=4))")
+    end
 end
 
 @testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
@@ -605,8 +611,8 @@ end
     end
 
     # Distance clustering
-    @testset "Distance Clustering (Bray-Curtis + Optimal Clusters)" begin
-        println("[Binom] Testing: Distance Clustering (Bray-Curtis + Optimal Clusters)")
+    @testset "Distance Clustering (Bray-Curtis Distance + Optimal Clusters)" begin
+        println("[Binom] Testing: Distance Clustering (Bray-Curtis Distance + Optimal Clusters)")
         binom_distance_matrix = Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_binom_matrix)
         binom_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(binom_distance_matrix)
         @test binom_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
@@ -616,7 +622,7 @@ end
         @test evaluation_result.macro_precision >= .95
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
-        push!(binom_method_accuracies, ("Distance Clustering (Bray-Curtis + Optimal Clusters)", evaluation_result.accuracy))
+        push!(binom_method_accuracies, ("Distance Clustering (Bray-Curtis Distance + Optimal Clusters)", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -624,13 +630,13 @@ end
     end
 
     # Distance + PCoA + KMeans
-    @testset "Distance + PCoA + KMeans" begin
-        println("[Binom] Testing: Distance + PCoA + KMeans")
+    @testset "Distance + PCoA (Bray-Curtis Distance) + KMeans" begin
+        println("[Binom] Testing: Distance + PCoA (Bray-Curtis Distance) + KMeans")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_binom_matrix))
         pcoa_fit_binom_labels = Clustering.kmeans(pcoa_binom_result.coordinates, n_distributions).assignments
         pcoa_fit_binom_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, pcoa_fit_binom_labels)
         plt = Mycelia.plot_embeddings(pcoa_binom_result.coordinates;
-                       title="PCoA - Bray-Curtis Distance - Binomial Matrix",
+                       title="Distance + PCoA (Bray-Curtis Distance) + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_binom_labels,
@@ -641,7 +647,7 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(binom_method_accuracies, ("Distance + PCoA + KMeans", evaluation_result.accuracy))
+        push!(binom_method_accuracies, ("Distance + PCoA (Bray-Curtis Distance) + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -649,15 +655,15 @@ end
     end
 
     # Distance + PCoA + UMAP + KMeans
-    @testset "Distance + PCoA + UMAP + KMeans" begin
-        println("[Binom] Testing: Distance + PCoA + UMAP + KMeans")
+    @testset "Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans" begin
+        println("[Binom] Testing: Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_braycurtis_distance_matrix(shuffled_binom_matrix))
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         @test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_binom_umap_fit_labels = Clustering.kmeans(pcoa_binom_umap_model.embedding, n_distributions).assignments
         pcoa_binom_umap_fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, pcoa_binom_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_binom_umap_model.embedding;
-                       title="PCoA - Bray-Curtis Distance - Binomial Matrix - UMAP",
+                       title="Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_binom_labels,
@@ -668,7 +674,7 @@ end
         @test evaluation_result.macro_precision >= 2/3
         @test evaluation_result.macro_recall >= 2/3
         @test evaluation_result.accuracy >= 2/3
-        push!(binom_method_accuracies, ("Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
+        push!(binom_method_accuracies, ("Distance + PCoA (Bray-Curtis Distance) + UMAP + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -682,7 +688,7 @@ end
         fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
         plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="Poisson PCA-EPCA - Binomial Matrix",
+                       title="PoissonPCA-EPCA + KMeans",
                        xlabel="PC1",
                        ylabel="PC2",
                        true_labels=shuffled_binom_labels,
@@ -708,7 +714,7 @@ end
         fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
         plt = Mycelia.plot_embeddings(umap_model.embedding;
-                       title="UMAP - Poisson PCA-EPCA - Binomial Matrix",
+                       title="PoissonPCA-EPCA + UMAP + KMeans",
                        xlabel="UMAP 1",
                        ylabel="UMAP 2",
                        true_labels=shuffled_binom_labels,
