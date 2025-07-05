@@ -9,20 +9,20 @@ else
     # this should be set via the `--project=` flag
 end
 
-using Revise
-using Test
-import Mycelia
-import FASTX
-import DocStringExtensions
-import BioSequences
-import Dates
-import Random
-import SHA
-import CSV
-import uCSV
-import DataFrames
-import Arrow
-import CodecZlib
+# using Revise
+# using Test
+# import Mycelia
+# import FASTX
+# import DocStringExtensions
+# import BioSequences
+# import Dates
+# import Random
+# import SHA
+# import CSV
+# import uCSV
+# import DataFrames
+# import Arrow
+# import CodecZlib
 
 # Recursively include all test files in the new nested structure, in logical order
 function include_all_tests(dir)
