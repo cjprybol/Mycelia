@@ -358,12 +358,31 @@ function frequency_matrix_to_jaccard_distance_matrix(matrix)
 end
 
 """
-    frequency_matrix_to_braycurtis_distance_matrix(counts_table)
+    frequency_matrix_to_bray_curtis_distance_matrix(counts_table)
 
 Pairwise Bray-Curtis distance between columns of `counts_table`.
 """
-frequency_matrix_to_braycurtis_distance_matrix(counts_table) =
+frequency_matrix_to_bray_curtis_distance_matrix(counts_table) =
     pairwise_distance_matrix(counts_table; dist_func = Distances.braycurtis, progress_desc = "Bray-Curtis distances")
+
+"""
+    frequency_matrix_to_jensen_shannon_distance_matrix(probability_matrix)
+
+Pairwise Jensen-Shannon divergence between columns of `probability_matrix`.
+
+# Arguments
+- `probability_matrix`: Matrix where each column is a probability distribution (sums to 1.0).
+
+# Returns
+- Symmetric matrix of Jensen-Shannon divergence values between columns.
+"""
+function frequency_matrix_to_jensen_shannon_distance_matrix(probability_matrix)
+    return pairwise_distance_matrix(
+        probability_matrix;
+        dist_func = Distances.js_divergence,
+        progress_desc = "Jensen-Shannon divergence"
+    )
+end
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
