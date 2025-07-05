@@ -456,6 +456,43 @@ end
         display(evaluation_result.precision_plot)
         display(evaluation_result.recall_plot)
     end
+
+    @testset "Bray-Curtis Distance + KMeans" begin
+        println("[Poisson] Testing: Bray-Curtis Distance + KMeans")
+        poisson_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(poisson_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(poisson_method_accuracies, ("Bray-Curtis Distance + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+
+    @testset "Bray-Curtis Distance + KMedoids" begin
+        println("[Poisson] Testing: Bray-Curtis Distance + KMedoids")
+        poisson_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix)
+        kmedoids_result = Clustering.kmedoids(poisson_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(poisson_method_accuracies, ("Bray-Curtis Distance + KMedoids", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
     
     # Distance + PCoA + KMeans
     @testset "Bray-Curtis Distance + PCoA + KMeans" begin
@@ -615,6 +652,43 @@ end
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
         push!(nb_method_accuracies, ("Bray-Curtis Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    @testset "Bray-Curtis Distance + KMeans" begin
+        println("[NegBin] Testing: Bray-Curtis Distance + KMeans")
+        nb_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(nb_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(nb_method_accuracies, ("Bray-Curtis Distance + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    @testset "Bray-Curtis Distance + KMedoids" begin
+        println("[NegBin] Testing: Bray-Curtis Distance + KMedoids")
+        nb_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix)
+        kmedoids_result = Clustering.kmedoids(nb_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(nb_method_accuracies, ("Bray-Curtis Distance + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -783,6 +857,43 @@ end
         display(evaluation_result.recall_plot)
     end
 
+    @testset "Bray-Curtis Distance + KMeans" begin
+        println("[Binom] Testing: Bray-Curtis Distance + KMeans")
+        binom_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(binom_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(binom_method_accuracies, ("Bray-Curtis Distance + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    @testset "Bray-Curtis Distance + KMedoids" begin
+        println("[Binom] Testing: Bray-Curtis Distance + KMedoids")
+        binom_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix)
+        kmedoids_result = Clustering.kmedoids(binom_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(binom_method_accuracies, ("Bray-Curtis Distance + KMedoids", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+
     # Bray-Curtis Distance + PCoA + KMeans
     @testset "Bray-Curtis Distance + PCoA + KMeans" begin
         println("[Binom] Testing: Bray-Curtis Distance + PCoA + KMeans")
@@ -944,6 +1055,45 @@ end
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
         push!(contb_method_accuracies, ("Cosine Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+
+    # Cosine Distance + KMeans
+    @testset "Cosine Distance + KMeans" begin
+        println("[ContBernoulli] Testing: Cosine Distance + KMeans")
+        contb_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(contb_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= .95
+        @test evaluation_result.macro_precision >= .95
+        @test evaluation_result.macro_recall >= .95
+        @test evaluation_result.accuracy >= .95
+        push!(contb_method_accuracies, ("Cosine Distance + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    # Cosine Distance + KMedoids
+    @testset "Cosine Distance + KMedoids" begin
+        println("[ContBernoulli] Testing: Cosine Distance + KMedoids")
+        contb_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix)
+        kmedoids_result = Clustering.kmedoids(contb_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= .95
+        @test evaluation_result.macro_precision >= .95
+        @test evaluation_result.macro_recall >= .95
+        @test evaluation_result.accuracy >= .95
+        push!(contb_method_accuracies, ("Cosine Distance + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -1118,6 +1268,45 @@ end
         display(evaluation_result.recall_plot)
     end
 
+    # Cosine Distance + KMeans
+    @testset "Cosine Distance + KMeans" begin
+        println("[Gamma] Testing: Cosine Distance + KMeans")
+        gamma_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(gamma_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= .95
+        @test evaluation_result.macro_precision >= .95
+        @test evaluation_result.macro_recall >= .95
+        @test evaluation_result.accuracy >= .95
+        push!(gamma_method_accuracies, ("Cosine Distance + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    # Cosine Distance + KMedoids
+    @testset "Cosine Distance + KMedoids" begin
+        println("[Gamma] Testing: Cosine Distance + KMedoids")
+        gamma_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix)
+        kmedoids_result = Clustering.kmedoids(gamma_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= .95
+        @test evaluation_result.macro_precision >= .95
+        @test evaluation_result.macro_recall >= .95
+        @test evaluation_result.accuracy >= .95
+        push!(gamma_method_accuracies, ("Cosine Distance + KMedoids", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+
     # Cosine Distance + PCoA + KMeans
     @testset "Cosine Distance + PCoA + KMeans" begin
         println("[Gamma] Testing: Cosine Distance + PCoA + KMeans")
@@ -1278,6 +1467,45 @@ end
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
         push!(gauss_method_accuracies, ("Euclidean Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    # Distance clustering + KMeans
+    @testset "Euclidean Distance + KMeans" begin
+        println("[Gaussian] Testing: Euclidean Distance + KMeans")
+        gauss_distance_matrix = Mycelia.frequency_matrix_to_euclidean_distance_matrix(shuffled_gauss_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(gauss_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 0.95
+        @test evaluation_result.macro_precision >= 0.95
+        @test evaluation_result.macro_recall >= 0.95
+        @test evaluation_result.accuracy >= 0.95
+        push!(gauss_method_accuracies, ("Euclidean Distance + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    # Distance clustering + KMedoids
+    @testset "Euclidean Distance + KMedoids" begin
+        println("[Gaussian] Testing: Euclidean Distance + KMedoids")
+        gauss_distance_matrix = Mycelia.frequency_matrix_to_euclidean_distance_matrix(shuffled_gauss_matrix)
+        kmedoids_result = Clustering.kmedoids(gauss_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 0.95
+        @test evaluation_result.macro_precision >= 0.95
+        @test evaluation_result.macro_recall >= 0.95
+        @test evaluation_result.accuracy >= 0.95
+        push!(gauss_method_accuracies, ("Euclidean Distance + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
@@ -1445,6 +1673,43 @@ end
         @test evaluation_result.macro_recall >= .95
         @test evaluation_result.accuracy >= .95
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + Optimal Hierarchical Clustering", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    @testset "Jensen-Shannon Divergence + KMeans" begin
+        println("[ProbVec] Testing: Jensen-Shannon Divergence + KMeans")
+        probvec_distance_matrix = Mycelia.frequency_matrix_to_jensen_shannon_distance_matrix(shuffled_dirichlet_matrix)
+        # Classical MDS/PCoA to get coordinates from distance matrix
+        pcoa_result = Mycelia.pcoa_from_dist(probvec_distance_matrix)
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, kmeans_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + KMeans", evaluation_result.accuracy))
+        display(evaluation_result.confusion_matrix_plot)
+        display(evaluation_result.f1_plot)
+        display(evaluation_result.precision_plot)
+        display(evaluation_result.recall_plot)
+    end
+    
+    @testset "Jensen-Shannon Divergence + KMedoids" begin
+        println("[ProbVec] Testing: Jensen-Shannon Divergence + KMedoids")
+        probvec_distance_matrix = Mycelia.frequency_matrix_to_jensen_shannon_distance_matrix(shuffled_dirichlet_matrix)
+        kmedoids_result = Clustering.kmedoids(probvec_distance_matrix, n_distributions)
+        kmedoids_labels = kmedoids_result.assignments
+        remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, kmedoids_labels)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels)
+        @test evaluation_result.macro_f1 >= 2/3
+        @test evaluation_result.macro_precision >= 2/3
+        @test evaluation_result.macro_recall >= 2/3
+        @test evaluation_result.accuracy >= 2/3
+        push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
         display(evaluation_result.precision_plot)
