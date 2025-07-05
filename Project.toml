@@ -75,17 +75,6 @@ XAM = "d759349c-bcba-11e9-07c2-5b90f8f05f7c"
 XMLDict = "228000da-037f-5747-90a9-8195ccbf91a5"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 
-[compat]
-ArgParse = "1.2.0"
-Automa = "0.7 - 0.8.3"
-Coverage = "1.6.1"
-Documenter = "1.8.0"
-Hungarian = "0.7.0"
-JET = "0.9.18"
-PackageCompiler = "2.2.0"
-Printf = "1.11.0"
-UMAP = "0.1.11"
-
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
