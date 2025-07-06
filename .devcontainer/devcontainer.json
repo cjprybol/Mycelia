@@ -2,11 +2,22 @@
 // README at: https://github.com/JuliaLang/devcontainer-templates/tree/main/src/julia
 {
     "name": "Mycelia Development Container",
-    "image": "mcr.microsoft.com/devcontainers/universal:2",
+
+    // local on mac
+    "image": "mcr.microsoft.com/devcontainers/base:debian-11",
+    // remote on codespaces
+    // "image": "mcr.microsoft.com/devcontainers/universal:2",
+    // for when/if I need more configuration than the base images provide
+    // "build": {
+    //     "dockerfile": "Dockerfile"
+    // },
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
-		"ghcr.io/julialang/devcontainer-features/julia:1": {}
+		"ghcr.io/julialang/devcontainer-features/julia:1": {},
+        // "ghcr.io/devcontainers/features/rust:1": {},
+        "ghcr.io/devcontainers/features/python:1": {},
+        // "ghcr.io/devcontainers/features/node:1": {}
 	},
     "waitFor": "postCreateCommand",
     // "updateContentCommand": "python3 -m pip install -r requirements.txt",
