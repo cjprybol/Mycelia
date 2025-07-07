@@ -122,127 +122,6 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
     return results_table
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Compare two FASTA sequences and calculate alignment statistics.
-
-# Arguments
-- `reference_fasta::String`: Path to the reference FASTA file
-- `query_fasta::String`: Path to the query FASTA file
-
-# Returns
-DataFrame with the following columns:
-- `alignment_percent_identity`: Percentage of matching bases in alignment
-- `total_equivalent_bases`: Number of equivalent bases between sequences
-- `total_alignment_length`: Length of the alignment
-- `query_length`: Length of query sequence
-- `total_variants`: Total number of variants (SNPs + indels)
-- `total_snps`: Number of single nucleotide polymorphisms
-- `total_indels`: Number of insertions and deletions
-- `alignment_coverage_query`: Percentage of query sequence covered
-- `alignment_coverage_reference`: Percentage of reference sequence covered
-- `size_equivalence_to_reference`: Size ratio of query to reference (%)
-
-# Notes
-- Uses minimap2 with progressively relaxed settings (asm5→asm10→asm20)
-- Returns empty string values for alignment statistics if no alignment is found
-- Requires minimap2 to be installed and accessible in PATH
-"""
-# uses minimap
-function pairwise_minimap_fasta_comparison(;reference_fasta, query_fasta)
-    header = [
-        "Query",
-        "Query length",
-        "Query start",
-        "Query end",
-        "Query strand",
-        "Target",
-        "Target length",
-        "Target start",
-        "Target end",
-        "Matches",
-        "Alignment length",
-        "Mapping quality",
-        "Cigar",
-        "CS tag"]
-    
-#     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
-    results5 = read(`minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
-    if !isempty(results5)
-        results = results5
-    else
-        @warn "no hit with asm5, trying asm10"
-        results10 = read(`minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
-        if !isempty(results10)
-            results = results10
-        else
-            @warn "no hits with asm5 or asm10, trying asm20"
-            results20 = read(`minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
-            if !isempty(results20)
-                results = results20
-            end
-        end
-    end
-    if !isempty(results)
-        data =  DelimitedFiles.readdlm(IOBuffer(results), '\t')
-        data_columns_of_interest = [collect(1:length(header)-2)..., collect(size(data, 2)-1:size(data, 2))...]
-        minimap_results = DataFrames.DataFrame(data[:, data_columns_of_interest], header)
-
-        equivalent_matches = reduce(vcat, map(x -> collect(eachmatch(r":([0-9]+)", replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
-        total_equivalent_bases = sum(map(match -> parse(Int, first(match.captures)), equivalent_matches))
-
-        insertion_matches = reduce(vcat, map(x -> collect(eachmatch(r"\+([a-z]+)"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
-        total_inserted_bases = sum(map(match -> length(first(match.captures)), insertion_matches))
-        deletion_matches = reduce(vcat, map(x -> collect(eachmatch(r"\-([a-z]+)"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
-        total_deleted_bases = sum(map(match -> length(first(match.captures)), deletion_matches))
-        substitution_matches = reduce(vcat, map(x -> collect(eachmatch(r"\*([a-z]{2})"i, replace(x, "cs:Z:" => ""))), minimap_results[!, "CS tag"]))
-        total_substituted_bases = length(substitution_matches)
-        total_variants = length(insertion_matches) + length(deletion_matches) + length(substitution_matches)
-        total_variable_bases = total_inserted_bases + total_deleted_bases + total_substituted_bases
-
-        total_alignment_length = sum(minimap_results[!, "Alignment length"])
-        total_matches = sum(minimap_results[!, "Matches"])
-        
-        alignment_percent_identity = round(total_matches / total_alignment_length * 100, digits=2)
-        size_equivalence_to_reference = round(minimap_results[1, "Query length"]/minimap_results[1, "Target length"] * 100, digits=2)
-        alignment_coverage_query = round(total_alignment_length / minimap_results[1, "Query length"] * 100, digits=2)
-        alignment_coverage_reference = round(total_alignment_length / minimap_results[1, "Target length"] * 100, digits=2)
-
-        results = DataFrames.DataFrame(
-            alignment_percent_identity = alignment_percent_identity,
-            total_equivalent_bases = total_equivalent_bases,
-            total_alignment_length = total_alignment_length,
-            query_length = minimap_results[1, "Query length"],
-            total_variants = total_variants,
-            total_snps = total_substituted_bases,
-            total_indels = length(insertion_matches) + length(deletion_matches),
-            alignment_coverage_query = alignment_coverage_query,
-            alignment_coverage_reference = alignment_coverage_reference,
-            size_equivalence_to_reference = size_equivalence_to_reference,
-        )
-    else
-        query_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(query_fasta)))))
-        target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
-        size_equivalence_to_reference = round(query_length/target_length * 100, digits=2)
-
-        # unable to find any matches
-        results = DataFrames.DataFrame(
-            alignment_percent_identity = "",
-            total_equivalent_bases = "",
-            total_alignment_length = "",
-            query_length = query_length,
-            total_variants = "",
-            total_snps = "",
-            total_indels = "",
-            alignment_coverage_query = 0,
-            alignment_coverage_reference = 0,
-            size_equivalence_to_reference = size_equivalence_to_reference
-        )
-    end
-    return results
-end
-
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -738,4 +617,766 @@ function fastx2normalized_table(fastx)
     normalized_table[!, "fastx_path"] .= basename(fastx)
     normalized_table[!, "fastx_sha256"] .= Mycelia.metasha256(normalized_table[!, "record_sha256"])
     return normalized_table[!, ["fastx_path", "fastx_sha256", current_columns...]]
+end
+
+"""
+    write_fastq(;records, filename, gzip=false)
+
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Write FASTQ records to file using FASTX.jl.
+Validates extension: .fastq, .fq, .fastq.gz, or .fq.gz.
+If `gzip` is true or filename endswith .gz, output is gzipped.
+`records` must be an iterable of FASTX.FASTQ.Record.
+"""
+function write_fastq(;records, filename, gzip=false)
+    function is_valid_fastq_ext(fname)
+        any(endswith.(fname, [".fastq", ".fq", ".fastq.gz", ".fq.gz"]))
+    end
+
+    if !is_valid_fastq_ext(filename)
+        error("File extension must be .fastq, .fq, .fastq.gz, or .fq.gz")
+    end
+
+    gzip_out = gzip || endswith(filename, ".gz")
+    if gzip_out
+        io = CodecZlib.GzipCompressorStream(open(filename, "w"))
+    else
+        io = open(filename, "w")
+    end
+
+    try
+        writer = FASTX.FASTQ.Writer(io)
+        for record in records
+            FASTX.write(writer, record)
+        end
+        FASTX.close(writer)
+    finally
+        close(io)
+    end
+    return filename
+end
+
+"""
+    write_fastas_from_normalized_fastx_tables(
+        table_paths::Vector{String};
+        output_dir::String = pwd(),
+        show_progress::Bool = true,
+        overwrite::Bool = false,
+        error_handler = (e, table_path)->display((e, table_path))
+    ) -> NamedTuple
+
+Given a vector of normalized fastx table paths, writes out gzipped FASTA files in parallel.
+Each table must have columns: "fastx_sha256", "record_sha256", "record_sequence".
+Automatically decompresses input files if they end with ".gz".
+Returns a summary NamedTuple with successes, failures, failed tables, and output files.
+
+# Keyword Arguments
+- `output_dir`: Directory to write .fna.gz files to.
+- `show_progress`: Show a progress bar (default: true).
+- `overwrite`: Overwrite existing files (default: false).
+- `error_handler`: Function called with (exception, table_path) on error.
+
+"""
+function write_fastas_from_normalized_fastx_tables(
+    table_paths::Vector{String};
+    output_dir::String = pwd(),
+    show_progress::Bool = true,
+    overwrite::Bool = false,
+    error_handler = (e, table_path)->display((e, table_path))
+)
+    n = length(table_paths)
+    successes = Base.Threads.Atomic{Int}(0)
+    failures = Base.Threads.Atomic{Int}(0)
+    failed_tables = String[]
+    failed_tables_lock = Base.Threads.SpinLock()
+    output_files = String[]
+    output_files_lock = Base.Threads.SpinLock()
+
+    progress = show_progress ? ProgressMeter.Progress(n, 1) : nothing
+
+    Base.Threads.@threads for i in 1:n
+        table_path = table_paths[i]
+        try
+            # Determine if the table should be decompressed based on extension
+            decompress = endswith(table_path, ".gz")
+            io = open(table_path)
+            stream = decompress ? CodecZlib.GzipDecompressorStream(io) : io
+            loaded_table = CSV.read(stream, DataFrames.DataFrame, delim='\t')
+            close(io)
+            # Remove .gz if present in the fastx_sha256 (basename)
+            fastx_basename = loaded_table[1, "fastx_sha256"]
+            if occursin(r"\.gz$", fastx_basename)
+                fastx_basename = replace(fastx_basename, r"\.gz$" => "")
+            end
+            fastx_filename = fastx_basename * ".fna.gz"
+            fastx_file = joinpath(output_dir, fastx_filename)
+            # Write if missing or overwrite specified
+            write_file = overwrite || !isfile(fastx_file)
+            if write_file
+                fastx_records = [
+                    FASTX.FASTA.Record(row["record_sha256"], row["record_sequence"])
+                    for row in DataFrames.eachrow(loaded_table)
+                ]
+                Mycelia.write_fasta(outfile = fastx_file, records = fastx_records)
+            end
+            # Record output file path
+            Base.Threads.lock(output_files_lock) do
+                push!(output_files, fastx_file)
+            end
+            Base.Threads.atomic_add!(successes, 1)
+        catch e
+            error_handler(e, table_path)
+            Base.Threads.atomic_add!(failures, 1)
+            Base.Threads.lock(failed_tables_lock) do
+                push!(failed_tables, table_path)
+            end
+        end
+        if show_progress
+            ProgressMeter.next!(progress)
+        end
+    end
+
+    if show_progress
+        ProgressMeter.finish!(progress)
+    end
+
+    return (
+        total = n,
+        succeeded = successes[],
+        failed = failures[],
+        failed_tables = failed_tables,
+        output_files = output_files
+    )
+end
+
+# convert all genomes into normalized tables
+function fastxs2normalized_tables(;fastxs, outdir, force=false)
+    mkpath(outdir)
+    n = length(fastxs)
+    normalized_table_paths = Vector{Union{String, Nothing}}(undef, n)
+    errors = Vector{Union{Nothing, Tuple{String, Exception}}}(undef, n)
+
+    prog = ProgressMeter.Progress(n, desc = "Processing files")
+
+    Threads.@threads for i in 1:n
+        fastx = fastxs[i]
+        outfile_base = basename(fastx)
+        if occursin(r"\.gz$", outfile_base)
+            outfile_base = replace(outfile_base, r"\.gz$" => "")
+        end
+        outfile = joinpath(outdir, outfile_base * ".tsv.gz")
+        try
+            if !isfile(outfile) || (filesize(outfile) == 0) || force
+                normalized_table = Mycelia.fastx2normalized_table(fastx)
+                open(outfile, "w") do file
+                    io = CodecZlib.GzipCompressorStream(file)
+                    CSV.write(io, normalized_table; delim='\t', bufsize=64*1024*1024)
+                    close(io)
+                end
+            end
+            normalized_table_paths[i] = outfile
+            errors[i] = nothing
+        catch e
+            normalized_table_paths[i] = nothing
+            errors[i] = (fastx, e)
+            @warn "Failed to process $fastx: $e"
+        end
+        ProgressMeter.next!(prog)
+    end
+
+    ProgressMeter.finish!(prog)
+    return (;normalized_table_paths, errors)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect sequence type from input and suggest appropriate file extension.
+
+# Arguments
+- `record`: A FASTA/FASTQ record
+- `sequence`: A string or BioSequence containing sequence data
+
+# Returns
+- `String`: Suggested file extension:
+  - ".fna" for DNA
+  - ".frn" for RNA
+  - ".faa" for protein
+  - ".fa" for unrecognized sequences
+"""
+function detect_sequence_extension(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record})
+    return detect_sequence_extension(FASTX.sequence(record))
+end
+function detect_sequence_extension(sequence::AbstractString)
+    sequence_type = detect_alphabet(sequence)
+    return _detect_sequence_extension(sequence_type::Symbol)
+end
+function detect_sequence_extension(sequence::BioSequences.LongSequence)
+    sequence_type = detect_alphabet(sequence)
+    return _detect_sequence_extension(sequence_type::Symbol)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Internal helper function to convert sequence type to file extension.
+
+Arguments
+- sequence_type: Symbol representing sequence type (:DNA, :RNA, or :AA)
+
+Returns
+- String: Appropriate file extensions
+"""
+function _detect_sequence_extension(sequence_type::Symbol)
+    @assert sequence_type in [:DNA, :RNA, :AA]
+    if sequence_type == :DNA
+        return ".fna"
+    elseif sequence_type == :RNA
+        return ".frn"
+    elseif sequence_type == :AA
+        return ".faa"
+    else
+        @warn "unrecognized sequence type: $(seq_type)"
+        return ".fa"
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compare two FASTA files to determine if they contain the same set of sequences,
+regardless of sequence order.
+
+# Arguments
+- `fasta_1::String`: Path to first FASTA file
+- `fasta_2::String`: Path to second FASTA file
+
+# Returns
+- `Bool`: `true` if both files contain exactly the same sequences, `false` otherwise
+
+# Details
+Performs a set-based comparison of DNA sequences by hashing each sequence.
+Sequence order differences between files do not affect the result.
+"""
+function equivalent_fasta_sequences(fasta_1, fasta_2)
+    fasta_1_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_1))
+    fasta_2_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_2))
+    @show setdiff(fasta_1_hashes, fasta_2_hashes)
+    @show setdiff(fasta_2_hashes, fasta_1_hashes)
+    return fasta_1_hashes == fasta_2_hashes
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Join fasta files while adding origin prefixes to the identifiers.
+
+Does not guarantee uniqueness but will warn if conflicts arise
+"""
+function merge_fasta_files(;fasta_files, fasta_file)
+    @info "merging $(length(fasta_files)) files..."
+    identifiers = Set{String}()
+    open(fasta_file, "w") do io
+        fastx_io = FASTX.FASTA.Writer(io)
+        ProgressMeter.@showprogress for f in fasta_files
+            f_id = replace(basename(f), Mycelia.FASTA_REGEX => "")
+            for record in Mycelia.open_fastx(f)
+                new_record_id = f_id * "__" * FASTX.identifier(record)
+                if new_record_id in identifiers
+                    @warn "new identifier $(new_record_id) already in identifiers!!!"
+                end
+                push!(identifiers, new_record_id)
+                new_record = FASTX.FASTA.Record(new_record_id, FASTX.sequence(record))
+                write(fastx_io, new_record)
+            end
+        end
+    end
+    @info "$(length(identifiers)) records merged..."
+    return fasta_file
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remove duplicate sequences from a FASTA file while preserving headers.
+
+# Arguments
+- `in_fasta`: Path to input FASTA file
+- `out_fasta`: Path where deduplicated FASTA will be written
+
+# Returns
+Path to the output FASTA file (same as `out_fasta` parameter)
+
+# Details
+- Sequences are considered identical if they match exactly (case-sensitive)
+- For duplicate sequences, keeps the first header encountered
+- Input sequences are sorted by identifier before deduplication
+- Preserves the original sequence formatting
+"""
+function deduplicate_fasta_file(in_fasta, out_fasta)
+    fasta_df = fasta_to_table(collect(open_fastx(in_fasta)))
+    sort!(fasta_df, "identifier")
+    unique_sequences = DataFrames.combine(DataFrames.groupby(fasta_df, "sequence"), first)
+    fasta = fasta_table_to_fasta(unique_sequences)
+    open(out_fasta, "w") do io
+        writer = FASTX.FASTA.Writer(io)
+        for record in fasta
+            write(writer, record)
+        end
+        close(writer)
+    end
+    return out_fasta
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Translates nucleic acid sequences from a FASTA file into amino acid sequences.
+
+# Arguments
+- `fasta_nucleic_acid_file::String`: Path to input FASTA file containing nucleic acid sequences
+- `fasta_amino_acid_file::String`: Path where the translated amino acid sequences will be written
+
+# Returns
+- `String`: Path to the output FASTA file containing translated amino acid sequences
+"""
+function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_file)
+    open(fasta_amino_acid_file, "w") do io
+        writer = FASTX.FASTA.Writer(io)
+        for record in FASTX.FASTA.Reader(open(fasta_nucleic_acid_file))
+            try
+                raw_seq = FASTX.sequence(record)
+                pruned_seq_length = Int(floor(length(raw_seq)/3)) * 3
+                truncated_seq = raw_seq[1:pruned_seq_length]
+                amino_acid_seq = BioSequences.translate(truncated_seq)
+                amino_acid_record = FASTX.FASTA.Record(FASTX.identifier(record), FASTX.description(record), amino_acid_seq)
+                write(writer, amino_acid_record)
+            catch
+                @warn "unable to translate record", record
+            end
+        end
+        close(writer)
+    end
+    return fasta_amino_acid_file
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a FASTA file/record iterator to a DataFrame.
+
+# Arguments
+- `fasta`: FASTA record iterator from FASTX.jl
+
+# Returns
+- `DataFrame` with columns:
+  - `identifier`: Sequence identifiers
+  - `description`: Full sequence descriptions 
+  - `sequence`: Biological sequences as strings
+"""
+function fasta_to_table(fasta)
+    collected_fasta = collect(fasta)
+    fasta_df = DataFrames.DataFrame(
+        identifier = FASTX.identifier.(collected_fasta),
+        description = FASTX.description.(collected_fasta),
+        sequence = FASTX.sequence.(collected_fasta)
+    )
+    return fasta_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a DataFrame containing FASTA sequence information into a vector of FASTA records.
+
+# Arguments
+- `fasta_df::DataFrame`: DataFrame with columns "identifier", "description", and "sequence"
+
+# Returns
+- `Vector{FASTX.FASTA.Record}`: Vector of FASTA records
+"""
+function fasta_table_to_fasta(fasta_df)
+    records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
+    for (i, row) in enumerate(DataFrames.eachrow(fasta_df))
+        record = FASTX.FASTA.Record(row["identifier"], row["description"], row["sequence"])
+        records[i] = record
+    end
+    return records
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+This turns a 4-line FASTQ entry into a single tab separated line,
+adds a column with the length of each read, passes it to Unix sort,
+removes the length column, and converts it back into a FASTQ file.
+
+sorts longest to shortest!!
+
+http://thegenomefactory.blogspot.com/2012/11/sorting-fastq-files-by-sequence-length.html
+"""
+function sort_fastq(input_fastq, output_fastq="")
+    
+    if endswith(input_fastq, ".gz")
+        p = pipeline(
+                `gzip -dc $input_fastq`,
+                `paste - - - -`,
+                `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
+                `sort -nr`,
+                `cut -f2-`,
+                `tr "\t" "\n"`,
+                `gzip`
+                )
+    else
+        p = pipeline(
+                `cat $input_fastq`,
+                `paste - - - -`,
+                `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
+                `sort -nr`,
+                `cut -f2-`,
+                `tr "\t" "\n"`
+                )
+    end
+    run(pipeline(p, output_fastq))
+    return output_fastq
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts the total number of records in a FASTA/FASTQ file.
+
+# Arguments
+- `fastx`: Path to a FASTA or FASTQ file (can be gzipped)
+
+# Returns
+- Number of records (sequences) in the file
+"""
+function count_records(fastx)
+    n_records = 0
+    for record in open_fastx(fastx)
+        n_records += 1
+    end
+    return n_records
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate sequence lengths for reads in a FASTQ file.
+
+# Arguments
+- `fastq_file::String`: Path to input FASTQ file
+- `total_reads::Integer=Inf`: Number of reads to process (defaults to all reads)
+
+# Returns
+- `Vector{Int}`: Array containing the length of each sequence read
+"""
+function determine_read_lengths(fastq_file; total_reads = Inf)
+    if total_reads == Inf
+        total_reads = count_records(fastq_file)
+    end
+    read_lengths = zeros(Int, total_reads)
+    @info "determining read lengths"
+    p = ProgressMeter.Progress(total_reads, 1)
+    for (i, record) in enumerate(open_fastx(fastq_file))
+#         push!(read_lengths, length(FASTX.sequence(record)))
+        read_lengths[i] = length(FASTX.sequence(record))
+        ProgressMeter.next!(p)
+    end
+    return read_lengths
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a Phred quality score (Q-value) to a probability of error.
+
+# Arguments
+- `q_value`: Phred quality score, typically ranging from 0 to 40
+
+# Returns
+- Error probability in range [0,1], where 0 indicates highest confidence
+
+A Q-value of 10 corresponds to an error rate of 0.1 (10%), while a Q-value of 
+30 corresponds to an error rate of 0.001 (0.1%).
+"""
+function q_value_to_error_rate(q_value)
+    error_rate = 10^(q_value/(-10))
+    return error_rate
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a sequencing error probability to a Phred quality score (Q-value).
+
+The calculation uses the standard Phred formula: Q = -10 * log₁₀(error_rate)
+
+# Arguments
+- `error_rate::Float64`: Probability of error (between 0 and 1)
+
+# Returns
+- `q_value::Float64`: Phred quality score
+"""
+function error_rate_to_q_value(error_rate)
+    q_value = -10 * log10(error_rate)
+    return q_value
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the total size (in bases) of all sequences in a FASTA file.
+
+# Arguments
+- `fasta_file::AbstractString`: Path to the FASTA file
+
+# Returns
+- `Int`: Sum of lengths of all sequences in the FASTA file
+"""
+function fasta_genome_size(fasta_file)
+    return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Subsample reads from a FASTQ file using seqkit.
+
+# Arguments
+- `in_fastq::String`: Path to input FASTQ file
+- `out_fastq::String=""`: Path to output FASTQ file. If empty, auto-generated based on input filename
+- `n_reads::Union{Missing,Int}=missing`: Number of reads to sample
+- `proportion_reads::Union{Missing,Float64}=missing`: Proportion of reads to sample (0.0-1.0)
+
+# Returns
+- `String`: Path to the output FASTQ file
+"""
+function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+    Mycelia.add_bioconda_env("seqkit")
+    if ismissing(n_reads) && ismissing(proportion_reads)
+        error("please specify the number or proportion of reads")
+    elseif !ismissing(n_reads)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --two-pass --number $(n_reads) $(in_fastq)`, `gzip`)
+        if isempty(out_fastq)
+            out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.N$(n_reads).fq.gz")
+        end
+    elseif !ismissing(proportion_reads)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --proportion $(proportion_reads) $(in_fastq)`, `gzip`)
+        if isempty(out_fastq)
+            out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.P$(proportion_reads).fq.gz")
+        end
+    end
+    @assert !isempty(out_fastq)
+    if !isfile(out_fastq)
+        run(pipeline(p, out_fastq))
+    else
+        @info "$(out_fastq) already present"
+    end
+    return out_fastq
+end
+
+# function subsample_reads_seqtk(;in_fastq::String, out_fastq="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+#     Mycelia.add_bioconda_env("seqtk")
+#     if ismissing(n_reads) && ismissing(proportion_reads)
+#         error("please specify the number or proportion of reads")
+#     elseif !ismissing(n_reads)
+#         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqtk seqtk sample -2 $(n_reads) $(in_fastq)`, `gzip`)
+#         if isempty(out_fastq)
+#             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqtk.N$(n_reads).fq.gz")
+#         end
+#     elseif !ismissing(proportion_reads)
+#         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqtk seqtk sample -2 $(proportion_reads) $(in_fastq)`, `gzip`)
+#         if isempty(out_fastq)
+#             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqtk.P$(proportion_reads).fq.gz")
+#         end
+#     end
+#     @assert !isempty(out_fastq)
+#     run(pipeline(p, out_fastq))
+#     return out_fastq
+# end
+
+# subsample_reads_seqtk(in_fastq = fastq, n_reads=10)
+
+# function filter_short_reads()
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates an index file (.fai) for a FASTA reference sequence using samtools.
+
+The FASTA index allows efficient random access to the reference sequence. This is 
+required by many bioinformatics tools that need to quickly fetch subsequences 
+from the reference.
+
+# Arguments
+- `fasta`: Path to the input FASTA file
+
+# Side Effects
+- Creates a `{fasta}.fai` index file in the same directory as input
+- Installs samtools via conda if not already present
+"""
+function samtools_index_fasta(;fasta)
+    Mycelia.add_bioconda_env("samtools")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Construct a FASTX FASTQ record from its components.
+
+# Arguments
+- `identifier::String`: The sequence identifier without the '@' prefix
+- `sequence::String`: The nucleotide sequence
+- `quality_scores::Vector{Int}`: Quality scores (0-93) as raw integers
+
+# Returns
+- `FASTX.FASTQRecord`: A parsed FASTQ record
+
+# Notes
+- Quality scores are automatically capped at 93 to ensure FASTQ compatibility
+- Quality scores are converted to ASCII by adding 33 (Phred+33 encoding)
+- The record is constructed in standard FASTQ format with four lines:
+  1. Header line (@ + identifier)
+  2. Sequence
+  3. Plus line
+  4. Quality scores (ASCII encoded)
+"""
+function fastq_record(;identifier, sequence, quality_scores)
+    # Fastx wont parse anything higher than 93
+    quality_scores = min.(quality_scores, 93)
+    record_string = join(["@" * identifier, sequence, "+", join([Char(x+33) for x in quality_scores])], "\n")
+    return FASTX.parse(FASTX.FASTQRecord, record_string)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate detailed mapping statistics for each reference sequence/contig in a XAM (SAM/BAM/CRAM) file.
+
+# Arguments
+- `xam`: Path to XAM file or XAM object
+
+# Returns
+A DataFrame with per-contig statistics including:
+- `n_aligned_reads`: Number of aligned reads
+- `total_aligned_bases`: Sum of alignment lengths
+- `total_alignment_score`: Sum of alignment scores
+- Mapping quality statistics (mean, std, median)
+- Alignment length statistics (mean, std, median)
+- Alignment score statistics (mean, std, median)
+- Percent mismatches statistics (mean, std, median)
+
+Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) are considered.
+"""
+function fastx_to_contig_lengths(fastx)
+    OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Open and return a reader for FASTA or FASTQ format files.
+
+# Arguments
+- `path::AbstractString`: Path to input file. Can be:
+    - Local file path
+    - HTTP/FTP URL
+    - Gzip compressed (.gz extension)
+
+# Supported formats
+- FASTA (.fasta, .fna, .faa, .fa)
+- FASTQ (.fastq, .fq)
+
+# Returns
+- `FASTX.FASTA.Reader` for FASTA files
+- `FASTX.FASTQ.Reader` for FASTQ files
+"""
+function open_fastx(path::AbstractString)
+    if isfile(path)
+        io = open(path)
+    elseif occursin(r"^ftp", path) || occursin(r"^http", path)
+        path = replace(path, r"^ftp:" => "http:")
+        io = IOBuffer(HTTP.get(path).body)
+    else
+        error("unable to locate file $path")
+    end
+    path_base = basename(path)
+    if occursin(r"\.gz$", path_base)
+        io = CodecZlib.GzipDecompressorStream(io)
+        path_base = replace(path_base, ".gz" => "")
+    end
+    if occursin(r"\.(fasta|fna|faa|fa|frn)$", path_base)
+        fastx_io = FASTX.FASTA.Reader(io)
+    elseif occursin(r"\.(fastq|fq)$", path_base)
+        fastx_io = FASTX.FASTQ.Reader(io)
+    else
+        error("attempting to open a FASTX file with an unsupported extension: $(path_base)")
+    end
+    return fastx_io
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Writes FASTA records to a file, optionally gzipped.
+
+# Arguments
+- `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true and ".gz" isn't already the extension.
+- `records::Vector{FASTX.FASTA.Record}`: A vector of FASTA records.
+- `gzip::Bool`: Optionally force compression of the output with gzip. By default will use the file name to infer.
+
+# Returns
+- `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
+"""
+function write_fasta(;outfile::AbstractString=tempname()*".fna", records::Vector{FASTX.FASTA.Record}, gzip::Bool=false)
+    # Determine if gzip compression should be used based on both the filename and the gzip argument
+    gzip = occursin(r"\.gz$", outfile) || gzip
+
+    # Append ".gz" to the filename if gzip is true and the extension isn't already present
+    outfile = gzip && !occursin(r"\.gz$", outfile) ? outfile * ".gz" : outfile  # More concise way to handle filename modification
+
+    # Use open with do block for automatic resource management (closing the file)
+    open(outfile, "w") do io
+        if gzip
+            io = CodecZlib.GzipCompressorStream(io)  # Wrap the io stream for gzip compression
+        end
+
+        FASTX.FASTA.Writer(io) do fastx_io  # Use do block for automatic closing of the FASTA writer
+            for record in records
+                write(fastx_io, record)
+            end
+        end # fastx_io automatically closed here
+    end # io automatically closed here
+
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a GenBank format file to FASTA format using EMBOSS seqret.
+
+# Arguments
+- `genbank`: Path to input GenBank format file
+- `fasta`: Optional output FASTA file path (defaults to input path with .fna extension)
+- `force`: If true, overwrites existing output file (defaults to false)
+
+# Returns
+Path to the output FASTA file
+
+# Notes
+- Requires EMBOSS suite (installed automatically via Conda)
+- Will not regenerate output if it already exists unless force=true
+"""
+function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
+    add_bioconda_env("emboss")
+    if !isfile(fasta) || force
+        run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)
+    end
+    return fasta
 end

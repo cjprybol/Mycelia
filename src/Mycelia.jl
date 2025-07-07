@@ -7,7 +7,6 @@ import Arrow
 import BioAlignments
 import BioSequences
 import BioSymbols
-import CairoMakie
 import Clustering
 # import CodecBase
 # import CodecBzip2
@@ -24,6 +23,7 @@ import Distances
 import Distributions
 import DocStringExtensions
 import Downloads
+import ExpFamilyPCA
 import FASTX
 import FileIO
 import GenomicAnnotations
@@ -33,6 +33,7 @@ import GLM
 import GraphMakie
 import Graphs
 # import HDF5
+import Hungarian
 import HTTP
 import JLD2
 import JSON
@@ -43,9 +44,11 @@ import Luxor
 import Makie
 import MetaGraphs
 import Mmap
+import MultivariateStats
 import OrderedCollections
 import Plots
 import Primes
+import Printf
 import ProgressMeter
 import Random
 import SankeyPlots
@@ -59,11 +62,20 @@ import Tar
 # import TopoPlots
 # import TranscodingStreams
 import uCSV
+import UMAP
 import UUIDs
 import XAM
 import XMLDict
 
+using CairoMakie
+
 import Pkg
+
+import JSON
+import DataFrames
+import ProgressMeter
+import CodecZlib
+import Base.Filesystem: stat
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
@@ -1127,414 +1139,45 @@ end
 
 # My standard pacbio aligning and sorting. No filtering done in this step.
 
-# Use shell_only=true to get string command to submit to SLURM
-# """
-# function map_pacbio_reads(;
-#         fastq,
-#         reference_fasta,
-#         temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
-#         outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz"),
-#         threads = Sys.CPU_THREADS,
-#         memory = Sys.total_memory(),
-#         shell_only = false
-#     )
-#     # 4G is the default
-#     # smaller, higher diversity databases do better with 5+ as the denominator - w/ <=4 they run out of memory
-#     index_chunk_size = "$(Int(floor(memory/5e9)))G"
-#     @show index_chunk_size
-#     @show threads
-#     Mycelia.add_bioconda_env("minimap2")
-#     # Mycelia.add_bioconda_env("samtools")
-#     Mycelia.add_bioconda_env("pigz")
-#     if shell_only
-#         cmd =
-#         """
-#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-#         """
-#         return cmd
-#     else
-#         if !isfile(outfile)
-#             map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -I$(index_chunk_size) -ax map-hifi $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-#             run(map)
-#             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`)
-#             @assert isfile(outfile)
-#         else
-#             @info "$(outfile) already present"
-#         end
-#     end
+# # map reads to the assembly and run qualimap QC
+# bwt_index = "$(assembled_fasta).bwt"
+# if !isfile(bwt_index)
+#     run(`bwa index $(assembled_fasta)`)
 # end
 
-# """
-# My standard pacbio aligning and sorting. No filtering done in this step.
-
-# Use shell_only=true to get string command to submit to SLURM
-# """
-# function minimap_index_pacbio(;
-#         reference_fasta,
-#         outfile = replace(reference_fasta, Mycelia.FASTA_REGEX => ".pacbio.mmi"),
-#         threads = Sys.CPU_THREADS,
-#         shell_only = false
-#     )
-#     Mycelia.add_bioconda_env("minimap2")
-#     Mycelia.add_bioconda_env("samtools")
-#     if shell_only
-#         cmd =
-#         """
-#         $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -ax map-pb $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-#         && $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile) \\
-#         | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile) \\
-#         && rm $(temp_sam_outfile)
-#         """
-#         return cmd
-#     else
-#         if !isfile(outfile)
-#             map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -ax map-pb $(reference_fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-#             run(map)
-#             p = pipeline(
-#                 `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort --threads $(threads) $(temp_sam_outfile)`,
-#                 `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -bh -o $(outfile)`
-#             )
-#             run(p)
-#             rm(temp_sam_outfile)
-#         else
-#             @info "$(outfile) already present"
-#         end
-#     end
+# mapped_reads_bam = "$(assembled_fasta).bwa.bam"
+# if !isfile(mapped_reads_bam)
+#     run(pipeline(
+#         `bwa mem -R "@RG\tID:$(config["sample identifier"])\tSM:bar" -t $(Sys.CPU_THREADS) $(assembled_fasta) $(TRIMMED_FORWARD) $(TRIMMED_REVERSE)`,
+#         `samtools collate -O - -`,
+#         `samtools fixmate -m - -`,
+#         `samtools sort`,
+#         `samtools markdup - -`,
+#         `samtools view -buh`,
+#         mapped_reads_bam))
 # end
 
-# function filter_short_reads()
+# if !isfile("$(mapped_reads_bam).bai")
+#     run(`samtools index $(mapped_reads_bam)`)
 # end
 
-# function map_short_reads()
-# end
+# qualimap_report_pdf = "$(assembly_dir)/qualimap/report.pdf"
+# qualimap_report_txt = "$(assembly_dir)/qualimap/genome_results.txt"
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Returns the current date and time as a normalized string with all non-word characters removed.
-
-The output format is based on ISO datetime (YYYYMMDDThhmmss) but strips any special characters
-like hyphens, colons or dots.
-"""
-function normalized_current_datetime()
-    return replace(Dates.format(Dates.now(), Dates.ISODateTimeFormat), r"[^\w]" => "")
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Returns the current date as a normalized string with all non-word characters removed.
-
-The output format is based on ISO datetime (YYYYMMDD) but strips any special characters
-like hyphens, colons or dots.
-"""
-function normalized_current_date()
-    return replace(Dates.format(Dates.today(), Dates.ISODateFormat), r"[^\w]" => "")
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Returns the current git commit hash of the repository.
-
-# Arguments
-- `short::Bool=false`: If true, returns abbreviated 8-character hash
-
-# Returns
-A string containing the git commit hash (full 40 characters by default)
-"""
-function githash(;short=false)
-    git_hash = rstrip(read(`git rev-parse HEAD`, String))
-    if short
-        git_hash = git_hash[1:8]
-    end
-    return git_hash
-end
-
-# CSV is too memory inefficient, the others too slow :(
-# # using uCSV
-# # k=11
-# # 3.444974 seconds (24.58 M allocations: 1.374 GiB, 34.65% gc time, 16.90% compilation time)
-# # k=13
-# # 362.285866 seconds (357.11 M allocations: 20.550 GiB, 91.60% gc time)
-
-# # using DelimitedFiles.readdlm
-# # k=11
-# # 2.386620 seconds (16.11 M allocations: 632.732 MiB, 34.16% gc time, 24.25% compilation time)
-# # k=13
-# # 82.888552 seconds (227.49 M allocations: 8.766 GiB, 82.01% gc time)
-
-# # CSV
-# # k=11
-# # 12.328422 seconds (7.62 M allocations: 732.639 MiB, 19091.67% compilation time: <1% of which was recompilation)
-# # k=13
-# # 37.098948 seconds (89.38 k allocations: 2.354 GiB, 93.56% gc time)
-
-# function parse_jellyfish_counts(tabular_counts)
-#     # load in the data
-#     @assert occursin(r"\.gz$", tabular_counts) "this expects gzipped jellyfish tabular counts"
-#     io = CodecZlib.GzipDecompressorStream(open(tabular_counts))
-#     canonical_kmer_counts_table = DataFrames.DataFrame(CSV.File(io; delim='\t', header=false))
-#     DataFrames.rename!(canonical_kmer_counts_table, [:Column1 => :kmer, :Column2 => :count])
-    
-#     # recode the kmers from strings to fixed sized kmer types
-#     unique_kmer_lengths = unique(length.(canonical_kmer_counts_table[!, "kmer"]))
-#     @assert length(unique_kmer_lengths) == 1
-#     k = first(unique_kmer_lengths)
-#     canonical_kmer_counts_table[!, "kmer"] = Kmers.DNAKmer{k}.(canonical_kmer_counts_table[!, "kmer"])
-    
-#     return canonical_kmer_counts_table
+# if !isfile(qualimap_report_pdf) || !isfile(qualimap_report_txt)
+#     run(`
+#         qualimap bamqc
+#         -nt $(Sys.CPU_THREADS)
+#         -bam $(mapped_reads_bam)
+#         -outdir $(assembly_dir)/qualimap
+#         -outformat PDF:HTML
+#         --output-genome-coverage $(mapped_reads_bam).genome_coverage.txt
+#         `)
 # end
 
 
-# https://www.ncbi.nlm.nih.gov/datasets/docs/v2/how-tos/taxonomy/taxonomy/
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Retrieve taxonomic information for a given NCBI taxonomy ID.
-
-# Arguments
-- `taxa_id`: NCBI taxonomy identifier (integer)
-
-# Returns
-- `DataFrame`: Taxonomy summary containing fields like tax_id, rank, species, etc.
-"""
-function ncbi_taxon_summary(taxa_id)
-    Mycelia.add_bioconda_env("ncbi-datasets")
-    p = pipeline(
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets datasets summary taxonomy taxon $(taxa_id) --as-json-lines`,
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets dataformat tsv taxonomy --template tax-summary`
-        )
-    return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
-end
 
 """
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Find the closest prime number to the given integer `n`.
-
-Returns the nearest prime number to `n`. If two prime numbers are equally distant 
-from `n`, returns the smaller one.
-
-# Arguments
-- `n::Int`: The input integer to find the nearest prime for
-
-# Returns
-- `Int`: The closest prime number to `n`
-"""
-function nearest_prime(n::Int)
-    if n < 2
-        return 2
-    end
-    next_p = Primes.nextprime(n)
-    prev_p = Primes.prevprime(n)
-    if n - prev_p <= next_p - n
-        return prev_p
-    else
-        return next_p
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Generate a sequence of Fibonacci numbers strictly less than the input value.
-
-# Arguments
-- `n::Int`: Upper bound (exclusive) for the Fibonacci sequence
-
-# Returns
-- `Vector{Int}`: Array containing Fibonacci numbers less than n
-"""
-function fibonacci_numbers_less_than(n::Int)
-    if n <= 0
-        return []
-    elseif n == 1
-        return [0]
-    else
-        fib = [0, 1]
-        next_fib = fib[end] + fib[end-1]
-        while next_fib < n
-            push!(fib, next_fib)
-            next_fib = fib[end] + fib[end-1]
-        end
-        return fib
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Generates a specialized sequence of prime numbers combining:
-- Odd primes up to 23 (flip_point)
-- Primes nearest to Fibonacci numbers above 23 up to max
-
-# Arguments
-- `min::Int=0`: Lower bound for the sequence
-- `max::Int=10_000`: Upper bound for the sequence
-
-# Returns
-Vector of Int containing the specialized prime sequence
-"""
-function ks(;min=0, max=10_000)
-    # flip from all odd primes to only nearest to fibonnaci primes
-    flip_point = 23
-    # skip 19 because it is so similar to 17
-    results = vcat(
-        filter(x -> x != 19, filter(isodd, Primes.primes(0, flip_point))),
-        filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max*10)))
-    )
-    return filter(x -> min <= x <= max, results)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Copy files between local and remote storage using rclone with automated retry logic.
-
-# Arguments
-- `source::String`: Source path or remote (e.g. "local/path" or "gdrive:folder")
-- `dest::String`: Destination path or remote (e.g. "gdrive:folder" or "local/path")
-
-# Keywords
-- `config::String=""`: Optional path to rclone config file
-- `max_attempts::Int=3`: Maximum number of retry attempts
-- `sleep_timer::Int=60`: Initial sleep duration between retries in seconds (doubles after each attempt)
-
-# Details
-Uses optimized rclone settings for large files:
-- 2GB chunk size
-- 1TB upload cutoff
-- Rate limited to 1 transaction per second
-"""
-function rclone_copy(source, dest; config="", max_attempts=3, sleep_timer=60)
-    done = false
-    attempts = 0
-    while !done && attempts < max_attempts
-        attempts += 1
-        try
-            # https://forum.rclone.org/t/google-drive-uploads-failing-http-429/34147/9
-            # --tpslimit                                       Limit HTTP transactions per second to this
-            # --drive-chunk-size SizeSuffix                    Upload chunk size (default 8Mi)
-            # --drive-upload-cutoff SizeSuffix                 Cutoff for switching to chunked upload (default 8Mi)
-            # not currently using these but they may become helpful
-            # --drive-pacer-burst int                          Number of API calls to allow without sleeping (default 100)
-            # --drive-pacer-min-sleep Duration                 Minimum time to sleep between API calls (default 100ms)
-            if isempty(config)
-                cmd = `rclone copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
-            else
-                cmd = `rclone --config $(config) copy --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 $(source) $(dest)`
-            end
-            @info "copying $(source) to $(dest) with command: $(cmd)"
-            run(cmd)
-            done = true
-        catch
-            @info "copying incomplete, sleeping $(sleep_timer) seconds and trying again..."
-            sleep(sleep_timer)
-            sleep_timer *= 2
-        end
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Copy files between local and remote storage using rclone with automated retry logic.
-
-# Arguments
-- `source::String`: Source path or remote (e.g. "local/path" or "gdrive:folder")
-- `dest::String`: Destination path or remote (e.g. "gdrive:folder" or "local/path")
-
-# Keywords
-- `config::String=""`: Optional path to rclone config file
-- `max_attempts::Int=3`: Maximum number of retry attempts
-- `sleep_timer::Int=60`: Initial sleep duration between retries in seconds (doubles after each attempt)
-- `includes::Vector{String}=[]`: One or more include patterns (each will be passed using `--include`)
-- `excludes::Vector{String}=[]`: One or more exclude patterns (each will be passed using `--exclude`)
-- `recursive::Bool=false`: If true, adds the flag for recursive traversal
-"""
-function rclone_copy2(source, dest;
-                     config = "",
-                     max_attempts = 3, sleep_timer = 60,
-                     includes = String[],
-                     excludes = String[],
-                     recursive = false)
-    done = false
-    attempts = 0
-    while !done && attempts < max_attempts
-        attempts += 1
-        try
-            # Define base flags optimized for large files
-            flags = ["--drive-chunk-size", "2G",
-                     "--drive-upload-cutoff", "1T",
-                     "--tpslimit", "1",
-                     "--verbose"]
-
-            # Append each include pattern with its flag
-            for pattern in includes
-                push!(flags, "--include")
-                push!(flags, pattern)
-            end
-
-            # Append each exclude pattern with its flag
-            for pattern in excludes
-                push!(flags, "--exclude")
-                push!(flags, pattern)
-            end
-
-            # Optionally add the recursive flag
-            if recursive
-                push!(flags, "--recursive")
-            end
-
-            # Build the full argument list as an array of strings.
-            args = String[]
-            # Add base command and optional config
-            push!(args, "rclone")
-            if !isempty(config)
-                push!(args, "--config")
-                push!(args, config)
-            end
-            push!(args, "copy")
-            # Insert all flags (each flag and its parameter are separate elements)
-            append!(args, flags)
-            # Add source and destination paths
-            push!(args, source)
-            push!(args, dest)
-
-            # Convert the argument vector into a Cmd object
-            cmd = Cmd(args)
-
-            @info "copying $(source) to $(dest) with command: $(cmd)"
-            run(cmd)
-            done = true
-        catch e
-            @info "copying incomplete, sleeping $(sleep_timer) seconds and trying again..."
-            sleep(sleep_timer)
-            sleep_timer *= 2
-        end
-    end
-end
-
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Identify all columns that have only missing or empty values
-
-Returns as a bit array
-
-See also: drop_empty_columns, drop_empty_columns!
-"""
-function find_nonempty_columns(df)
-    non_empty_columns = [eltype(col) != Missing || !all(v -> isnothing(v) || ismissing(v) || (!isa(v, Date) && isempty(v)), col) for col in DataFrames.eachcol(df)]
-    return non_empty_columns
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Identify all columns that have only missing or empty values, and remove those columns from the dataframe.
 
 Returns a modified copy of the dataframe.

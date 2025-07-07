@@ -1,6 +1,130 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Save the kmer counting results (kmers vector, counts sparse matrix)
+and the input FASTA file list to a JLD2 file for long-term storage
+and reproducibility.
+
+# Arguments
+- `filename::AbstractString`: Path to the output JLD2 file.
+- `kmers::AbstractVector{<:Kmers.Kmer}`: The sorted vector of unique kmer objects.
+- `counts::AbstractMatrix`: The (sparse or dense) matrix of kmer counts.
+- `fasta_list::AbstractVector{<:AbstractString}`: The list of FASTA file paths used as input.
+- `k::Integer`: The kmer size used.
+- `alphabet::Symbol`: The alphabet used (:AA, :DNA, :RNA).
+
+"""
+function save_kmer_results(;
+    filename::AbstractString,
+    kmers::AbstractVector{<:Kmers.Kmer},
+    counts::AbstractMatrix,
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol
+    )
+
+    if !endswith(filename, ".jld2")
+        @warn "Filename '$filename' does not end with '.jld2'. Appending it."
+        filename *= ".jld2"
+    end
+
+    @info "Saving kmer results to $filename..."
+    try
+        # Open the file in write mode ('w'). This will create or overwrite the file.
+        JLD2.jldopen(filename, "w") do file
+            # Write each component as a separate dataset within the JLD2 file
+            # The string names ("kmers", "counts", etc.) are how you'll access them upon loading.
+            file["kmers"] = kmers
+            file["counts"] = counts
+            file["fasta_list"] = fasta_list
+            # Store metadata as well
+            file["metadata/k"] = k
+            file["metadata/alphabet"] = string(alphabet) # Store symbol as string for robustness
+            file["metadata/creation_timestamp"] = string(Dates.now())
+            file["metadata/julia_version"] = string(VERSION)
+        end
+        @info "Successfully saved results to $filename."
+    catch e
+        @error "Failed to save results to $filename: $e"
+        rethrow(e)
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Load kmer counting results previously saved with `save_kmer_results`.
+
+# Arguments
+- `filename::AbstractString`: Path to the input JLD2 file.
+
+# Returns
+- `NamedTuple`: Contains the loaded `kmers`, `counts`, `fasta_list`, and `metadata`.
+  Returns `nothing` if the file cannot be loaded or essential keys are missing.
+"""
+function load_kmer_results(filename::AbstractString)
+    if !Base.Filesystem.isfile(filename)
+        @error "File not found: $filename"
+        return nothing
+    end
+    if !endswith(filename, ".jld2")
+        @warn "Filename '$filename' does not end with '.jld2'. Attempting to load anyway."
+    end
+
+    @info "Loading kmer results from $filename..."
+    try
+        # JLD2.load returns a dictionary-like object mapping names to loaded data
+        loaded_data = JLD2.load(filename)
+
+        # Basic validation (check if essential keys exist)
+        required_keys = ["kmers", "counts", "fasta_list"]
+        if !all(haskey(loaded_data, k) for k in required_keys)
+             @error "File $filename is missing one or more required keys: $required_keys"
+             return nothing
+        end
+
+        # Reconstruct metadata if present
+        metadata = Dict{String, Any}()
+        if haskey(loaded_data, "metadata/k")
+            metadata["k"] = loaded_data["metadata/k"]
+        end
+        if haskey(loaded_data, "metadata/alphabet")
+             # Attempt to convert back to Symbol, fallback to string if error
+             try
+                 metadata["alphabet"] = Symbol(loaded_data["metadata/alphabet"])
+             catch
+                 @warn "Could not convert loaded alphabet '$(loaded_data["metadata/alphabet"])' back to Symbol. Storing as String."
+                 metadata["alphabet"] = loaded_data["metadata/alphabet"]
+             end
+        end
+         # Add other metadata fields if they exist
+        for key in keys(loaded_data)
+            if startswith(key, "metadata/") && !haskey(metadata, replace(key, "metadata/" => ""))
+                 metadata[replace(key, "metadata/" => "")] = loaded_data[key]
+            end
+        end
+
+
+        @info "Successfully loaded results from $filename."
+        # Return as a NamedTuple for convenient access
+        return (;
+            kmers=loaded_data["kmers"],
+            counts=loaded_data["counts"],
+            fasta_list=loaded_data["fasta_list"],
+            metadata=metadata
+        )
+
+    catch e
+        @error "Failed to load results from $filename: $e"
+        return nothing
+    end
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Calculate the quality score for a single base given multiple observations.
 
 This function implements the "Converting to Error Probabilities and Combining" method:
@@ -285,61 +409,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Calculate the cosine similarity between two k-mer count dictionaries.
-
-# Arguments
-- `kmer_counts_1::Dict{String,Int}`: First dictionary mapping k-mer sequences to their counts
-- `kmer_counts_2::Dict{String,Int}`: Second dictionary mapping k-mer sequences to their counts
-
-# Returns
-- `Float64`: Cosine distance between the two k-mer count vectors, in range [0,1]
-  where 0 indicates identical distributions and 1 indicates maximum dissimilarity
-
-# Details
-Converts k-mer count dictionaries into vectors using a unified set of keys,
-then computes cosine distance. Missing k-mers are treated as count 0.
-Result is invariant to input order and total counts (normalized internally).
-"""
-function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
-    sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
-    a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    # Distances.cosine_dist(a, b) == Distances.cosine_dist(b, a) == Distances.cosine_dist(a ./ sum(a), b ./ sum(b)) == Distances.cosine_dist(b ./ sum(b), a ./ sum(a))
-    return Distances.cosine_dist(a, b)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Calculate the Jensen-Shannon divergence between two k-mer frequency distributions.
-
-# Arguments
-- `kmer_counts_1`: Dictionary mapping k-mers to their counts in first sequence
-- `kmer_counts_2`: Dictionary mapping k-mers to their counts in second sequence
-
-# Returns
-- Normalized Jensen-Shannon divergence score between 0 and 1, where:
-  - 0 indicates identical distributions
-  - 1 indicates maximally different distributions
-
-# Notes
-- The measure is symmetric: JS(P||Q) = JS(Q||P)
-- Counts are automatically normalized to probability distributions
-"""
-function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
-    sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
-    a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    a_norm = a ./ sum(a)
-    b_norm = b ./ sum(b)
-    # Distances.js_divergence(a ./ sum(a), b ./ sum(b)) == Distances.js_divergence(b ./ sum(b), a ./ sum(a))
-    # Distances.js_divergence(a, b) != Distances.js_divergence(a ./ sum(a), b ./ sum(b))
-    return Distances.js_divergence(a_norm, b_norm)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Evaluate genome assembly quality by comparing k-mer distributions between assembled sequences and raw observations.
 
 # Arguments
@@ -384,58 +453,6 @@ end
 
 # function assess_assembly_quality(;assembled_sequence::BioSequences.LongDNA{2}, fastq::String, k::Int)
 #     assess_assembly_quality(assembled_sequence=assembled_sequence, fastq=fastq, ks=[k])
-# end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Compute the Jaccard similarity coefficient between two sets.
-
-The Jaccard similarity is defined as the size of the intersection divided by the size
-of the union of two sets:
-
-    J(A,B) = |A ∩ B| / |A ∪ B|
-
-# Arguments
-- `set1`: First set for comparison
-- `set2`: Second set for comparison
-
-# Returns
-- `Float64`: A value between 0.0 and 1.0, where:
-  * 1.0 indicates identical sets
-  * 0.0 indicates completely disjoint sets
-"""
-function jaccard_similarity(set1, set2)
-    return length(intersect(set1, set2)) / length(union(set1, set2))
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Calculate the Jaccard distance between two sets, which is the complement of the Jaccard similarity.
-
-The Jaccard distance is defined as:
-``J_d(A,B) = 1 - J_s(A,B) = 1 - \\frac{|A ∩ B|}{|A ∪ B|}``
-
-# Arguments
-- `set1`: First set to compare
-- `set2`: Second set to compare
-
-# Returns
-- `Float64`: A value in [0,1] where 0 indicates identical sets and 1 indicates disjoint sets
-"""
-function jaccard_distance(set1, set2)
-    return 1.0 - jaccard_similarity(set1, set2)
-end
-
-# function kmer_counts_to_jaccard(kmer_counts_1::AbstractDict{Kmers.DNAKmer{k}, Int64}, kmer_counts_2::AbstractDict{Kmers.DNAKmer{k}, Int64}) where k
-#     # sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
-#     # a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-#     # b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-#     # a_indices = findall(a .> 0)
-#     # b_indices = findall(b .> 0)
-#     # return Distances.jaccard(a_indices, b_indices)
-#     return jaccard(collect(keys(kmer_counts_1)), collect(keys(kmer_counts_2)))
 # end
 
 """
@@ -820,3 +837,1163 @@ Analyzes k-mer saturation in a FASTA/FASTQ file to determine optimal k-mer size.
 function assess_dnamer_saturation(fastx::AbstractString; power=10, outdir="", min_k=3, max_k=17, threshold=0.1, kmers_to_assess=10_000_000)
     assess_dnamer_saturation([fastx], outdir=outdir, min_k=min_k, max_k=max_k, threshold=threshold, power=power, kmers_to_assess=kmers_to_assess)
 end
+
+"""
+    generate_and_save_kmer_counts(; 
+        bioalphabet, 
+        fastas, 
+        k, 
+        output_dir=pwd(),
+        filename=nothing
+    )
+
+Generates and saves k-mer counts for a list of FASTA files for a single k.
+
+# Keyword Arguments
+- `bioalphabet`: Alphabet type (e.g., :DNA).
+- `fastas`: List of FASTA file paths.
+- `k`: Value of k (e.g., 9).
+- `output_dir`: (optional) Directory to write output files (default: current directory).
+- `filename`: (optional) Full file name for output (default: 
+    `"{Mycelia.normalized_current_date()}.{lowercase(string(bioalphabet))}{k}mers.jld2"`).
+
+# Output
+Saves a .jld2 file with the specified file name in `output_dir` if it does not already exist.
+"""
+function generate_and_save_kmer_counts(; 
+    alphabet, 
+    fastas, 
+    k, 
+    output_dir=pwd(),
+    filename=nothing
+)
+    if filename === nothing
+        filename = string(
+            Mycelia.normalized_current_date(), ".", 
+            lowercase(string(alphabet)), 
+            k, "mers.jld2"
+        )
+    end
+    kmer_result_file = joinpath(output_dir, filename)
+    if !isfile(kmer_result_file)
+        kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
+            fasta_list=fastas,
+            k=k,
+            alphabet=alphabet
+        )
+        Mycelia.save_kmer_results(
+            filename = kmer_result_file,
+            kmers = kmer_count_results.kmers,
+            counts = kmer_count_results.counts,
+            fasta_list = fastas,
+            k = k,
+            alphabet = alphabet
+        )
+    end
+    return kmer_result_file
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a sparse kmer counts table (SparseMatrixCSC) from a list of FASTA files using a 3-pass approach.
+Pass 1 (Parallel): Counts kmers per file and writes to temporary JLD2 files.
+Pass 2 (Serial): Aggregates unique kmers, max count, nnz per file, and rarefaction data from temp files.
+                 Generates and saves a k-mer rarefaction plot.
+Pass 3 (Parallel): Reads temporary counts again to construct the final sparse matrix.
+
+Optionally, a results filename can be provided to save/load the output. If the file exists and `force` is false,
+the result is loaded and returned. If `force` is true or the file does not exist, results are computed and saved.
+
+# Output Directory Behavior
+- All auxiliary output files (e.g., rarefaction data, plots) are written to a common output directory.
+- By default, this is:
+    - The value of `out_dir` if provided.
+    - Otherwise, the directory containing `result_file` (if provided and has a directory component).
+    - Otherwise, the current working directory (`pwd()`).
+- If you provide an absolute path for an output file (e.g. `rarefaction_data_filename`), that path is used directly.
+- If both `out_dir` and a relative filename are given, the file is written to `out_dir`.
+
+# Arguments
+- `fasta_list::AbstractVector{<:AbstractString}`: A list of paths to FASTA files.
+- `k::Integer`: The length of the kmer.
+- `alphabet::Symbol`: The alphabet type (:AA, :DNA, :RNA).
+- `temp_dir_parent::AbstractString`: Parent directory for creating the temporary working directory. Defaults to `Base.tempdir()`.
+- `count_element_type::Union{Type{<:Unsigned}, Nothing}`: Optional. Specifies the unsigned integer type for the counts. If `nothing` (default), the smallest `UInt` type capable of holding the maximum observed count is used.
+- `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. If a relative path, will be written to `out_dir`.
+- `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. If a relative path, will be written to `out_dir`.
+- `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
+- `result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
+- `out_dir::Union{Nothing, AbstractString}`: Optional. Output directory for auxiliary outputs. Defaults as described above.
+- `force::Bool`: If true, recompute and overwrite the output file even if it exists. Defaults to `false`.
+- `rarefaction_plot_kwargs...`: Keyword arguments to pass to `plot_kmer_rarefaction` for plot customization.
+
+# Returns
+- `NamedTuple{(:kmers, :counts, :rarefaction_data_path)}`:
+    - `kmers`: A sorted `Vector` of unique kmer objects.
+    - `counts`: A `SparseArrays.SparseMatrixCSC{V, Int}` storing kmer counts.
+    - `rarefaction_data_path`: Path to the saved TSV file with rarefaction data.
+
+# Raises
+- `ErrorException`: If input `fasta_list` is empty, alphabet is invalid, or required Kmer/counting functions are not found.
+"""
+function fasta_list_to_sparse_kmer_counts(;
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol,
+    temp_dir_parent::AbstractString = Base.tempdir(),
+    count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
+    rarefaction_data_filename::AbstractString = "$(normalized_current_datetime()).$(lowercase(string(alphabet)))$(k)mer_rarefaction.tsv",
+    rarefaction_plot_basename::AbstractString = replace(rarefaction_data_filename, ".tsv" => ""),
+    show_rarefaction_plot::Bool = true,
+    result_file::Union{Nothing, AbstractString} = nothing,
+    out_dir::Union{Nothing, AbstractString} = nothing,
+    force::Bool = false,
+    rarefaction_plot_kwargs...
+)
+
+    # --- Determine output directory logic ---
+    function _get_output_dir()
+        if !isnothing(out_dir)
+            return out_dir
+        elseif !isnothing(result_file) && !isempty(Base.Filesystem.dirname(result_file)) && Base.Filesystem.dirname(result_file) != "."
+            return Base.Filesystem.dirname(result_file)
+        else
+            return Base.pwd()
+        end
+    end
+    output_dir = _get_output_dir()
+    if !Base.Filesystem.isdir(output_dir)
+        Base.Filesystem.mkpath(output_dir)
+    end
+    Base.@info "Output directory for auxiliary files: $output_dir"
+
+    # Helper to prepend output_dir only if the path is relative
+    function _resolve_outpath(fname::AbstractString)
+        (Base.Filesystem.isabspath(fname) || isempty(fname)) ? fname : Base.Filesystem.joinpath(output_dir, fname)
+    end
+
+    # --- Results File Short Circuit ---
+    if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
+        Base.@info "result_file already exists at $result_file. Loading and returning results."
+        result = JLD2.load_object(result_file)
+        if all(haskey(result, key) for key in (:kmers, :counts, :rarefaction_data_path))
+            return result
+        else
+            Base.@warn "Loaded file does not have required structure; will recompute."
+        end
+    elseif !isnothing(result_file) && force && Base.Filesystem.isfile(result_file)
+        Base.@info "Force is true. Overwriting $result_file with recomputed results."
+    end
+
+    # --- 0. Input Validation and Setup ---
+    num_files = length(fasta_list)
+    if num_files == 0
+        error("Input fasta_list is empty.")
+    end
+
+    KMER_TYPE = if alphabet == :AA
+        isdefined(Kmers, :AAKmer) ? Kmers.AAKmer{k} : error("Kmers.AAKmer not found or Kmers.jl not loaded correctly.")
+    elseif alphabet == :DNA
+        isdefined(Kmers, :DNAKmer) ? Kmers.DNAKmer{k} : error("Kmers.DNAKmer not found or Kmers.jl not loaded correctly.")
+    elseif alphabet == :RNA
+        isdefined(Kmers, :RNAKmer) ? Kmers.RNAKmer{k} : error("Kmers.RNAKmer not found or Kmers.jl not loaded correctly.")
+    else
+        error("Invalid alphabet: $alphabet. Choose from :AA, :DNA, :RNA")
+    end
+
+    COUNT_FUNCTION = if alphabet == :DNA
+        func_name = :count_canonical_kmers
+        isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
+    else
+        func_name = :count_kmers
+        isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
+    end
+
+    temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="kmer_counts_3pass_")
+    Base.@info "Using temporary directory for intermediate counts: $temp_dir"
+    temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
+
+    # --- Pass 1: Count Kmers per file and Write to Temp Files (Parallel) ---
+    Base.@info "Pass 1: Counting $(KMER_TYPE) for $num_files files and writing temps using $(Base.Threads.nthreads()) threads..."
+    progress_pass1 = ProgressMeter.Progress(num_files; desc="Pass 1 (Counting & Writing Temps): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    progress_pass1_lock = Base.ReentrantLock()
+
+    Base.Threads.@threads for original_file_idx in 1:num_files
+        fasta_file = fasta_list[original_file_idx]
+        temp_filename = temp_file_paths[original_file_idx]
+        counts_dict = Dict{KMER_TYPE, Int}()
+        try
+            counts_dict = COUNT_FUNCTION(KMER_TYPE, fasta_file)
+            JLD2.save_object(temp_filename, counts_dict)
+        catch e
+            Base.println("Error processing file $fasta_file (idx $original_file_idx) during Pass 1: $e")
+            try
+                JLD2.save_object(temp_filename, Dict{KMER_TYPE, Int}())
+            catch save_err
+                Base.@error "Failed to save empty placeholder for errored file $fasta_file to $temp_filename: $save_err"
+            end
+        end
+        Base.lock(progress_pass1_lock) do
+            ProgressMeter.next!(progress_pass1)
+        end
+    end
+    ProgressMeter.finish!(progress_pass1)
+    Base.@info "Pass 1 finished."
+
+    # --- Pass 2: Aggregate Unique Kmers, Max Count, NNZ per file, Rarefaction Data (Serial) ---
+    Base.@info "Pass 2: Aggregating stats and rarefaction data from temporary files (serially)..."
+    all_kmers_set = Set{KMER_TYPE}()
+    max_observed_count = 0
+    total_non_zero_entries = 0
+    nnz_per_file = Vector{Int}(undef, num_files)
+    rarefaction_points = Vector{Tuple{Int, Int}}()
+
+    progress_pass2 = ProgressMeter.Progress(num_files; desc="Pass 2 (Aggregating Serially): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:yellow)
+
+    for i in 1:num_files
+        temp_filename = temp_file_paths[i]
+        current_file_nnz = 0
+        try
+            if Base.Filesystem.isfile(temp_filename)
+                counts_dict = JLD2.load_object(temp_filename)
+                current_file_nnz = length(counts_dict)
+                if current_file_nnz > 0
+                    for k in keys(counts_dict)
+                        push!(all_kmers_set, k)
+                    end
+                    current_file_max_val = maximum(values(counts_dict))
+                    if current_file_max_val > max_observed_count
+                        max_observed_count = current_file_max_val
+                    end
+                end
+            else
+                Base.@warn "Temporary file not found during Pass 2: $temp_filename. Assuming 0 counts for this file."
+            end
+        catch e
+            Base.@error "Error reading or processing temporary file $temp_filename (for original file $i) during Pass 2: $e. Assuming 0 counts for this file."
+        end
+        nnz_per_file[i] = current_file_nnz
+        total_non_zero_entries += current_file_nnz
+        push!(rarefaction_points, (i, length(all_kmers_set)))
+        ProgressMeter.next!(progress_pass2; showvalues = [(:unique_kmers, length(all_kmers_set))])
+    end
+    ProgressMeter.finish!(progress_pass2)
+    Base.@info "Pass 2 aggregation finished."
+
+    # --- Process and Save/Plot Rarefaction Data (after Pass 2) ---
+    rarefaction_data_path = _resolve_outpath(rarefaction_data_filename)
+    Base.@info "Saving rarefaction data to $rarefaction_data_path..."
+    try
+        data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
+        if !isempty(data_to_write)
+            DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
+        else
+            Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
+            DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
+        end
+    catch e
+        Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
+    end
+
+    rarefaction_plot_base = _resolve_outpath(rarefaction_plot_basename)
+    if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
+        Base.@info "Generating k-mer rarefaction plot..."
+        try
+            plot_kmer_rarefaction(
+                rarefaction_data_path;
+                output_dir = Base.Filesystem.dirname(rarefaction_plot_base),
+                output_basename = Base.Filesystem.basename(rarefaction_plot_base),
+                display_plot = show_rarefaction_plot,
+                rarefaction_plot_kwargs...
+            )
+        catch e
+            Base.@error "Failed to generate rarefaction plot: $e. Ensure Makie and a backend are correctly set up. Also ensure 'plot_kmer_rarefaction' function is loaded."
+        end
+    else
+        Base.@warn "Skipping rarefaction plot generation as data file is missing or empty."
+    end
+
+    # --- Determine Value Type, Prepare for Pass 3 ---
+    ValType = if isnothing(count_element_type)
+        if max_observed_count <= typemax(UInt8)
+            UInt8
+        elseif max_observed_count <= typemax(UInt16)
+            UInt16
+        elseif max_observed_count <= typemax(UInt32)
+            UInt32
+        else
+            UInt64
+        end
+    else
+        count_element_type
+    end
+    if !isnothing(count_element_type) && max_observed_count > typemax(count_element_type)
+        Base.@warn "User-specified count_element_type ($count_element_type) may be too small for the maximum observed count ($max_observed_count)."
+    end
+    Base.@info "Using element type $ValType for kmer counts. Max observed count: $max_observed_count."
+
+    if isempty(all_kmers_set) && total_non_zero_entries == 0
+        Base.@warn "No kmers found across any files, or errors prevented aggregation."
+        result = (; kmers=Vector{KMER_TYPE}(), counts=SparseArrays.spzeros(ValType, Int, 0, num_files), rarefaction_data_path=rarefaction_data_path)
+        if !isnothing(result_file)
+            JLD2.save_object(result_file, result)
+            Base.@info "Saved empty results to $result_file"
+        end
+        return result
+    end
+
+    sorted_kmers = sort(collect(all_kmers_set))
+    num_kmers = length(sorted_kmers)
+    empty!(all_kmers_set); all_kmers_set = nothing; GC.gc()
+
+    kmer_to_row_map = Dict{KMER_TYPE, Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    Base.@info "Found $num_kmers unique kmers. Total non-zero entries: $total_non_zero_entries."
+
+    # --- Pass 3: Prepare Sparse Matrix Data (In Parallel from Temp Files) ---
+    Base.@info "Pass 3: Preparing data for sparse matrix construction using $(Base.Threads.nthreads()) threads..."
+
+    actual_total_nnz_from_files = sum(nnz_per_file)
+    if total_non_zero_entries != actual_total_nnz_from_files
+        Base.@warn "Sum of nnz_per_file ($actual_total_nnz_from_files) differs from serially accumulated total_non_zero_entries ($total_non_zero_entries). Using sum of nnz_per_file."
+        total_non_zero_entries = actual_total_nnz_from_files
+    end
+
+    if total_non_zero_entries == 0 && num_kmers > 0
+        Base.@warn "Found $num_kmers unique kmers, but $total_non_zero_entries non-zero entries. Matrix will be empty of values."
+    elseif total_non_zero_entries == 0 && num_kmers == 0
+        Base.@warn "No k-mers and no non-zero entries. Resulting matrix will be empty."
+    end
+
+    row_indices = Vector{Int}(undef, total_non_zero_entries)
+    col_indices = Vector{Int}(undef, total_non_zero_entries)
+    values_vec = Vector{ValType}(undef, total_non_zero_entries)
+
+    write_offsets = Vector{Int}(undef, num_files + 1)
+    write_offsets[1] = 0
+    for i in 1:num_files
+        write_offsets[i+1] = write_offsets[i] + nnz_per_file[i]
+    end
+
+    progress_pass3 = ProgressMeter.Progress(num_files; desc="Pass 3 (Filling Sparse Data): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:blue)
+    progress_pass3_lock = Base.ReentrantLock()
+
+    Base.Threads.@threads for original_file_idx in 1:num_files
+        if nnz_per_file[original_file_idx] > 0
+            temp_filename = temp_file_paths[original_file_idx]
+            file_start_offset = write_offsets[original_file_idx]
+            current_entry_in_file = 0
+            try
+                if Base.Filesystem.isfile(temp_filename)
+                    counts_dict_pass3 = JLD2.load_object(temp_filename)
+                    for (kmer, count_val) in counts_dict_pass3
+                        if count_val > 0
+                            row_idx_val = Base.get(kmer_to_row_map, kmer, 0)
+                            if row_idx_val > 0
+                                global_idx = file_start_offset + current_entry_in_file + 1
+                                if global_idx <= total_non_zero_entries
+                                    row_indices[global_idx] = row_idx_val
+                                    col_indices[global_idx] = original_file_idx
+                                    values_vec[global_idx] = ValType(count_val)
+                                    current_entry_in_file += 1
+                                else
+                                    Base.@error "Internal error: Exceeded sparse matrix capacity (total_non_zero_entries = $total_non_zero_entries) for file $original_file_idx. Global Idx: $global_idx. Kmer: $kmer."
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    if current_entry_in_file != nnz_per_file[original_file_idx]
+                        Base.@warn "Mismatch in NNZ for file $original_file_idx ($(fasta_list[original_file_idx])) during Pass 3. Expected $(nnz_per_file[original_file_idx]), wrote $current_entry_in_file."
+                    end
+                else
+                    Base.@warn "Temp file $temp_filename (for original file $original_file_idx) not found in Pass 3, though nnz_per_file was $(nnz_per_file[original_file_idx])."
+                end
+            catch e
+                Base.@error "Error reading or processing temporary file $temp_filename (for original file $original_file_idx) in Pass 3: $e."
+            end
+        end
+        Base.lock(progress_pass3_lock) do
+            ProgressMeter.next!(progress_pass3)
+        end
+    end
+    ProgressMeter.finish!(progress_pass3)
+    Base.@info "Pass 3 finished."
+
+    Base.@info "Constructing sparse matrix ($num_kmers rows, $num_files columns, $total_non_zero_entries non-zero entries)..."
+
+    kmer_counts_sparse_matrix = if total_non_zero_entries > 0 && num_kmers > 0
+        SparseArrays.sparse(
+            row_indices[1:total_non_zero_entries],
+            col_indices[1:total_non_zero_entries],
+            values_vec[1:total_non_zero_entries],
+            num_kmers,
+            num_files
+        )
+    else
+        SparseArrays.spzeros(ValType, Int, num_kmers, num_files)
+    end
+
+    Base.@info "Done. Returning sorted kmer list, sparse counts matrix, and rarefaction data path."
+    final_result = (; kmers=sorted_kmers, counts=kmer_counts_sparse_matrix, rarefaction_data_path=rarefaction_data_path)
+
+    try
+        Base.Filesystem.rm(temp_dir; recursive=true, force=true)
+        Base.@info "Successfully removed temporary directory: $temp_dir"
+    catch e
+        Base.@warn "Could not remove temporary directory $temp_dir: $e"
+    end
+
+    # Save result if requested
+    if !isnothing(result_file)
+        try
+            JLD2.save_object(result_file, final_result)
+            Base.@info "Saved kmer count results to $result_file"
+        catch e
+            Base.@error "Failed to save kmer count results to $result_file: $e"
+        end
+    end
+
+    return final_result
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the maximum number of possible canonical k-mers for a given alphabet.
+
+# Arguments
+- `k::Integer`: Length of k-mer
+- `ALPHABET::Vector{Char}`: Character set (nucleotides or amino acids)
+
+# Returns
+- `Int`: Maximum number of possible canonical k-mers
+
+# Details
+- For amino acids (AA_ALPHABET): returns total possible k-mers
+- For nucleotides: returns half of total possible k-mers (canonical form)
+- Requires odd k-mer length for nucleotide alphabets
+"""
+function determine_max_canonical_kmers(k, ALPHABET)
+    max_possible_kmers = determine_max_possible_kmers(k, ALPHABET)
+    if ALPHABET == AA_ALPHABET
+        return max_possible_kmers
+    else
+        @assert isodd(k) "this calculation is not valid for even length kmers"
+        return Int(max_possible_kmers / 2)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the total number of possible unique k-mers that can be generated from a given alphabet.
+
+# Arguments
+- `k`: Length of k-mers to consider
+- `ALPHABET`: Vector containing the allowed characters/symbols
+
+# Returns
+- Integer representing the maximum number of possible unique k-mers (|Σ|ᵏ)
+"""
+function determine_max_possible_kmers(k, ALPHABET)
+    return length(ALPHABET)^k
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Canonicalizes the k-mer counts in the given dictionary.
+
+This function iterates over the provided dictionary `kmer_counts`, which maps k-mers to their respective counts. For each k-mer that is not in its canonical form, it converts the k-mer to its canonical form and updates the count in the dictionary accordingly. If the canonical form of the k-mer already exists in the dictionary, their counts are summed. The original non-canonical k-mer is then removed from the dictionary.
+
+# Arguments
+- `kmer_counts::Dict{BioSequences.Kmer, Int}`: A dictionary where keys are k-mers and values are their counts.
+
+# Returns
+- The input dictionary `kmer_counts` with all k-mers in their canonical form, sorted by k-mers.
+"""
+function canonicalize_kmer_counts!(kmer_counts)
+    for (kmer, count) in kmer_counts
+        if !BioSequences.iscanonical(kmer)
+            canonical_kmer = BioSequences.canonical(kmer)
+            if haskey(kmer_counts, canonical_kmer)
+                kmer_counts[canonical_kmer] += count
+            else
+                kmer_counts[canonical_kmer] = count
+            end
+            delete!(kmer_counts, kmer)
+        end
+    end
+    return sort!(kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize k-mer counts into a canonical form by creating a non-mutating copy.
+
+# Arguments
+- `kmer_counts`: Dictionary or collection of k-mer count data
+
+# Returns
+- A new normalized k-mer count collection
+"""
+function canonicalize_kmer_counts(kmer_counts)
+    return canonicalize_kmer_counts!(copy(kmer_counts))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical k-mers in biological sequences. A canonical k-mer is the lexicographically 
+smaller of a DNA sequence and its reverse complement, ensuring strand-independent counting.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer size and structure
+- `sequences`: Iterator of biological sequences to analyze
+
+# Returns
+- `Dict{KMER_TYPE,Int}`: Dictionary mapping canonical k-mers to their counts
+"""
+function count_canonical_kmers(::Type{KMER_TYPE}, sequences) where KMER_TYPE
+    kmer_counts = count_kmers(KMER_TYPE, sequences)
+    return canonicalize_kmer_counts!(kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of each k-mer in a DNA sequence.
+
+# Arguments
+- `::Type{Kmers.Kmer{A,K}}`: K-mer type with alphabet A and length K
+- `sequence::BioSequences.LongSequence`: Input DNA sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+
+# Type Parameters
+- `A <: BioSequences.DNAAlphabet`: DNA alphabet type
+- `K`: Length of k-mers
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.DNAAlphabet, K}
+    # return sort(StatsBase.countmap(Kmers.FwDNAMers{K}(sequence)))
+    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousDNAMers{K}(sequence)]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of each k-mer in an RNA sequence.
+
+# Arguments
+- `Kmer`: Type parameter specifying the k-mer length K and RNA alphabet
+- `sequence`: Input RNA sequence to analyze
+
+# Returns
+- `Dict{Kmers.Kmer, Int}`: Sorted dictionary mapping each k-mer to its frequency count
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
+    # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
+    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousRNAMers{K}(sequence)]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of amino acid k-mers in a biological sequence.
+
+# Arguments
+- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
+- `sequence`: Input biological sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+"""
+function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.AminoAcidAlphabet, K}
+    return sort(StatsBase.countmap(Kmers.FwAAMers{K}(sequence)))
+end
+
+# TODO add a way to handle ambiguity or not
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count the frequency of amino acid k-mers in a biological sequence.
+
+# Arguments
+- `Kmers.Kmer{A,K}`: Type parameter specifying amino acid alphabet (A) and k-mer length (K)
+- `sequence`: Input biological sequence to analyze
+
+# Returns
+A sorted dictionary mapping each k-mer to its frequency count in the sequence.
+"""
+function count_kmers(::Type{KMER_TYPE}, record::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    # TODO: need to figure out how to infer the sequence type
+    if eltype(KMER_TYPE) == BioSymbols.DNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongDNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.RNA
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongRNA{4}, record))
+    elseif eltype(KMER_TYPE) == BioSymbols.AminoAcid
+        return count_kmers(KMER_TYPE, FASTX.sequence(BioSequences.LongAA, record))
+    else
+        @error KMER_TYPE
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers across multiple sequence records and return a sorted frequency table.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{3}` for 3-mers)
+- `records`: Vector of FASTA/FASTQ records to analyze
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Sorted dictionary mapping k-mers to their frequencies
+"""
+function count_kmers(::Type{KMER_TYPE}, records::AbstractVector{T}) where {KMER_TYPE, T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    kmer_counts = count_kmers(KMER_TYPE, first(records))
+    for record in records[2:end]
+        _kmer_counts = count_kmers(KMER_TYPE, record)
+        merge!(+, kmer_counts, _kmer_counts)
+    end
+    sort!(kmer_counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Counts k-mer occurrences in biological sequences from a FASTA/FASTQ reader.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length and encoding (e.g., `DNAKmer{4}` for 4-mers)
+- `sequences`: A FASTA or FASTQ reader containing the biological sequences to analyze
+
+# Returns
+A dictionary mapping k-mers to their counts in the input sequences
+"""
+function count_kmers(::Type{KMER_TYPE}, sequences::R) where {KMER_TYPE, R <: Union{FASTX.FASTA.Reader, FASTX.FASTQ.Reader}}
+    return count_kmers(KMER_TYPE, collect(sequences))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers across multiple FASTA/FASTQ files and merge the results.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer length (e.g., `DNAKmer{4}` for 4-mers)
+- `fastx_files`: Vector of paths to FASTA/FASTQ files
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Dictionary mapping k-mers to their total counts across all files
+"""
+function count_kmers(::Type{KMER_TYPE}, fastx_files::AbstractVector{T}) where {KMER_TYPE, T <: AbstractString}
+    kmer_counts = count_kmers(KMER_TYPE, first(fastx_files))
+    for file in fastx_files[2:end]
+        _kmer_counts = count_kmers(KMER_TYPE, file)
+        kmer_counts = merge!(+, kmer_counts, _kmer_counts)
+    end
+    return kmer_counts
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count k-mers in a FASTA/FASTQ file and return their frequencies.
+
+# Arguments
+- `KMER_TYPE`: Type parameter specifying the k-mer type (e.g., `DNAKmer{K}`)
+- `fastx_file`: Path to input FASTA/FASTQ file
+
+# Returns
+- `Dict{KMER_TYPE, Int}`: Dictionary mapping each k-mer to its frequency
+"""
+function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_TYPE}
+    fastx_io = open_fastx(fastx_file)
+    kmer_counts = count_kmers(KMER_TYPE, fastx_io)
+    close(fastx_io)
+    return kmer_counts
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a dense k-mer counts table for a set of FASTA files, with disk-backed temporary storage, 
+custom element type, robust error handling, and optional output file caching.
+"""
+function fasta_list_to_dense_kmer_counts(;
+    fasta_list::AbstractVector{<:AbstractString},
+    k::Integer,
+    alphabet::Symbol,
+    temp_dir_parent::AbstractString = Base.tempdir(),
+    count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
+    result_file::Union{Nothing, AbstractString} = nothing,
+    force::Bool = false,
+    cleanup_temp::Bool = true
+)
+
+    num_files = length(fasta_list)
+    if num_files == 0
+        error("Input fasta_list is empty.")
+    end
+    if !(isa(k, Integer) && 0 < k <= 9)
+        error("k must be a positive integer <= 9. Use sparse counts for larger k")
+    end
+    if !(alphabet in (:AA, :DNA, :RNA))
+        error("alphabet must be :AA, :DNA, or :RNA")
+    end
+    if any(f -> !Base.Filesystem.isfile(f), fasta_list)
+        missing_files = [f for f in fasta_list if !Base.Filesystem.isfile(f)]
+        error("Missing FASTA files: $(join(missing_files, ", ")).")
+    end
+
+    # Output file short-circuit
+    if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
+        Base.@info "result_file exists at $result_file. Loading and returning."
+        return JLD2.load_object(result_file)
+    end
+
+    # KMER TYPE/COUNT/GENERATOR setup
+    if alphabet == :AA
+        KMER_TYPE = Kmers.AAKmer{k}
+        ALPHABET_SEQ = Mycelia.AA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    elseif alphabet == :DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        ALPHABET_SEQ = Mycelia.DNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_canonical_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_canonical_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    elseif alphabet == :RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        ALPHABET_SEQ = Mycelia.RNA_ALPHABET
+        COUNT_FUNCTION = Mycelia.count_kmers
+        GENERATE_KMERS = Mycelia.generate_all_possible_kmers
+        sorted_kmers = sort(GENERATE_KMERS(k, ALPHABET_SEQ))
+    end
+
+    num_kmers = length(sorted_kmers)
+    Base.@info "Counting $num_kmers $(KMER_TYPE) across $num_files files..."
+
+    # Temp files
+    temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="dense_kmer_counts_")
+    temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
+
+    # Pass 1: count kmers per file, record max, save to temp
+    progress1 = ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
+    lock = Base.ReentrantLock()
+    error_log = Vector{Tuple{Int, String}}()
+    successful_indices = Vector{Int}()
+    max_observed_count_ref = Ref{Int}(0)
+
+    Threads.@threads for idx in 1:num_files
+        fasta_file = fasta_list[idx]
+        temp_file = temp_file_paths[idx]
+        local_max = 0
+        try
+            kmer_counts = COUNT_FUNCTION(KMER_TYPE, fasta_file)
+            JLD2.save_object(temp_file, kmer_counts)
+            if !isempty(kmer_counts)
+                local_max = maximum(Base.values(kmer_counts))
+            end
+            Base.lock(lock)
+            try
+                push!(successful_indices, idx)
+                if local_max > max_observed_count_ref[]
+                    max_observed_count_ref[] = local_max
+                end
+            finally
+                Base.unlock(lock)
+            end
+        catch e
+            Base.lock(lock)
+            try
+                push!(error_log, (idx, string(e)))
+            finally
+                Base.unlock(lock)
+            end
+            try JLD2.save_object(temp_file, Dict{KMER_TYPE, Int}()) catch end
+        end
+        Base.lock(lock)
+        try
+            ProgressMeter.next!(progress1)
+        finally
+            Base.unlock(lock)
+        end
+    end
+    ProgressMeter.finish!(progress1)
+
+    sorted_successful_indices = sort(successful_indices)
+    successful_fasta_list = fasta_list[sorted_successful_indices]
+
+    num_successful_files = length(successful_fasta_list)
+    percent_successful = round((num_successful_files / num_files) * 100, digits=3)
+    Base.@info "$num_successful_files of $num_files ($(percent_successful)%) counted successfully"
+
+    max_observed_count = max_observed_count_ref[]
+
+    # Determine element type for counts
+    if isnothing(count_element_type)
+        ValType = max_observed_count <= typemax(UInt8) ? UInt8 :
+                  max_observed_count <= typemax(UInt16) ? UInt16 :
+                  max_observed_count <= typemax(UInt32) ? UInt32 : UInt64
+    else
+        ValType = count_element_type
+        if max_observed_count > typemax(ValType)
+            Base.@warn "User-specified count_element_type $ValType may be too small for max observed count $max_observed_count"
+        end
+    end
+    Base.@info "Using $ValType for kmer counts"
+
+    # Build kmer index for matrix rows
+    kmer_index = Dict{KMER_TYPE,Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    kmer_counts_matrix = zeros(ValType, num_kmers, num_successful_files)
+
+    # Pass 2: fill matrix (multi-threaded, only for successful files)
+    progress2 = ProgressMeter.Progress(num_successful_files; desc="Filling matrix: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:green)
+    Threads.@threads for col in 1:num_successful_files
+        orig_idx = sorted_successful_indices[col]
+        try
+            kmer_counts = JLD2.load_object(temp_file_paths[orig_idx])
+            for (kmer, count) in kmer_counts
+                row = kmer_index[kmer]
+                kmer_counts_matrix[row, col] = ValType(count)
+            end
+        catch
+            # Optionally log error
+        end
+        Base.lock(lock)
+        try
+            ProgressMeter.next!(progress2)
+        finally
+            Base.unlock(lock)
+        end
+    end
+    ProgressMeter.finish!(progress2)
+
+    if cleanup_temp
+        try Base.Filesystem.rm(temp_dir; recursive=true, force=true) catch end
+    end
+
+    result = (;kmers=sorted_kmers, counts=kmer_counts_matrix, successful_fasta_list=successful_fasta_list, error_log=error_log)
+
+    if !isnothing(result_file)
+        try JLD2.save_object(result_file, result) catch end
+    end
+
+    return result
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a collection of biological sequences into a dense k-mer count matrix.
+
+# Arguments
+- `biosequences`: Collection of DNA, RNA, or amino acid sequences (BioSequence types)
+- `k::Integer`: Length of k-mers to count (must be ≤ 13)
+
+# Returns
+Named tuple containing:
+- `sorted_kmers`: Vector of all possible k-mers in sorted order
+- `kmer_counts_matrix`: Dense matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA sequences, counts canonical k-mers (both strands)
+- For RNA and protein sequences, counts exact k-mers
+- Uses parallel processing with threads
+"""
+function biosequences_to_dense_counts_table(;biosequences, k)
+    k >= 11 && error("use sparse counts to count k >= 11")    
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = BioSequences.AminoAcidAlphabet
+        sorted_kmers = sort(generate_all_possible_kmers(k, AA_ALPHABET))
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = BioSequences.DNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_canonical_kmers(k, DNA_ALPHABET))
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = BioSequences.RNAAlphabet{2}
+        sorted_kmers = sort(generate_all_possible_kmers(k, RNA_ALPHABET))
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+    end
+    kmer_counts_matrix = zeros(length(sorted_kmers), length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for (entity_index, biosequence) in collect(enumerate(biosequences))
+        # Acquire the lock before updating the progress
+        lock(reenrantlock) do
+            # Update the progress meter
+            ProgressMeter.next!(progress)
+        end
+        entity_mer_counts = COUNT(Kmers.Kmer{KMER_TYPE, k}, biosequence)
+        for (i, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[i, entity_index] = get(entity_mer_counts, kmer, 0)
+        end
+    end
+    return (;sorted_kmers, kmer_counts_matrix)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a collection of biological sequences into a k-mer count matrix.
+
+# Arguments
+- `biosequences`: Vector of biological sequences (DNA, RNA, or Amino Acids)
+- `k`: Length of k-mers to count
+
+# Returns
+Named tuple with:
+- `sorted_kmers`: Vector of all unique k-mers found, lexicographically sorted
+- `kmer_counts_matrix`: Sparse matrix where rows are k-mers and columns are sequences
+
+# Details
+- For DNA sequences, counts canonical k-mers (both strands)
+- Uses parallel processing with Thread-safe progress tracking
+- Memory efficient sparse matrix representation
+- Supports DNA, RNA and Amino Acid sequences
+"""
+function biosequences_to_counts_table(;biosequences, k)
+    if eltype(first(biosequences)) == BioSymbols.AminoAcid
+        KMER_TYPE = Kmers.AAKmer{k}
+        COUNT = count_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.DNA
+        KMER_TYPE = Kmers.DNAKmer{k}
+        COUNT = count_canonical_kmers
+    elseif eltype(first(biosequences)) == BioSymbols.RNA
+        KMER_TYPE = Kmers.RNAKmer{k}
+        COUNT = count_kmers
+    else
+        error("invalid alphabet, please choose from :AA, :DNA, :RNA")
+    end
+    
+    kmer_counts = Vector{OrderedCollections.OrderedDict{KMER_TYPE, Int}}(undef, length(biosequences))
+    progress = ProgressMeter.Progress(length(biosequences))
+    reenrantlock = ReentrantLock()
+    Threads.@threads for i in eachindex(biosequences)
+        lock(reenrantlock) do
+            ProgressMeter.next!(progress)
+        end
+        kmer_counts[i] = COUNT(KMER_TYPE, biosequences[i])
+    end
+    sorted_kmers = sort(collect(reduce(union, keys.(kmer_counts))))
+    kmer_counts_matrix = SparseArrays.spzeros(Int, length(sorted_kmers), length(biosequences))
+    @info "populating sparse counts matrix..."
+    for (col, biosequence) in enumerate(biosequences)
+        for (row, kmer) in enumerate(sorted_kmers)
+            kmer_counts_matrix[row, col] = get(kmer_counts[col], kmer, 0)
+        end
+    end
+    return (;sorted_kmers, kmer_counts_matrix)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a dictionary of k-mer counts to a fixed-length numeric vector based on a predefined mapping.
+
+# Arguments
+- `kmer_to_index_map`: Dictionary mapping k-mer sequences to their corresponding vector indices
+- `kmer_counts`: Dictionary containing k-mer sequences and their occurrence counts
+
+# Returns
+- A vector where each position corresponds to a k-mer count, with zeros for absent k-mers
+"""
+function kmer_counts_dict_to_vector(kmer_to_index_map, kmer_counts)
+    kmer_counts_vector = zeros(length(kmer_to_index_map))
+    for (kmer, count) in kmer_counts
+        kmer_index = kmer_to_index_map[kmer]
+        kmer_counts_vector[kmer_index] = count
+    end
+    return kmer_counts_vector
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Generate a sorted list of all possible k-mers for a given alphabet.
+
+# Arguments
+- `k::Integer`: Length of k-mers to generate
+- `alphabet`: Collection of symbols (DNA, RNA, or amino acids) from BioSymbols
+
+# Returns
+- Sorted Vector of Kmers of the appropriate type (DNA, RNA, or amino acid)
+"""
+function generate_all_possible_kmers(k, alphabet)
+    kmer_iterator = Iterators.product([alphabet for i in 1:k]...)
+    kmer_vectors = collect.(vec(collect(kmer_iterator)))
+    if eltype(alphabet) == BioSymbols.AminoAcid
+        kmers = [Kmers.AAKmer{k}(BioSequences.LongAA(kv)) for kv in kmer_vectors]
+    elseif eltype(alphabet) == BioSymbols.DNA
+        kmers = [Kmers.DNAKmer{k}(BioSequences.LongDNA{2}(kv)) for kv in kmer_vectors]
+    elseif eltype(alphabet) == BioSymbols.RNA
+        kmers = [Kmers.RNAKmer{k}(BioSequences.LongRNA{2}(kv)) for kv in kmer_vectors]
+    else
+        error()
+    end
+    return sort!(kmers)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create distance matrix from a column-major counts matrix (features as rows and entities as columns)
+where distance is a proportional to total feature count magnitude (size) and cosine similarity (relative frequency)
+
+Generate all possible canonical k-mers of length `k` from the given `alphabet`.
+
+For DNA/RNA sequences, returns unique canonical k-mers where each k-mer is represented by
+the lexicographically smaller of itself and its reverse complement.
+For amino acid sequences, returns all possible k-mers without canonicalization.
+
+# Arguments
+- `k`: Length of k-mers to generate
+- `alphabet`: Vector of BioSymbols (DNA, RNA or AminoAcid)
+
+# Returns
+- Vector of k-mers, canonicalized for DNA/RNA alphabets
+"""
+function generate_all_possible_canonical_kmers(k, alphabet)
+    kmers = generate_all_possible_kmers(k, alphabet)
+    if eltype(alphabet) == BioSymbols.AminoAcid
+        return kmers
+    elseif eltype(alphabet) in (BioSymbols.DNA, BioSymbols.RNA)
+        return unique!(BioSequences.canonical.(kmers))
+    else
+        error()
+    end
+end
+
+# CSV is too memory inefficient, the others too slow :(
+# # using uCSV
+# # k=11
+# # 3.444974 seconds (24.58 M allocations: 1.374 GiB, 34.65% gc time, 16.90% compilation time)
+# # k=13
+# # 362.285866 seconds (357.11 M allocations: 20.550 GiB, 91.60% gc time)
+
+# # using DelimitedFiles.readdlm
+# # k=11
+# # 2.386620 seconds (16.11 M allocations: 632.732 MiB, 34.16% gc time, 24.25% compilation time)
+# # k=13
+# # 82.888552 seconds (227.49 M allocations: 8.766 GiB, 82.01% gc time)
+
+# # CSV
+# # k=11
+# # 12.328422 seconds (7.62 M allocations: 732.639 MiB, 19091.67% compilation time: <1% of which was recompilation)
+# # k=13
+# # 37.098948 seconds (89.38 k allocations: 2.354 GiB, 93.56% gc time)
+
+# function parse_jellyfish_counts(tabular_counts)
+#     # load in the data
+#     @assert occursin(r"\.gz$", tabular_counts) "this expects gzipped jellyfish tabular counts"
+#     io = CodecZlib.GzipDecompressorStream(open(tabular_counts))
+#     canonical_kmer_counts_table = DataFrames.DataFrame(CSV.File(io; delim='\t', header=false))
+#     DataFrames.rename!(canonical_kmer_counts_table, [:Column1 => :kmer, :Column2 => :count])
+    
+#     # recode the kmers from strings to fixed sized kmer types
+#     unique_kmer_lengths = unique(length.(canonical_kmer_counts_table[!, "kmer"]))
+#     @assert length(unique_kmer_lengths) == 1
+#     k = first(unique_kmer_lengths)
+#     canonical_kmer_counts_table[!, "kmer"] = Kmers.DNAKmer{k}.(canonical_kmer_counts_table[!, "kmer"])
+    
+#     return canonical_kmer_counts_table
+# end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the closest prime number to the given integer `n`.
+
+Returns the nearest prime number to `n`. If two prime numbers are equally distant 
+from `n`, returns the smaller one.
+
+# Arguments
+- `n::Int`: The input integer to find the nearest prime for
+
+# Returns
+- `Int`: The closest prime number to `n`
+"""
+function nearest_prime(n::Int)
+    if n < 2
+        return 2
+    end
+    next_p = Primes.nextprime(n)
+    prev_p = Primes.prevprime(n)
+    if n - prev_p <= next_p - n
+        return prev_p
+    else
+        return next_p
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a sequence of Fibonacci numbers strictly less than the input value.
+
+# Arguments
+- `n::Int`: Upper bound (exclusive) for the Fibonacci sequence
+
+# Returns
+- `Vector{Int}`: Array containing Fibonacci numbers less than n
+"""
+function fibonacci_numbers_less_than(n::Int)
+    if n <= 0
+        return []
+    elseif n == 1
+        return [0]
+    else
+        fib = [0, 1]
+        next_fib = fib[end] + fib[end-1]
+        while next_fib < n
+            push!(fib, next_fib)
+            next_fib = fib[end] + fib[end-1]
+        end
+        return fib
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generates a specialized sequence of prime numbers combining:
+- Odd primes up to 23 (flip_point)
+- Primes nearest to Fibonacci numbers above 23 up to max
+
+# Arguments
+- `min::Int=0`: Lower bound for the sequence
+- `max::Int=10_000`: Upper bound for the sequence
+
+# Returns
+Vector of Int containing the specialized prime sequence
+"""
+function ks(;min=0, max=10_000)
+    # flip from all odd primes to only nearest to fibonnaci primes
+    flip_point = 23
+    # skip 19 because it is so similar to 17
+    results = vcat(
+        filter(x -> x != 19, filter(isodd, Primes.primes(0, flip_point))),
+        filter(x -> x > flip_point, nearest_prime.(fibonacci_numbers_less_than(max*10)))
+    )
+    return filter(x -> min <= x <= max, results)
+end
+
+# function observed_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
+#     kmer_count_dict = BioSequences.kmercounts(seq, k)
+#     total_kmers = sum(values(kmer_count_dict))
+#     return Dict(kmer => count / total_kmers for (kmer, count) in kmer_count_dict)
+# end
