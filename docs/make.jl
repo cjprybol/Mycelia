@@ -14,7 +14,8 @@ mkpath(GENERATED_DOCS_DIR)
 Literate.markdown(
     joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"),
     GENERATED_DOCS_DIR;
-    credit = false
+    credit = false,
+    flavor = Literate.DocumenterFlavor()
 )
 
 # # --- ORIGINAL: Process all .jl files in test/ (reactivate later) ---
@@ -24,7 +25,7 @@ Literate.markdown(
 #         input_file = joinpath(root, file)
 #         output_dir = joinpath(GENERATED_DOCS_DIR, relative_path)
 #         mkpath(output_dir)
-#         Literate.markdown(input_file, output_dir, credit = false)
+#         Literate.markdown(input_file, output_dir, credit = false, flavor = Literate.DocumenterFlavor())
 #     end
 # end
 

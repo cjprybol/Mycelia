@@ -10,13 +10,6 @@ from a given Jaccard Index and k-mer size.
 
 # Returns
 - `Float64`: The estimated Mash distance `D`. The estimated ANI would be `1.0 - D`.
-
-# Example
-```jldoctest
-julia> # Example: Two genomes with a Jaccard index of 0.2, using k=21
-julia> mash_distance_from_jaccard(0.2, 21)
-0.08053896775831388
-```
 """
 function mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
     # --- Input Validation ---
@@ -256,55 +249,6 @@ function pairwise_minimap_fasta_comparison(;reference_fasta, query_fasta)
         )
     end
     return results
-end
-
-"""
-    mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
-
-Calculates the Mash distance (an estimate of Average Nucleotide Identity)
-from a given Jaccard Index and k-mer size.
-
-# Arguments
-- `jaccard_index::Float64`: The Jaccard similarity between the two k-mer sets. Must be between 0.0 and 1.0.
-- `kmer_size::Int`: The length of k-mers used to calculate the Jaccard index.
-
-# Returns
-- `Float64`: The estimated Mash distance `D`. The estimated ANI would be `1.0 - D`.
-
-# Example
-```jldoctest
-julia> # Example: Two genomes with a Jaccard index of 0.2, using k=21
-julia> mash_distance_from_jaccard(0.2, 21)
-0.08053896775831388
-```
-"""
-function mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
-    # --- Input Validation ---
-    if !(0.0 <= jaccard_index <= 1.0)
-    error("Jaccard index must be between 0.0 and 1.0")
-    end
-    if kmer_size <= 0
-    error("k-mer size must be a positive integer")
-    end
-
-    # --- Edge Case Handling ---
-    # If Jaccard is 0, the genomes share no k-mers. The distance is effectively infinite,
-    # conventionally represented as 1.0 (100% divergent). The formula would fail due to log(0).
-    if jaccard_index == 0.0
-        return 1.0
-    end
-
-    # If Jaccard is 1, the genomes are identical. Distance is 0.
-    if jaccard_index == 1.0
-        return 0.0
-    end
-
-    # --- Core Mash Formula ---
-    # D = - (1/k) * ln(2J / (1+J))
-    # In Julia, log() is the natural logarithm (ln).
-    mash_dist = - (1 / kmer_size) * log(2 * jaccard_index / (1 + jaccard_index))
-
-    return mash_dist
 end
 
 """
