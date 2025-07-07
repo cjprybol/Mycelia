@@ -94,13 +94,13 @@ function scg_sbatch(;
         mail_user::String,
         mail_type::String="ALL",
         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
-        partition::String="interactive",
+        partition::String="nih_s10",
         account::String,
         nodes::Int=1,
         ntasks::Int=1,
-        time::String="1-00:00:00",
+        time::String="7-00:00:00",
         cpus_per_task::Int=16,
-        mem_gb::Int=cpus_per_task * 8,
+        mem_gb::Int=96,
         cmd::String
     )
     submission = 
