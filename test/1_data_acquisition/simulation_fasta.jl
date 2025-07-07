@@ -1,29 +1,43 @@
 # FASTA simulation and acquisition tests
+
+import Pkg
+Pkg.activate("..")
+using Test
+import Mycelia
+import FASTX
+import Random
+
 const SEED = 42
-const phiX174_accession_id = "NC_001422.1"
-const phiX174_assembly_id = "GCF_000819615.1"
 
 @testset "FASTA simulation and acquisition" begin
-    @testset "random_fasta_record" begin
-        # Test correct sequence length and alphabet for DNA, RNA, AA
-        # Example: dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=42, L=10)
-        # @test typeof(dna_record) == FASTX.FASTA.Record
-        # @test length(FASTX.sequence(dna_record)) == 10
-    end
-    @testset "download_genome_by_accession" begin
-        # Test file download and format
-        # Example: result = Mycelia.download_genome_by_accession(accession="NC_001422.1")
-        # @test isfile(result)
-        # @test result endswith ".fna.gz"
-    end
-    @testset "ncbi_genome_download_accession" begin
-        # Test all expected files are present
-        # Example: result = Mycelia.ncbi_genome_download_accession(accession="GCF_000819615.1", include_string="genome,protein")
-        # @test isfile(result.genome)
-        # @test isfile(result.protein)
-    end
     @testset "get_base_extension" begin
-        # @test Mycelia.get_base_extension("foo.fna.gz") == ".fna.gz"
+        @test Mycelia.get_base_extension("foo.fasta.gz") == ".fasta"
+        @test Mycelia.get_base_extension("foo.fna.gz") == ".fna"
+        @test Mycelia.get_base_extension("foo.faa.gz") == ".faa"
+        @test Mycelia.get_base_extension("foo.frn.gz") == ".frn"
+    
+        @test Mycelia.get_base_extension("foo.fasta") == ".fasta"
+        @test Mycelia.get_base_extension("foo.fna") == ".fna"
+        @test Mycelia.get_base_extension("foo.faa") == ".faa"
+        @test Mycelia.get_base_extension("foo.frn") == ".frn"
+    end
+    
+    @testset "random_fasta_record" begin
+        for molecule in [:DNA, :RNA, :AA]
+            a = Mycelia.random_fasta_record(moltype=molecule, seed=42, L=10)
+            b = Mycelia.random_fasta_record(moltype=molecule, seed=42, L=10)
+            @test typeof(a) == typeof(b) == FASTX.FASTA.Record
+            @test length(FASTX.sequence(a)) == 10
+            @test FASTX.sequence(a) == FASTX.sequence(b)
+            @test FASTX.identifier(a) != FASTX.identifier(b)
+            if molecule == :DNA
+                @test FASTX.sequence(a) == "CCGCCGCTCA"
+            elseif molecule == :RNA
+                @test FASTX.sequence(a) == "CCGCCGCUCA"
+            elseif molecule == :AA
+                @test FASTX.sequence(a) == "VATAGWWITI"
+            end
+        end
     end
     @testset "dna record" begin
         dna_record = Mycelia.random_fasta_record(moltype=:DNA, seed=SEED, L = 10)
@@ -47,23 +61,5 @@ const phiX174_assembly_id = "GCF_000819615.1"
         @test Mycelia.get_base_extension(phiX174_assembly_dataset.genome) == ".fna"
         @test Mycelia.get_base_extension(phiX174_assembly_dataset.protein) == ".faa"
         rm(phiX174_assembly_id, recursive=true)
-    end
-    @testset "bacteria-like" begin
-        @test 1 + 1 == 2
-    end
-    @testset "protist-like" begin
-        @test 1 + 1 == 2
-    end
-    @testset "fungi-like" begin
-        @test 1 + 1 == 2
-    end
-    @testset "plant-like" begin
-        @test 1 + 1 == 2
-    end
-    @testset "animal-like" begin
-        @test 1 + 1 == 2
-    end
-    @testset "microbiome" begin
-        @test 1 + 1 == 2
     end
 end

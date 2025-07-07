@@ -1,4 +1,5 @@
 @testset "download_genome_by_accession" begin
+    # const phiX174_accession_id = "NC_001422.1"
     result = Mycelia.download_genome_by_accession(accession="NC_001422.1")
     @test isfile(result)
     @test endswith(result, ".fna.gz")
@@ -7,6 +8,7 @@
 end
 
 @testset "ncbi_genome_download_accession" begin
+    # const phiX174_assembly_id = "GCF_000819615.1"
     accession = "GCF_000819615.1"
     result = Mycelia.ncbi_genome_download_accession(accession=accession)
     @test isdir(result.directory)
@@ -72,34 +74,4 @@ end
     @test basename(fasterq_result.unpaired_reads) == "$(SRR_identifier).fastq.gz"
     @test isfile(fasterq_result.unpaired_reads) && filesize(fasterq_result.unpaired_reads) > 0
     rm(SRR_identifier, recursive=true)
-end
-
-@testset "get_base_extension" begin
-    @test Mycelia.get_base_extension("foo.fasta.gz") == ".fasta"
-    @test Mycelia.get_base_extension("foo.fna.gz") == ".fna"
-    @test Mycelia.get_base_extension("foo.faa.gz") == ".faa"
-    @test Mycelia.get_base_extension("foo.frn.gz") == ".frn"
-
-    @test Mycelia.get_base_extension("foo.fasta") == ".fasta"
-    @test Mycelia.get_base_extension("foo.fna") == ".fna"
-    @test Mycelia.get_base_extension("foo.faa") == ".faa"
-    @test Mycelia.get_base_extension("foo.frn") == ".frn"
-end
-
-@testset "random_fasta_record" begin
-    for molecule in [:DNA, :RNA, :AA]
-        a = Mycelia.random_fasta_record(moltype=molecule, seed=42, L=10)
-        b = Mycelia.random_fasta_record(moltype=molecule, seed=42, L=10)
-        @test typeof(a) == typeof(b) == FASTX.FASTA.Record
-        @test length(FASTX.sequence(a)) == 10
-        @test FASTX.sequence(a) == FASTX.sequence(b)
-        @test FASTX.identifier(a) != FASTX.identifier(b)
-        if molecule == :DNA
-            @test FASTX.sequence(a) == "CCGCCGCTCA"
-        elseif molecule == :RNA
-            @test FASTX.sequence(a) == "CCGCCGCUCA"
-        elseif molecule == :AA
-            @test FASTX.sequence(a) == "VATAGWWITI"
-        end
-    end
 end
