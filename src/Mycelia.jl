@@ -33,6 +33,7 @@ import GFF3
 import GLM
 import GraphMakie
 import Graphs
+import GraphPlot
 # import HDF5
 import Hungarian
 import HTTP
@@ -44,6 +45,7 @@ import LsqFit
 import Luxor
 import Makie
 import MetaGraphs
+import MetaGraphsNext
 import Mmap
 import MultivariateStats
 import OrderedCollections

@@ -1,4 +1,55 @@
 """
+    rand_ascii_greek_string(len::Int) -> String
+
+Generate a random string of printable ASCII and Greek characters of length `len`.
+
+The string contains random printable ASCII characters and both uppercase and lowercase Greek letters.
+"""
+function rand_ascii_greek_string(len::Int)
+    printable_ascii = filter(isprint, [Char(c) for c in 0x21:0x7E])
+    capital_greek = filter(isprint, [Char(c) for c in 0x391:0x3A9])
+    lowercase_greek = filter(isprint, [Char(c) for c in 0x3B1:0x3C9])
+    alphabet = vcat(printable_ascii, capital_greek, lowercase_greek)
+    return join([Random.rand(alphabet) for _ in 1:len])
+end
+
+"""
+    rand_latin1_string(len::Int) -> String
+
+Generate a random string of printable Latin-1 characters of length `len`.
+
+The string contains random printable characters from the Latin-1 character set.
+"""
+function rand_latin1_string(len::Int)
+    latin1_chars = filter(isprint, [Char(c) for c in 0x00:0xFF])
+    return join([Random.rand(latin1_chars) for _ in 1:len])
+end
+
+"""
+    rand_printable_unicode_string(len::Int) -> String
+
+Generate a random string of printable Unicode characters of length `len`.
+
+The string contains random printable Unicode characters, excluding surrogate code points.
+"""
+function rand_printable_unicode_string(len::Int)
+    chars = [Char(c) for c in 0x0000:0x10FFFF if ((c <= 0xD7FF) || (0xE000 <= c <= 0x10FFFF)) && Base.isprint(Char(c))]
+    return join([Random.rand(chars) for _ in 1:len])
+end
+
+"""
+    rand_bmp_printable_string(len::Int) -> String
+
+Generate a random string of printable Basic Multilingual Plane (BMP) characters of length `len`.
+
+The string contains random printable BMP characters, excluding surrogate code points.
+"""
+function rand_bmp_printable_string(len::Int)
+    bmp_chars = [Char(c) for c in 0x0020:0xFFFD if (c < 0xD800 || c > 0xDFFF) && Base.isprint(Char(c))]
+    return join([Random.rand(bmp_chars) for _ in 1:len])
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Simulate Illumina short reads from a FASTA file using the ART Illumina simulator.
