@@ -1,4 +1,83 @@
 """
+    merge_and_map_single_end_samples(; 
+        fasta_reference::AbstractString, 
+        fastq_list::Vector{<:AbstractString}, 
+        minimap_index::AbstractString, 
+        mapping_type::AbstractString,
+        outbase::AbstractString = "results",
+        outformats::Vector{<:AbstractString} = ["tsv.gz", "arrow"]
+    ) -> DataFrames.DataFrame
+
+Merge and map single-end sequencing samples, then output results in one or more formats.
+
+# Arguments
+- `fasta_reference`: Path to the reference FASTA file.
+- `fastq_list`: Vector of paths to input FASTQ files to be merged.
+- `minimap_index`: Path to the minimap2 index file (.mmi).
+- `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
+- `outbase`: Base name (optionally including path) for output files (default: `Mycelia.normalized_current_date() * ".joint-minimap-mapping-results"`,).
+- `outformats`: Vector of output file formats to write results to. Supported: `"tsv.gz"`, `"arrow"`.
+
+# Description
+This function merges provided FASTQ files and assigns unique UUIDs to reads, maps the merged FASTQ against the provided reference using minimap2, reads mapping and UUID tables, joins them into a single DataFrame, writes this table to all requested output formats with filenames constructed from the `outbase` and the appropriate extension, and returns the resulting joined DataFrame.
+
+# Output Files
+- `.tsv.gz`: Tab-separated, gzip-compressed table of results.
+- `.arrow`: Apache Arrow file containing results.
+
+# Returns
+- The joined results as a `DataFrames.DataFrame`.
+"""
+function merge_and_map_single_end_samples(; 
+    fasta_reference::AbstractString, 
+    fastq_list::Vector{<:AbstractString}, 
+    minimap_index::AbstractString, 
+    mapping_type::AbstractString,
+    outbase::AbstractString = Mycelia.normalized_current_date() * ".joint-minimap-mapping-results",
+    outformats::Vector{<:AbstractString} = ["tsv.gz", "arrow"]
+)
+    # Join fastqs
+    fastq_join_result = Mycelia.join_fastqs_with_uuid(fastq_list)
+    
+    # Run minimap if needed
+    minimap_result = Mycelia.minimap_map_with_index(
+        fasta = fasta_reference,
+        mapping_type = mapping_type,
+        fastq = fastq_join_result.fastq_out,
+        index_file = minimap_index
+    )
+    if !isfile(minimap_result.outfile)
+        @time run(minimap_result.cmd)
+    end
+
+    # Read tables
+    tsv_stream = CodecZlib.GzipDecompressorStream(open(fastq_join_result.tsv_out))
+    read_id_mapping_table = CSV.read(tsv_stream, DataFrames.DataFrame, delim='\t')
+    mapping_results_table = Mycelia.xam_to_dataframe(minimap_result.outfile)
+    results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
+
+    # Write outputs
+    outfiles = String[]
+    for fmt in outformats
+        if fmt == "tsv.gz"
+            outfile = outbase * ".tsv.gz"
+            io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
+            CSV.write(io, results_table; delim='\t')
+            close(io)
+            push!(outfiles, outfile)
+        elseif fmt == "arrow"
+            outfile = outbase * ".arrow"
+            Arrow.write(outfile, results_table)
+            push!(outfiles, outfile)
+        else
+            @warn "Unknown output format: $fmt"
+        end
+    end
+
+    return (;results_table, outfiles)
+end
+
+"""
     mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
 
 Calculates the Mash distance (an estimate of Average Nucleotide Identity)

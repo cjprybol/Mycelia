@@ -1,4 +1,60 @@
 """
+    join_fastqs_with_uuid(
+        fastq_files::Vector{String};
+        fastq_out::String
+        tsv_out::String
+    )
+
+Note: does not keep track of paired-end data - assumes single end reads
+
+Designed primarily to allow joint mapping of many long-read samples
+
+Given a collection of fastq files, creates:
+- A gzipped TSV mapping original file and read_id to a new UUID per read
+- A gzipped joint fastq file with the new UUID as read header
+
+Returns: Tuple of output file paths (tsv_out, fastq_out)
+"""
+function join_fastqs_with_uuid(
+    fastq_files::Vector{String};
+    fastq_out::String = Mycelia.normalized_current_datetime() * ".joint_reads.fq.gz",
+    tsv_out::String = replace(fastq_out, r"\.fq\.gz$" => ".tsv.gz")
+)
+    # Build mapping as a DataFrame in memory
+    mapping = DataFrames.DataFrame(
+        input_file = String[],
+        original_read_id = String[],
+        new_uuid = String[]
+    )
+
+    # Prepare gzipped FASTQ writer using CodecZlib
+    gz_out = CodecZlib.GzipCompressorStream(open(fastq_out, "w"))
+    writer = FASTX.FASTQ.Writer(gz_out)
+
+    for fastq_file in fastq_files
+        for record in Mycelia.open_fastx(fastq_file)
+            original_id = String(FASTX.identifier(record))
+            uuid = string(UUIDs.uuid4())
+            # Save mapping to DataFrame
+            DataFrames.push!(mapping, (fastq_file, original_id, uuid))
+            # Write record with new UUID as id
+            new_record = FASTX.FASTQ.Record(uuid, FASTX.sequence(record), FASTX.quality(record))
+            FASTX.write(writer, new_record)
+        end
+    end
+
+    FASTX.close(writer)
+    CodecZlib.close(gz_out)
+
+    # Write mapping table as gzipped TSV using CodecZlib
+    tsv_io = CodecZlib.GzipCompressorStream(open(tsv_out, "w"))
+    CSV.write(tsv_io, mapping; delim='\t')
+    CodecZlib.close(tsv_io)
+
+    return (;tsv_out, fastq_out)
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function run_fastqc(;fastq, outdir = replace(fastq, Mycelia.FASTQ_REGEX => "_fastqc"))
