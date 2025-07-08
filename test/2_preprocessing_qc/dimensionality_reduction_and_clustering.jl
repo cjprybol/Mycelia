@@ -13,7 +13,9 @@
 
 ## imports
 import Pkg
-Pkg.activate("..")
+if isinteractive()
+    Pkg.activate("..")
+end
 using Test
 import Mycelia
 import Random

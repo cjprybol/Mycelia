@@ -57,24 +57,30 @@ function merge_and_map_single_end_samples(;
     results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
 
     # Write outputs
-    outfiles = String[]
+    results_table_outfiles = String[]
     for fmt in outformats
         if fmt == "tsv.gz"
             outfile = outbase * ".tsv.gz"
             io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
             CSV.write(io, results_table; delim='\t')
             close(io)
-            push!(outfiles, outfile)
+            push!(results_table_outfiles, outfile)
         elseif fmt == "arrow"
             outfile = outbase * ".arrow"
             Arrow.write(outfile, results_table)
-            push!(outfiles, outfile)
+            push!(results_table_outfiles, outfile)
         else
             @warn "Unknown output format: $fmt"
         end
     end
 
-    return (;results_table, outfiles)
+    return (
+        results_table = results_table,
+        results_table_outfiles = results_table_outfiles,
+        joint_fastq_file = fastq_join_result.fastq_out,
+        fastq_id_mapping_table = fastq_join_result.tsv_out,
+        bam_file = minimap_result.outfile
+    )
 end
 
 """
