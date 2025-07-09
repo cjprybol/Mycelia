@@ -27,30 +27,33 @@ function join_fastqs_with_uuid(
         new_uuid = String[]
     )
 
-    # Prepare gzipped FASTQ writer using CodecZlib
-    gz_out = CodecZlib.GzipCompressorStream(open(fastq_out, "w"))
-    writer = FASTX.FASTQ.Writer(gz_out)
+    if (!isfile(fastq_out) || filesize(fastq_out) == 0) || (!isfile(tsv_out) || filesize(tsv_out) == 0)
+        # Prepare gzipped FASTQ writer using CodecZlib
+        gz_out = CodecZlib.GzipCompressorStream(open(fastq_out, "w"))
+        writer = FASTX.FASTQ.Writer(gz_out)
 
-    for fastq_file in fastq_files
-        for record in Mycelia.open_fastx(fastq_file)
-            original_id = String(FASTX.identifier(record))
-            uuid = string(UUIDs.uuid4())
-            # Save mapping to DataFrame
-            DataFrames.push!(mapping, (fastq_file, original_id, uuid))
-            # Write record with new UUID as id
-            new_record = FASTX.FASTQ.Record(uuid, FASTX.sequence(record), FASTX.quality(record))
-            FASTX.write(writer, new_record)
+        for fastq_file in fastq_files
+            for record in Mycelia.open_fastx(fastq_file)
+                original_id = String(FASTX.identifier(record))
+                uuid = string(UUIDs.uuid4())
+                # Save mapping to DataFrame
+                DataFrames.push!(mapping, (fastq_file, original_id, uuid))
+                # Write record with new UUID as id
+                new_record = FASTX.FASTQ.Record(uuid, FASTX.sequence(record), FASTX.quality(record))
+                FASTX.write(writer, new_record)
+            end
         end
+
+        FASTX.close(writer)
+        CodecZlib.close(gz_out)
+
+        # Write mapping table as gzipped TSV using CodecZlib
+        tsv_io = CodecZlib.GzipCompressorStream(open(tsv_out, "w"))
+        CSV.write(tsv_io, mapping; delim='\t')
+        CodecZlib.close(tsv_io)
+    else
+        @warn "Output files already exist and are not empty: $fastq_out, $tsv_out"
     end
-
-    FASTX.close(writer)
-    CodecZlib.close(gz_out)
-
-    # Write mapping table as gzipped TSV using CodecZlib
-    tsv_io = CodecZlib.GzipCompressorStream(open(tsv_out, "w"))
-    CSV.write(tsv_io, mapping; delim='\t')
-    CodecZlib.close(tsv_io)
-
     return (;tsv_out, fastq_out)
 end
 
