@@ -37,7 +37,7 @@ function merge_and_map_single_end_samples(;
     outformats::Vector{<:AbstractString} = ["tsv.gz", "arrow"]
 )
     # Join fastqs
-    fastq_join_result = Mycelia.join_fastqs_with_uuid(fastq_list)
+    fastq_join_result = Mycelia.join_fastqs_with_uuid(fastq_list, fastq_out=outbase * ".fq.gz", tsv_out=outbase * ".tsv.gz")
     
     # Run minimap if needed
     minimap_result = Mycelia.minimap_map_with_index(

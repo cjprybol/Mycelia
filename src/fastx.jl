@@ -18,7 +18,7 @@ Returns: Tuple of output file paths (tsv_out, fastq_out)
 function join_fastqs_with_uuid(
     fastq_files::Vector{String};
     fastq_out::String = Mycelia.normalized_current_datetime() * ".joint_reads.fq.gz",
-    tsv_out::String = replace(fastq_out, r"\.fq\.gz$" => ".tsv.gz")
+    tsv_out::String = replace(fastq_out, Mycelia.FASTQ_REGEX => ".tsv.gz")
 )
     # Build mapping as a DataFrame in memory
     mapping = DataFrames.DataFrame(
