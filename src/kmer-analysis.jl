@@ -876,11 +876,37 @@ function generate_and_save_kmer_counts(;
     end
     kmer_result_file = joinpath(output_dir, filename)
     if !isfile(kmer_result_file)
-        kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
-            fasta_list=fastas,
-            k=k,
-            alphabet=alphabet
-        )
+        if (alphabet == :DNA) || (alphabet == :RNA)
+            if k <= 9
+                kmer_count_results = Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list=fastas,
+                    k=k,
+                    alphabet=alphabet
+                )
+            else
+                kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
+                    fasta_list=fastas,
+                    k=k,
+                    alphabet=alphabet
+                )
+            end
+        elseif (alphabet == :AA)
+            if k <= 3
+                kmer_count_results = Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list=fastas,
+                    k=k,
+                    alphabet=alphabet
+                )
+            else
+                kmer_count_results = Mycelia.fasta_list_to_sparse_kmer_counts(
+                    fasta_list=fastas,
+                    k=k,
+                    alphabet=alphabet
+                )
+            end
+        else
+            error("unrecognized alphabet: $(alphabet)")
+        end
         Mycelia.save_kmer_results(
             filename = kmer_result_file,
             kmers = kmer_count_results.kmers,
@@ -892,7 +918,6 @@ function generate_and_save_kmer_counts(;
     end
     return kmer_result_file
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1148,6 +1173,15 @@ function fasta_list_to_sparse_kmer_counts(;
     num_kmers = length(sorted_kmers)
     empty!(all_kmers_set); all_kmers_set = nothing; GC.gc()
 
+    # Estimate memory needed for sparse matrix
+    sparse_matrix_bytes_needed = Mycelia.estimate_sparse_matrix_memory(ValType, num_kmers, num_files, nnz=total_non_zero_entries)
+
+    # Check if matrix will fit in memory
+    mem_check = check_matrix_fits_in_memory(sparse_matrix_bytes_needed; severity=:error)
+    if !mem_check.will_fit_total
+        error("Sparse matrix will not fit in available memory. Required: $(bytes_human_readable(sparse_matrix_bytes_needed)), Available: $(bytes_human_readable(mem_check.free_memory))")
+    end
+
     kmer_to_row_map = Dict{KMER_TYPE, Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
     Base.@info "Found $num_kmers unique kmers. Total non-zero entries: $total_non_zero_entries."
 
@@ -1235,7 +1269,18 @@ function fasta_list_to_sparse_kmer_counts(;
         SparseArrays.spzeros(ValType, Int, num_kmers, num_files)
     end
 
+    # --- After constructing the sparse matrix ---
     Base.@info "Done. Returning sorted kmer list, sparse counts matrix, and rarefaction data path."
+    # Estimate memory needed for dense matrix
+    dense_matrix_bytes_needed = Mycelia.estimate_dense_matrix_memory(ValType, num_kmers, num_files)
+
+    # Compare with sparse matrix memory usage
+    if dense_matrix_bytes_needed < sparse_matrix_bytes_needed
+        @warn "A dense matrix would be more efficient"
+        @warn "Estimated dense matrix memory usage: $(bytes_human_readable(dense_matrix_bytes_needed))"
+        @warn "Estimated sparse matrix memory usage: $(bytes_human_readable(sparse_matrix_bytes_needed))"
+    end
+
     final_result = (; kmers=sorted_kmers, counts=kmer_counts_sparse_matrix, rarefaction_data_path=rarefaction_data_path)
 
     try
@@ -1540,11 +1585,26 @@ function fasta_list_to_dense_kmer_counts(;
     if num_files == 0
         error("Input fasta_list is empty.")
     end
-    if !(isa(k, Integer) && 0 < k <= 9)
-        error("k must be a positive integer <= 9. Use sparse counts for larger k")
-    end
     if !(alphabet in (:AA, :DNA, :RNA))
         error("alphabet must be :AA, :DNA, or :RNA")
+    end
+
+    if alphabet == :AA
+        if !(isa(k, Integer) && 0 < k <= 5)
+            if force
+                @warn "k should be a positive integer <= 5 for alphabet :AA.  Sparse counts are recommended for larger k."
+            else
+                error("k must be a positive integer <= 5 for alphabet :AA. Use sparse counts for larger k")
+            end
+        end
+    else
+        if !(isa(k, Integer) && 0 < k <= 11)
+            if force
+                @warn "k should be a positive integer <= 11 for alphabet :DNA or :RNA. Sparse counts are recommended for larger k."
+            else
+                error("k must be a positive integer <= 11 for alphabet :DNA or :RNA. Use sparse counts for larger k")
+            end
+        end
     end
     if any(f -> !Base.Filesystem.isfile(f), fasta_list)
         missing_files = [f for f in fasta_list if !Base.Filesystem.isfile(f)]
@@ -1649,7 +1709,14 @@ function fasta_list_to_dense_kmer_counts(;
             Base.@warn "User-specified count_element_type $ValType may be too small for max observed count $max_observed_count"
         end
     end
-    Base.@info "Using $ValType for kmer counts"
+    Base.@info "Using $ValType for kmer counts: Maximum count observed = $(max_observed_count)"
+
+    dense_matrix_bytes_needed = Mycelia.estimate_dense_matrix_memory(ValType, num_kmers, num_successful_files)
+    # Check if matrix will fit in memory
+    mem_check = check_matrix_fits_in_memory(dense_matrix_bytes_needed; severity=:error)
+    if !mem_check.will_fit_total
+        error("Matrix will not fit in available memory. Required: $(bytes_human_readable(bytes_needed)), Available: $(bytes_human_readable(mem_check.free_memory))")
+    end
 
     # Build kmer index for matrix rows
     kmer_index = Dict{KMER_TYPE,Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
@@ -1679,6 +1746,13 @@ function fasta_list_to_dense_kmer_counts(;
 
     if cleanup_temp
         try Base.Filesystem.rm(temp_dir; recursive=true, force=true) catch end
+    end
+
+    sparse_matrix_bytes_needed = Mycelia.estimate_sparse_matrix_memory(ValType, num_kmers, num_successful_files, nnz = count(kmer_counts_matrix .!= 0))
+    if sparse_matrix_bytes_needed < dense_matrix_bytes_needed
+        @warn "A sparse matrix would be more efficient"
+        @warn "Estimated dense matrix memory usage: $(bytes_human_readable(dense_matrix_bytes_needed))"
+        @warn "Estimated sparse matrix memory usage: $(bytes_human_readable(sparse_matrix_bytes_needed))"
     end
 
     result = (;kmers=sorted_kmers, counts=kmer_counts_matrix, successful_fasta_list=successful_fasta_list, error_log=error_log)
