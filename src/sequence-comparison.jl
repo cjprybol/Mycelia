@@ -55,6 +55,7 @@ function merge_and_map_single_end_samples(;
     read_id_mapping_table = CSV.read(tsv_stream, DataFrames.DataFrame, delim='\t')
     mapping_results_table = Mycelia.xam_to_dataframe(minimap_result.outfile)
     results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
+    results_table = Mycelia.dataframe_replace_nothing_with_missing(results_table)
 
     # Write outputs
     results_table_outfiles = String[]

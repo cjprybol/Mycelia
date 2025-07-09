@@ -1,4 +1,18 @@
 """
+    dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame) -> DataFrames.DataFrame
+
+Return a copy of the DataFrame with all `nothing` values replaced by `missing`.
+"""
+function dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame)
+    df_copy = DataFrames.copy(df)
+    for (colname, col) in zip(names(df_copy), DataFrames.eachcol(df_copy))
+        if any(isnothing, col)
+            df_copy[!, colname] = map(x -> isnothing(x) ? missing : x, col)
+        end
+    end
+    return df_copy
+end
+"""
     check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
 
 Checks whether the specified number of bytes can fit in the computer's memory.
