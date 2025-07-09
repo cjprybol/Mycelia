@@ -50,28 +50,28 @@ function merge_and_map_single_end_samples(;
         @time run(minimap_result.cmd)
     end
 
-    # Read tables
-    tsv_stream = CodecZlib.GzipDecompressorStream(open(fastq_join_result.tsv_out))
-    read_id_mapping_table = CSV.read(tsv_stream, DataFrames.DataFrame, delim='\t')
-    mapping_results_table = Mycelia.xam_to_dataframe(minimap_result.outfile)
-    results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
-    results_table = Mycelia.dataframe_replace_nothing_with_missing(results_table)
+    results_table_outfiles = [outbase * fmt for fmt in outformats]
+    if !all(isfile, results_table_outfiles) || any(x -> filesize(x) == 0, results_table_outfiles)
+        # Read tables
+        read_id_mapping_table = CSV.read(
+            CodecZlib.GzipDecompressorStream(open(fastq_join_result.tsv_out)), DataFrames.DataFrame, delim='\t')
+        mapping_results_table = Mycelia.xam_to_dataframe(minimap_result.outfile)
+        results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
+        results_table = Mycelia.dataframe_replace_nothing_with_missing(results_table)
 
-    # Write outputs
-    results_table_outfiles = String[]
-    for fmt in outformats
-        if fmt == "tsv.gz"
-            outfile = outbase * ".tsv.gz"
-            io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
-            CSV.write(io, results_table; delim='\t')
-            close(io)
-            push!(results_table_outfiles, outfile)
-        elseif fmt == "arrow"
-            outfile = outbase * ".arrow"
-            Arrow.write(outfile, results_table)
-            push!(results_table_outfiles, outfile)
-        else
-            @warn "Unknown output format: $fmt"
+        # Write outputs
+        for fmt in outformats
+            if fmt == "tsv.gz"
+                outfile = outbase * ".tsv.gz"
+                io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
+                CSV.write(io, results_table; delim='\t')
+                close(io)
+            elseif fmt == "arrow"
+                outfile = outbase * ".arrow"
+                Arrow.write(outfile, results_table)
+            else
+                @warn "Unknown output format: $fmt"
+            end
         end
     end
 
