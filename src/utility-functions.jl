@@ -1,4 +1,123 @@
 """
+    check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
+
+Checks whether the specified number of bytes can fit in the computer's memory.
+
+- `bytes_needed`: The number of bytes required (output from `estimate_dense_matrix_memory` or `estimate_sparse_matrix_memory`).
+- `severity`: What to do if there is not enough available memory. Can be `:warn` (default) or `:error`.
+
+Returns a named tuple:
+    (will_fit_total, will_fit_available, total_memory, free_memory, bytes_needed)
+Where:
+- `will_fit_total`: `true` if the matrix fits in total system memory.
+- `will_fit_available`: `true` if the matrix fits in currently available (free) system memory.
+- `total_memory`: Total system RAM in bytes.
+- `free_memory`: Currently available system RAM in bytes.
+- `bytes_needed`: Bytes requested for the matrix.
+
+If `will_fit_available` is false, either warns or errors depending on `severity`.
+"""
+function check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
+    # Get total and available RAM
+    total_mem = Sys.total_memory()
+    # Sys.free_memory() is available on Linux & macOS, but not in Julia 1.6 on Windows.
+    free_mem = try
+        Sys.free_memory()
+    catch
+        # Fallback: If not available, just use total memory as a conservative estimate.
+        total_mem
+    end
+
+    will_fit_total = bytes_needed ≤ total_mem
+    will_fit_available = bytes_needed ≤ free_mem
+
+    
+    msg = 
+    """
+    Requested: $(Mycelia.bytes_human_readable(bytes_needed))
+    Free: $(Mycelia.bytes_human_readable(free_mem))
+    Total: $(Mycelia.bytes_human_readable(total_mem))"
+    """
+
+    if !will_fit_available
+        if severity == :error
+            error("Matrix will not fit in available memory! $msg")
+        elseif severity == :warn
+            @warn "Matrix may not fit in available memory! $msg"
+        end
+    end
+
+    return (
+        will_fit_total = will_fit_total,
+        will_fit_available = will_fit_available,
+        total_memory = total_mem,
+        free_memory = free_mem,
+        bytes_needed = bytes_needed
+    )
+end
+
+"""
+    estimate_dense_matrix_memory(nrows::Integer, ncols::Integer)
+    estimate_dense_matrix_memory(T::DataType, nrows::Integer, ncols::Integer)
+
+Estimate the memory required (in bytes) for a dense matrix.
+
+- If `T` is provided, estimate memory for a matrix with element type `T`.
+- If `T` is not provided, defaults to Float64.
+"""
+function estimate_dense_matrix_memory(args...)
+    if length(args) == 2
+        nrows, ncols = args
+        # T = Int
+        T = Float64
+    elseif length(args) == 3
+        T, nrows, ncols = args
+    else
+        throw(ArgumentError("Invalid arguments. Provide (nrows, ncols) or (T, nrows, ncols)."))
+    end
+    elsize = Base.sizeof(T)
+    total_bytes = elsize * nrows * ncols
+    return total_bytes
+end
+
+"""
+    estimate_sparse_matrix_memory(nrows::Integer, ncols::Integer; nnz=nothing, density=nothing)
+    estimate_sparse_matrix_memory(T::DataType, nrows::Integer, ncols::Integer; nnz=nothing, density=nothing)
+
+Estimate the memory required (in bytes) for a sparse matrix in CSC format.
+
+- If `T` is provided, estimate memory for a matrix with element type `T`.
+- If `T` is not provided, defaults to Float64.
+- You must specify either `nnz` (number of non-zeros) or `density` (proportion of non-zeros, between 0 and 1).
+"""
+function estimate_sparse_matrix_memory(args...; nnz::Union{Nothing, Integer}=nothing, density::Union{Nothing, AbstractFloat}=nothing)
+    if length(args) == 2
+        nrows, ncols = args
+        # T = Int
+        T = Float64
+    elseif length(args) == 3
+        T, nrows, ncols = args
+    else
+        throw(ArgumentError("Invalid arguments. Provide (nrows, ncols) or (T, nrows, ncols)."))
+    end
+
+    if nnz !== nothing
+        nstored = nnz
+    elseif density !== nothing
+        nstored = round(Int, density * nrows * ncols)
+    else
+        throw(ArgumentError("Must specify either nnz or density"))
+    end
+
+    val_bytes = Base.sizeof(T) * nstored
+    rowind_bytes = Base.sizeof(Int) * nstored
+    colptr_bytes = Base.sizeof(Int) * (ncols + 1)
+
+    total_bytes = val_bytes + rowind_bytes + colptr_bytes
+    return total_bytes
+end
+
+"""
 Apply breadth-first sampling to a DataFrame
 """
 function breadth_first_sample_dataframe(df::DataFrames.DataFrame, group_col::Union{Symbol, String}, 
@@ -1133,7 +1252,26 @@ See Also
 * Base.format_bytes: Converts a byte count into a human-readable string. 
 """
 function filesize_human_readable(f)
+    @assert isfile(f) "File does not exist: $f"
     return Base.format_bytes(filesize(f))
+end
+
+function bytes_human_readable(num::Real)
+    return Base.format_bytes(num)
+    # units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
+    # i = 1
+    # while num ≥ 1024 && i < length(units)
+    #     num /= 1024
+    #     i += 1
+    # end
+    # return @sprintf("%.2f %s", num, units[i])
+end
+
+function scientific_notation(num::Number; precision::Int=2)
+    if precision < 0
+        error("Number of decimal places (precision) must be non-negative.")
+    end
+    return Printf.format(Printf.Format("%.$(precision)e"), num)
 end
 
 """
