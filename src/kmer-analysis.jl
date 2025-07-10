@@ -486,7 +486,7 @@ function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{
     Ktotal = length(keys(assembly_counts))
     # Kshared = # of shared kmers between assembly and readset
     Kshared = length(intersect(keys(raw_data_counts), keys(assembly_counts)))
-    # probabilitiy_base_in_assembly_correct
+    # probability_base_in_assembly_correct
     P = (Kshared/Ktotal)^(1/k)
     # # Error rate
     E = 1-P
