@@ -1,5 +1,11 @@
 # BLAST Database Integration and Metadata Tests
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+using Revise
 using Test
+import Mycelia
 
 @testset "BLAST Database Integration" begin
     @testset "BLAST DB Search Paths" begin
