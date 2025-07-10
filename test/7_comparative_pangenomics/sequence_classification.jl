@@ -1,5 +1,22 @@
 # Sequence Classification tests for basic utilities
 
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=test -e 'include("test/7_comparative_pangenomics/sequence_classification.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/sequence_classification.jl", "test/7_comparative_pangenomics", execute=false)'
+# ````
+
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+using Revise
+using Test
 import Mycelia
 import BioSequences
 import DataFrames
