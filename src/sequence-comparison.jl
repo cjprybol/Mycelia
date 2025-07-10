@@ -5,7 +5,7 @@
         minimap_index::AbstractString, 
         mapping_type::AbstractString,
         outbase::AbstractString = "results",
-        outformats::Vector{<:AbstractString} = ["tsv.gz", "arrow"]
+        outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
     ) -> DataFrames.DataFrame
 
 Merge and map single-end sequencing samples, then output results in one or more formats.
@@ -15,15 +15,15 @@ Merge and map single-end sequencing samples, then output results in one or more 
 - `fastq_list`: Vector of paths to input FASTQ files to be merged.
 - `minimap_index`: Path to the minimap2 index file (.mmi).
 - `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
-- `outbase`: Base name (optionally including path) for output files (default: `Mycelia.normalized_current_date() * ".joint-minimap-mapping-results"`,).
-- `outformats`: Vector of output file formats to write results to. Supported: `"tsv.gz"`, `"arrow"`.
+- `outbase`: Base name (optionally including path) for output files (default: `Mycelia.normalized_current_date() * ".joint-minimap-mapping-results"`).
+- `outformats`: Vector of output file formats to write results to. Supported: `".tsv.gz"`, `".jld2"`.
 
 # Description
 This function merges provided FASTQ files and assigns unique UUIDs to reads, maps the merged FASTQ against the provided reference using minimap2, reads mapping and UUID tables, joins them into a single DataFrame, writes this table to all requested output formats with filenames constructed from the `outbase` and the appropriate extension, and returns the resulting joined DataFrame.
 
 # Output Files
 - `.tsv.gz`: Tab-separated, gzip-compressed table of results.
-- `.arrow`: Apache Arrow file containing results.
+- `".jld2"`: JLD2 file containing results.
 
 # Returns
 - The joined results as a `DataFrames.DataFrame`.
@@ -34,41 +34,48 @@ function merge_and_map_single_end_samples(;
     minimap_index::AbstractString, 
     mapping_type::AbstractString,
     outbase::AbstractString = Mycelia.normalized_current_date() * ".joint-minimap-mapping-results",
-    outformats::Vector{<:AbstractString} = ["tsv.gz", "arrow"]
+    outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
 )
-    # Join fastqs
-    fastq_join_result = Mycelia.join_fastqs_with_uuid(fastq_list, fastq_out=outbase * ".fq.gz", tsv_out=outbase * ".tsv.gz")
+    # Join FASTQ files
+    fastq_out = outbase * ".fq.gz"
+    tsv_out = outbase * ".uuid-map.tsv.gz"
+    fastq_join_result = Mycelia.join_fastqs_with_uuid(fastq_list, fastq_out=fastq_out, tsv_out=tsv_out)
     
     # Run minimap if needed
     minimap_result = Mycelia.minimap_map_with_index(
         fasta = fasta_reference,
         mapping_type = mapping_type,
-        fastq = fastq_join_result.fastq_out,
+        fastq = fastq_out,
         index_file = minimap_index
     )
     if !isfile(minimap_result.outfile)
         @time run(minimap_result.cmd)
     end
-
     results_table_outfiles = [outbase * fmt for fmt in outformats]
+    # Determine file paths for .tsv.gz and .jld2
+    tsv_file = ".tsv.gz" in outformats ? outbase * ".tsv.gz" : nothing
+    jld2_file = ".jld2" in outformats ? outbase * ".jld2" : nothing
     if !all(isfile, results_table_outfiles) || any(x -> filesize(x) == 0, results_table_outfiles)
         # Read tables
         read_id_mapping_table = CSV.read(
-            CodecZlib.GzipDecompressorStream(open(fastq_join_result.tsv_out)), DataFrames.DataFrame, delim='\t')
+            CodecZlib.GzipDecompressorStream(open(tsv_out)), DataFrames.DataFrame, delim='\t')
         mapping_results_table = Mycelia.xam_to_dataframe(minimap_result.outfile)
         results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
         results_table = Mycelia.dataframe_replace_nothing_with_missing(results_table)
-
         # Write outputs
         for fmt in outformats
-            if fmt == "tsv.gz"
-                outfile = outbase * ".tsv.gz"
+            outfile = outbase * fmt
+            if fmt == ".tsv.gz"
+                @assert outfile == tsv_file
                 io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
                 CSV.write(io, results_table; delim='\t')
                 close(io)
-            elseif fmt == "arrow"
-                outfile = outbase * ".arrow"
-                Arrow.write(outfile, results_table)
+                @assert isfile(tsv_file)
+                @show tsv_file
+            elseif fmt == ".jld2"
+                @assert outfile == jld2_file
+                JLD2_write_table(df=results_table, filename=outfile)
+                @assert isfile(jld2_file)
             else
                 @warn "Unknown output format: $fmt"
             end
@@ -77,10 +84,11 @@ function merge_and_map_single_end_samples(;
 
     return (
         results_table = results_table,
-        results_table_outfiles = results_table_outfiles,
-        joint_fastq_file = fastq_join_result.fastq_out,
-        fastq_id_mapping_table = fastq_join_result.tsv_out,
-        bam_file = minimap_result.outfile
+        joint_fastq_file = fastq_out,
+        fastq_id_mapping_table = tsv_out,
+        bam_file = minimap_result.outfile,
+        tsv_file = tsv_file,
+        jld2_file = jld2_file
     )
 end
 

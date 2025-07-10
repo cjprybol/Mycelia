@@ -17,19 +17,19 @@ function mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=
     i = 1
     while i <= length(chars)
         if Random.rand() < error_rate
-            mutation = Random.rand(['sub', 'ins', 'del'])
-            if mutation == 'sub'
+            mutation = Random.rand(["sub", "ins", "del"])
+            if mutation == "sub"
                 # Substitute with random char from alphabet (not the same as current)
                 choices = setdiff(alphabet, [chars[i]])
                 if !isempty(choices)
                     chars[i] = Random.rand(choices)
                 end
-            elseif mutation == 'ins'
+            elseif mutation == "ins"
                 # Insert random char from alphabet
                 insert_char = Random.rand(alphabet)
                 insert!(chars, i, insert_char)
                 i += 1 # skip inserted char
-            elseif mutation == 'del' && length(chars) > 1
+            elseif mutation == "del" && length(chars) > 1
                 # Delete the char
                 deleteat!(chars, i)
                 i -= 1 # stay at this index
@@ -181,7 +181,7 @@ function simulate_illumina_paired_reads(;in_fasta::String,
             --in $(in_fasta) \
             --out $(outbase)`
     else
-        error("Either 'coverage' or 'read_count' must be provided.")
+        error("Either `coverage` or `read_count` must be provided.")
     end
 
     forward_fq = "$(outbase)1.fq"

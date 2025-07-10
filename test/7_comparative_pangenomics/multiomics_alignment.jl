@@ -71,30 +71,27 @@ import Arrow
     percent_mapped = 
         count(merged_mapping_results.results_table.ismapped) / length(merged_mapping_results.results_table.ismapped)
     @test percent_mapped >= 0.9
-    # @test all(merged_mapping_results.results_table.ismapped)
+    ## @test all(merged_mapping_results.results_table.ismapped)
 
-    # Cleanup
-    if isfile(fasta_file)
-        rm(fasta_file)
-    end
-    if isfile(minimap_index_result.outfile)
-        rm(minimap_index_result.outfile)
-    end
+    ## Cleanup
+    @test isfile(fasta_file)
+    rm(fasta_file)
+    @test isfile(minimap_index_result.outfile)
+    rm(minimap_index_result.outfile)
+
+    @show merged_mapping_results.tsv_file
+    @test isfile(merged_mapping_results.tsv_file)
+    rm(merged_mapping_results.tsv_file)
+
     foreach(f -> isfile(f) && rm(f), fastq_list)
-    for f in merged_mapping_results.results_table_outfiles
-        if isfile(f)
-            rm(f)
-        end
-    end
-    if isfile(merged_mapping_results.joint_fastq_file)
-        rm(merged_mapping_results.joint_fastq_file)
-    end
-    if isfile(merged_mapping_results.fastq_id_mapping_table)
-        rm(merged_mapping_results.fastq_id_mapping_table)
-    end
-    if isfile(merged_mapping_results.bam_file)
-        rm(merged_mapping_results.bam_file)
-    end
+    @test isfile(merged_mapping_results.joint_fastq_file)
+    rm(merged_mapping_results.joint_fastq_file)
+    @test isfile(merged_mapping_results.fastq_id_mapping_table)
+    rm(merged_mapping_results.fastq_id_mapping_table)
+    @test isfile(merged_mapping_results.bam_file)
+    rm(merged_mapping_results.bam_file)
+    @test isfile(merged_mapping_results.jld2_file)
+    rm(merged_mapping_results.jld2_file)
 end
 
 ## Multi-omics alignment & mapping tests
