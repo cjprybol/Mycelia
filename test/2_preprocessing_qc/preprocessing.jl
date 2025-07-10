@@ -105,4 +105,58 @@ const phiX174_accession_id = "NC_001422.1"
         @test length(unique(seqs)) == 1
         rm(fasta_file, force=true)
     end
+
+    @testset "fastx_stats and fastx2normalized_table - fixtures" begin
+        mktempdir() do dir
+            fasta_path = joinpath(dir, "small.fasta")
+            fastq_path = joinpath(dir, "small.fastq")
+            records = [
+                FASTX.FASTA.Record("seq1", "ACGT"),
+                FASTX.FASTA.Record("seq2", "GGGG"),
+            ]
+            open(fasta_path, "w") do io
+                for rec in records
+                    FASTX.write(io, rec)
+                end
+            end
+            open(fastq_path, "w") do io
+                for rec in records
+                    qual = repeat("I", length(FASTX.sequence(rec)))
+                    fqrec = FASTX.FASTQ.Record(FASTX.identifier(rec), FASTX.sequence(rec), qual)
+                    FASTX.write(io, fqrec)
+                end
+            end
+
+            expected_cols = [
+                "file", "format", "type", "num_seqs", "sum_len", "min_len", "avg_len",
+                "max_len", "Q1", "Q2", "Q3", "sum_gap", "N50", "N50_num", "Q20(%)",
+                "Q30(%)", "AvgQual", "GC(%)", "sum_n", "N90",
+            ]
+
+            stats_fasta = Mycelia.fastx_stats(fasta_path)
+            @test names(stats_fasta) == expected_cols
+            @test stats_fasta.num_seqs[1] == 2
+            @test stats_fasta.sum_len[1] == 8
+            @test isapprox(stats_fasta[1, "GC(%)"], 75.0; atol=0.01)
+
+            stats_fastq = Mycelia.fastx_stats(fastq_path)
+            @test stats_fastq.num_seqs[1] == 2
+            @test isapprox(stats_fastq.AvgQual[1], 40.0; atol=0.01)
+
+            norm_cols = [
+                "fastx_path", "fastx_sha256", "record_identifier", "record_description",
+                "record_sha256", "record_quality", "record_alphabet", "record_type",
+                "mean_record_quality", "median_record_quality", "record_length", "record_sequence",
+            ]
+
+            nfasta = Mycelia.fastx2normalized_table(fasta_path)
+            nfastq = Mycelia.fastx2normalized_table(fastq_path)
+            @test names(nfasta) == norm_cols
+            @test names(nfastq) == norm_cols
+            @test nrow(nfasta) == 2
+            gc_val = sum(count(c -> c in ['G','C'], row.record_sequence) for row in eachrow(nfasta)) / sum(nfasta.record_length) * 100
+            @test isapprox(gc_val, 75.0; atol=0.01)
+            @test isapprox(mean(skipmissing(nfastq.mean_record_quality)), 40.0; atol=0.01)
+        end
+    end
 end
