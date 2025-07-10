@@ -1,3 +1,45 @@
+const PRINTABLE_ASCII_ALPHABET = filter(isprint, [Char(c) for c in 0x21:0x7E])
+const PRINTABLE_GREEK_ALPHABET = vcat(
+    filter(isprint, [Char(c) for c in 0x391:0x3A9]),  # Capital Greek letters
+    filter(isprint, [Char(c) for c in 0x3B1:0x3C9])   # Lowercase Greek letters
+)
+const PRINTABLE_LATIN1_ALPHABET = filter(isprint, [Char(c) for c in 0x00:0xFF])
+const PRINTABLE_UNICODE_ALPHABET = [Char(c) for c in 0x0000:0x10FFFF if ((c <= 0xD7FF) || (0xE000 <= c <= 0x10FFFF)) && Base.isprint(Char(c))]
+const PRINTABLE_BMP_ALPHABET  = [Char(c) for c in 0x0020:0xFFFD if (c < 0xD800 || c > 0xDFFF) && Base.isprint(Char(c))]
+
+# Mutate a string given an alphabet, error rate, and allowed mutation types.
+# If `alphabet` is not provided, use the unique set of observed characters in the input string.
+function mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=nothing, error_rate::Float64=0.01)
+    chars = collect(s)
+    if alphabet === nothing
+        alphabet = unique(chars)
+    end
+    i = 1
+    while i <= length(chars)
+        if Random.rand() < error_rate
+            mutation = Random.rand(['sub', 'ins', 'del'])
+            if mutation == 'sub'
+                # Substitute with random char from alphabet (not the same as current)
+                choices = setdiff(alphabet, [chars[i]])
+                if !isempty(choices)
+                    chars[i] = Random.rand(choices)
+                end
+            elseif mutation == 'ins'
+                # Insert random char from alphabet
+                insert_char = Random.rand(alphabet)
+                insert!(chars, i, insert_char)
+                i += 1 # skip inserted char
+            elseif mutation == 'del' && length(chars) > 1
+                # Delete the char
+                deleteat!(chars, i)
+                i -= 1 # stay at this index
+            end
+        end
+        i += 1
+    end
+    return join(chars)
+end
+
 """
     rand_ascii_greek_string(len::Int) -> String
 
@@ -6,10 +48,7 @@ Generate a random string of printable ASCII and Greek characters of length `len`
 The string contains random printable ASCII characters and both uppercase and lowercase Greek letters.
 """
 function rand_ascii_greek_string(len::Int)
-    printable_ascii = filter(isprint, [Char(c) for c in 0x21:0x7E])
-    capital_greek = filter(isprint, [Char(c) for c in 0x391:0x3A9])
-    lowercase_greek = filter(isprint, [Char(c) for c in 0x3B1:0x3C9])
-    alphabet = vcat(printable_ascii, capital_greek, lowercase_greek)
+    alphabet = vcat(PRINTABLE_ASCII_ALPHABET, PRINTABLE_GREEK_ALPHABET)
     return join([Random.rand(alphabet) for _ in 1:len])
 end
 
@@ -21,8 +60,7 @@ Generate a random string of printable Latin-1 characters of length `len`.
 The string contains random printable characters from the Latin-1 character set.
 """
 function rand_latin1_string(len::Int)
-    latin1_chars = filter(isprint, [Char(c) for c in 0x00:0xFF])
-    return join([Random.rand(latin1_chars) for _ in 1:len])
+    return join([Random.rand(PRINTABLE_LATIN1_ALPHABET) for _ in 1:len])
 end
 
 """
@@ -33,8 +71,7 @@ Generate a random string of printable Unicode characters of length `len`.
 The string contains random printable Unicode characters, excluding surrogate code points.
 """
 function rand_printable_unicode_string(len::Int)
-    chars = [Char(c) for c in 0x0000:0x10FFFF if ((c <= 0xD7FF) || (0xE000 <= c <= 0x10FFFF)) && Base.isprint(Char(c))]
-    return join([Random.rand(chars) for _ in 1:len])
+    return join([Random.rand(PRINTABLE_UNICODE_ALPHABET) for _ in 1:len])
 end
 
 """
@@ -46,7 +83,7 @@ The string contains random printable BMP characters, excluding surrogate code po
 """
 function rand_bmp_printable_string(len::Int)
     bmp_chars = [Char(c) for c in 0x0020:0xFFFD if (c < 0xD800 || c > 0xDFFF) && Base.isprint(Char(c))]
-    return join([Random.rand(bmp_chars) for _ in 1:len])
+    return join([Random.rand(PRINTABLE_BMP_ALPHABET) for _ in 1:len])
 end
 
 """
