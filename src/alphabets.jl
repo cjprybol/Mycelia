@@ -1,3 +1,14 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return the alphabet associated with a `BioSequence` type.
+
+# Arguments
+- `s::BioSequences.BioSequence`: A subtype instance.
+
+# Returns
+`BioSymbols.Alphabet` of the sequence type.
+"""
 function get_biosequence_alphabet(s::T) where T<:BioSequences.BioSequence
     return first(T.parameters)
 end
@@ -42,17 +53,36 @@ function detect_alphabet(seq::AbstractString)::Symbol
     end
 end
 
-# Specific dispatch for DNA sequences
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect the alphabet of a `LongDNA` sequence.
+
+Always returns `:DNA`.
+"""
 function detect_alphabet(sequence::BioSequences.LongDNA)
     return :DNA
 end
 
-# Specific dispatch for RNA sequences
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect the alphabet of a `LongRNA` sequence.
+
+Always returns `:RNA`.
+"""
 function detect_alphabet(sequence::BioSequences.LongRNA)
     return :RNA
 end
 
-# Specific dispatch for protein/amino acid sequences
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect the alphabet of a `LongAA` sequence.
+
+Always returns `:AA`.
+"""
 function detect_alphabet(sequence::BioSequences.LongAA)
     return :AA
 end

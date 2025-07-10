@@ -275,10 +275,13 @@ function annotate_aa_fasta(;
     return outdir
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
+Ensure the `padloc` environment and database are installed.
 
-
-
+Downloads the environment if missing and updates the padloc database.
+"""
 function setup_padloc()
     padloc_is_already_installed = check_bioconda_env_is_installed("padloc")
     if !padloc_is_already_installed

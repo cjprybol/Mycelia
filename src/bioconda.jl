@@ -1,19 +1,30 @@
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Check whether a named Bioconda environment already exists.
+
+# Arguments
+- `pkg::String`: Name of the environment.
+
+# Returns
+`Bool` indicating if the environment is present.
+"""
 function check_bioconda_env_is_installed(pkg)
     # ensure conda environment is available
-if !isfile(CONDA_RUNNER)
-    if (basename(CONDA_RUNNER) == "mamba")
-        Conda.add("mamba")
-    elseif (basename(CONDA_RUNNER) == "conda")
-        Conda.update()
+    if !isfile(CONDA_RUNNER)
+        if (basename(CONDA_RUNNER) == "mamba")
+            Conda.add("mamba")
+        elseif (basename(CONDA_RUNNER) == "conda")
+            Conda.update()
+        end
     end
-end
-# try
-current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
-if pkg in current_environments
-    return true
-else
-    return false
-end
+    # try
+    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+    if pkg in current_environments
+        return true
+    else
+        return false
+    end
 end
 
 """
