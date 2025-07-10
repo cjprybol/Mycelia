@@ -2228,44 +2228,65 @@ end
 
 function load_bvbrc_genome_metadata(; 
     summary_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
-    metadata_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata")
-    
-    # Create a unique temporary directory
-    temp_dir = joinpath(tempdir(), "bvbrc_temp_$(Dates.format(Dates.now(), "yyyymmdd_HHMMSS"))")
-    mkpath(temp_dir)
-    
-    try
-        # Define temporary file paths
-        summary_file = joinpath(temp_dir, "genome_summary.tsv")
-        metadata_file = joinpath(temp_dir, "genome_metadata.tsv")
-        
-        # Download files to temporary location
-        @info "Downloading genome summary from $(summary_url)"
-        Downloads.download(summary_url, summary_file)
-        
-        @info "Downloading genome metadata from $(metadata_url)"
-        Downloads.download(metadata_url, metadata_file)
-        
-        # Read files into DataFrames
-        @info "Reading genome summary file"
-        genome_summary = CSV.read(summary_file, DataFrames.DataFrame, delim='\t', header=1, 
-                                 types=Dict("genome_id" => String))
-        
-        @info "Reading genome metadata file"
-        genome_metadata = CSV.read(metadata_file, DataFrames.DataFrame, delim='\t', header=1, 
-                                  types=Dict("genome_id" => String))
-        
-        # Join the DataFrames
-        @info "Joining genome summary and metadata"
-        bvbrc_genome_summary = DataFrames.innerjoin(genome_summary, genome_metadata, 
-                                                  on="genome_id", makeunique=true)
-        
-        return bvbrc_genome_summary
-    finally
-        # Clean up temporary files regardless of success or failure
-        @info "Cleaning up temporary files"
-        rm(temp_dir, recursive=true, force=true)
+    metadata_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata"
+)
+    # --- Cache Path Setup ---
+    cache_dir = joinpath(homedir(), "workspace", ".bvbrc")
+    mkpath(cache_dir)
+    today_str = Dates.format(Dates.today(), "yyyy-mm-dd")
+    summary_cache = joinpath(cache_dir, "$(today_str).genome_summary.tsv")
+    metadata_cache = joinpath(cache_dir, "$(today_str).genome_metadata.tsv")
+
+    function is_valid_file(f)
+        isfile(f) && filesize(f) > 0
     end
+
+    # Try today's cache first
+    summary_file = summary_cache
+    metadata_file = metadata_cache
+    used_cache = false
+
+    if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
+        @info "Using cached BVBRC metadata for today: $summary_cache, $metadata_cache"
+        used_cache = true
+    else
+        # Try to download and cache
+        try
+            @info "Downloading BVBRC genome summary from $summary_url"
+            Downloads.download(summary_url, summary_cache)
+            @info "Downloading BVBRC genome metadata from $metadata_url"
+            Downloads.download(metadata_url, metadata_cache)
+            if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
+                @info "Successfully downloaded and cached BVBRC metadata"
+            else
+                error("Downloaded files are missing or empty")
+            end
+        catch e
+            @warn "Failed to download BVBRC metadata: $e"
+            # Fallback: find most recent previous cache
+            cached_files = sort(filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_summary\.tsv", f), readdir(cache_dir; join=true)), rev=true)
+            cached_meta_files = sort(filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_metadata\.tsv", f), readdir(cache_dir; join=true)), rev=true)
+            if !isempty(cached_files) && !isempty(cached_meta_files)
+                summary_file = cached_files[1]
+                metadata_file = cached_meta_files[1]
+                @info "Falling back to most recent cached BVBRC metadata: $summary_file, $metadata_file"
+                used_cache = true
+            else
+                error("No valid BVBRC metadata cache available and download failed.")
+            end
+        end
+    end
+
+    # Read files into DataFrames
+    @info "Reading genome summary file: $summary_file"
+    genome_summary = CSV.read(summary_file, DataFrames.DataFrame, delim='\t', header=1, types=Dict("genome_id" => String))
+    @info "Reading genome metadata file: $metadata_file"
+    genome_metadata = CSV.read(metadata_file, DataFrames.DataFrame, delim='\t', header=1, types=Dict("genome_id" => String))
+
+    # Join the DataFrames
+    @info "Joining genome summary and metadata"
+    bvbrc_genome_summary = DataFrames.innerjoin(genome_summary, genome_metadata, on="genome_id", makeunique=true)
+    return bvbrc_genome_summary
 end
 
 """
