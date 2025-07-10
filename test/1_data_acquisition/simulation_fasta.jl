@@ -6,20 +6,21 @@ using Test
 import Mycelia
 import FASTX
 import Random
+import CodecZlib
 
 const SEED = 42
 
 @testset "FASTA simulation and acquisition" begin
     @testset "get_base_extension" begin
         @test Mycelia.get_base_extension("foo.fasta.gz") == ".fasta"
-        @test Mycelia.get_base_extension("foo.fna.gz") == ".fna"
-        @test Mycelia.get_base_extension("foo.faa.gz") == ".faa"
-        @test Mycelia.get_base_extension("foo.frn.gz") == ".frn"
-    
+        for ext in ["fna", "faa", "frn"]
+            @test Mycelia.get_base_extension("foo.$ext.gz") == "." * ext
+        end
+
         @test Mycelia.get_base_extension("foo.fasta") == ".fasta"
-        @test Mycelia.get_base_extension("foo.fna") == ".fna"
-        @test Mycelia.get_base_extension("foo.faa") == ".faa"
-        @test Mycelia.get_base_extension("foo.frn") == ".frn"
+        for ext in ["fna", "faa", "frn"]
+            @test Mycelia.get_base_extension("foo.$ext") == "." * ext
+        end
     end
     
     @testset "random_fasta_record" begin
@@ -50,6 +51,28 @@ const SEED = 42
     @testset "aa record" begin
         aa_record = Mycelia.random_fasta_record(moltype=:AA, seed=SEED, L = 10)
         @test FASTX.sequence(aa_record) == "VATAGWWITI"
+    end
+    @testset "deterministic sequence" begin
+        rec1 = Mycelia.random_fasta_record(seed=SEED, L=15)
+        rec2 = Mycelia.random_fasta_record(seed=SEED, L=15)
+        @test FASTX.sequence(rec1) == FASTX.sequence(rec2)
+        @test FASTX.identifier(rec1) != FASTX.identifier(rec2)
+    end
+    @testset "write_fasta" begin
+        record = Mycelia.random_fasta_record(seed=SEED, L=10)
+        fasta_file = "temp_write_fasta.fna.gz"
+        try
+            result = Mycelia.write_fasta(outfile=fasta_file, records=[record])
+            @test result == fasta_file
+            @test isfile(fasta_file)
+            FASTX.FASTA.Reader(CodecZlib.GzipDecompressorStream(open(fasta_file))) do reader
+                rec = first(reader)
+                @test FASTX.sequence(rec) == FASTX.sequence(record)
+                @test FASTX.identifier(rec) == FASTX.identifier(record)
+            end
+        finally
+            isfile(fasta_file) && rm(fasta_file)
+        end
     end
     @testset "virus phiX174" begin
         genome_result = Mycelia.download_genome_by_accession(accession=phiX174_accession_id)
