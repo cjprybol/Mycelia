@@ -909,7 +909,7 @@ function fasterq_dump(;outdir=pwd(), srr_identifier="")
     end
     return (
         forward_reads = isfile(forward_reads_gz) ? forward_reads_gz : missing,
-        reverse_reads = isfile(forward_reads_gz) ? reverse_reads_gz : missing,
+        reverse_reads = isfile(reverse_reads_gz) ? reverse_reads_gz : missing,
         unpaired_reads = isfile(unpaired_reads_gz) ? unpaired_reads_gz : missing
     )
 end
