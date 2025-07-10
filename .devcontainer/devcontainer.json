@@ -14,8 +14,13 @@
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
-		"ghcr.io/julialang/devcontainer-features/julia:1": {},
-        "ghcr.io/devcontainers/features/python:1": {},
+		"ghcr.io/julialang/devcontainer-features/julia:1": {
+            "channel": "lts"
+        },
+        "ghcr.io/devcontainers/features/python:1": {
+            "installTools": true,
+            "version": "os-provided"
+        },
 	},
     "waitFor": "postCreateCommand",
     // "updateContentCommand": "python3 -m pip install -r requirements.txt",
