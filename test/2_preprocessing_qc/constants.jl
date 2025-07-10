@@ -13,6 +13,8 @@
             "sample.fast",
             "sample.fastq1",
             "notfastq.txt",
+            "sample.fastq.gz.old",
+            "reads.fq.gz.bak",
         ]
         for invalid_fastq_file in invalid_fastq_files
             @test !occursin(Mycelia.FASTQ_REGEX, invalid_fastq_file)
@@ -37,6 +39,8 @@
             "genome.fasta1",
             "file.fasta.txt",
             "notfasta.fa.gz.old",
+            "genome.fa.bz2",
+            "fasta.fna.gz.tmp",
         ]
         for invalid_fasta_file in invalid_fasta_files
             @test !occursin(Mycelia.FASTA_REGEX, invalid_fasta_file)
@@ -54,6 +58,8 @@
             "variants.vcf1",
             "vcf_variants.txt",
             "sample.vcf.gz.old",
+            "genotypes.vcf.bz2",
+            "variants.vcf.gz.bak",
         ]
         for invalid_vcf_file in invalid_vcf_files
             @test !occursin(Mycelia.VCF_REGEX, invalid_vcf_file)
@@ -73,6 +79,9 @@
             "alignment.sam1",
             "alignment.bam.gz",
             "xam_alignment.txt",
+            "alignment.sam.gz.old",
+            "alignment.cram.gz",
+            "alignment.bam1",
         ]
         for invalid_xam_file in invalid_xam_files
             @test !occursin(Mycelia.XAM_REGEX, invalid_xam_file)
