@@ -200,4 +200,48 @@ import Kmers
         exact_qualmers = collect(Mycelia.qualmers_fw(exact_dna, exact_qual, Val(4)))
         @test length(exact_qualmers) == 1
     end
+
+    @testset "Simple Qualmer Examples" begin
+        # Basic Qualmer construction for each alphabet
+        dna_kmer = Kmers.DNAKmer{3}(BioSequences.LongDNA{3}("ACG"))
+        rna_kmer = Kmers.RNAKmer{3}(BioSequences.LongRNA{3}("ACG"))
+        aa_kmer  = Kmers.AAKmer{3}(BioSequences.LongAA("ACD"))
+        qual = (0x01, 0x02, 0x03)
+
+        dna_q = Mycelia.Qualmer(dna_kmer, qual)
+        rna_q = Mycelia.Qualmer(rna_kmer, qual)
+        aa_q  = Mycelia.Qualmer(aa_kmer,  qual)
+
+        @test dna_q.kmer == dna_kmer && dna_q.qualities == qual
+        @test rna_q.kmer == rna_kmer && rna_q.qualities == qual
+        @test aa_q.kmer  == aa_kmer  && aa_q.qualities  == qual
+
+        # Canonical with reverse complement for DNA and RNA
+        rc_dna = Kmers.DNAKmer{3}(BioSequences.LongDNA{3}("GAT"))
+        rc_q   = (0x10, 0x11, 0x12)
+        canon_dna = Mycelia.canonical(Mycelia.Qualmer(rc_dna, rc_q))
+        @test canon_dna.kmer == BioSequences.canonical(rc_dna)
+        @test canon_dna.qualities == (0x12, 0x11, 0x10)
+
+        rc_rna = Kmers.RNAKmer{3}(BioSequences.LongRNA{3}("GAU"))
+        canon_rna = Mycelia.canonical(Mycelia.Qualmer(rc_rna, rc_q))
+        @test canon_rna.kmer == BioSequences.canonical(rc_rna)
+        @test canon_rna.qualities == (0x12, 0x11, 0x10)
+
+        # Iterator checks with small sequences
+        seq = BioSequences.LongDNA{4}("ACGT")
+        q   = UInt8[1,2,3,4]
+
+        fw = collect(Mycelia.qualmers_fw(seq, q, Val(2)))
+        @test length(fw) == 3
+        @test fw[1] == (Mycelia.Qualmer(Kmers.DNAKmer{2}(BioSequences.LongDNA{2}("AC")), (0x01,0x02)), 1)
+
+        unambig = collect(Mycelia.qualmers_unambiguous(seq, q, Val(2)))
+        @test length(unambig) == 3
+        @test unambig[3] == (Mycelia.Qualmer(Kmers.DNAKmer{2}(BioSequences.LongDNA{2}("GT")), (0x03,0x04)), 3)
+
+        canon = collect(Mycelia.qualmers_canonical(seq, q, Val(2)))
+        @test length(canon) == 3
+        @test canon[3] == (Mycelia.Qualmer(BioSequences.canonical(Kmers.DNAKmer{2}(BioSequences.LongDNA{2}("GT"))), (0x04,0x03)), 3)
+    end
 end
