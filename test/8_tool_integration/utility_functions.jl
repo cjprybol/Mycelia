@@ -8,9 +8,12 @@ import Random
 @testset "scientific notation" begin
     @test Mycelia.scientific_notation(100) == "1.00e+02"
     @test Mycelia.scientific_notation(1000, precision=3) == "1.000e+03"
+    @test Mycelia.scientific_notation(0) == "0.00e+00"
+    @test_throws ErrorException Mycelia.scientific_notation(1; precision=-1)
 end
 
 @testset "byte formatting" begin
+    @test Mycelia.bytes_human_readable(0) == "0 bytes"
     @test Mycelia.bytes_human_readable(1) == "1 byte"
     @test Mycelia.bytes_human_readable(1024^0 + 1024^0) == "2 bytes"
     @test Mycelia.bytes_human_readable(1024^0 + 1024^1) == "1.001 KiB"
@@ -35,6 +38,14 @@ end
     @test Mycelia.bytes_human_readable(Mycelia.estimate_sparse_matrix_memory(10^5, 10^5, density = 0.2)) == "29.803 GiB"
     @test Mycelia.bytes_human_readable(Mycelia.estimate_sparse_matrix_memory(Int64, 10^5, 10^5, density = 0.2)) == "29.803 GiB"
     @test Mycelia.bytes_human_readable(Mycelia.estimate_sparse_matrix_memory(UInt64, 10^5, 10^5, density = 0.2)) == "29.803 GiB"
+
+    @test Mycelia.estimate_dense_matrix_memory(Int32, 2, 2) == 16
+    @test_throws ArgumentError Mycelia.estimate_dense_matrix_memory(10)
+
+    @test Mycelia.estimate_sparse_matrix_memory(Float32, 2, 2, nnz=2) == 48
+    @test Mycelia.estimate_sparse_matrix_memory(Float32, 2, 2, density=0.5) == 48
+    @test Mycelia.estimate_sparse_matrix_memory(2, 2, density=0.25) == 40
+    @test_throws ArgumentError Mycelia.estimate_sparse_matrix_memory(Float32, 2, 2)
 end
 
 @testset "check matrix fits in memory" begin
@@ -44,4 +55,7 @@ end
     )
     @test assessed_memory_needs.will_fit_available == (assessed_memory_needs.bytes_needed <= assessed_memory_needs.free_memory)
     @test assessed_memory_needs.will_fit_total == (assessed_memory_needs.bytes_needed <= assessed_memory_needs.total_memory)
+
+    too_big = Sys.total_memory() * 2
+    @test_throws ErrorException Mycelia.check_matrix_fits_in_memory(too_big; severity=:error)
 end
