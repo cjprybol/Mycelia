@@ -1796,8 +1796,8 @@ Iterates through each column in the DataFrame and displays:
 2. A Dict mapping unique values to their frequencies using StatsBase.countmap
 """
 function countmap_columns(table)
-    for n in names(refseq_metadata)
+    for n in names(table)
         display(n)
-        display(StatsBase.countmap(refseq_metadata[!, n]))
+        display(StatsBase.countmap(table[!, n]))
     end
 end
