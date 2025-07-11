@@ -1,6 +1,6 @@
 # Getting Started with Mycelia
 
-Welcome to Mycelia, a comprehensive Julia package for bioinformatics and computational biology. This guide will help you install Mycelia and complete your first genomic analysis.
+Welcome to Mycelia, a Julia package for bioinformatics and computational biology. This guide will help you install Mycelia and complete your first genomic analysis.
 
 ## What is Mycelia?
 
@@ -19,26 +19,24 @@ Mycelia is a modular bioinformatics toolkit that provides:
 
 ### Julia Installation
 
-Mycelia requires Julia 1.8 or higher. Install Julia using [juliaup](https://github.com/JuliaLang/juliaup):
+Mycelia is tested against Julia LTS and release. Install Julia using [juliaup](https://github.com/JuliaLang/juliaup):
 
 ```bash
 # Install juliaup
 curl -fsSL https://install.julialang.org | sh
 
-# Install latest stable Julia
+# Install latest lts Julia
+juliaup add lts
+juliaup default lts
+
+# Install latest release Julia
 juliaup add release
 juliaup default release
 ```
 
 ### System Dependencies
 
-Mycelia integrates with external bioinformatics tools. For full functionality, you'll need:
-
-```bash
-# Install bioconda (recommended for tool management)
-conda install -c conda-forge mamba
-mamba install -c bioconda hifiasm minimap2 pyrodigal
-```
+Mycelia integrates with external bioinformatics tools. For full functionality, you'll need conda. If no conda environment is available, Mycelia will install it's own environment using Conda.jl.
 
 ### HPC Environment Setup
 

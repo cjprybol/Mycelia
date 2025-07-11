@@ -43,7 +43,7 @@ small_config = Dict(
 medium_config = Dict(
     "genome_sizes" => [500000, 1000000, 2000000],
     "coverage_depths" => [20, 30, 50],
-    "assemblers" => ["hifiasm", "canu"],
+    "assemblers" => ["megahit", "metaspades", "flye", "canu", "hifiasm", "unicycler", "mycelia"],
     "n_replicates" => 5,
     "description" => "Medium scale - realistic datasets"
 )
@@ -52,7 +52,7 @@ medium_config = Dict(
 large_config = Dict(
     "genome_sizes" => [5000000, 10000000, 50000000],
     "coverage_depths" => [30, 50, 100],
-    "assemblers" => ["hifiasm", "canu", "flye"],
+    "assemblers" => ["megahit", "metaspades", "flye", "canu", "hifiasm", "unicycler", "mycelia"],
     "n_replicates" => 10,
     "description" => "Large scale - scalability testing"
 )
@@ -118,10 +118,18 @@ println("\n--- Assembly Quality Benchmarks ---")
 println("\n--- Assembler Comparison Benchmarks ---")
 
 # TODO: Implement assembler comparison benchmarks
-# - Performance comparison
-# - Quality comparison
+# - Performance comparison (runtime, memory usage)
+# - Quality comparison (N50, completeness, accuracy)
 # - Parameter sensitivity analysis
 # - Robustness testing
+# - Mycelia vs external assemblers:
+#   - Short reads: MEGAHIT vs metaSPAdes vs Mycelia
+#   - Long reads: Flye vs Canu vs hifiasm vs Mycelia
+#   - Hybrid: Unicycler vs Mycelia hybrid approach
+# - Error correction effectiveness:
+#   - Viterbi polishing vs traditional polishing
+#   - Iterative polishing convergence
+#   - Probabilistic vs deterministic approaches
 
 # ## Parameter Optimization Benchmarks
 #

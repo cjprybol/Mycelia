@@ -1,13 +1,17 @@
 # # Tutorial 4: Genome Assembly
 #
-# This tutorial covers genome assembly from sequencing reads, focusing on modern
-# HiFi assembly approaches and quality assessment techniques.
+# This tutorial covers comprehensive genome assembly approaches, including short read,
+# long read, and hybrid assembly methods, with emphasis on Mycelia's probabilistic
+# assembly and benchmarking against state-of-the-art tools.
 #
 # ## Learning Objectives
 #
 # By the end of this tutorial, you will understand:
 # - Different assembly algorithms and their applications
-# - HiFi assembly workflow with hifiasm
+# - Short read assembly with MEGAHIT and metaSPAdes
+# - Long read assembly with Flye, Canu, and hifiasm
+# - Hybrid assembly approaches combining multiple data types
+# - Mycelia's probabilistic assembly using string graphs and Viterbi error correction
 # - Assembly quality metrics and their interpretation
 # - Error correction and polishing techniques
 # - Handling repetitive sequences and structural variants
@@ -37,26 +41,36 @@ println("=== Genome Assembly Tutorial ===")
 
 # ### Assembly Paradigms
 #
-# Three main approaches to genome assembly:
-# 1. Overlap-Layout-Consensus (OLC) - for long reads
-# 2. de Bruijn Graph - for short reads
-# 3. String Graph - for long accurate reads
+# Four main approaches to genome assembly:
+# 1. de Bruijn Graph - for short reads (MEGAHIT, metaSPAdes)
+# 2. Overlap-Layout-Consensus (OLC) - for long reads (Canu)
+# 3. String Graph - for long accurate reads (hifiasm, Flye)
+# 4. Probabilistic Assembly - Mycelia's approach using string graphs with Viterbi error correction
 
 println("Assembly Algorithm Comparison:")
-println("OLC (Overlap-Layout-Consensus):")
-println("  - Best for: Long reads (PacBio, Nanopore)")
-println("  - Strengths: Handles repeats, intuitive approach")
-println("  - Weaknesses: Computationally expensive, error-sensitive")
-println()
 println("de Bruijn Graph:")
 println("  - Best for: Short reads (Illumina)")
+println("  - Tools: MEGAHIT, metaSPAdes, SPAdes")
 println("  - Strengths: Efficient, handles high coverage")
 println("  - Weaknesses: Struggles with repeats, requires error correction")
 println()
+println("OLC (Overlap-Layout-Consensus):")
+println("  - Best for: Long reads (PacBio, Nanopore)")
+println("  - Tools: Canu, Miniasm")
+println("  - Strengths: Handles repeats, intuitive approach")
+println("  - Weaknesses: Computationally expensive, error-sensitive")
+println()
 println("String Graph:")
 println("  - Best for: Long accurate reads (HiFi)")
+println("  - Tools: hifiasm, Flye")
 println("  - Strengths: Efficient, haplotype-aware, handles complexity")
 println("  - Weaknesses: Requires high-quality reads")
+println()
+println("Probabilistic Assembly (Mycelia):")
+println("  - Best for: Any read type with error correction")
+println("  - Tools: Mycelia's string graph + Viterbi")
+println("  - Strengths: Handles errors probabilistically, adaptable")
+println("  - Weaknesses: Computationally intensive for large genomes")
 
 # ## Part 2: Data Preparation for Assembly
 #
@@ -64,9 +78,9 @@ println("  - Weaknesses: Requires high-quality reads")
 
 println("\n=== Data Preparation ===")
 
-# ### Simulating HiFi-like Data
+# ### Simulating Multi-Platform Data
 #
-# Create synthetic HiFi data for assembly demonstration
+# Create synthetic data for comprehensive assembly testing
 
 println("--- Generating Test Data ---")
 
@@ -76,28 +90,54 @@ reference_genome = Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=genome_si
 
 println("Reference genome: $(genome_size) bp")
 
-# Simulate HiFi reads
-coverage = 20
-read_length = 15000  # Typical HiFi read length
-error_rate = 0.001   # HiFi error rate
+# Simulate different read types
+short_read_params = Dict(
+    "coverage" => 30,
+    "read_length" => 150,
+    "error_rate" => 0.001,
+    "description" => "Illumina short reads"
+)
 
-# TODO: Implement HiFi read simulation
-# - Generate reads with appropriate length distribution
-# - Add realistic error profiles
-# - Maintain strand information
-# - Create paired-end reads if needed
+long_read_params = Dict(
+    "coverage" => 20,
+    "read_length" => 10000,
+    "error_rate" => 0.05,
+    "description" => "Nanopore long reads"
+)
 
-println("Simulating HiFi reads:")
-println("  Coverage: $(coverage)x")
-println("  Read length: $(read_length) bp")
-println("  Error rate: $(error_rate * 100)%")
+hifi_params = Dict(
+    "coverage" => 15,
+    "read_length" => 15000,
+    "error_rate" => 0.001,
+    "description" => "PacBio HiFi reads"
+)
+
+# TODO: Implement multi-platform read simulation
+# - Generate short reads for MEGAHIT/metaSPAdes
+# - Generate long reads for Flye/Canu
+# - Generate HiFi reads for hifiasm
+# - Create hybrid datasets for Unicycler
+# - Generate error-prone reads for Mycelia polishing
+
+println("Simulating read types:")
+for (name, params) in [("Short reads", short_read_params), 
+                      ("Long reads", long_read_params), 
+                      ("HiFi reads", hifi_params)]
+    println("  $(name): $(params["coverage"])x coverage, $(params["read_length"]) bp, $(params["error_rate"]*100)% error")
+end
 
 # Write test data
 reference_file = "reference_genome.fasta"
-reads_file = "hifi_reads.fastq"
+short_reads_r1 = "short_reads_R1.fastq"
+short_reads_r2 = "short_reads_R2.fastq"
+long_reads_file = "long_reads.fastq"
+hifi_reads_file = "hifi_reads.fastq"
 
 Mycelia.write_fasta(outfile=reference_file, records=[reference_genome])
-# TODO: Write simulated reads to FASTQ file
+# TODO: Write simulated reads to FASTQ files
+# - Generate paired-end short reads
+# - Generate single-end long reads
+# - Generate single-end HiFi reads
 
 # ### Read Statistics and Quality Assessment
 #
@@ -111,50 +151,116 @@ println("--- Read Analysis ---")
 # - Coverage estimation
 # - Error rate assessment
 
-# ## Part 3: Assembly with hifiasm
+# ## Part 3: Multi-Platform Assembly Approaches
 #
-# Modern HiFi assembly using hifiasm string graph approach
+# Comprehensive coverage of short read, long read, and hybrid assembly
 
-println("\n=== HiFi Assembly with hifiasm ===")
+println("\n=== Multi-Platform Assembly Approaches ===")
 
-# ### Assembly Parameters
+# ### Short Read Assembly
 #
-# Key parameters for hifiasm assembly
+# MEGAHIT and metaSPAdes for short read data
 
-assembly_params = Dict(
-    "min_overlap" => 1000,      # Minimum overlap length
-    "min_identity" => 0.95,     # Minimum overlap identity
-    "kmer_size" => 51,          # K-mer size for overlap detection
-    "haplotype_mode" => true,   # Enable haplotype-aware assembly
-    "threads" => 4              # Number of threads
+println("--- Short Read Assembly ---")
+
+# Example parameters for short read assembly
+short_read_params = Dict(
+    "megahit_k_list" => "21,29,39,59,79,99,119,141",
+    "metaspades_k_list" => "21,33,55,77",
+    "min_contig_len" => 200,
+    "threads" => 4
 )
 
-println("Assembly parameters:")
-for (param, value) in assembly_params
+println("Short read assembly parameters:")
+for (param, value) in short_read_params
     println("  $param: $value")
 end
 
-# ### Running Assembly
+# TODO: Implement short read assembly examples
+# - Run MEGAHIT for metagenomic data
+# - Run metaSPAdes for complex datasets
+# - Compare assembly quality metrics
+# - Evaluate computational requirements
+
+# ### Long Read Assembly
 #
-# Execute hifiasm assembly with monitoring
+# Flye, Canu, and hifiasm for long read data
 
-println("--- Running Assembly ---")
+println("--- Long Read Assembly ---")
 
-# TODO: Implement hifiasm assembly
-# - Configure assembly parameters
-# - Run hifiasm with monitoring
-# - Handle different output formats
-# - Process primary and alternate assemblies
+# Example parameters for long read assembly
+long_read_params = Dict(
+    "genome_size" => "5m",
+    "flye_read_type" => "pacbio-hifi",
+    "canu_read_type" => "pacbio",
+    "hifiasm_mode" => "primary",
+    "threads" => 4
+)
 
-assembly_output = "assembly_output"
-# assembly_result = Mycelia.assemble_genome(
-#     reads_file,
-#     output_dir=assembly_output,
-#     assembler="hifiasm",
-#     params=assembly_params
-# )
+println("Long read assembly parameters:")
+for (param, value) in long_read_params
+    println("  $param: $value")
+end
 
-println("Assembly completed - checking outputs...")
+# TODO: Implement long read assembly examples
+# - Run Flye for various read types
+# - Run Canu with error correction
+# - Run hifiasm for HiFi data
+# - Compare assembly contiguity
+# - Evaluate error rates
+
+# ### Hybrid Assembly
+#
+# Unicycler combining short and long reads
+
+println("--- Hybrid Assembly ---")
+
+# Example parameters for hybrid assembly
+hybrid_params = Dict(
+    "short_read_accuracy" => 0.99,
+    "long_read_accuracy" => 0.90,
+    "bridging_mode" => "conservative",
+    "threads" => 4
+)
+
+println("Hybrid assembly parameters:")
+for (param, value) in hybrid_params
+    println("  $param: $value")
+end
+
+# TODO: Implement hybrid assembly examples
+# - Run Unicycler with paired data
+# - Compare to short-read-only assemblies
+# - Evaluate scaffolding improvements
+# - Assess computational trade-offs
+
+# ### Mycelia's Probabilistic Assembly
+#
+# String graph approach with Viterbi error correction
+
+println("--- Mycelia's Probabilistic Assembly ---")
+
+# Example parameters for Mycelia assembly
+mycelia_params = Dict(
+    "k_range" => "21,31,41,51,61,71,81,91",
+    "error_rate" => 0.01,
+    "min_coverage" => 3,
+    "iterative_polishing" => true,
+    "verbosity" => "reads"
+)
+
+println("Mycelia assembly parameters:")
+for (param, value) in mycelia_params
+    println("  $param: $value")
+end
+
+# TODO: Implement Mycelia assembly examples
+# - Build string graph from reads
+# - Apply Viterbi error correction
+# - Perform iterative polishing
+# - Compare to external assemblers
+
+println("Assembly approaches comparison completed...")
 
 # ## Part 4: Assembly Quality Assessment
 #
@@ -373,14 +479,17 @@ println("- Compare with related genomes")
 # ## Summary
 println("\n=== Assembly Summary ===")
 println("✓ Understanding assembly algorithms and their applications")
-println("✓ Implementing HiFi assembly with hifiasm")
+println("✓ Short read assembly with MEGAHIT and metaSPAdes")
+println("✓ Long read assembly with Flye, Canu, and hifiasm")
+println("✓ Hybrid assembly approaches with Unicycler")
+println("✓ Mycelia's probabilistic assembly with string graphs and Viterbi error correction")
 println("✓ Comprehensive quality assessment techniques")
 println("✓ Assembly polishing and error correction")
 println("✓ Handling repetitive sequences and heterozygosity")
 println("✓ Visualization and benchmarking approaches")
 
 # Cleanup
-cleanup_files = [reference_file, reads_file]
+cleanup_files = [reference_file, short_reads_r1, short_reads_r2, long_reads_file, hifi_reads_file]
 for file in cleanup_files
     if isfile(file)
         rm(file, force=true)
