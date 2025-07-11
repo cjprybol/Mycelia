@@ -1,10 +1,16 @@
 # Assembly modules tests
-@testset "assembly modules" begin
-    @testset "1. Pre‐processing & Read QC" begin
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
+import Mycelia
+Test.@testset "assembly modules" begin
+    Test.@testset "1. Pre‐processing & Read QC" begin
     end
-    @testset "2. k‑mer Analysis" begin
+    Test.@testset "2. k‑mer Analysis" begin
     end
-    @testset "3. Short Read Assembly" begin
+    Test.@testset "3. Short Read Assembly" begin
         mktempdir() do dir
             fastq1 = joinpath(dir, "reads_1.fq")
             fastq2 = joinpath(dir, "reads_2.fq")
@@ -26,8 +32,8 @@
             mkpath(outdir)
             touch(joinpath(outdir, "final.contigs.fa"))
             result = Mycelia.run_megahit(fastq1=fastq1, fastq2=fastq2, outdir=outdir)
-            @test result.outdir == outdir
-            @test result.contigs == joinpath(outdir, "final.contigs.fa")
+            Test.@test result.outdir == outdir
+            Test.@test result.contigs == joinpath(outdir, "final.contigs.fa")
             
             # Test metaSPAdes
             outdir = joinpath(dir, "metaspades")
@@ -35,13 +41,13 @@
             touch(joinpath(outdir, "contigs.fasta"))
             touch(joinpath(outdir, "scaffolds.fasta"))
             result = Mycelia.run_metaspades(fastq1=fastq1, fastq2=fastq2, outdir=outdir)
-            @test result.outdir == outdir
-            @test result.contigs == joinpath(outdir, "contigs.fasta")
-            @test result.scaffolds == joinpath(outdir, "scaffolds.fasta")
+            Test.@test result.outdir == outdir
+            Test.@test result.contigs == joinpath(outdir, "contigs.fasta")
+            Test.@test result.scaffolds == joinpath(outdir, "scaffolds.fasta")
         end
     end
     
-    @testset "4. Long Read Assembly" begin
+    Test.@testset "4. Long Read Assembly" begin
         mktempdir() do dir
             fastq = joinpath(dir, "long_reads.fq")
             open(fastq, "w") do io
@@ -56,16 +62,16 @@
             mkpath(outdir)
             touch(joinpath(outdir, "assembly.fasta"))
             result = Mycelia.run_flye(fastq=fastq, outdir=outdir, genome_size="5m")
-            @test result.outdir == outdir
-            @test result.assembly == joinpath(outdir, "assembly.fasta")
+            Test.@test result.outdir == outdir
+            Test.@test result.assembly == joinpath(outdir, "assembly.fasta")
             
             # Test Canu
             outdir = joinpath(dir, "canu")
             mkpath(outdir)
             touch(joinpath(outdir, "reads.contigs.fasta"))
             result = Mycelia.run_canu(fastq=fastq, outdir=outdir, genome_size="5m")
-            @test result.outdir == outdir
-            @test result.assembly == joinpath(outdir, "reads.contigs.fasta")
+            Test.@test result.outdir == outdir
+            Test.@test result.assembly == joinpath(outdir, "reads.contigs.fasta")
             
             # Test hifiasm
             outdir = joinpath(dir, "hifiasm")
@@ -73,12 +79,12 @@
             prefix = joinpath(outdir, basename(fastq) * ".hifiasm")
             touch(prefix * ".dummy")
             result = Mycelia.run_hifiasm(fastq=fastq, outdir=outdir)
-            @test result.outdir == outdir
-            @test result.hifiasm_outprefix == prefix
+            Test.@test result.outdir == outdir
+            Test.@test result.hifiasm_outprefix == prefix
         end
     end
     
-    @testset "5. Hybrid Assembly" begin
+    Test.@testset "5. Hybrid Assembly" begin
         mktempdir() do dir
             short1 = joinpath(dir, "short_1.fq")
             short2 = joinpath(dir, "short_2.fq")
@@ -108,11 +114,11 @@
             mkpath(outdir)
             touch(joinpath(outdir, "assembly.fasta"))
             result = Mycelia.run_unicycler(short_1=short1, short_2=short2, long_reads=long_reads, outdir=outdir)
-            @test result.outdir == outdir
-            @test result.assembly == joinpath(outdir, "assembly.fasta")
+            Test.@test result.outdir == outdir
+            Test.@test result.assembly == joinpath(outdir, "assembly.fasta")
         end
     end
-    @testset "6. Probabilistic Assembly (Mycelia)" begin
+    Test.@testset "6. Probabilistic Assembly (Mycelia)" begin
         mktempdir() do dir
             fastq = joinpath(dir, "reads.fq")
             open(fastq, "w") do io
@@ -128,20 +134,20 @@
             
             # Test string graph building
             graph = Mycelia.string_to_ngram_graph(s="ACGTACGTACGTACGTACGT", n=5)
-            @test Graphs.nv(graph) > 0
+            Test.@test Graphs.nv(graph) > 0
             
             # Test Viterbi error correction functions exist
-            @test hasmethod(Mycelia.viterbi_maximum_likelihood_traversals, (Any,))
-            @test hasmethod(Mycelia.polish_fastq, (Any,))
+            Test.@test hasmethod(Mycelia.viterbi_maximum_likelihood_traversals, (Any,))
+            Test.@test hasmethod(Mycelia.polish_fastq, (Any,))
         end
     end
     
-    @testset "7. Assembly merging" begin
+    Test.@testset "7. Assembly merging" begin
     end
-    @testset "8. Polishing & Error Correction" begin
+    Test.@testset "8. Polishing & Error Correction" begin
     end
-    @testset "6. Strain resolution" begin
+    Test.@testset "6. Strain resolution" begin
     end
-    @testset "7. Validation & Quality Control" begin
+    Test.@testset "7. Validation & Quality Control" begin
     end
 end

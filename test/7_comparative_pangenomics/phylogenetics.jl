@@ -15,14 +15,14 @@ import Pkg
 if isinteractive()
     Pkg.activate("..")
 end
-using Revise
-using Test
+import Revise
+import Test
 import Mycelia
 import FASTX
 import Kmers
 import Distances
 
-@testset "phylogenetic analyses" begin
+Test.@testset "phylogenetic analyses" begin
     recs = [Mycelia.random_fasta_record(moltype = :DNA, seed = i, L = 12) for i in 1:3]
     counts_list = [Mycelia.count_canonical_kmers(Kmers.DNAKmer{3}, [r]) for r in recs]
 
@@ -39,8 +39,8 @@ import Distances
 
     mktemp() do path, io
         newick_file = Mycelia.distance_matrix_to_newick(distance_matrix = dist, labels = 1:3, outfile = path)
-        @test isfile(newick_file)
+        Test.@test isfile(newick_file)
         line = open(readline, newick_file)
-        @test endswith(line, ';')
+        Test.@test endswith(line, ';')
     end
 end

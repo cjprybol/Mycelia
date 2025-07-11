@@ -10,11 +10,10 @@
 # ````
 
 import Pkg
-
-Pkg.activate("..")
-
-using Revise
-using Test
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
 import Mycelia
 import Random
 import Graphs
@@ -294,26 +293,26 @@ end
 # create basic undirectected graph, find connected components, collapse unbranching paths, return minimal graph
 
 # add longer n's, find connected components, collapse unbranching paths, return minimal string graph
-@testset "banana string graph" begin
+Test.@testset "banana string graph" begin
     s = "banana"
     n = 2
     g = Mycelia.string_to_ngram_graph(;s,n)
     display(Mycelia.plot_ngram_graph(g))
-    @test collect(Graphs.weights(g)) == [0 0 2; 1 0 0; 1 0 0]
-    @test collect(MetaGraphsNext.labels(g)) == ["an", "ba", "na"]
-    @test collect(MetaGraphsNext.edge_labels(g)) == [("an", "na"), ("ba", "an"), ("na", "an")]
+    Test.@test collect(Graphs.weights(g)) == [0 0 2; 1 0 0; 1 0 0]
+    Test.@test collect(MetaGraphsNext.labels(g)) == ["an", "ba", "na"]
+    Test.@test collect(MetaGraphsNext.edge_labels(g)) == [("an", "na"), ("ba", "an"), ("na", "an")]
 end
 
 # add longer n's, find connected components, collapse unbranching paths, return minimal string graph
 
-@testset "Mycelia string graph" begin
+Test.@testset "Mycelia string graph" begin
     s = "mycelia"
     n = 3
     g = Mycelia.string_to_ngram_graph(;s,n)
     display(Mycelia.plot_ngram_graph(g))
-    @test collect(Graphs.weights(g)) == [0 1 0 0 0; 0 0 1 0 0; 0 0 0 0 0; 0 0 0 0 1; 1 0 0 0 0]
-    @test collect(MetaGraphsNext.labels(g)) == ["cel", "eli", "lia", "myc", "yce"]
-    @test collect(MetaGraphsNext.edge_labels(g)) == [("cel", "eli"), ("eli", "lia"), ("myc", "yce"), ("yce", "cel")]
+    Test.@test collect(Graphs.weights(g)) == [0 1 0 0 0; 0 0 1 0 0; 0 0 0 0 0; 0 0 0 0 1; 1 0 0 0 0]
+    Test.@test collect(MetaGraphsNext.labels(g)) == ["cel", "eli", "lia", "myc", "yce"]
+    Test.@test collect(MetaGraphsNext.edge_labels(g)) == [("cel", "eli"), ("eli", "lia"), ("myc", "yce"), ("yce", "cel")]
 end
 
 # repeat with `Random.randstring()` with simulated observations

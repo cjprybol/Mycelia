@@ -1,24 +1,30 @@
 # Probabilistic ensemble assembly tests
-@testset "probabilistic ensemble assembly" begin
-    @testset "Illumina" begin
-        @test 1 + 1 == 2
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
+import Mycelia
+Test.@testset "probabilistic ensemble assembly" begin
+    Test.@testset "Illumina" begin
+        Test.@test 1 + 1 == 2
     end
-    @testset "Ultima" begin
-        @test 1 + 1 == 2
+    Test.@testset "Ultima" begin
+        Test.@test 1 + 1 == 2
     end
-    @testset "Nanopore" begin
-        @test 1 + 1 == 2
+    Test.@testset "Nanopore" begin
+        Test.@test 1 + 1 == 2
     end
-    @testset "PacBio" begin
-        @test 1 + 1 == 2
+    Test.@testset "PacBio" begin
+        Test.@test 1 + 1 == 2
     end
-    @testset "multi-entity, even coverage" begin
-        @test 1 + 1 == 2
+    Test.@testset "multi-entity, even coverage" begin
+        Test.@test 1 + 1 == 2
     end
-    @testset "multi-entity, log-distributed coverage" begin
-        @test 1 + 1 == 2
+    Test.@testset "multi-entity, log-distributed coverage" begin
+        Test.@test 1 + 1 == 2
     end
-    @testset "multi-platform" begin
-        @test 1 + 1 == 2
+    Test.@testset "multi-platform" begin
+        Test.@test 1 + 1 == 2
     end
 end

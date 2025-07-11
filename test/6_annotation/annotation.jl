@@ -1,8 +1,10 @@
 # Annotation & feature extraction tests
 
 import Pkg
-Pkg.activate("..")
-using Test
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
 import Mycelia
 import FASTX
 import BioSequences
@@ -10,55 +12,55 @@ import DataFrames
 import CSV
 import uCSV
 
-@testset "Annotation & feature extraction" begin
+Test.@testset "Annotation & feature extraction" begin
 
-    @testset "generate_transterm_coordinates_from_fasta" begin
+    Test.@testset "generate_transterm_coordinates_from_fasta" begin
         mktempdir() do dir
             fasta_file = joinpath(dir, "sample.fna")
             record = FASTX.FASTA.Record("seq1", BioSequences.DNASequence("ATGCGT"))
             Mycelia.write_fasta(outfile=fasta_file, records=[record])
             coords_file = Mycelia.generate_transterm_coordinates_from_fasta(fasta_file)
-            @test isfile(coords_file)
+            Test.@test isfile(coords_file)
             coords_df = uCSV.read(coords_file, DataFrames.DataFrame; delim="  ")
-            @test size(coords_df, 1) == 2
-            @test coords_df.gene_id == ["seq1_start", "seq1_stop"]
-            @test coords_df.start == [1, length("ATGCGT")-1]
-            @test coords_df.stop == [2, length("ATGCGT")]
+            Test.@test size(coords_df, 1) == 2
+            Test.@test coords_df.gene_id == ["seq1_start", "seq1_stop"]
+            Test.@test coords_df.start == [1, length("ATGCGT")-1]
+            Test.@test coords_df.stop == [2, length("ATGCGT")]
         end
     end
 
-    @testset "generate_transterm_coordinates_from_gff" begin
+    Test.@testset "generate_transterm_coordinates_from_gff" begin
         mktempdir() do dir
             gff_file = joinpath(dir, "sample.gff")
             open(gff_file, "w") do io
                 println(io, "seq1\tsource\tgene\t1\t5\t0\t+\t0\tID=gene1")
             end
             coords_file = Mycelia.generate_transterm_coordinates_from_gff(gff_file)
-            @test isfile(coords_file)
+            Test.@test isfile(coords_file)
             df = uCSV.read(coords_file, DataFrames.DataFrame; delim="  ")
-            @test size(df, 1) == 1
-            @test df.gene_id[1] == "gene1"
-            @test df.start[1] == 0
-            @test df.stop[1] == 5
-            @test df."#seqid"[1] == "seq1"
+            Test.@test size(df, 1) == 1
+            Test.@test df.gene_id[1] == "gene1"
+            Test.@test df.start[1] == 0
+            Test.@test df.stop[1] == 5
+            Test.@test df."#seqid"[1] == "seq1"
         end
     end
 
-    @testset "read_gff and split attributes" begin
+    Test.@testset "read_gff and split attributes" begin
         mktempdir() do dir
             gff_file = joinpath(dir, "sample.gff")
             open(gff_file, "w") do io
                 println(io, "seq1\tsource\tgene\t1\t5\t0\t+\t0\tID=gene1;Note=demo")
             end
             gff_df = Mycelia.read_gff(gff_file)
-            @test size(gff_df, 1) == 1
+            Test.@test size(gff_df, 1) == 1
             Mycelia.split_gff_attributes_into_columns(gff_df)
-            @test gff_df.ID[1] == "gene1"
-            @test gff_df.Note[1] == "demo"
+            Test.@test gff_df.ID[1] == "gene1"
+            Test.@test gff_df.Note[1] == "demo"
         end
     end
 
-    @testset "update_gff_with_mmseqs" begin
+    Test.@testset "update_gff_with_mmseqs" begin
         mktempdir() do dir
             gff_file = joinpath(dir, "sample.gff")
             open(gff_file, "w") do io
@@ -72,7 +74,7 @@ import uCSV
             CSV.write(mmseqs_file, df; delim='\t')
             updated = Mycelia.update_gff_with_mmseqs(gff_file, mmseqs_file)
             expected = "label=\"desc__protein\";product=\"desc__protein\";ID=gene1"
-            @test updated[1, "attributes"] == expected
+            Test.@test updated[1, "attributes"] == expected
         end
     end
 

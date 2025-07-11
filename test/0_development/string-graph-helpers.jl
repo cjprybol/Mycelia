@@ -1,30 +1,31 @@
 import Pkg
-Pkg.activate("..")
-
-using Test
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
 import Mycelia
 import Graphs
 import MetaGraphsNext
 
-@testset "ngrams" begin
+Test.@testset "ngrams" begin
     s = "banana"
     n = 2
     expected = ["ba", "an", "na", "an", "na"]
-    @test Mycelia.ngrams(s, n) == expected
+    Test.@test Mycelia.ngrams(s, n) == expected
 end
 
-@testset "string_to_ngram_graph" begin
+Test.@testset "string_to_ngram_graph" begin
     s = "banana"
     n = 2
     g = Mycelia.string_to_ngram_graph(; s, n)
-    @test collect(Graphs.weights(g)) == [0 0 2; 1 0 0; 1 0 0]
-    @test collect(MetaGraphsNext.labels(g)) == ["an", "ba", "na"]
-    @test collect(MetaGraphsNext.edge_labels(g)) == [("an", "na"), ("ba", "an"), ("na", "an")]
+    Test.@test collect(Graphs.weights(g)) == [0 0 2; 1 0 0; 1 0 0]
+    Test.@test collect(MetaGraphsNext.labels(g)) == ["an", "ba", "na"]
+    Test.@test collect(MetaGraphsNext.edge_labels(g)) == [("an", "na"), ("ba", "an"), ("na", "an")]
     comps = Mycelia.find_connected_components(g)
-    @test length(comps) == 1 && sort(comps[1]) == [1, 2, 3]
+    Test.@test length(comps) == 1 && sort(comps[1]) == [1, 2, 3]
 end
 
-@testset "collapse and assemble" begin
+Test.@testset "collapse and assemble" begin
     g = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
         label_type=String,
@@ -40,12 +41,12 @@ end
     g["B", "C"] = 1
 
     assembled = Mycelia.assemble_strings(g)
-    @test assembled == ["ABC"]
+    Test.@test assembled == ["ABC"]
 
     collapsed = Mycelia.collapse_unbranching_paths(g)
-    @test sort(MetaGraphsNext.labels(collapsed)) == ["A", "C"]
-    @test MetaGraphsNext.has_edge(collapsed, "A", "C")
+    Test.@test sort(MetaGraphsNext.labels(collapsed)) == ["A", "C"]
+    Test.@test MetaGraphsNext.has_edge(collapsed, "A", "C")
     assembled_collapsed = Mycelia.assemble_strings(collapsed)
-    @test assembled_collapsed == ["ABC"]
+    Test.@test assembled_collapsed == ["ABC"]
 end
 

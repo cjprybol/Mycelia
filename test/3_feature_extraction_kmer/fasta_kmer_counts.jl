@@ -1,8 +1,12 @@
-using Test
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
 import Mycelia
 import FASTX
 
-@testset "fasta_list_to_*_kmer_counts" begin
+Test.@testset "fasta_list_to_*_kmer_counts" begin
     sequences = ["ACGTACGT", "AAAACCCC", "GGGGAAAA"]
     fasta_files = String[]
     for (i, seq) in enumerate(sequences)
@@ -27,15 +31,15 @@ import FASTX
 
     expected_rows = length(Mycelia.generate_all_possible_canonical_kmers(k, Mycelia.DNA_ALPHABET))
     nfiles = length(fasta_files)
-    @test size(dense_res.counts, 1) == expected_rows
-    @test size(dense_res.counts, 2) == nfiles
-    @test size(sparse_res.counts, 1) == expected_rows
-    @test size(sparse_res.counts, 2) == nfiles
+    Test.@test size(dense_res.counts, 1) == expected_rows
+    Test.@test size(dense_res.counts, 2) == nfiles
+    Test.@test size(sparse_res.counts, 1) == expected_rows
+    Test.@test size(sparse_res.counts, 2) == nfiles
 
     for (i, seq) in enumerate(sequences)
         expected_total = length(seq) - k + 1
-        @test sum(dense_res.counts[:, i]) == expected_total
-        @test sum(sparse_res.counts[:, i]) == expected_total
+        Test.@test sum(dense_res.counts[:, i]) == expected_total
+        Test.@test sum(sparse_res.counts[:, i]) == expected_total
     end
 
     for f in fasta_files

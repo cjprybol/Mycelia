@@ -15,19 +15,19 @@ import Pkg
 if isinteractive()
     Pkg.activate("..")
 end
-using Revise
-using Test
+import Revise
+import Test
 import Mycelia
 import BioSequences
 import DataFrames
 
-@testset "sequence classification" begin
+Test.@testset "sequence classification" begin
     seq1 = BioSequences.dna"ATGC"
     seq2 = BioSequences.dna"GCAT"  # reverse complement of seq1
     seq3 = BioSequences.dna"AAAA"
 
-    @test Mycelia.is_equivalent(seq1, seq2)
-    @test !Mycelia.is_equivalent(seq1, seq3)
+    Test.@test Mycelia.is_equivalent(seq1, seq2)
+    Test.@test !Mycelia.is_equivalent(seq1, seq3)
 
     df = DataFrames.DataFrame(
         top_taxid = [1, 2],
@@ -37,6 +37,6 @@ import DataFrames
     )
     classified = Mycelia.apply_conservative_taxonomy(df; ratio_threshold = 2.0)
 
-    @test all(classified.final_assignment .== df.top_taxid)
-    @test all(classified.confidence_level .== "high")
+    Test.@test all(classified.final_assignment .== df.top_taxid)
+    Test.@test all(classified.confidence_level .== "high")
 end

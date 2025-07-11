@@ -1,10 +1,14 @@
-using Test
-using Mycelia
-using DataFrames
-using HTTP
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
+import Mycelia
+import DataFrames
+import HTTP
 
-@testset "Genome Features Tests" begin
-    @testset "GFF Reading and Writing" begin
+Test.@testset "Genome Features Tests" begin
+    Test.@testset "GFF Reading and Writing" begin
         # Create test GFF content
         test_gff_content = """##gff-version 3
 ##sequence-region ctg123 1 1497228
@@ -21,23 +25,23 @@ ctg123	.	mRNA	1050	9000	.	+	.	ID=mRNA00002;Parent=gene00001;Name=EDEN.2
         # Test reading GFF
         gff_df = Mycelia.read_gff(temp_gff)
         
-        @test gff_df isa DataFrame
-        @test size(gff_df, 1) == 4  # 4 feature lines
-        @test names(gff_df) == ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]
+        Test.@test gff_df isa DataFrame
+        Test.@test size(gff_df, 1) == 4  # 4 feature lines
+        Test.@test names(gff_df) == ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]
         
         # Test specific values
-        @test gff_df[1, "#seqid"] == "ctg123"
-        @test gff_df[1, "type"] == "gene"
-        @test gff_df[1, "start"] == 1000
-        @test gff_df[1, "end"] == 9000
-        @test gff_df[1, "strand"] == "+"
-        @test occursin("ID=gene00001", gff_df[1, "attributes"])
+        Test.@test gff_df[1, "#seqid"] == "ctg123"
+        Test.@test gff_df[1, "type"] == "gene"
+        Test.@test gff_df[1, "start"] == 1000
+        Test.@test gff_df[1, "end"] == 9000
+        Test.@test gff_df[1, "strand"] == "+"
+        Test.@test occursin("ID=gene00001", gff_df[1, "attributes"])
         
         # Cleanup
         rm(temp_gff, force=true)
     end
 
-    @testset "GFF Attributes Splitting" begin
+    Test.@testset "GFF Attributes Splitting" begin
         # Create test DataFrame with GFF attributes
         test_df = DataFrame(
             attributes = [
@@ -50,20 +54,20 @@ ctg123	.	mRNA	1050	9000	.	+	.	ID=mRNA00002;Parent=gene00001;Name=EDEN.2
         # Test splitting attributes
         expanded_df = Mycelia.split_gff_attributes_into_columns(test_df)
         
-        @test "ID" in names(expanded_df)
-        @test "Name" in names(expanded_df)
-        @test "Type" in names(expanded_df)
-        @test "Parent" in names(expanded_df)
+        Test.@test "ID" in names(expanded_df)
+        Test.@test "Name" in names(expanded_df)
+        Test.@test "Type" in names(expanded_df)
+        Test.@test "Parent" in names(expanded_df)
         
         # Test specific values
-        @test expanded_df[1, "ID"] == "gene1"
-        @test expanded_df[1, "Name"] == "BRCA1"
-        @test expanded_df[1, "Type"] == "gene"
-        @test ismissing(expanded_df[3, "Name"])  # exon1 has no Name attribute
-        @test expanded_df[2, "Parent"] == "gene1"
+        Test.@test expanded_df[1, "ID"] == "gene1"
+        Test.@test expanded_df[1, "Name"] == "BRCA1"
+        Test.@test expanded_df[1, "Type"] == "gene"
+        Test.@test ismissing(expanded_df[3, "Name"])  # exon1 has no Name attribute
+        Test.@test expanded_df[2, "Parent"] == "gene1"
     end
 
-    @testset "GFF Writing" begin
+    Test.@testset "GFF Writing" begin
         # Create test data
         test_data = DataFrame(
             seqid = ["chr1", "chr1", "chr2"],
@@ -81,20 +85,20 @@ ctg123	.	mRNA	1050	9000	.	+	.	ID=mRNA00002;Parent=gene00001;Name=EDEN.2
         temp_output = tempname() * ".gff"
         result_file = Mycelia.write_gff(gff=test_data, outfile=temp_output)
         
-        @test result_file == temp_output
-        @test isfile(temp_output)
+        Test.@test result_file == temp_output
+        Test.@test isfile(temp_output)
         
         # Verify content can be read back
         content = read(temp_output, String)
-        @test occursin("chr1", content)
-        @test occursin("gene", content)
-        @test occursin("ID=gene1", content)
+        Test.@test occursin("chr1", content)
+        Test.@test occursin("gene", content)
+        Test.@test occursin("ID=gene1", content)
         
         # Cleanup
         rm(temp_output, force=true)
     end
 
-    @testset "MMseqs GFF Update" begin
+    Test.@testset "MMseqs GFF Update" begin
         # Create mock GFF data
         gff_content = """##gff-version 3
 ctg123	prodigal	CDS	1000	2000	.	+	0	ID=gene_001;product=hypothetical_protein
@@ -122,44 +126,44 @@ ctg123	prodigal	CDS	3000	4000	.	-	0	ID=gene_002;product=unknown_function
         
         # Test the update logic manually
         gff_df = Mycelia.read_gff(temp_gff)
-        @test size(gff_df, 1) == 2
+        Test.@test size(gff_df, 1) == 2
         
         # Cleanup
         rm(temp_gff, force=true)
         rm(temp_mmseqs, force=true)
     end
 
-    @testset "File Path Handling" begin
+    Test.@testset "File Path Handling" begin
         # Test file existence checking logic
         temp_file = tempname() * ".gff"
         write(temp_file, "test content")
         
-        @test isfile(temp_file)
+        Test.@test isfile(temp_file)
         
         # Test the logic from open_gff without actually opening
         path = temp_file
-        @test isfile(path)
+        Test.@test isfile(path)
         
         # Test gzipped file detection
         gz_path = temp_file * ".gz"
-        @test occursin(r"\.gz$", basename(gz_path))
-        @test !occursin(r"\.gz$", basename(temp_file))
+        Test.@test occursin(r"\.gz$", basename(gz_path))
+        Test.@test !occursin(r"\.gz$", basename(temp_file))
         
         # Test URL detection
         http_url = "http://example.com/file.gff"
         ftp_url = "ftp://example.com/file.gff"
-        @test occursin(r"^http", http_url)
-        @test occursin(r"^ftp", ftp_url)
+        Test.@test occursin(r"^http", http_url)
+        Test.@test occursin(r"^ftp", ftp_url)
         
         # Test FTP to HTTP conversion logic
         converted_url = replace(ftp_url, r"^ftp:" => "http:")
-        @test converted_url == "http://example.com/file.gff"
+        Test.@test converted_url == "http://example.com/file.gff"
         
         # Cleanup
         rm(temp_file, force=true)
     end
 
-    @testset "GFF Format Validation" begin
+    Test.@testset "GFF Format Validation" begin
         # Test with malformed GFF content
         malformed_gff = """##gff-version 3
 chr1	source	gene	not_a_number	2000	.	+	.	ID=gene1
@@ -168,7 +172,7 @@ chr1	source	gene	not_a_number	2000	.	+	.	ID=gene1
         write(temp_malformed, malformed_gff)
         
         # This should either handle the error gracefully or fail predictably
-        @test_throws Exception Mycelia.read_gff(temp_malformed)
+        Test.@test_throws Exception Mycelia.read_gff(temp_malformed)
         
         # Cleanup
         rm(temp_malformed, force=true)
@@ -181,15 +185,15 @@ chr1	.	gene	1	100	.	+	.	ID=gene1
         write(temp_minimal, minimal_gff)
         
         minimal_df = Mycelia.read_gff(temp_minimal)
-        @test size(minimal_df, 1) == 1
-        @test minimal_df[1, "start"] == 1
-        @test minimal_df[1, "end"] == 100
+        Test.@test size(minimal_df, 1) == 1
+        Test.@test minimal_df[1, "start"] == 1
+        Test.@test minimal_df[1, "end"] == 100
         
         # Cleanup
         rm(temp_minimal, force=true)
     end
 
-    @testset "Attribute Parsing Edge Cases" begin
+    Test.@testset "Attribute Parsing Edge Cases" begin
         # Test various attribute formats
         test_cases = [
             "ID=gene1",  # Simple case
@@ -206,29 +210,29 @@ chr1	.	gene	1	100	.	+	.	ID=gene1
         expanded_df = Mycelia.split_gff_attributes_into_columns(test_df)
         
         # All rows should have ID column populated (except empty one)
-        @test expanded_df[1, "ID"] == "gene1"
-        @test expanded_df[2, "ID"] == "gene1"
-        @test expanded_df[3, "ID"] == "gene1"
+        Test.@test expanded_df[1, "ID"] == "gene1"
+        Test.@test expanded_df[2, "ID"] == "gene1"
+        Test.@test expanded_df[3, "ID"] == "gene1"
         
         # Test Name column
-        @test ismissing(expanded_df[1, "Name"])  # No Name in first case
-        @test expanded_df[2, "Name"] == "test"
-        @test expanded_df[7, "Name"] == "test name with spaces"
+        Test.@test ismissing(expanded_df[1, "Name"])  # No Name in first case
+        Test.@test expanded_df[2, "Name"] == "test"
+        Test.@test expanded_df[7, "Name"] == "test name with spaces"
     end
 
-    @testset "Error Handling" begin
+    Test.@testset "Error Handling" begin
         # Test with non-existent file
         non_existent = "/path/that/does/not/exist.gff"
-        @test_throws Exception Mycelia.read_gff(non_existent)
+        Test.@test_throws Exception Mycelia.read_gff(non_existent)
         
         # Test empty DataFrame for attribute splitting
         empty_df = DataFrame(attributes = String[])
         result = Mycelia.split_gff_attributes_into_columns(empty_df)
-        @test size(result, 1) == 0
-        @test "attributes" in names(result)
+        Test.@test size(result, 1) == 0
+        Test.@test "attributes" in names(result)
     end
 
-    @testset "Integration Tests" begin
+    Test.@testset "Integration Tests" begin
         # Test complete workflow: create GFF -> read -> modify -> write
         original_data = DataFrame(
             "#seqid" => ["chr1", "chr1"],
@@ -250,21 +254,21 @@ chr1	.	gene	1	100	.	+	.	ID=gene1
         read_data = Mycelia.read_gff(temp_file1)
         
         # Verify data integrity
-        @test size(read_data) == size(original_data)
-        @test read_data[1, "start"] == 1000
-        @test read_data[2, "type"] == "mRNA"
+        Test.@test size(read_data) == size(original_data)
+        Test.@test read_data[1, "start"] == 1000
+        Test.@test read_data[2, "type"] == "mRNA"
         
         # Expand attributes
         expanded_data = Mycelia.split_gff_attributes_into_columns(read_data)
-        @test "ID" in names(expanded_data)
-        @test "Name" in names(expanded_data)
-        @test "Parent" in names(expanded_data)
+        Test.@test "ID" in names(expanded_data)
+        Test.@test "Name" in names(expanded_data)
+        Test.@test "Parent" in names(expanded_data)
         
         # Write expanded data
         temp_file2 = tempname() * ".gff"
         Mycelia.write_gff(gff=expanded_data, outfile=temp_file2)
         
-        @test isfile(temp_file2)
+        Test.@test isfile(temp_file2)
         
         # Cleanup
         rm(temp_file1, force=true)

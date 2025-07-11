@@ -15,14 +15,14 @@ import Pkg
 if isinteractive()
     Pkg.activate("..")
 end
-using Revise
-using Test
+import Revise
+import Test
 import Mycelia
 import FASTX
 import Kmers
 import Distances
 
-@testset "pantranscriptome construction" begin
+Test.@testset "pantranscriptome construction" begin
     recs = [Mycelia.random_fasta_record(moltype = :RNA, seed = i, L = 12) for i in 1:3]
     counts_list = [Mycelia.count_canonical_kmers(Kmers.RNAKmer{3}, [r]) for r in recs]
 
@@ -37,7 +37,7 @@ import Distances
 
     dist = Mycelia.pairwise_distance_matrix(matrix; dist_func = Distances.euclidean, show_progress = false)
 
-    @test size(dist) == (3, 3)
-    @test dist[1, 1] == 0
-    @test dist[1, 2] == dist[2, 1]
+    Test.@test size(dist) == (3, 3)
+    Test.@test dist[1, 1] == 0
+    Test.@test dist[1, 2] == dist[2, 1]
 end
