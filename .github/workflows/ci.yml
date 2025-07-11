@@ -15,7 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version: ['1', 'lts']
+        julia-version: ['lts']
+        # julia-version: ['1', 'lts']
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

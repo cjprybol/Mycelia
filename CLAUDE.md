@@ -96,4 +96,12 @@ The package integrates with various bioinformatics tools:
 - Bioconda for package management
 - SLURM for job scheduling
 - Rclone for cloud storage
-- Neo4j for graph databases
+<!-- - Neo4j for graph databases -->
+
+## Code Style Guidelines
+
+### Package Imports
+- **ALWAYS use `import` statements rather than `using` statements** in test files and code
+- This provides better namespace clarity and avoids conflicts
+- Example: `import Test` instead of `using Test`
+- Make sure to call functions with the module prefix when importing, e.g., `Test.@test` instead of `@test`
