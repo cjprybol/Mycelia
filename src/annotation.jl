@@ -1104,3 +1104,42 @@ function parse_virsorter_score_tsv(virsorter_score_tsv)
     end
     return DataFrames.DataFrame(data, header)
 end
+
+"""
+    count_predicted_genes(gff_file)
+
+Count the number of predicted genes from a GFF file.
+
+Parses a GFF/GTF file and counts the number of CDS (coding sequence) features,
+which correspond to predicted genes.
+
+# Arguments
+- `gff_file`: Path to GFF/GTF file
+
+# Returns
+- Integer count of predicted genes (CDS features)
+
+# See Also
+- `run_pyrodigal`: For gene prediction that generates GFF files
+- `parse_transterm_output`: For parsing other annotation tool outputs
+"""
+function count_predicted_genes(gff_file)
+    gene_count = 0
+    
+    open(gff_file, "r") do f
+        for line in eachline(f)
+            # Skip comment lines
+            if startswith(line, "#")
+                continue
+            end
+            
+            # Parse GFF line
+            fields = split(line, "\t")
+            if length(fields) >= 3 && fields[3] == "CDS"
+                gene_count += 1
+            end
+        end
+    end
+    
+    return gene_count
+end

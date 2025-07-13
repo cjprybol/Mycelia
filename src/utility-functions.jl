@@ -1801,3 +1801,66 @@ function countmap_columns(table)
         display(StatsBase.countmap(table[!, n]))
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Recursively include all files matching a pattern in a directory and its subdirectories.
+
+# Arguments
+- `dir::AbstractString`: Directory path to search recursively
+- `pattern::Regex=r"\\.jl$"`: Regular expression pattern to match files (defaults to .jl files)
+
+# Details
+Files are processed in sorted order within each directory. This is useful for 
+loading test files, examples, or other Julia modules in a predictable order.
+
+# Examples
+```julia
+# Include all Julia files in a directory tree
+include_all_files("test/modules")
+
+# Include all text files
+include_all_files("docs", r"\\.txt$")
+```
+"""
+function include_all_files(dir::AbstractString; pattern::Regex=r"\.jl$")
+    for (root, dirs, files) in walkdir(dir)
+        for file in sort(files)
+            if occursin(pattern, file)
+                include(joinpath(root, file))
+            end
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the theoretical k-mer space size for a given k-mer length and alphabet size.
+
+# Arguments
+- `k::Integer`: K-mer length
+- `alphabet_size::Integer=4`: Size of the alphabet (defaults to 4 for DNA: A,C,G,T)
+
+# Returns
+- `Integer`: Total number of possible k-mers (alphabet_size^k)
+
+# Details
+For DNA sequences (alphabet_size=4), this computes 4^k. Useful for:
+- Memory estimation for k-mer analysis
+- Parameter validation and selection
+- Understanding computational complexity
+
+# Examples
+```julia
+# DNA 3-mers: 4^3 = 64 possible k-mers
+kmer_space_size(3)
+
+# Protein 5-mers: 20^5 = 3,200,000 possible k-mers  
+kmer_space_size(5, 20)
+```
+"""
+function kmer_space_size(k::Integer, alphabet_size::Integer=4)
+    return alphabet_size^k
+end

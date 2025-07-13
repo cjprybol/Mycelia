@@ -186,4 +186,52 @@ function best_label_mapping(true_labels, pred_labels)
     return remapped_pred_labels, mapping
 end
 
+"""
+    assess_assembly_quality(contigs_file)
+
+Assess basic assembly quality metrics from a FASTA file.
+
+Calculates standard assembly quality metrics including contig count, total length,
+and N50 statistic for assembly evaluation.
+
+# Arguments
+- `contigs_file`: Path to FASTA file containing assembly contigs
+
+# Returns
+- Tuple of (n_contigs, total_length, n50)
+  - `n_contigs`: Number of contigs in the assembly
+  - `total_length`: Total length of all contigs in base pairs
+  - `n50`: N50 statistic (length of shortest contig in the set covering 50% of assembly)
+
+# Example
+```julia
+n_contigs, total_length, n50 = assess_assembly_quality("assembly.fasta")
+println("Assembly has \$n_contigs contigs, \$total_length bp total, N50=\$n50")
+```
+
+# See Also
+- `assess_assembly_kmer_quality`: For k-mer based assembly quality assessment
+"""
+function assess_assembly_quality(contigs_file)
+    contigs = []
+    
+    open(FASTX.FASTA.Reader, contigs_file) do reader
+        for record in reader
+            push!(contigs, length(FASTX.FASTA.sequence(record)))
+        end
+    end
+    
+    n_contigs = length(contigs)
+    total_length = sum(contigs)
+    
+    # Calculate N50
+    sorted_lengths = sort(contigs, rev=true)
+    cumsum_lengths = cumsum(sorted_lengths)
+    target_length = total_length / 2
+    n50_idx = findfirst(x -> x >= target_length, cumsum_lengths)
+    n50 = n50_idx !== nothing ? sorted_lengths[n50_idx] : 0
+    
+    return n_contigs, total_length, n50
+end
+
 #

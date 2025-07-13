@@ -1,11 +1,13 @@
 # Mycelia Benchmarking Suite
 
-This directory contains performance benchmarking tests for Mycelia using realistic datasets. These tests are designed to:
+This directory contains a comprehensive performance benchmarking infrastructure for Mycelia using realistic datasets and production-ready workflows. The benchmarking suite is designed to:
 
-- Evaluate computational performance and memory usage
-- Test scalability with large datasets
-- Validate accuracy against reference implementations
-- Identify performance bottlenecks and optimization opportunities
+- **Evaluate computational performance and memory usage** with detailed profiling
+- **Test scalability** with configurable dataset sizes and parallel processing
+- **Track performance regressions** against baseline results
+- **Validate accuracy** against reference implementations and known benchmarks
+- **Identify performance bottlenecks** and optimization opportunities
+- **Support HPC environments** with SLURM integration and automated resource monitoring
 
 ## ⚠️ Important Notes
 
@@ -18,27 +20,39 @@ This directory contains performance benchmarking tests for Mycelia using realist
 
 ## Benchmark Categories
 
-### 1. Data Processing Benchmarks
-- Large-scale FASTQ processing
-- Massive FASTA file handling
-- Format conversion performance
+### 1. Data Processing Benchmarks (`01_data_processing_benchmark.jl`)
+- **FASTQ/FASTA Processing**: Large-scale sequence file I/O performance
+- **Format Conversion**: Efficiency of format transformations
+- **Memory Usage**: Scaling with dataset size and parallel processing
+- **Parallel Processing**: Thread scalability and load balancing
+- **I/O Performance**: Sequential and concurrent file operations
+- **Quality Control**: Duplication rate assessment and read length determination
 
-### 2. K-mer Analysis Benchmarks
-- Scalability testing with varying k-mer sizes
-- Memory efficiency with sparse vs dense matrices
-- Performance on different genome sizes
+### 2. K-mer Analysis Benchmarks (`02_kmer_analysis_benchmark.jl`)
+- **K-mer Counting**: Dense and sparse counting performance across k values
+- **Canonical K-mers**: Memory efficiency with canonicalization
+- **Spectrum Analysis**: Frequency histogram generation and genome size estimation
+- **Memory Efficiency**: Peak usage, fragmentation, and cache performance
+- **Scalability**: Performance vs genome size with efficiency metrics
+- **Accuracy**: Genome size estimation validation
 
-### 3. Assembly Benchmarks
-- HiFi assembly with varying coverage depths
-- Different genome sizes and complexities
-- Assembly quality vs computational cost
+### 3. Assembly Benchmarks (`03_assembly_benchmark.jl`)
+- **MEGAHIT Performance**: Metagenomic assembly with realistic datasets
+- **metaSPAdes Testing**: Comparative assembler performance
+- **Quality Metrics**: N50, contiguity, and length recovery assessment
+- **Simulated Reads**: Paired-end read generation with error models
+- **Resource Usage**: Memory and time scaling with coverage and genome size
+- **Thread Scalability**: Multi-core assembly performance
 
-### 4. Annotation Benchmarks
-- Gene prediction on large genomes
-- Parallel processing efficiency
-- Accuracy vs reference annotations
+### 4. Annotation Benchmarks (`04_annotation_benchmark.jl`)
+- **Pyrodigal Gene Prediction**: Ab initio gene finding performance
+- **Parallel Annotation**: Multi-genome processing with threading
+- **Accuracy Assessment**: Gene prediction sensitivity and specificity
+- **Organism Types**: Bacterial, fungal, and plant genome annotation
+- **Throughput Analysis**: Base pairs processed per second
+- **Memory Profiling**: Peak usage during annotation pipelines
 
-### 5. Comparative Genomics Benchmarks
+### 5. Comparative Genomics Benchmarks (Planned)
 - Pangenome construction with many genomes
 - Phylogenetic tree construction
 - Large-scale comparative analysis
@@ -52,34 +66,91 @@ This directory contains performance benchmarking tests for Mycelia using realist
 # Recommended: 64GB+ RAM, 1TB+ storage, 16+ cores
 # Install required external tools via bioconda
 mamba env create -f environment.yml
+
+# Ensure BenchmarkTools.jl is installed
+julia --project=. -e "import Pkg; Pkg.add(\"BenchmarkTools\")"
+```
+
+### Benchmark Configuration
+
+The benchmarking suite supports three scales via environment variables:
+
+```bash
+# Small scale (development/testing) - Default
+export BENCHMARK_SCALE=small
+
+# Medium scale (realistic datasets)
+export BENCHMARK_SCALE=medium  
+
+# Large scale (scalability testing)
+export BENCHMARK_SCALE=large
 ```
 
 ### Running Individual Benchmarks
 
 ```bash
-# Run specific benchmark
+# Run specific benchmark with small scale (default)
 julia --project=. benchmarking/01_data_processing_benchmark.jl
 
-# Run with performance monitoring
-julia --project=. --track-allocation=user benchmarking/01_data_processing_benchmark.jl
+# Run with medium scale
+BENCHMARK_SCALE=medium julia --project=. benchmarking/02_kmer_analysis_benchmark.jl
+
+# Run with performance monitoring and allocation tracking
+julia --project=. --track-allocation=user benchmarking/03_assembly_benchmark.jl
+
+# Run annotation benchmark
+julia --project=. benchmarking/04_annotation_benchmark.jl
 ```
 
-### Running All Benchmarks (HPC)
+### Running Complete Benchmark Suite
 
 ```bash
-# Submit to SLURM (recommended)
-sbatch benchmarking/run_all_benchmarks.sh
+# Run orchestrated benchmark suite with regression checking
+julia --project=. benchmarking/benchmark_runner.jl small
 
-# Or run locally (use with extreme caution)
-julia --project=. benchmarking/run_all_benchmarks.jl
+# Run medium scale benchmark suite
+julia --project=. benchmarking/benchmark_runner.jl medium
+
+# Submit to SLURM cluster (recommended for large scale)
+sbatch benchmarking/run_all_benchmarks.sh
+```
+
+### Performance Regression Testing
+
+```bash
+# Run with regression checking (default)
+julia --project=. benchmarking/benchmark_runner.jl small
+
+# Update baselines for future comparisons
+UPDATE_BASELINES=true julia --project=. benchmarking/benchmark_runner.jl medium
+
+# Disable regression checking
+CHECK_REGRESSION=false julia --project=. benchmarking/benchmark_runner.jl small
 ```
 
 ## Benchmark Results
 
-Results are automatically saved to:
-- `results/performance_metrics.json` - Timing and memory usage
-- `results/accuracy_metrics.json` - Quality and accuracy measurements
-- `results/benchmark_report.html` - Comprehensive HTML report
+The benchmarking suite generates comprehensive results in multiple formats:
+
+### Result Files
+- **Individual Results**: `results/[benchmark]_[timestamp].json` - Detailed benchmark data
+- **Comprehensive Results**: `results/[benchmark]_comprehensive_[timestamp].json` - Enhanced metrics
+- **HTML Reports**: `results/benchmark_report_[scale]_[timestamp].html` - Interactive reports
+- **Baseline Storage**: `baselines/[benchmark]_baseline.json` - Reference performance data
+
+### Performance Metrics Collected
+- **Timing**: Median, mean, min, max execution times
+- **Memory**: Peak usage, allocations, garbage collection statistics
+- **Throughput**: Data processed per unit time (reads/min, bp/sec, etc.)
+- **Scalability**: Performance efficiency vs dataset size
+- **Quality**: Assembly N50, gene prediction sensitivity, etc.
+- **Resource Utilization**: CPU usage, I/O patterns, memory fragmentation
+
+### Automated Analysis Features
+- **Performance Regression Detection**: Compare against baselines with configurable thresholds
+- **Scaling Analysis**: Efficiency calculations across different input sizes
+- **Quality Assessment**: Accuracy metrics for assembly and annotation results
+- **System Information**: Hardware details, Julia version, platform data
 
 ## Dataset Requirements
 
@@ -102,32 +173,71 @@ Results are automatically saved to:
 
 ### SLURM Job Scripts
 
-All benchmarks include SLURM job scripts for HPC execution:
+The benchmarking suite includes production-ready SLURM integration:
 
 ```bash
-# Example SLURM submission
-sbatch --partition=compute --time=24:00:00 --mem=64G --cpus-per-task=16 benchmarking/assembly_benchmark.sh
+# Submit complete benchmark suite to cluster
+sbatch benchmarking/run_all_benchmarks.sh
+
+# Customize resources
+sbatch --partition=compute --time=24:00:00 --mem=64G --cpus-per-task=16 benchmarking/run_all_benchmarks.sh
+
+# Set benchmark scale for cluster execution
+BENCHMARK_SCALE=large sbatch benchmarking/run_all_benchmarks.sh
 ```
 
-### Resource Monitoring
+### Automated Resource Monitoring
 
-Benchmarks automatically collect:
-- CPU usage and time
-- Memory consumption (peak and average)
-- Disk I/O statistics
-- Network usage (if applicable)
+The SLURM integration includes:
+- **Timeout Management**: 4-20 hour timeouts with graceful handling
+- **Resource Tracking**: Peak memory, CPU time, wall time via `sacct`
+- **Output Compression**: Automatic compression of large log files
+- **Error Handling**: Robust error reporting and recovery
+- **Environment Setup**: Automatic module loading and conda environment activation
+- **Cleanup**: Automated temporary file management
 
-## Benchmark Validation
+### HPC Features
+- **Parallel Execution**: Coordinated benchmark runner handles multiple benchmarks
+- **Performance Analysis**: Built-in regression checking on cluster results  
+- **Report Generation**: Automatic HTML report creation with cluster metadata
+- **Baseline Management**: Distributed baseline storage and comparison
 
-### Accuracy Testing
-- Compare results against known references
-- Validate against published benchmarks
-- Cross-validate with other tools
+## Benchmark Infrastructure
 
-### Performance Regression Testing
-- Track performance over time
-- Identify performance regressions
-- Validate optimizations
+### Core Components
+
+The benchmarking suite is built on several key components:
+
+- **`benchmark_utils.jl`**: Core utilities with BenchmarkTools.jl integration
+  - Memory profiling with detailed allocation tracking
+  - Scaling benchmark runner for input size analysis  
+  - Performance regression checking against baselines
+  - Comprehensive result serialization and HTML report generation
+
+- **`benchmark_runner.jl`**: Orchestrated execution framework
+  - Coordinated multi-benchmark execution
+  - Automated baseline management and regression detection
+  - HTML report generation with performance summaries
+  - Error handling and graceful failure recovery
+
+- **`run_all_benchmarks.sh`**: Production SLURM integration
+  - HPC resource management and monitoring
+  - Automated environment setup and cleanup
+  - Timeout handling and resource usage reporting
+
+### Validation Framework
+
+#### Accuracy Testing
+- **Assembly Quality**: N50, contiguity, length recovery vs reference genomes
+- **Gene Prediction**: Sensitivity assessment against simulated gene positions
+- **K-mer Analysis**: Genome size estimation accuracy validation
+- **Cross-validation**: Compare results with established bioinformatics tools
+
+#### Performance Regression Testing
+- **Automated Baseline Comparison**: Configurable performance thresholds (default 10%)
+- **Historical Tracking**: Performance metrics stored over time
+- **Regression Alerts**: Automatic detection of performance degradations
+- **Improvement Detection**: Recognition of performance gains
 
 ## Contributing
 
@@ -170,16 +280,48 @@ When adding new benchmarks:
 ## Results Interpretation
 
 ### Performance Metrics
-- **Throughput**: Data processed per unit time
-- **Memory Efficiency**: Peak memory usage relative to data size
-- **Scalability**: Performance vs dataset size relationship
-- **Accuracy**: Quality of results vs reference standards
+- **Throughput**: Data processed per unit time (reads/min, bp/sec, k-mers/sec)
+- **Memory Efficiency**: Peak memory usage relative to data size and scaling patterns
+- **Scalability**: Performance vs dataset size relationship with efficiency scores
+- **Accuracy**: Quality of results vs reference standards (N50, sensitivity, etc.)
+- **Resource Utilization**: CPU usage patterns, I/O efficiency, memory fragmentation
 
 ### Comparative Analysis
-- Compare with other bioinformatics tools
-- Analyze performance across different hardware
-- Evaluate trade-offs between speed and accuracy
+- **Tool Comparison**: Performance vs MEGAHIT, metaSPAdes, Pyrodigal
+- **Hardware Analysis**: Performance across different systems and configurations  
+- **Trade-off Evaluation**: Speed vs accuracy vs memory usage relationships
+- **Optimization Guidance**: Bottleneck identification and improvement recommendations
+
+### Example Metrics
+```
+K-mer Analysis Performance Summary:
+- Sequences tested: 15
+- Total sequence length: 7.5 Mbp
+- K-mer throughput estimates:
+  - k=15: 2,450,000 k-mers/second
+  - k=21: 1,890,000 k-mers/second
+- Scaling efficiency:
+  - 500000bp: 0.95 (near-linear scaling)
+  - 1000000bp: 0.91 (slight overhead)
+- Peak memory usage: 245.67 MB
+```
+
+## Quick Start
+
+```bash
+# 1. Install dependencies
+julia --project=. -e "import Pkg; Pkg.add(\"BenchmarkTools\")"
+
+# 2. Run a quick benchmark test
+julia --project=. benchmarking/01_data_processing_benchmark.jl
+
+# 3. Run full benchmark suite with regression checking
+julia --project=. benchmarking/benchmark_runner.jl small
+
+# 4. View results
+firefox results/benchmark_report_small_[timestamp].html
+```
 
 ---
 
-**Remember**: These benchmarks are designed for performance evaluation, not routine analysis. Use the regular tutorials for learning and the main package for production analysis.
+**Remember**: These benchmarks are designed for performance evaluation and optimization guidance, not routine analysis. Use the regular tutorials for learning and the main package for production analysis.

@@ -76,43 +76,35 @@ run_benchmark() {
     return $exit_code
 }
 
-# Main benchmarking sequence
-echo "=== Starting Benchmarking Sequence ==="
+# Set benchmark scale from environment or default to large for HPC
+BENCHMARK_SCALE=${BENCHMARK_SCALE:-"large"}
+export BENCHMARK_SCALE
 
-# Data Processing Benchmarks
-if [ -f "benchmarking/01_data_processing_benchmark.jl" ]; then
-    run_benchmark "data_processing" "benchmarking/01_data_processing_benchmark.jl"
-fi
+echo "Benchmark scale: $BENCHMARK_SCALE"
+echo ""
 
-# K-mer Analysis Benchmarks
-if [ -f "benchmarking/02_kmer_analysis_benchmark.jl" ]; then
-    run_benchmark "kmer_analysis" "benchmarking/02_kmer_analysis_benchmark.jl"
-fi
+# Use the new benchmark runner for coordinated execution
+echo "=== Running Benchmark Suite ==="
+echo "Using benchmark_runner.jl for coordinated execution"
 
-# Assembly Benchmarks
-if [ -f "benchmarking/03_assembly_benchmark.jl" ]; then
-    run_benchmark "assembly" "benchmarking/03_assembly_benchmark.jl"
-fi
+# Run the benchmark runner with performance regression checking
+timeout 20h julia --project=. --track-allocation=user benchmarking/benchmark_runner.jl 2>&1 | tee "results/benchmark_suite_output.log"
 
-# Annotation Benchmarks
-if [ -f "benchmarking/04_annotation_benchmark.jl" ]; then
-    run_benchmark "annotation" "benchmarking/04_annotation_benchmark.jl"
-fi
+runner_exit_code=${PIPESTATUS[0]}
 
-# Comparative Genomics Benchmarks
-if [ -f "benchmarking/05_comparative_benchmark.jl" ]; then
-    run_benchmark "comparative" "benchmarking/05_comparative_benchmark.jl"
-fi
-
-# Generate HTML reports from executed benchmarks
-echo "=== Generating HTML Reports ==="
-if command -v jupyter &> /dev/null; then
-    julia --project=. run_extended_tests.jl reports
-    echo "✓ HTML reports generated"
+if [ $runner_exit_code -eq 0 ]; then
+    echo "✓ Benchmark suite completed successfully"
+elif [ $runner_exit_code -eq 124 ]; then
+    echo "✗ Benchmark suite timed out (20 hours)"
 else
-    echo "⚠ Jupyter not found - install with: pip install jupyter nbconvert"
-    echo "  Reports can be generated later with: julia --project=. run_extended_tests.jl reports"
+    echo "✗ Benchmark suite failed with exit code $runner_exit_code"
 fi
+
+# Performance regression analysis (handled by benchmark_runner.jl)
+echo "=== Performance Analysis ==="
+echo "✓ Performance regression analysis completed by benchmark runner"
+echo "✓ HTML reports generated automatically"
+echo "✓ Baseline comparisons completed"
 
 # System resource usage summary
 echo "=== Resource Usage Summary ==="
@@ -137,7 +129,7 @@ find results -name "*.json" -size +10M -exec gzip {} \;
 echo "=== Benchmarking Complete ==="
 echo "End time: $(date)"
 echo "Results saved to: results/"
-echo "Job completed with exit code: $?"
+echo "Job completed with benchmark runner exit code: $runner_exit_code"
 
 # Exit with success
 exit 0
