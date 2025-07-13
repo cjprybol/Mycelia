@@ -2,6 +2,10 @@ module Mycelia
 
 __precompile__(false)
 
+# ============================================================================
+# DEPENDENCY IMPORTS
+# ============================================================================
+
 import AlgebraOfGraphics
 import Arrow
 import BioAlignments
@@ -70,26 +74,76 @@ import UUIDs
 import XAM
 import XMLDict
 
-
-
 import Pkg
 # TODO remove this import and update function call usage
 import Base.Filesystem: stat
 
-# preserve definitions between code jldoctest code blocks
-# https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
-# use this to build up a story as we go, where outputs of earlier defined functions feed into
-# tests for further downstream functions
+# ============================================================================
+# DEPRECATION SYSTEM
+# ============================================================================
 
-# if things fall out of date but look correct, update them automatically
-# https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Fixing-Outdated-Doctests
+# Include deprecation macros
+include("deprecation.jl")
 
-# dynamic import of files??
+# ============================================================================
+# SUBMODULE SYSTEM
+# ============================================================================
+
+# Include submodules
+include("submodules/IO.jl")
+include("submodules/Sequences.jl")
+include("submodules/Assembly.jl")
+include("submodules/Alignment.jl")
+include("submodules/Annotation.jl")
+include("submodules/Taxonomy.jl")
+include("submodules/SequenceClustering.jl")
+include("submodules/Variants.jl")
+include("submodules/Visualization.jl")
+include("submodules/QualityControl.jl")
+include("submodules/Utils.jl")
+
+# Expose submodules (but do NOT export their functions)
+# Note: We don't use 'using' to avoid namespace conflicts with imported packages
+# Instead, the submodules are available as Mycelia.IO, Mycelia.Sequences, etc.
+
+# ============================================================================
+# LEGACY SYSTEM (TEMPORARY - for backward compatibility)
+# ============================================================================
+
+# Include legacy files temporarily to avoid breaking existing code
+# These will be removed once functions are fully migrated to submodules
 all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
-# don't recusively import this file
-all_other_julia_files = filter(x -> x != "Mycelia.jl", all_julia_files)
-for f in all_other_julia_files
+# Don't recursively import these files
+excluded_files = ["Mycelia.jl", "deprecation.jl", "api_migration_plan.jl"]
+legacy_files = filter(x -> !(x in excluded_files) && !startswith(x, "submodules/"), all_julia_files)
+
+for f in legacy_files
     include(f)
 end
+
+# ============================================================================
+# NO TOP-LEVEL EXPORTS
+# ============================================================================
+# All functions must be called via Mycelia.Submodule.function_name
+# This forces users to be explicit about which functionality they're using
+
+# ============================================================================
+# DEPRECATION SHIMS - Backward compatibility warnings
+# ============================================================================
+
+# Create deprecation warnings for functions currently called at top level
+# These direct users to the new submodule structure
+
+# Example: when someone calls Mycelia.open_fastx(), they get a warning
+# directing them to use Mycelia.IO.open_fastx() instead
+@deprecated_toplevel open_fastx "Mycelia.IO.open_fastx"
+@deprecated_toplevel write_fasta "Mycelia.IO.write_fasta"
+@deprecated_toplevel write_fastq "Mycelia.IO.write_fastq"
+@deprecated_toplevel count_kmers "Mycelia.Sequences.count_kmers"
+@deprecated_toplevel count_canonical_kmers "Mycelia.Sequences.count_canonical_kmers"
+@deprecated_toplevel run_megahit "Mycelia.Assembly.run_megahit"
+@deprecated_toplevel run_flye "Mycelia.Assembly.run_flye"
+
+# More deprecation shims will be added as we identify all currently used functions
 
 end # module
