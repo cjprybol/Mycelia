@@ -1809,7 +1809,7 @@ Recursively include all files matching a pattern in a directory and its subdirec
 
 # Arguments
 - `dir::AbstractString`: Directory path to search recursively
-- `pattern::Regex=r"\\.jl$"`: Regular expression pattern to match files (defaults to .jl files)
+- `pattern::Regex=r"\\.jl\$"`: Regular expression pattern to match files (defaults to .jl files)
 
 # Details
 Files are processed in sorted order within each directory. This is useful for 
@@ -1821,7 +1821,7 @@ loading test files, examples, or other Julia modules in a predictable order.
 include_all_files("test/modules")
 
 # Include all text files
-include_all_files("docs", r"\\.txt$")
+include_all_files("docs", r"\\.txt\$")
 ```
 """
 function include_all_files(dir::AbstractString; pattern::Regex=r"\.jl$")
