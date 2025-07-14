@@ -83,7 +83,7 @@ function merge_and_map_single_end_samples(;
     end
 
     return (
-        results_table = results_table,
+        # results_table = results_table,
         joint_fastq_file = fastq_out,
         fastq_id_mapping_table = tsv_out,
         bam_file = minimap_result.outfile,
