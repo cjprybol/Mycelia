@@ -1,4 +1,36 @@
 """
+    find_fasta_files(input_path::String) -> Vector{String}
+
+Find all FASTA files in a directory or return single file if path is a file.
+
+Uses the existing `FASTA_REGEX` constant to identify FASTA files.
+
+# Arguments
+- `input_path`: Path to directory or single FASTA file
+
+# Returns
+- Vector of FASTA file paths
+
+# Example
+```julia
+fasta_files = find_fasta_files("./genomes/")
+```
+"""
+function find_fasta_files(input_path::String)
+    if isfile(input_path)
+        if occursin(FASTA_REGEX, input_path)
+            return [input_path]
+        else
+            error("Input file does not match FASTA format: $(input_path)")
+        end
+    elseif isdir(input_path)
+        return filter(f -> occursin(FASTA_REGEX, f), readdir(input_path, join=true))
+    else
+        error("Input path does not exist: $(input_path)")
+    end
+end
+
+"""
     join_fastqs_with_uuid(
         fastq_files::Vector{String};
         fastq_out::String
