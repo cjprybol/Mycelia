@@ -17,9 +17,11 @@
 # ```
 
 import Pkg
-Pkg.activate("..")
+if isinteractive()
+    Pkg.activate("..")
+end
 
-using Dates
+import Dates
 import Literate
 
 # List of all tutorials in execution order
@@ -41,7 +43,7 @@ Execute all tutorials in sequence, collecting timing and status information.
 """
 function run_all_tutorials()
     println("=== Running All Mycelia Tutorials ===")
-    println("Start time: $(now())")
+    println("Start time: $(Dates.now())")
     println()
     
     results = []
@@ -95,7 +97,7 @@ function run_all_tutorials()
     
     println()
     println("Successful: $successful/$(length(TUTORIALS))")
-    println("End time: $(now())")
+    println("End time: $(Dates.now())")
     
     return results
 end

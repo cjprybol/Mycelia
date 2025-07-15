@@ -22,7 +22,7 @@ if isinteractive()
     Pkg.activate("..")
 end
 
-using Test
+import Test
 import Mycelia
 import FASTX
 import Random
@@ -75,8 +75,8 @@ genome_file = Mycelia.download_genome_by_accession(accession=phix_accession)
 println("Downloaded to: $genome_file")
 
 # Verify the download
-@test isfile(genome_file)
-@test endswith(genome_file, ".fna.gz")
+Test.@test isfile(genome_file)
+Test.@test endswith(genome_file, ".fna.gz")
 println("✓ Download successful")
 println("File size: $(filesize(genome_file)) bytes")
 
@@ -116,8 +116,8 @@ open(assembly_result.genome) do io
     println("Sequence start: $sequence_start...")
     
     # Verify it's a valid FASTA format
-    @test startswith(header, '>')
-    @test all(c -> c in "ATCGN\n", sequence_start)
+    Test.@test startswith(header, '>')
+    Test.@test all(c -> c in "ATCGN\n", sequence_start)
 end
 
 println("✓ Valid FASTA format confirmed")
@@ -195,9 +195,9 @@ open(assembly_result.genome) do io
 end
 
 # Basic validation checks
-@test length(genome_seq) > 0
-@test all(c -> c in "ATCGN", genome_seq)
-@test count(c -> c == 'N', genome_seq) / length(genome_seq) < 0.01  # < 1% N's
+Test.@test length(genome_seq) > 0
+Test.@test all(c -> c in "ATCGN", genome_seq)
+Test.@test count(c -> c == 'N', genome_seq) / length(genome_seq) < 0.01  # < 1% N's
 
 println("✓ Genome length: $(length(genome_seq)) bp")
 println("✓ Valid DNA alphabet")
@@ -221,8 +221,8 @@ for (i, filename) in enumerate(synthetic_files)
     seq_str = String(FASTX.sequence(seq_record))
     
     # Validate sequence properties
-    @test length(seq_str) > 0
-    @test all(c -> c in "ATCG", seq_str)  # No N's in synthetic data
+    Test.@test length(seq_str) > 0
+    Test.@test all(c -> c in "ATCG", seq_str)  # No N's in synthetic data
     
     println("✓ Synthetic sequence $i: $(length(seq_str)) bp, valid DNA")
 end

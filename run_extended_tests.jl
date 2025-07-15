@@ -26,9 +26,11 @@
 # ```
 
 import Pkg
-Pkg.activate(".")
+if isinteractive()
+    Pkg.activate("..")
+end
 
-using Dates
+import Dates
 import Literate
 
 # Configuration
@@ -80,7 +82,7 @@ Execute all tutorials in sequence.
 """
 function run_tutorials()
     println("=== Running All Mycelia Tutorials ===")
-    println("Start time: $(now())")
+    println("Start time: $(Dates.now())")
     println()
     
     if !isdir(TUTORIALS_DIR)
@@ -135,7 +137,7 @@ function run_tutorials()
     
     successful = count(r -> r[2] == :success, results)
     println("Successful: $successful/$(length(results))")
-    println("End time: $(now())")
+    println("End time: $(Dates.now())")
     
     return successful == length(results)
 end
@@ -271,7 +273,7 @@ function run_benchmarks_locally()
     successful = count(r -> r[2] == :success, results)
     println("Successful: $successful/$(length(results))")
     println("Results saved to: $RESULTS_DIR")
-    println("End time: $(now())")
+    println("End time: $(Dates.now())")
     
     return successful == length(results)
 end
@@ -482,7 +484,7 @@ function create_reports_index(html_dir, source_files)
     <body>
         <div class="header">
             <h1>Mycelia Documentation and Benchmark Reports</h1>
-            <p>Generated: $(now())</p>
+            <p>Generated: $(Dates.now())</p>
             <p>Interactive reports with executed code, outputs, and visualizations</p>
         </div>
         

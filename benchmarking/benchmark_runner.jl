@@ -6,7 +6,9 @@
 # performance regressions against baseline results.
 
 import Pkg
-Pkg.activate("..")
+if isinteractive()
+    Pkg.activate("..")
+end
 
 import Dates
 import JSON

@@ -13,9 +13,11 @@
 # - Large-scale comparative genomics workflows
 
 import Pkg
-Pkg.activate("..")
+if isinteractive()
+    Pkg.activate("..")
+end
 
-using Test
+import Test
 import Mycelia
 import FASTX
 import BenchmarkTools
