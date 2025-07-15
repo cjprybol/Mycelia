@@ -308,8 +308,6 @@ function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".check
     return db_dir
 end
 
-
-
 """
     run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
 
@@ -323,15 +321,23 @@ CheckV assesses the quality and completeness of viral genomes.
 - `threads`: Number of threads to use (default: all available CPU threads)
 - `db_dir`: CheckV database directory (default: ~/.checkv)
 
+# Returns
+- Named tuple with fields:
+  - `outdir`: Output directory path
+  - `complete_genomes`: Path to complete_genomes.tsv
+  - `completeness`: Path to completeness.tsv
+  - `contamination`: Path to contamination.tsv
+  - `proviruses`: Path to proviruses.fna
+  - `quality_summary`: Path to quality_summary.tsv
+  - `viruses`: Path to viruses.fna
+
 # Example
 ```julia
-run_checkv("genome.fasta")
-run_checkv("genome.fasta.gz")
+result = run_checkv("genome.fasta")
+println("Quality summary: ", result.quality_summary)
 ```
 """
 function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=Sys.CPU_THREADS)
-    setup_checkv(db_dir=db_dir)
-    
     if !isfile(fasta_file)
         error("Input file does not exist: $(fasta_file)")
     end
@@ -340,9 +346,24 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
         error("Input file does not match FASTA format: $(fasta_file)")
     end
     
-    run(`$(CONDA_RUNNER) run -n checkv checkv end_to_end $(fasta_file) $(outdir) -d $(db_dir) --threads $(threads)`)
+    # Define expected output files
+    output_files = (
+        complete_genomes = joinpath(outdir, "complete_genomes.tsv"),
+        completeness = joinpath(outdir, "completeness.tsv"),
+        contamination = joinpath(outdir, "contamination.tsv"),
+        proviruses = joinpath(outdir, "proviruses.fna"),
+        quality_summary = joinpath(outdir, "quality_summary.tsv"),
+        viruses = joinpath(outdir, "viruses.fna")
+    )
     
-    return outdir
+    # Check if output directory exists and all expected files are present
+    if isdir(outdir) && all(isfile, output_files)
+        @warn "CheckV output directory already exists with all expected files. Skipping analysis: $(outdir)"
+    else
+        latest_db = last(readdir(Mycelia.setup_checkv(), join=true))
+        run(`$(CONDA_RUNNER) run -n checkv checkv end_to_end $(fasta_file) $(outdir) -d $(latest_db) -t $(threads)`)
+    end
+    return (outdir=outdir, output_files...)
 end
 
 """
