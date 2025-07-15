@@ -76,7 +76,7 @@ struct KmerEdgeData
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Create a next-generation, type-stable k-mer graph using MetaGraphsNext.
 
@@ -132,49 +132,9 @@ function build_kmer_graph_next(kmer_type, observations::AbstractVector{<:Union{F
     
     return graph
 end
-    
-    # Count canonical k-mers from observations
-    canonical_kmer_counts = Mycelia.count_canonical_kmers(kmer_type, observations)
-    canonical_kmers = collect(keys(canonical_kmer_counts))
-    
-    if isempty(canonical_kmers)
-        @warn "No k-mers found in observations"
-        return _create_empty_kmer_graph()
-    end
-    
-    # Create stranded k-mers (forward + reverse complement)
-    stranded_kmers = if graph_type == :stranded
-        sort!(vcat(canonical_kmers, [BioSequences.reverse_complement(kmer) for kmer in canonical_kmers]))
-    else
-        sort!(canonical_kmers)
-    end
-    
-    # Create the MetaGraphsNext graph with type-stable metadata
-    graph = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=KmerVertexData,
-        edge_data_type=KmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
-        default_weight=0.0
-    )
-    
-    # Add vertices for each k-mer
-    for (i, kmer) in enumerate(stranded_kmers)
-        kmer_str = string(kmer)
-        graph[kmer_str] = KmerVertexData(kmer_str)
-    end
-    
-    # Process observations to build edges
-    for (obs_idx, observation) in enumerate(observations)
-        _add_observation_to_graph!(graph, observation, obs_idx, stranded_kmers, graph_type)
-    end
-    
-    return graph
-end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Add a sequence observation to an existing k-mer graph with strand-aware edge creation.
 
@@ -285,7 +245,7 @@ function _create_empty_kmer_graph()
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert a sequence to a path through canonical k-mer space with strand awareness.
 
@@ -353,7 +313,7 @@ function _sequence_to_canonical_path(canonical_kmers, sequence, graph_mode)
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Validate that a transition between two k-mers with given strand orientations is biologically valid.
 
@@ -385,7 +345,7 @@ end
 # Compatibility layer for migrating from legacy MetaGraphs implementation
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert a legacy MetaGraphs-based k-mer graph to the next-generation MetaGraphsNext format.
 
@@ -491,7 +451,7 @@ function legacy_to_next_graph(legacy_graph)
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Check if a graph is using the legacy MetaGraphs format.
 
@@ -506,7 +466,7 @@ function is_legacy_graph(graph)
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Automatically convert legacy graphs to next-generation format if needed.
 
@@ -527,7 +487,1673 @@ function ensure_next_graph(graph)
     end
 end
 
-# Export the main functions and types
-export build_kmer_graph_next, legacy_to_next_graph, is_legacy_graph, ensure_next_graph
-export KmerVertexData, KmerEdgeData, StrandOrientation, GraphMode
-export Forward, Reverse, SingleStrand, DoubleStrand
+# Note: We don't export specific types/functions - use fully qualified names like Mycelia.build_kmer_graph_next
+
+# GFA I/O functionality for MetaGraphsNext-based strand-aware k-mer graphs
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Write a MetaGraphsNext k-mer graph to GFA (Graphical Fragment Assembly) format.
+
+This function exports strand-aware k-mer graphs to standard GFA format, handling:
+- Canonical k-mer vertices as segments (S lines)
+- Strand-aware edges as links (L lines) with proper orientations
+- Coverage information as depth annotations
+
+# Arguments
+- `graph`: MetaGraphsNext k-mer graph with strand-aware edges
+- `outfile`: Path where the GFA file should be written
+
+# Returns
+- Path to the written GFA file
+
+# GFA Format
+The output follows GFA v1.0 specification:
+- Header (H) line with version
+- Segment (S) lines: vertex_id, canonical_k-mer_sequence, depth
+- Link (L) lines: source_id, source_orientation, target_id, target_orientation, overlap
+
+# Example
+```julia
+graph = build_kmer_graph_next(DNAKmer{3}, observations)
+write_gfa_next(graph, "assembly.gfa")
+```
+"""
+function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
+    open(outfile, "w") do io
+        # Write GFA header
+        println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Next")
+        
+        # Write segments (vertices) - canonical k-mers
+        vertex_id_map = Dict{String, Int}()
+        for (i, label) in enumerate(MetaGraphsNext.labels(graph))
+            vertex_id_map[label] = i
+            vertex_data = graph[label]
+            
+            # Calculate depth from coverage
+            depth = length(vertex_data.coverage)
+            
+            # Write segment line: S<tab>id<tab>sequence<tab>optional_fields
+            println(io, "S\t$i\t$(vertex_data.canonical_kmer)\tDP:f:$depth")
+        end
+        
+        # Calculate k-mer size for overlap
+        if !isempty(MetaGraphsNext.labels(graph))
+            first_label = first(MetaGraphsNext.labels(graph))
+            k = length(graph[first_label].canonical_kmer)
+            overlap = k - 1
+        else
+            overlap = 0
+        end
+        
+        # Write links (edges) - strand-aware transitions
+        for edge_labels in MetaGraphsNext.edge_labels(graph)
+            if length(edge_labels) == 2
+                src_label, dst_label = edge_labels
+                edge_data = graph[src_label, dst_label]
+                
+                src_id = vertex_id_map[src_label]
+                dst_id = vertex_id_map[dst_label]
+                
+                # Convert strand orientations to GFA format
+                src_orientation = edge_data.src_strand == Forward ? '+' : '-'
+                dst_orientation = edge_data.dst_strand == Forward ? '+' : '-'
+                
+                # Write link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
+                println(io, "L\t$src_id\t$src_orientation\t$dst_id\t$dst_orientation\t$(overlap)M")
+            end
+        end
+    end
+    
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Read a GFA file and convert it to a MetaGraphsNext strand-aware k-mer graph.
+
+This function parses GFA format files and creates a strand-aware k-mer graph compatible
+with the next-generation implementation.
+
+# Arguments
+- `gfa_file`: Path to input GFA file
+- `graph_mode`: GraphMode (SingleStrand or DoubleStrand, default: DoubleStrand)
+
+# Returns
+- MetaGraphsNext.MetaGraph with strand-aware edges
+
+# GFA Format Support
+Supports GFA v1.0 with:
+- Header (H) lines (ignored)
+- Segment (S) lines: parsed as canonical k-mer vertices
+- Link (L) lines: parsed as strand-aware edges
+- Path (P) lines: stored as metadata (future use)
+
+# Example
+```julia
+graph = read_gfa_next("assembly.gfa")
+# Or with specific mode
+graph = read_gfa_next("assembly.gfa", SingleStrand)
+```
+"""
+function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand)
+    # Parse GFA file content
+    segments = Dict{String, String}()  # id -> sequence
+    links = Vector{Tuple{String, Bool, String, Bool}}()  # (src_id, src_forward, dst_id, dst_forward)
+    paths = Dict{String, Vector{String}}()  # path_name -> vertex_ids
+    
+    for line in eachline(gfa_file)
+        fields = split(line, '\t')
+        if isempty(fields)
+            continue
+        end
+        
+        line_type = first(fields)
+        
+        if line_type == "H"
+            # Header line - skip for now
+            continue
+        elseif line_type == "S"
+            # Segment line: S<tab>id<tab>sequence<tab>optional_fields
+            if length(fields) >= 3
+                seg_id = fields[2]
+                sequence = fields[3]
+                segments[seg_id] = sequence
+            end
+        elseif line_type == "L"
+            # Link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
+            if length(fields) >= 6
+                src_id = fields[2]
+                src_orient = fields[3] == "+"
+                dst_id = fields[4]
+                dst_orient = fields[5] == "+"
+                push!(links, (src_id, src_orient, dst_id, dst_orient))
+            end
+        elseif line_type == "P"
+            # Path line: P<tab>path_name<tab>path<tab>overlaps
+            if length(fields) >= 3
+                path_name = fields[2]
+                # Parse path string (removes +/- orientations for now)
+                path_vertices = split(replace(fields[3], r"[+-]" => ""), ',')
+                paths[path_name] = string.(path_vertices)
+            end
+        elseif line_type == "A"
+            # Assembly info line (hifiasm) - skip for now
+            continue
+        else
+            @warn "Unknown GFA line type: $line_type in line: $line"
+        end
+    end
+    
+    # Create MetaGraphsNext graph
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=String,
+        vertex_data_type=KmerVertexData,
+        edge_data_type=KmerEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0
+    )
+    
+    # Add vertices (segments)
+    for (seg_id, sequence) in segments
+        # Determine canonical sequence based on graph mode
+        canonical_seq = if graph_mode == DoubleStrand
+            # Use canonical representation for double-strand mode
+            dna_seq = BioSequences.LongDNA{4}(sequence)
+            rc_seq = BioSequences.reverse_complement(dna_seq)
+            string(dna_seq <= rc_seq ? dna_seq : rc_seq)
+        else
+            # Use sequence as-is for single-strand mode
+            sequence
+        end
+        
+        # Create vertex with empty coverage (will be populated if we have observations)
+        graph[seg_id] = KmerVertexData(canonical_seq)
+    end
+    
+    # Add edges (links)
+    for (src_id, src_forward, dst_id, dst_forward) in links
+        if src_id in MetaGraphsNext.labels(graph) && dst_id in MetaGraphsNext.labels(graph)
+            # Convert GFA orientations to StrandOrientation
+            src_strand = src_forward ? Forward : Reverse
+            dst_strand = dst_forward ? Forward : Reverse
+            
+            # Create strand-aware edge
+            graph[src_id, dst_id] = KmerEdgeData(src_strand, dst_strand)
+        else
+            @warn "Link references unknown segment: $src_id -> $dst_id"
+        end
+    end
+    
+    # Store paths as graph metadata if needed (future enhancement)
+    # MetaGraphsNext doesn't have global properties like MetaGraphs, so we'd need
+    # a different approach for storing paths
+    
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a legacy MetaGraphs GFA to next-generation MetaGraphsNext format.
+
+This convenience function reads a GFA file using the legacy parser and converts
+it to the new strand-aware format.
+
+# Arguments
+- `gfa_file`: Path to GFA file
+- `graph_mode`: GraphMode for the output graph
+
+# Returns
+- MetaGraphsNext.MetaGraph in strand-aware format
+"""
+function convert_legacy_gfa_to_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand)
+    # Use legacy parser
+    legacy_graph = parse_gfa(gfa_file)
+    
+    # Convert to next-generation format
+    next_graph = legacy_to_next_graph(legacy_graph)
+    
+    return next_graph
+end
+"""
+Advanced Graph Algorithms for Next-Generation Assembly
+
+This module provides sophisticated graph algorithms for assembly graph analysis,
+including Eulerian path finding, bubble detection, repeat resolution, and
+graph simplification operations.
+
+All algorithms are designed to work with strand-aware MetaGraphsNext graphs
+and maintain biological correctness constraints.
+"""
+
+import MetaGraphsNext
+import Graphs
+import BioSequences
+import FASTX
+import DataStructures
+import Statistics
+
+# Note: We don't export specific types/functions - use fully qualified names like Mycelia.find_eulerian_paths_next
+
+"""
+    BubbleStructure
+
+Represents a bubble (alternative path) in the assembly graph.
+"""
+struct BubbleStructure
+    entry_vertex::String
+    exit_vertex::String
+    path1::Vector{String}
+    path2::Vector{String}
+    path1_support::Int
+    path2_support::Int
+    complexity_score::Float64
+    
+    function BubbleStructure(entry::String, exit::String, 
+                           p1::Vector{String}, p2::Vector{String},
+                           s1::Int, s2::Int, complexity::Float64)
+        new(entry, exit, p1, p2, s1, s2, complexity)
+    end
+end
+
+"""
+    RepeatRegion
+
+Represents a repetitive region in the assembly graph.
+"""
+struct RepeatRegion
+    repeat_vertices::Vector{String}
+    incoming_edges::Vector{Tuple{String, String}}
+    outgoing_edges::Vector{Tuple{String, String}}
+    copy_number_estimate::Float64
+    repeat_type::Symbol  # :tandem, :interspersed, :palindromic
+    confidence::Float64
+    
+    function RepeatRegion(vertices::Vector{String}, 
+                         incoming::Vector{Tuple{String, String}},
+                         outgoing::Vector{Tuple{String, String}},
+                         copy_num::Float64, rep_type::Symbol, conf::Float64)
+        @assert rep_type in [:tandem, :interspersed, :palindromic] "Invalid repeat type"
+        @assert 0.0 <= conf <= 1.0 "Confidence must be in [0,1]"
+        new(vertices, incoming, outgoing, copy_num, rep_type, conf)
+    end
+end
+
+"""
+    ContigPath
+
+Represents a linear path through the graph forming a contig.
+"""
+struct ContigPath
+    vertices::Vector{String}
+    sequence::String
+    coverage_profile::Vector{Float64}
+    length::Int
+    n50_contribution::Float64
+    
+    function ContigPath(vertices::Vector{String}, sequence::String,
+                       coverage::Vector{Float64})
+        new(vertices, sequence, coverage, length(sequence), 0.0)
+    end
+end
+
+"""
+    ScaffoldResult
+
+Results from scaffolding analysis.
+"""
+struct ScaffoldResult
+    scaffolds::Vector{Vector{ContigPath}}
+    gap_estimates::Vector{Tuple{Int, Int, Float64}}  # (min_gap, max_gap, confidence)
+    scaffold_n50::Float64
+    total_length::Int
+    
+    function ScaffoldResult(scaffolds::Vector{Vector{ContigPath}},
+                          gaps::Vector{Tuple{Int, Int, Float64}})
+        total_len = sum(sum(contig.length for contig in scaffold) for scaffold in scaffolds)
+        # Calculate N50 (simplified)
+        lengths = [sum(contig.length for contig in scaffold) for scaffold in scaffolds]
+        sort!(lengths, rev=true)
+        cumsum_lengths = cumsum(lengths)
+        n50_idx = findfirst(x -> x >= total_len / 2, cumsum_lengths)
+        n50 = n50_idx !== nothing ? lengths[n50_idx] : 0.0
+        
+        new(scaffolds, gaps, n50, total_len)
+    end
+end
+
+"""
+    find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph) -> Vector{Vector{String}}
+
+Find Eulerian paths in the assembly graph. An Eulerian path visits every edge exactly once.
+"""
+function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData})
+    if isempty(MetaGraphsNext.labels(graph))
+        return Vector{String}[]
+    end
+    
+    # Check if Eulerian path exists
+    in_degrees, out_degrees = calculate_degrees(graph)
+    eulerian_info = check_eulerian_conditions(in_degrees, out_degrees)
+    
+    if !eulerian_info.has_path
+        println("Graph does not have Eulerian path")
+        return Vector{String}[]
+    end
+    
+    # Find starting vertices
+    start_vertices = find_eulerian_start_vertices(in_degrees, out_degrees, eulerian_info)
+    
+    paths = Vector{String}[]
+    for start_vertex in start_vertices
+        path = find_eulerian_path_from_vertex(graph, start_vertex, in_degrees, out_degrees)
+        if !isempty(path)
+            push!(paths, path)
+        end
+    end
+    
+    return paths
+end
+
+"""
+Calculate in-degrees and out-degrees for all vertices.
+"""
+function calculate_degrees(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData})
+    vertices = collect(MetaGraphsNext.labels(graph))
+    in_degrees = Dict{String, Int}()
+    out_degrees = Dict{String, Int}()
+    
+    # Initialize
+    for vertex in vertices
+        in_degrees[vertex] = 0
+        out_degrees[vertex] = 0
+    end
+    
+    # Count degrees
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        src, dst = edge_label
+        out_degrees[src] += 1
+        in_degrees[dst] += 1
+    end
+    
+    return in_degrees, out_degrees
+end
+
+"""
+Check conditions for Eulerian path existence.
+"""
+function check_eulerian_conditions(in_degrees::Dict{String, Int}, out_degrees::Dict{String, Int})
+    odd_vertices = String[]
+    start_vertices = String[]
+    end_vertices = String[]
+    
+    for vertex in keys(in_degrees)
+        in_deg = in_degrees[vertex]
+        out_deg = out_degrees[vertex]
+        
+        if in_deg != out_deg
+            push!(odd_vertices, vertex)
+            if out_deg > in_deg
+                push!(start_vertices, vertex)
+            elseif in_deg > out_deg
+                push!(end_vertices, vertex)
+            end
+        end
+    end
+    
+    # Eulerian path conditions:
+    # - All vertices have equal in/out degree (Eulerian cycle), OR
+    # - Exactly one vertex has out_degree = in_degree + 1 (start)
+    # - Exactly one vertex has in_degree = out_degree + 1 (end)
+    # - All other vertices have equal in/out degree
+    
+    has_path = length(odd_vertices) == 0 || 
+               (length(start_vertices) == 1 && length(end_vertices) == 1)
+    
+    return (has_path=has_path, start_vertices=start_vertices, end_vertices=end_vertices)
+end
+
+"""
+Find valid starting vertices for Eulerian paths.
+"""
+function find_eulerian_start_vertices(in_degrees::Dict{String, Int}, 
+                                     out_degrees::Dict{String, Int},
+                                     eulerian_info)
+    if !isempty(eulerian_info.start_vertices)
+        return eulerian_info.start_vertices
+    else
+        # If it's an Eulerian cycle, can start from any vertex with edges
+        return [v for v in keys(out_degrees) if out_degrees[v] > 0]
+    end
+end
+
+"""
+Find Eulerian path starting from a specific vertex using Hierholzer's algorithm.
+"""
+function find_eulerian_path_from_vertex(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                                       start_vertex::String,
+                                       in_degrees::Dict{String, Int},
+                                       out_degrees::Dict{String, Int})
+    # Create adjacency list with edge tracking
+    adj_list = Dict{String, Vector{Tuple{String, Bool}}}()  # (neighbor, used)
+    
+    for vertex in keys(out_degrees)
+        adj_list[vertex] = Tuple{String, Bool}[]
+    end
+    
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        src, dst = edge_label
+        push!(adj_list[src], (dst, false))
+    end
+    
+    path = String[]
+    stack = [start_vertex]
+    current_vertex = start_vertex
+    
+    while !isempty(stack) || any(any(!used for (_, used) in neighbors) for neighbors in values(adj_list))
+        if any(!used for (_, used) in adj_list[current_vertex])
+            push!(stack, current_vertex)
+            
+            # Find first unused edge
+            for (i, (neighbor, used)) in enumerate(adj_list[current_vertex])
+                if !used
+                    adj_list[current_vertex][i] = (neighbor, true)
+                    current_vertex = neighbor
+                    break
+                end
+            end
+        else
+            push!(path, current_vertex)
+            if !isempty(stack)
+                current_vertex = pop!(stack)
+            end
+        end
+    end
+    
+    reverse!(path)
+    return path
+end
+
+"""
+    detect_bubbles_next(graph::MetaGraphsNext.MetaGraph, min_bubble_length::Int=2, max_bubble_length::Int=100) -> Vector{BubbleStructure}
+
+Detect bubble structures (alternative paths) in the assembly graph.
+"""
+function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData};
+                           min_bubble_length::Int=2,
+                           max_bubble_length::Int=100)
+    bubbles = BubbleStructure[]
+    vertices = collect(MetaGraphsNext.labels(graph))
+    
+    for entry_vertex in vertices
+        # Find potential bubble entry points (vertices with out-degree > 1)
+        out_neighbors = get_out_neighbors(graph, entry_vertex)
+        
+        if length(out_neighbors) >= 2
+            # Look for bubbles starting from this vertex
+            bubble_candidates = find_bubble_paths(graph, entry_vertex, out_neighbors, 
+                                                min_bubble_length, max_bubble_length)
+            
+            for bubble in bubble_candidates
+                if is_valid_bubble(graph, bubble)
+                    push!(bubbles, bubble)
+                end
+            end
+        end
+    end
+    
+    return remove_duplicate_bubbles(bubbles)
+end
+
+"""
+Get outgoing neighbors of a vertex.
+"""
+function get_out_neighbors(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData}, vertex::String)
+    neighbors = String[]
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        src, dst = edge_label
+        if src == vertex
+            push!(neighbors, dst)
+        end
+    end
+    return neighbors
+end
+
+"""
+Get incoming neighbors of a vertex.
+"""
+function get_in_neighbors(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData}, vertex::String)
+    neighbors = String[]
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        src, dst = edge_label
+        if dst == vertex
+            push!(neighbors, src)
+        end
+    end
+    return neighbors
+end
+
+"""
+Find potential bubble paths from an entry vertex.
+"""
+function find_bubble_paths(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                          entry_vertex::String, 
+                          out_neighbors::Vector{String},
+                          min_length::Int, max_length::Int)
+    bubbles = BubbleStructure[]
+    
+    # Try all pairs of outgoing paths
+    for i in 1:length(out_neighbors)
+        for j in (i+1):length(out_neighbors)
+            path1_start = out_neighbors[i]
+            path2_start = out_neighbors[j]
+            
+            # Find paths from each starting point
+            path1 = find_limited_path(graph, path1_start, max_length)
+            path2 = find_limited_path(graph, path2_start, max_length)
+            
+            # Check if paths reconverge
+            convergence_point = find_path_convergence(path1, path2)
+            
+            if convergence_point !== nothing && 
+               length(path1) >= min_length && length(path2) >= min_length
+                
+                # Extract paths up to convergence
+                conv_idx1 = findfirst(v -> v == convergence_point, path1)
+                conv_idx2 = findfirst(v -> v == convergence_point, path2)
+                
+                if conv_idx1 !== nothing && conv_idx2 !== nothing
+                    bubble_path1 = path1[1:conv_idx1]
+                    bubble_path2 = path2[1:conv_idx2]
+                    
+                    # Calculate support (simplified - could use actual coverage)
+                    support1 = calculate_path_support(graph, bubble_path1)
+                    support2 = calculate_path_support(graph, bubble_path2)
+                    
+                    complexity = calculate_bubble_complexity(bubble_path1, bubble_path2)
+                    
+                    bubble = BubbleStructure(entry_vertex, convergence_point,
+                                           bubble_path1, bubble_path2,
+                                           support1, support2, complexity)
+                    push!(bubbles, bubble)
+                end
+            end
+        end
+    end
+    
+    return bubbles
+end
+
+"""
+Find a limited-length path from a starting vertex.
+"""
+function find_limited_path(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                          start_vertex::String, max_length::Int)
+    path = [start_vertex]
+    current = start_vertex
+    
+    for _ in 1:max_length
+        neighbors = get_out_neighbors(graph, current)
+        if length(neighbors) == 1
+            next_vertex = neighbors[1]
+            if next_vertex in path  # Avoid cycles
+                break
+            end
+            push!(path, next_vertex)
+            current = next_vertex
+        else
+            break  # Multiple or no neighbors
+        end
+    end
+    
+    return path
+end
+
+"""
+Find where two paths converge.
+"""
+function find_path_convergence(path1::Vector{String}, path2::Vector{String})
+    # Find first common vertex (excluding starting vertices)
+    for vertex1 in path1[2:end]
+        if vertex1 in path2[2:end]
+            return vertex1
+        end
+    end
+    return nothing
+end
+
+"""
+Calculate support for a path (simplified version).
+"""
+function calculate_path_support(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                               path::Vector{String})
+    if isempty(path)
+        return 0
+    end
+    
+    # Use vertex data coverage if available
+    total_coverage = 0.0
+    for vertex in path
+        if haskey(graph, vertex)
+            vertex_data = graph[vertex]
+            # Use metadata if available, otherwise default to 1
+            coverage = length(vertex_data.coverage)
+            total_coverage += coverage
+        end
+    end
+    
+    return round(Int, total_coverage / length(path))
+end
+
+"""
+Calculate complexity score for a bubble.
+"""
+function calculate_bubble_complexity(path1::Vector{String}, path2::Vector{String})
+    # Simple complexity metric based on path length difference and sequence similarity
+    length_diff = abs(length(path1) - length(path2))
+    avg_length = (length(path1) + length(path2)) / 2
+    
+    length_score = length_diff / max(avg_length, 1)
+    
+    # Could add sequence similarity scoring here
+    similarity_score = 0.5  # Placeholder
+    
+    return length_score + (1 - similarity_score)
+end
+
+"""
+Check if a bubble structure is valid.
+"""
+function is_valid_bubble(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                        bubble::BubbleStructure)
+    # Check that paths are distinct
+    if bubble.path1 == bubble.path2
+        return false
+    end
+    
+    # Check that entry and exit vertices exist
+    if !(haskey(graph, bubble.entry_vertex) && haskey(graph, bubble.exit_vertex))
+        return false
+    end
+    
+    # Check that paths are valid in graph
+    is_valid_path(graph, [bubble.entry_vertex; bubble.path1]) &&
+    is_valid_path(graph, [bubble.entry_vertex; bubble.path2])
+end
+
+"""
+Check if a path is valid in the graph.
+"""
+function is_valid_path(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                      path::Vector{String})
+    if length(path) < 2
+        return true
+    end
+    
+    for i in 1:(length(path)-1)
+        if !haskey(graph, path[i], path[i+1])
+            return false
+        end
+    end
+    return true
+end
+
+"""
+Remove duplicate bubbles.
+"""
+function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure})
+    unique_bubbles = BubbleStructure[]
+    
+    for bubble in bubbles
+        is_duplicate = false
+        for existing in unique_bubbles
+            if are_equivalent_bubbles(bubble, existing)
+                is_duplicate = true
+                break
+            end
+        end
+        
+        if !is_duplicate
+            push!(unique_bubbles, bubble)
+        end
+    end
+    
+    return unique_bubbles
+end
+
+"""
+Check if two bubbles are equivalent.
+"""
+function are_equivalent_bubbles(b1::BubbleStructure, b2::BubbleStructure)
+    return (b1.entry_vertex == b2.entry_vertex && 
+            b1.exit_vertex == b2.exit_vertex &&
+            ((b1.path1 == b2.path1 && b1.path2 == b2.path2) ||
+             (b1.path1 == b2.path2 && b1.path2 == b2.path1)))
+end
+
+"""
+    resolve_repeats_next(graph::MetaGraphsNext.MetaGraph, min_repeat_length::Int=10) -> Vector{RepeatRegion}
+
+Identify and characterize repetitive regions in the assembly graph.
+"""
+function resolve_repeats_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData};
+                            min_repeat_length::Int=10)
+    repeats = RepeatRegion[]
+    vertices = collect(MetaGraphsNext.labels(graph))
+    
+    # Find vertices with high in-degree or out-degree (potential repeat boundaries)
+    in_degrees, out_degrees = calculate_degrees(graph)
+    
+    # Find potential repeat vertices (high connectivity)
+    repeat_candidates = find_repeat_candidates(in_degrees, out_degrees)
+    
+    # Analyze each candidate region
+    for candidate_vertex in repeat_candidates
+        repeat_region = analyze_repeat_region(graph, candidate_vertex, min_repeat_length)
+        if repeat_region !== nothing
+            push!(repeats, repeat_region)
+        end
+    end
+    
+    # Merge overlapping repeat regions
+    merged_repeats = merge_overlapping_repeats(repeats)
+    
+    return merged_repeats
+end
+
+"""
+Find vertices that could be part of repeat regions.
+"""
+function find_repeat_candidates(in_degrees::Dict{String, Int}, out_degrees::Dict{String, Int})
+    candidates = String[]
+    
+    for vertex in keys(in_degrees)
+        # High connectivity suggests repeat
+        total_degree = in_degrees[vertex] + out_degrees[vertex]
+        if total_degree > 4  # Threshold for repeat consideration
+            push!(candidates, vertex)
+        end
+    end
+    
+    return candidates
+end
+
+"""
+Analyze a potential repeat region starting from a vertex.
+"""
+function analyze_repeat_region(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                              start_vertex::String, min_length::Int)
+    # Get local subgraph around the vertex
+    local_vertices = get_local_subgraph(graph, start_vertex, min_length)
+    
+    if length(local_vertices) < min_length
+        return nothing
+    end
+    
+    # Analyze connectivity patterns
+    incoming_edges = Tuple{String, String}[]
+    outgoing_edges = Tuple{String, String}[]
+    
+    for vertex in local_vertices
+        in_neighbors = get_in_neighbors(graph, vertex)
+        out_neighbors = get_out_neighbors(graph, vertex)
+        
+        # Count external connections
+        for neighbor in in_neighbors
+            if !(neighbor in local_vertices)
+                push!(incoming_edges, (neighbor, vertex))
+            end
+        end
+        
+        for neighbor in out_neighbors
+            if !(neighbor in local_vertices)
+                push!(outgoing_edges, (vertex, neighbor))
+            end
+        end
+    end
+    
+    # Estimate copy number based on coverage
+    copy_number = estimate_copy_number(graph, local_vertices)
+    
+    # Classify repeat type
+    repeat_type = classify_repeat_type(graph, local_vertices, incoming_edges, outgoing_edges)
+    
+    # Calculate confidence
+    confidence = calculate_repeat_confidence(graph, local_vertices, copy_number)
+    
+    return RepeatRegion(local_vertices, incoming_edges, outgoing_edges,
+                       copy_number, repeat_type, confidence)
+end
+
+"""
+Get local subgraph around a vertex.
+"""
+function get_local_subgraph(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                           center_vertex::String, radius::Int)
+    visited = Set{String}()
+    queue = DataStructures.Queue{Tuple{String, Int}}()
+    DataStructures.enqueue!(queue, (center_vertex, 0))
+    
+    while !isempty(queue)
+        vertex, distance = DataStructures.dequeue!(queue)
+        
+        if vertex in visited || distance > radius
+            continue
+        end
+        
+        push!(visited, vertex)
+        
+        # Add neighbors
+        for neighbor in get_out_neighbors(graph, vertex)
+            if !(neighbor in visited)
+                DataStructures.enqueue!(queue, (neighbor, distance + 1))
+            end
+        end
+        
+        for neighbor in get_in_neighbors(graph, vertex)
+            if !(neighbor in visited)
+                DataStructures.enqueue!(queue, (neighbor, distance + 1))
+            end
+        end
+    end
+    
+    return collect(visited)
+end
+
+"""
+Estimate copy number for repeat region.
+"""
+function estimate_copy_number(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                             vertices::Vector{String})
+    if isempty(vertices)
+        return 1.0
+    end
+    
+    # Use coverage information if available
+    total_coverage = 0.0
+    for vertex in vertices
+        if haskey(graph, vertex)
+            vertex_data = graph[vertex]
+            coverage = length(vertex_data.coverage)
+            total_coverage += coverage
+        end
+    end
+    
+    avg_coverage = total_coverage / length(vertices)
+    
+    # Estimate based on coverage relative to expected single-copy coverage
+    expected_single_copy = 10.0  # Could be estimated from graph statistics
+    copy_number = max(1.0, avg_coverage / expected_single_copy)
+    
+    return copy_number
+end
+
+"""
+Classify the type of repeat.
+"""
+function classify_repeat_type(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                             vertices::Vector{String},
+                             incoming_edges::Vector{Tuple{String, String}},
+                             outgoing_edges::Vector{Tuple{String, String}})
+    # Simple classification based on connectivity pattern
+    n_incoming = length(incoming_edges)
+    n_outgoing = length(outgoing_edges)
+    
+    if n_incoming <= 2 && n_outgoing <= 2
+        return :tandem
+    elseif n_incoming > 2 || n_outgoing > 2
+        return :interspersed
+    else
+        return :palindromic
+    end
+end
+
+"""
+Calculate confidence in repeat identification.
+"""
+function calculate_repeat_confidence(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                                   vertices::Vector{String}, copy_number::Float64)
+    # Higher copy number and larger region size increase confidence
+    size_score = min(1.0, length(vertices) / 20.0)
+    copy_score = min(1.0, (copy_number - 1.0) / 5.0)
+    
+    return (size_score + copy_score) / 2.0
+end
+
+"""
+Merge overlapping repeat regions.
+"""
+function merge_overlapping_repeats(repeats::Vector{RepeatRegion})
+    if isempty(repeats)
+        return repeats
+    end
+    
+    merged = RepeatRegion[]
+    used = falses(length(repeats))
+    
+    for i in 1:length(repeats)
+        if used[i]
+            continue
+        end
+        
+        current_repeat = repeats[i]
+        overlapping_indices = [i]
+        
+        # Find overlapping repeats
+        for j in (i+1):length(repeats)
+            if !used[j] && regions_overlap(current_repeat, repeats[j])
+                push!(overlapping_indices, j)
+                used[j] = true
+            end
+        end
+        
+        # Merge overlapping regions
+        if length(overlapping_indices) > 1
+            merged_repeat = merge_repeat_regions([repeats[idx] for idx in overlapping_indices])
+            push!(merged, merged_repeat)
+        else
+            push!(merged, current_repeat)
+        end
+        
+        used[i] = true
+    end
+    
+    return merged
+end
+
+"""
+Check if two repeat regions overlap.
+"""
+function regions_overlap(r1::RepeatRegion, r2::RepeatRegion)
+    return !isempty(intersect(Set(r1.repeat_vertices), Set(r2.repeat_vertices)))
+end
+
+"""
+Merge multiple repeat regions into one.
+"""
+function merge_repeat_regions(regions::Vector{RepeatRegion})
+    all_vertices = String[]
+    all_incoming = Tuple{String, String}[]
+    all_outgoing = Tuple{String, String}[]
+    
+    for region in regions
+        append!(all_vertices, region.repeat_vertices)
+        append!(all_incoming, region.incoming_edges)
+        append!(all_outgoing, region.outgoing_edges)
+    end
+    
+    # Remove duplicates
+    unique_vertices = unique(all_vertices)
+    unique_incoming = unique(all_incoming)
+    unique_outgoing = unique(all_outgoing)
+    
+    # Average copy number and confidence
+    avg_copy_number = Statistics.mean(r.copy_number_estimate for r in regions)
+    avg_confidence = Statistics.mean(r.confidence for r in regions)
+    
+    # Use most common repeat type
+    repeat_types = [r.repeat_type for r in regions]
+    repeat_type = mode(repeat_types)
+    
+    return RepeatRegion(unique_vertices, unique_incoming, unique_outgoing,
+                       avg_copy_number, repeat_type, avg_confidence)
+end
+
+"""
+    find_contigs_next(graph::MetaGraphsNext.MetaGraph, min_contig_length::Int=500) -> Vector{ContigPath}
+
+Extract linear contigs from the assembly graph.
+"""
+function find_contigs_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData};
+                          min_contig_length::Int=500)
+    contigs = ContigPath[]
+    visited = Set{String}()
+    vertices = collect(MetaGraphsNext.labels(graph))
+    
+    for start_vertex in vertices
+        if start_vertex in visited
+            continue
+        end
+        
+        # Find linear path starting from this vertex
+        path = find_linear_path(graph, start_vertex, visited)
+        
+        if length(path) >= 2  # At least 2 k-mers for a meaningful contig
+            # Generate sequence and coverage profile
+            sequence = generate_contig_sequence(graph, path)
+            coverage_profile = generate_coverage_profile(graph, path)
+            
+            if length(sequence) >= min_contig_length
+                contig = ContigPath(path, sequence, coverage_profile)
+                push!(contigs, contig)
+            end
+            
+            # Mark vertices as visited
+            for vertex in path
+                push!(visited, vertex)
+            end
+        end
+    end
+    
+    return sort_contigs_by_length(contigs)
+end
+
+"""
+Find a linear path through the graph.
+"""
+function find_linear_path(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                         start_vertex::String, visited::Set{String})
+    if start_vertex in visited
+        return String[]
+    end
+    
+    path = [start_vertex]
+    current = start_vertex
+    
+    # Extend forward
+    while true
+        out_neighbors = get_out_neighbors(graph, current)
+        valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path)]
+        
+        if length(valid_neighbors) == 1
+            next_vertex = valid_neighbors[1]
+            # Check if next vertex has only one incoming edge (to current)
+            in_neighbors = get_in_neighbors(graph, next_vertex)
+            if length(in_neighbors) == 1 && in_neighbors[1] == current
+                push!(path, next_vertex)
+                current = next_vertex
+            else
+                break
+            end
+        else
+            break
+        end
+    end
+    
+    # Try to extend backward from start
+    current = start_vertex
+    backward_path = String[]
+    
+    while true
+        in_neighbors = get_in_neighbors(graph, current)
+        valid_neighbors = [n for n in in_neighbors if !(n in visited) && !(n in path) && !(n in backward_path)]
+        
+        if length(valid_neighbors) == 1
+            prev_vertex = valid_neighbors[1]
+            # Check if prev vertex has only one outgoing edge (to current)
+            out_neighbors = get_out_neighbors(graph, prev_vertex)
+            if length(out_neighbors) == 1 && out_neighbors[1] == current
+                pushfirst!(backward_path, prev_vertex)
+                current = prev_vertex
+            else
+                break
+            end
+        else
+            break
+        end
+    end
+    
+    return [backward_path; path]
+end
+
+"""
+Generate sequence for a contig path.
+"""
+function generate_contig_sequence(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                                 path::Vector{String})
+    if isempty(path)
+        return ""
+    end
+    
+    # Start with first k-mer
+    sequence = path[1]
+    
+    # Add last character of each subsequent k-mer
+    for i in 2:length(path)
+        kmer = path[i]
+        sequence *= kmer[end]  # Add last character
+    end
+    
+    return sequence
+end
+
+"""
+Generate coverage profile for a contig path.
+"""
+function generate_coverage_profile(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                                  path::Vector{String})
+    coverage = Float64[]
+    
+    for vertex in path
+        if haskey(graph, vertex)
+            vertex_data = graph[vertex]
+            vertex_coverage = Float64(length(vertex_data.coverage))
+            push!(coverage, vertex_coverage)
+        else
+            push!(coverage, 0.0)
+        end
+    end
+    
+    return coverage
+end
+
+"""
+Sort contigs by length (descending).
+"""
+function sort_contigs_by_length(contigs::Vector{ContigPath})
+    return sort(contigs, by=c -> c.length, rev=true)
+end
+
+"""
+    simplify_graph_next(graph::MetaGraphsNext.MetaGraph, bubbles::Vector{BubbleStructure}) -> MetaGraphsNext.MetaGraph
+
+Simplify the graph by resolving bubbles and removing low-confidence paths.
+"""
+function simplify_graph_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                           bubbles::Vector{BubbleStructure})
+    # Create a copy of the graph
+    simplified_graph = deepcopy(graph)
+    
+    # Process bubbles by confidence
+    sorted_bubbles = sort(bubbles, by=b -> b.complexity_score)
+    
+    for bubble in sorted_bubbles
+        # Choose which path to keep based on support
+        if bubble.path1_support > bubble.path2_support
+            remove_path_from_graph!(simplified_graph, bubble.path2, bubble.entry_vertex, bubble.exit_vertex)
+        elseif bubble.path2_support > bubble.path1_support
+            remove_path_from_graph!(simplified_graph, bubble.path1, bubble.entry_vertex, bubble.exit_vertex)
+        else
+            # Equal support - could use other criteria or keep both
+            continue
+        end
+    end
+    
+    # Remove isolated vertices
+    remove_isolated_vertices!(simplified_graph)
+    
+    return simplified_graph
+end
+
+"""
+Remove a path from the graph.
+"""
+function remove_path_from_graph!(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+                                path::Vector{String}, entry_vertex::String, exit_vertex::String)
+    # Remove edges in the path
+    prev_vertex = entry_vertex
+    for vertex in path
+        if haskey(graph, prev_vertex, vertex)
+            delete!(graph, prev_vertex, vertex)
+        end
+        prev_vertex = vertex
+    end
+    
+    # Remove final edge to exit
+    if !isempty(path) && haskey(graph, path[end], exit_vertex)
+        delete!(graph, path[end], exit_vertex)
+    end
+    
+    # Remove vertices that are now isolated
+    for vertex in path
+        if is_isolated_vertex(graph, vertex)
+            delete!(graph, vertex)
+        end
+    end
+end
+
+"""
+Check if a vertex is isolated (no edges).
+"""
+function is_isolated_vertex(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData}, vertex::String)
+    return isempty(get_in_neighbors(graph, vertex)) && isempty(get_out_neighbors(graph, vertex))
+end
+
+"""
+Remove all isolated vertices from the graph.
+"""
+function remove_isolated_vertices!(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData})
+    vertices_to_remove = String[]
+    
+    for vertex in MetaGraphsNext.labels(graph)
+        if is_isolated_vertex(graph, vertex)
+            push!(vertices_to_remove, vertex)
+        end
+    end
+    
+    for vertex in vertices_to_remove
+        delete!(graph, vertex)
+    end
+end
+"""
+Probabilistic algorithms for strand-aware k-mer graph traversal and assembly.
+
+This module implements the core algorithms for Phase 2 of the assembly roadmap:
+- Probabilistic walks with strand-consistent transitions
+- Shortest probability paths (distance ∝ -log(probability))
+- Maximum weight walks for high-confidence path finding
+- Quality-aware scoring and path validation
+"""
+
+import MetaGraphsNext
+import Graphs
+import DataStructures
+import Statistics
+import Random
+using DocStringExtensions
+
+"""
+Represents a step in a probabilistic walk through the graph.
+"""
+struct WalkStep
+    vertex_label::String
+    strand::StrandOrientation
+    probability::Float64
+    cumulative_probability::Float64
+end
+
+"""
+Represents a complete path through the k-mer graph.
+"""
+struct GraphPath
+    steps::Vector{WalkStep}
+    total_probability::Float64
+    sequence::String
+    
+    function GraphPath(steps::Vector{WalkStep})
+        total_prob = isempty(steps) ? 0.0 : last(steps).cumulative_probability
+        sequence = _reconstruct_sequence_from_path(steps)
+        new(steps, total_prob, sequence)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform a probabilistic walk through the strand-aware k-mer graph.
+
+This algorithm follows edges based on their probability weights, respecting strand
+orientation constraints. The walk continues until max_steps is reached or no valid
+transitions are available.
+
+# Arguments
+- `graph`: MetaGraphsNext k-mer graph with strand-aware edges
+- `start_vertex`: Starting k-mer (vertex label)
+- `max_steps`: Maximum number of steps to take
+- `seed`: Random seed for reproducibility (optional)
+
+# Returns
+- `GraphPath`: Complete path with probability information
+
+# Algorithm
+1. Start at given vertex with forward strand orientation
+2. At each step, calculate transition probabilities based on edge weights
+3. Sample next vertex according to probabilities
+4. Update cumulative probability and continue
+5. Respect strand orientation constraints from edge metadata
+
+# Example
+```julia
+graph = build_kmer_graph_next(DNAKmer{15}, observations)
+path = probabilistic_walk_next(graph, "ATCGATCGATCGATC", 100)
+println("Assembled sequence: \$(path.sequence)")
+println("Path probability: \$(path.total_probability)")
+```
+"""
+function probabilistic_walk_next(graph::MetaGraphsNext.MetaGraph, 
+                                start_vertex::String, 
+                                max_steps::Int;
+                                seed::Union{Nothing, Int}=nothing)
+    if seed !== nothing
+        Random.seed!(seed)
+    end
+    
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+    
+    steps = Vector{WalkStep}()
+    current_vertex = start_vertex
+    current_strand = Forward  # Start with forward orientation
+    cumulative_prob = 1.0
+    
+    # Add starting step
+    push!(steps, WalkStep(current_vertex, current_strand, 1.0, cumulative_prob))
+    
+    for step in 1:max_steps
+        # Get all valid outgoing edges from current vertex
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+        
+        if isempty(valid_transitions)
+            # No valid transitions available
+            break
+        end
+        
+        # Calculate transition probabilities
+        transition_probs = _calculate_transition_probabilities(valid_transitions)
+        
+        # Sample next transition
+        next_transition = _sample_transition(valid_transitions, transition_probs)
+        
+        # Update path
+        step_prob = next_transition[:probability]
+        cumulative_prob *= step_prob
+        
+        current_vertex = next_transition[:target_vertex]
+        current_strand = next_transition[:target_strand]
+        
+        push!(steps, WalkStep(current_vertex, current_strand, step_prob, cumulative_prob))
+    end
+    
+    return GraphPath(steps)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the shortest path in probability space between two vertices.
+
+Uses Dijkstra's algorithm where edge distances are -log(probability), so the
+shortest path corresponds to the highest probability path.
+
+# Arguments
+- `graph`: MetaGraphsNext k-mer graph
+- `source`: Source vertex label
+- `target`: Target vertex label
+
+# Returns
+- `Union{GraphPath, Nothing}`: Shortest probability path, or nothing if no path exists
+
+# Algorithm
+1. Convert edge weights to -log(probability) distances
+2. Run Dijkstra's algorithm with strand-aware edge traversal
+3. Reconstruct path maintaining strand information
+4. Convert back to probability space for final result
+"""
+function shortest_probability_path_next(graph::MetaGraphsNext.MetaGraph, 
+                                       source::String, 
+                                       target::String)
+    if !(source in MetaGraphsNext.labels(graph)) || !(target in MetaGraphsNext.labels(graph))
+        return nothing
+    end
+    
+    # State: (vertex_label, strand_orientation)
+    distances = Dict{Tuple{String, StrandOrientation}, Float64}()
+    predecessors = Dict{Tuple{String, StrandOrientation}, Union{Nothing, Tuple{String, StrandOrientation}}}()
+    visited = Set{Tuple{String, StrandOrientation}}()
+    
+    # Priority queue: (distance, vertex_label, strand)
+    pq = DataStructures.PriorityQueue{Tuple{String, StrandOrientation}, Float64}()
+    
+    # Initialize
+    start_state = (source, Forward)
+    distances[start_state] = 0.0
+    predecessors[start_state] = nothing
+    pq[start_state] = 0.0
+    
+    while !isempty(pq)
+        current_state = DataStructures.dequeue!(pq)
+        current_vertex, current_strand = current_state
+        
+        if current_state in visited
+            continue
+        end
+        push!(visited, current_state)
+        
+        # Check if we reached target
+        if current_vertex == target
+            # Reconstruct path
+            return _reconstruct_shortest_path(predecessors, distances, start_state, current_state, graph)
+        end
+        
+        # Explore neighbors
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+        
+        for transition in valid_transitions
+            neighbor_vertex = transition[:target_vertex]
+            neighbor_strand = transition[:target_strand]
+            neighbor_state = (neighbor_vertex, neighbor_strand)
+            
+            if neighbor_state in visited
+                continue
+            end
+            
+            # Distance is -log(probability)
+            edge_prob = transition[:probability]
+            edge_distance = edge_prob > 0 ? -log(edge_prob) : Inf
+            new_distance = distances[current_state] + edge_distance
+            
+            if !haskey(distances, neighbor_state) || new_distance < distances[neighbor_state]
+                distances[neighbor_state] = new_distance
+                predecessors[neighbor_state] = current_state
+                pq[neighbor_state] = new_distance
+            end
+        end
+    end
+    
+    return nothing  # No path found
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform a maximum weight walk prioritizing highest confidence edges.
+
+This greedy algorithm always chooses the edge with the highest weight (coverage)
+at each step, useful for finding high-confidence assembly paths.
+
+# Arguments
+- `graph`: MetaGraphsNext k-mer graph
+- `start_vertex`: Starting vertex label
+- `max_steps`: Maximum steps to take
+- `weight_function`: Function to extract weight from edge data (default: uses edge.weight)
+
+# Returns
+- `GraphPath`: Path following maximum weight edges
+"""
+function maximum_weight_walk_next(graph::MetaGraphsNext.MetaGraph,
+                                 start_vertex::String,
+                                 max_steps::Int;
+                                 weight_function::Function = edge_data -> edge_data.weight)
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+    
+    steps = Vector{WalkStep}()
+    current_vertex = start_vertex
+    current_strand = Forward
+    cumulative_prob = 1.0
+    
+    # Add starting step
+    push!(steps, WalkStep(current_vertex, current_strand, 1.0, cumulative_prob))
+    
+    for step in 1:max_steps
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+        
+        if isempty(valid_transitions)
+            break
+        end
+        
+        # Find transition with maximum weight
+        best_transition = nothing
+        max_weight = -Inf
+        
+        for transition in valid_transitions
+            weight = weight_function(transition[:edge_data])
+            if weight > max_weight
+                max_weight = weight
+                best_transition = transition
+            end
+        end
+        
+        if best_transition === nothing
+            break
+        end
+        
+        # Follow best transition
+        step_prob = best_transition[:probability]
+        cumulative_prob *= step_prob
+        
+        current_vertex = best_transition[:target_vertex]
+        current_strand = best_transition[:target_strand]
+        
+        push!(steps, WalkStep(current_vertex, current_strand, step_prob, cumulative_prob))
+    end
+    
+    return GraphPath(steps)
+end
+
+"""
+Helper function to get valid transitions from a vertex with given strand orientation.
+"""
+function _get_valid_transitions(graph, vertex_label, strand)
+    transitions = []
+    
+    # Get all outgoing edges from this vertex
+    for edge_labels in MetaGraphsNext.edge_labels(graph)
+        if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+            target_vertex = edge_labels[2]
+            edge_data = graph[edge_labels...]
+            
+            # Check if this edge is valid for our current strand
+            if edge_data.src_strand == strand
+                probability = edge_data.weight > 0 ? edge_data.weight : 1e-10
+                
+                push!(transitions, Dict(
+                    :target_vertex => target_vertex,
+                    :target_strand => edge_data.dst_strand,
+                    :probability => probability,
+                    :edge_data => edge_data
+                ))
+            end
+        end
+    end
+    
+    return transitions
+end
+
+"""
+Helper function to calculate normalized transition probabilities.
+"""
+function _calculate_transition_probabilities(transitions)
+    if isempty(transitions)
+        return Float64[]
+    end
+    
+    weights = [t[:probability] for t in transitions]
+    total_weight = sum(weights)
+    
+    if total_weight == 0
+        # Equal probability for all transitions
+        return fill(1.0 / length(transitions), length(transitions))
+    else
+        return weights ./ total_weight
+    end
+end
+
+"""
+Helper function to sample a transition based on probabilities.
+"""
+function _sample_transition(transitions, probabilities)
+    if isempty(transitions)
+        return nothing
+    end
+    
+    if length(transitions) == 1
+        return first(transitions)
+    end
+    
+    # Sample according to probabilities
+    r = rand()
+    cumulative = 0.0
+    
+    for (i, prob) in enumerate(probabilities)
+        cumulative += prob
+        if r <= cumulative
+            return transitions[i]
+        end
+    end
+    
+    # Fallback to last transition
+    return last(transitions)
+end
+
+"""
+Helper function to reconstruct sequence from a graph path.
+"""
+function _reconstruct_sequence_from_path(steps)
+    if isempty(steps)
+        return ""
+    end
+    
+    # Start with first k-mer
+    first_step = first(steps)
+    first_vertex_data = first_step.vertex_label  # This should be the k-mer sequence
+    
+    if first_step.strand == Forward
+        sequence = first_vertex_data
+    else
+        # Reverse complement for reverse strand
+        sequence = string(BioSequences.reverse_complement(BioSequences.DNASequence(first_vertex_data)))
+    end
+    
+    # Add subsequent nucleotides
+    for i in 2:length(steps)
+        step = steps[i]
+        vertex_sequence = step.vertex_label
+        
+        # Get the sequence considering strand
+        if step.strand == Forward
+            kmer_seq = vertex_sequence
+        else
+            kmer_seq = string(BioSequences.reverse_complement(BioSequences.DNASequence(vertex_sequence)))
+        end
+        
+        # Add the last nucleotide (assuming k-mer overlap)
+        if length(kmer_seq) > 0
+            sequence *= last(kmer_seq)
+        end
+    end
+    
+    return sequence
+end
+
+"""
+Helper function to reconstruct shortest path from Dijkstra's algorithm.
+"""
+function _reconstruct_shortest_path(predecessors, distances, start_state, end_state, graph)
+    path_states = []
+    current_state = end_state
+    
+    while current_state !== nothing
+        pushfirst!(path_states, current_state)
+        current_state = predecessors[current_state]
+    end
+    
+    # Convert to WalkStep format
+    steps = Vector{WalkStep}()
+    total_distance = distances[end_state]
+    total_probability = exp(-total_distance)
+    
+    for (i, (vertex, strand)) in enumerate(path_states)
+        step_prob = if i == 1
+            1.0
+        else
+            # Calculate step probability from distance difference
+            prev_state = path_states[i-1]
+            step_distance = distances[(vertex, strand)] - distances[prev_state]
+            exp(-step_distance)
+        end
+        
+        cumulative_prob = exp(-distances[(vertex, strand)])
+        push!(steps, WalkStep(vertex, strand, step_prob, cumulative_prob))
+    end
+    
+    return GraphPath(steps)
+end
+
+# Note: We don't export specific types/functions - use fully qualified names like Mycelia.probabilistic_walk_next

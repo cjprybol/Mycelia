@@ -110,7 +110,7 @@ end
 
 Create Hidden Markov Model parameters from a k-mer graph structure.
 """
-function create_hmm_from_graph(graph::MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData}, 
+function create_hmm_from_graph(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData}, 
                               config::ViterbiConfig)
     vertices = collect(MetaGraphsNext.labels(graph))
     n_states = length(vertices) * (config.consider_reverse_complement ? 2 : 1)
@@ -179,7 +179,7 @@ end
 
 Estimate transition probabilities from observed sequences in the graph.
 """
-function estimate_transition_probabilities(graph::MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+function estimate_transition_probabilities(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
                                           sequences::Vector)
     vertices = collect(MetaGraphsNext.labels(graph))
     n_vertices = length(vertices)
@@ -223,7 +223,7 @@ end
 
 Enhanced Viterbi decoding with strand awareness and memory efficiency.
 """
-function viterbi_decode_next(graph::MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+function viterbi_decode_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
                             observations::Vector{String},
                             config::ViterbiConfig = ViterbiConfig())
     states, transitions, emissions = create_hmm_from_graph(graph, config)
@@ -397,7 +397,7 @@ end
 
 Process multiple sequences in batches for memory efficiency.
 """
-function viterbi_batch_process(graph::MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+function viterbi_batch_process(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
                               sequences::Vector,
                               config::ViterbiConfig = ViterbiConfig())
     results = Vector{ViterbiPath}()
@@ -439,7 +439,7 @@ end
 
 Polish a single sequence using Viterbi algorithm on k-mer graph.
 """
-function polish_sequence_next(graph::MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+function polish_sequence_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
                              sequence::String,
                              config::ViterbiConfig = ViterbiConfig())
     k = length(first(MetaGraphsNext.labels(graph)))
@@ -464,7 +464,7 @@ end
 
 Correct errors in sequences using Viterbi algorithm and return corrected FASTA records.
 """
-function correct_errors_next(graph::MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+function correct_errors_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
                             sequences::Vector,
                             config::ViterbiConfig = ViterbiConfig())
     corrected_records = Vector{FASTX.FASTA.Record}()

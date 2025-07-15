@@ -31,7 +31,7 @@ struct BenchmarkConfig
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Generate synthetic DNA sequences for benchmarking.
 
@@ -57,7 +57,7 @@ function generate_test_sequences(config::BenchmarkConfig)
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Benchmark graph construction performance: Legacy vs Next-generation.
 
@@ -114,14 +114,12 @@ function benchmark_graph_construction(config::BenchmarkConfig=BenchmarkConfig())
     # Display results
     println("\n🎯 Performance Results:")
     println("=" ^ 40)
-    println(@sprintf "Legacy (MetaGraphs):     %.3f seconds, %.1f MB, %d allocations" 
-            legacy_time (legacy_memory/1024/1024) legacy_allocs)
-    println(@sprintf "Next-Gen (MetaGraphsNext): %.3f seconds, %.1f MB, %d allocations" 
-            next_time (next_memory/1024/1024) next_allocs)
+    println(Printf.format("Legacy (MetaGraphs):     %.3f seconds, %.1f MB, %d allocations", legacy_time, (legacy_memory/1024/1024), legacy_allocs))
+    println(Printf.format("Next-Gen (MetaGraphsNext): %.3f seconds, %.1f MB, %d allocations", next_time, (next_memory/1024/1024), next_allocs))
     println()
-    println(@sprintf "Speed improvement:       %.2fx faster" speed_improvement)
-    println(@sprintf "Memory reduction:        %.1f%%" memory_reduction)
-    println(@sprintf "Allocation reduction:    %.1f%%" alloc_reduction)
+    println(Printf.format("Speed improvement:       %.2fx faster", speed_improvement))
+    println(Printf.format("Memory reduction:        %.1f%%", memory_reduction))
+    println(Printf.format("Allocation reduction:    %.1f%%", alloc_reduction))
     
     # Check targets
     println("\n🎯 Target Achievement:")
@@ -143,7 +141,7 @@ function benchmark_graph_construction(config::BenchmarkConfig=BenchmarkConfig())
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Benchmark memory usage patterns for different graph representations.
 
@@ -185,13 +183,12 @@ function benchmark_memory_patterns(config::BenchmarkConfig=BenchmarkConfig())
     
     println("\n📊 Memory Pattern Analysis:")
     println("=" ^ 40)
-    println(@sprintf "Legacy vertices:         %d" legacy_vertices)
-    println(@sprintf "Next-gen vertices:       %d (%.1f%% reduction)" next_vertices vertex_reduction)
-    println(@sprintf "Legacy edges:            %d" legacy_edges)
-    println(@sprintf "Next-gen edges:          %d" next_edges)
+    println(Printf.format("Legacy vertices:         %d", legacy_vertices))
+    println(Printf.format("Next-gen vertices:       %d (%.1f%% reduction)", next_vertices, vertex_reduction))
+    println(Printf.format("Legacy edges:            %d", legacy_edges))
+    println(Printf.format("Next-gen edges:          %d", next_edges))
     println()
-    println(@sprintf "Estimated vertex memory: Legacy %.1f KB, Next-gen %.1f KB" 
-            (legacy_vertex_memory/1024) (next_vertex_memory/1024))
+    println(Printf.format("Estimated vertex memory: Legacy %.1f KB, Next-gen %.1f KB", (legacy_vertex_memory/1024), (next_vertex_memory/1024)))
     
     return (
         legacy_vertices = legacy_vertices,
@@ -204,7 +201,7 @@ function benchmark_memory_patterns(config::BenchmarkConfig=BenchmarkConfig())
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Benchmark type stability and allocation patterns.
 
@@ -255,8 +252,8 @@ function benchmark_type_stability(config::BenchmarkConfig=BenchmarkConfig())
     
     println("📊 Type Stability Results:")
     println("=" ^ 40)
-    println(@sprintf "Vertex access allocations: %d (target: 0)" vertex_allocs)
-    println(@sprintf "Edge access allocations:   %d (target: 0)" edge_allocs)
+    println(Printf.format("Vertex access allocations: %d (target: 0)", vertex_allocs))
+    println(Printf.format("Edge access allocations:   %d (target: 0)", edge_allocs))
     
     type_stable = vertex_allocs == 0 && edge_allocs == 0
     println("Type stability achieved:    ", type_stable ? "✅ YES" : "⚠️  NO")
@@ -269,7 +266,7 @@ function benchmark_type_stability(config::BenchmarkConfig=BenchmarkConfig())
 end
 
 """
-$(TYPEDSIGNATURES)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Run comprehensive performance benchmark suite.
 

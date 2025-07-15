@@ -802,65 +802,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Runs the MMseqs2 easy-search command on the given query FASTA file against the target database.
-
-# Arguments
-- `query_fasta::String`: Path to the query FASTA file.
-- `target_database::String`: Path to the target database.
-- `out_dir::String`: Directory to store the output file. Defaults to the directory of the query FASTA file.
-- `outfile::String`: Name of the output file. Defaults to a combination of the query FASTA and target database filenames.
-- `format_output::String`: Format of the output. Defaults to a predefined set of fields.
-- `threads::Int`: Number of CPU threads to use. Defaults to the number of CPU threads available.
-- `force::Bool`: If true, forces the re-generation of the output file even if it already exists. Defaults to false.
-
-# Returns
-- `outfile_path::String`: Path to the generated output file.
-
-# Notes
-- Adds the `mmseqs2` environment using Bioconda if not already present.
-- Removes temporary files created during the process.
-"""
-function run_mmseqs_easy_search(;
-        query_fasta,
-        target_database,
-        out_dir=dirname(query_fasta),
-        outfile=basename(query_fasta) * ".mmseqs_easy_search." * basename(target_database) * ".txt",
-        format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-        threads = Sys.CPU_THREADS,
-        force=false)
-    
-    add_bioconda_env("mmseqs2")
-    outfile_path = joinpath(out_dir, outfile)
-    tmp_dir = joinpath(out_dir, "tmp")
-    if force || (!force && !isfile(outfile_path))
-        cmd = 
-        `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
-            easy-search
-            $(query_fasta)
-            $(target_database)
-            $(outfile_path)
-            $(tmp_dir)
-            --threads $(threads)
-            --format-mode 4
-            --format-output $(format_output)
-            --start-sens 1 -s 7 --sens-steps 7
-            --sort-results 1
-            --remove-tmp-files 1
-        `
-        @time run(pipeline(cmd))
-    else
-        @info "target outfile $(outfile_path) already exists, remove it or set force=true to re-generate"
-    end
-    # we set remote tmp files = 1 above, but it still doesn't seem to work?
-    if isdir(tmp_dir)
-        rm(tmp_dir, recursive=true)
-    end
-    return outfile_path
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 
 Run the BLASTN (Basic Local Alignment Search Tool for Nucleotides) command with specified parameters.
 
