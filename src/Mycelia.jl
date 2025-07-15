@@ -48,6 +48,14 @@ import MetaGraphs
 import MetaGraphsNext
 import Mmap
 import MultivariateStats
+
+# Auto-include all Julia files in src directory
+# This ensures our next-generation modules are automatically loaded:
+# - sequence-graphs-next.jl (strand-aware k-mer graphs)
+# - gfa-io-next.jl (MetaGraphsNext GFA I/O)
+# - probabilistic-algorithms-next.jl (probabilistic walks, shortest paths)
+# - viterbi-next.jl (enhanced Viterbi with batch processing)
+# - graph-algorithms-next.jl (Eulerian paths, bubble detection, repeat resolution)
 import OrderedCollections
 import Plots
 import Primes
