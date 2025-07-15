@@ -311,7 +311,7 @@ end
 
 
 """
-    run_checkv(fasta_file::String; outdir::String="./checkv_out", db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
+    run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
 
 Run CheckV on a single genome FASTA file.
 
@@ -319,7 +319,7 @@ CheckV assesses the quality and completeness of viral genomes.
 
 # Arguments
 - `fasta_file`: Path to single FASTA file (can be gzipped)
-- `outdir`: Output directory for CheckV results (default: "./checkv_out")
+- `outdir`: Output directory for CheckV results (default: fasta_file * "_checkv")
 - `threads`: Number of threads to use (default: all available CPU threads)
 - `db_dir`: CheckV database directory (default: ~/.checkv)
 
@@ -329,7 +329,7 @@ run_checkv("genome.fasta")
 run_checkv("genome.fasta.gz")
 ```
 """
-function run_checkv(fasta_file::String; outdir::String="./checkv_out", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=Sys.CPU_THREADS)
+function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=Sys.CPU_THREADS)
     setup_checkv(db_dir=db_dir)
     
     if !isfile(fasta_file)
@@ -346,7 +346,7 @@ function run_checkv(fasta_file::String; outdir::String="./checkv_out", db_dir::S
 end
 
 """
-    run_checkm(input_path::String; outdir::String="./checkm_out", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta")
+    run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta")
 
 Run CheckM on directory containing FASTA files.
 
@@ -354,7 +354,7 @@ CheckM requires a directory of genome files as input.
 
 # Arguments
 - `input_path`: Path to directory containing FASTA files
-- `outdir`: Output directory for CheckM results (default: "./checkm_out")
+- `outdir`: Output directory for CheckM results (default: input_path * "_checkm")
 - `db_dir`: CheckM database directory (default: ~/.checkm)
 - `extension`: File extension for genomes (default: "fasta")
 - `threads`: Number of threads to use (default: all available CPU threads)
@@ -364,7 +364,7 @@ CheckM requires a directory of genome files as input.
 run_checkm("./genomes/")
 ```
 """
-function run_checkm(input_path::String; outdir::String="./checkm_out", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta", threads::Int=Sys.CPU_THREADS)
+function run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta", threads::Int=Sys.CPU_THREADS)
     setup_checkm(db_dir=db_dir)
     
     if !isdir(input_path)
@@ -394,13 +394,13 @@ function run_checkm(input_path::String; outdir::String="./checkm_out", db_dir::S
 end
 
 """
-    run_checkm2(input_path::String; outdir::String="./checkm2_out", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+    run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
 
 Run CheckM2 on FASTA file(s) or directory containing FASTA files.
 
 # Arguments
 - `input_path`: Path to FASTA file or directory containing FASTA files
-- `outdir`: Output directory for CheckM2 results (default: "./checkm2_out")
+- `outdir`: Output directory for CheckM2 results (default: input_path * "_checkm2")
 - `threads`: Number of threads to use (default: all available CPU threads)
 - `db_dir`: CheckM2 database directory (default: ~/.checkm2)
 
@@ -410,7 +410,7 @@ run_checkm2("genome.fasta")
 run_checkm2("./genomes/")
 ```
 """
-function run_checkm2(input_path::String; outdir::String="./checkm2_out", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
+function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
     setup_checkm2(db_dir=db_dir)
     
     fasta_files = find_fasta_files(input_path)
@@ -428,7 +428,7 @@ function run_checkm2(input_path::String; outdir::String="./checkm2_out", db_dir:
 end
 
 """
-    run_checkm2_list(fasta_files::Vector{String}; outdir::String="./checkm2_out", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+    run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
 
 Run CheckM2 on a list of FASTA files.
 
@@ -436,7 +436,7 @@ CheckM2 can automatically handle mixed lists of gzipped and non-gzipped files wh
 
 # Arguments
 - `fasta_files`: Vector of FASTA file paths (can be mixed gzipped and non-gzipped)
-- `outdir`: Output directory for CheckM2 results (default: "./checkm2_out")
+- `outdir`: Output directory for CheckM2 results (default: normalized_current_datetime() * "_checkm2")
 - `threads`: Number of threads to use (default: all available CPU threads)
 - `db_dir`: CheckM2 database directory (default: ~/.checkm2)
 
@@ -446,7 +446,7 @@ files = ["genome1.fasta.gz", "genome2.fasta", "genome3.fasta.gz"]
 run_checkm2_list(files)
 ```
 """
-function run_checkm2_list(fasta_files::Vector{String}; outdir::String="./checkm2_out", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
+function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
     setup_checkm2(db_dir=db_dir)
     
     if isempty(fasta_files)
