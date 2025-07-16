@@ -480,7 +480,7 @@ function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2",
     # CheckM2 can take comma-separated fasta files as input
     input_str = join(fasta_files, ",")
     
-    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads)`)
+    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads) --force`)
     
     # Verify output files were created
     if !isdir(protein_files_dir)
