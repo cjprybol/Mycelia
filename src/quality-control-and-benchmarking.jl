@@ -363,6 +363,11 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
         latest_db = last(readdir(Mycelia.setup_checkv(), join=true))
         run(`$(CONDA_RUNNER) run -n checkv checkv end_to_end $(fasta_file) $(outdir) -d $(latest_db) -t $(threads)`)
     end
+    
+    # Clean up temporary directory if it exists
+    tmp_dir = joinpath(outdir, "tmp")
+    Mycelia.cleanup_directory(tmp_dir, verbose=true, force=true)
+    
     return (outdir=outdir, output_files...)
 end
 
