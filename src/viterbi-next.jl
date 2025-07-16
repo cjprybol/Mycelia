@@ -15,10 +15,10 @@ import FASTX
 import LinearAlgebra
 import Statistics
 
-export ViterbiState, ViterbiPath, ViterbiConfig
-export viterbi_decode_next, viterbi_batch_process, viterbi_streaming
-export create_hmm_from_graph, estimate_transition_probabilities
-export polish_sequence_next, correct_errors_next
+# export ViterbiState, ViterbiPath, ViterbiConfig
+# export viterbi_decode_next, viterbi_batch_process, viterbi_streaming
+# export create_hmm_from_graph, estimate_transition_probabilities
+# export polish_sequence_next, correct_errors_next
 
 """
     ViterbiState
@@ -110,7 +110,7 @@ end
 
 Create Hidden Markov Model parameters from a k-mer graph structure.
 """
-function create_hmm_from_graph(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData}, 
+function create_hmm_from_graph(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, String, KmerVertexData, KmerEdgeData}, 
                               config::ViterbiConfig)
     vertices = collect(MetaGraphsNext.labels(graph))
     n_states = length(vertices) * (config.consider_reverse_complement ? 2 : 1)
@@ -149,13 +149,13 @@ function create_hmm_from_graph(graph::MetaGraphsNext.MetaGraph{<:Integer, String
         dst_forward, dst_reverse = state_map[dst_label]
         
         # Set transitions based on edge strand compatibility
-        if edge_data.from_strand == Forward && edge_data.to_strand == Forward
+        if edge_data.src_strand == Forward && edge_data.dst_strand == Forward
             transitions[src_forward, dst_forward] = edge_data.weight
-        elseif edge_data.from_strand == Forward && edge_data.to_strand == Reverse
+        elseif edge_data.src_strand == Forward && edge_data.dst_strand == Reverse
             transitions[src_forward, dst_reverse] = edge_data.weight * (1.0 - config.strand_switch_penalty)
-        elseif edge_data.from_strand == Reverse && edge_data.to_strand == Forward
+        elseif edge_data.src_strand == Reverse && edge_data.dst_strand == Forward
             transitions[src_reverse, dst_forward] = edge_data.weight * (1.0 - config.strand_switch_penalty)
-        elseif edge_data.from_strand == Reverse && edge_data.to_strand == Reverse
+        elseif edge_data.src_strand == Reverse && edge_data.dst_strand == Reverse
             transitions[src_reverse, dst_reverse] = edge_data.weight
         end
     end
@@ -223,7 +223,7 @@ end
 
 Enhanced Viterbi decoding with strand awareness and memory efficiency.
 """
-function viterbi_decode_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData},
+function viterbi_decode_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, String, KmerVertexData, KmerEdgeData},
                             observations::Vector{String},
                             config::ViterbiConfig = ViterbiConfig())
     states, transitions, emissions = create_hmm_from_graph(graph, config)

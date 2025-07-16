@@ -8,6 +8,7 @@ import MetaGraphsNext
 import Graphs
 import BioSequences
 import FASTX
+import Kmers
 
 Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
     
@@ -27,16 +28,24 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         graph["TCG"] = Mycelia.KmerVertexData("TCG")  
         graph["CGA"] = Mycelia.KmerVertexData("CGA")
         
-        # Add edges with different weights
+        # Add edges with different coverage (weight is calculated automatically)
+        # High coverage edge (3 observations)
+        high_coverage = [
+            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Forward)),
+            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Forward)),
+            ((3, 1, Mycelia.Forward), (3, 2, Mycelia.Forward))
+        ]
         graph["ATC", "TCG"] = Mycelia.KmerEdgeData(
-            [(Tuple{Int,Int,Mycelia.StrandOrientation}, Tuple{Int,Int,Mycelia.StrandOrientation})[]],
-            3.0,  # High weight
+            high_coverage,
             Mycelia.Forward, Mycelia.Forward
         )
         
+        # Low coverage edge (1 observation)
+        low_coverage = [
+            ((1, 2, Mycelia.Forward), (1, 3, Mycelia.Forward))
+        ]
         graph["TCG", "CGA"] = Mycelia.KmerEdgeData(
-            [(Tuple{Int,Int,Mycelia.StrandOrientation}, Tuple{Int,Int,Mycelia.StrandOrientation})[]],
-            1.0,  # Lower weight
+            low_coverage,
             Mycelia.Forward, Mycelia.Forward
         )
         
@@ -148,7 +157,7 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         seq2 = FASTX.FASTA.Record("test2", "TCGATCGA")
         observations = [seq1, seq2]
         
-        kmer_type = BioSequences.DNAKmer{3}
+        kmer_type = Kmers.DNAKmer{3}
         graph = Mycelia.build_kmer_graph_next(kmer_type, observations)
         
         if !isempty(MetaGraphsNext.labels(graph))
@@ -197,9 +206,12 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         graph["GAT"] = Mycelia.KmerVertexData("GAT")  # Reverse complement of ATC
         
         # Add edge requiring strand compatibility
+        strand_coverage = [
+            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Reverse)),
+            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Reverse))
+        ]
         graph["ATC", "GAT"] = Mycelia.KmerEdgeData(
-            [(Tuple{Int,Int,Mycelia.StrandOrientation}, Tuple{Int,Int,Mycelia.StrandOrientation})[]],
-            2.0,
+            strand_coverage,
             Mycelia.Forward, Mycelia.Reverse  # Forward ATC -> Reverse GAT
         )
         

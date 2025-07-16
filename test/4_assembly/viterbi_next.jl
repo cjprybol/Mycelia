@@ -28,17 +28,29 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
         end
         
         # Add edges forming a path
+        # High coverage edge (3 observations)
+        high_coverage = [
+            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Forward)),
+            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Forward)),
+            ((3, 1, Mycelia.Forward), (3, 2, Mycelia.Forward))
+        ]
         graph["ATC", "TCG"] = Mycelia.KmerEdgeData(
-            [(Tuple{Int,Int,Mycelia.StrandOrientation}, Tuple{Int,Int,Mycelia.StrandOrientation})[]],
-            0.9, Mycelia.Forward, Mycelia.Forward
+            high_coverage, Mycelia.Forward, Mycelia.Forward
         )
+        # Medium coverage edge (2 observations)
+        medium_coverage = [
+            ((1, 2, Mycelia.Forward), (1, 3, Mycelia.Forward)),
+            ((2, 2, Mycelia.Forward), (2, 3, Mycelia.Forward))
+        ]
         graph["TCG", "CGA"] = Mycelia.KmerEdgeData(
-            [(Tuple{Int,Int,Mycelia.StrandOrientation}, Tuple{Int,Int,Mycelia.StrandOrientation})[]],
-            0.8, Mycelia.Forward, Mycelia.Forward
+            medium_coverage, Mycelia.Forward, Mycelia.Forward
         )
+        # Low coverage edge (1 observation)
+        low_coverage = [
+            ((1, 3, Mycelia.Forward), (1, 4, Mycelia.Forward))
+        ]
         graph["CGA", "GAT"] = Mycelia.KmerEdgeData(
-            [(Tuple{Int,Int,Mycelia.StrandOrientation}, Tuple{Int,Int,Mycelia.StrandOrientation})[]],
-            0.7, Mycelia.Forward, Mycelia.Forward
+            low_coverage, Mycelia.Forward, Mycelia.Forward
         )
         
         return graph
