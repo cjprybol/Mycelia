@@ -425,14 +425,19 @@ Run CheckM2 on FASTA file(s) or directory containing FASTA files.
 - `threads`: Number of threads to use (default: all available CPU threads)
 - `db_dir`: CheckM2 database directory (default: ~/.checkm2)
 
-# Example
-```julia
-run_checkm2("genome.fasta")
-run_checkm2("./genomes/")
-```
+# Returns
+A named tuple with the following fields:
+- `outdir`: Output directory path
+- `quality_report`: Path to quality_report.tsv
+- `log_file`: Path to checkm2.log
+- `diamond_results`: Path to DIAMOND_RESULTS.tsv
+- `protein_file`: Path to the single .faa file
 """
 function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
-    setup_checkm2(db_dir=db_dir)
+    # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
+    # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
+    db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
+    @assert isfile(db_path)
     
     fasta_files = find_fasta_files(input_path)
     
@@ -440,12 +445,58 @@ function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2",
         error("No FASTA files found in: $(input_path)")
     end
     
+    # Define expected output file paths
+    quality_report = joinpath(outdir, "quality_report.tsv")
+    log_file = joinpath(outdir, "checkm2.log")
+    diamond_results = joinpath(outdir, "diamond_output", "DIAMOND_RESULTS.tsv")
+    protein_files_dir = joinpath(outdir, "protein_files")
+    
+    # Check if all expected files already exist
+    files_exist = isfile(quality_report) && isfile(log_file) && isfile(diamond_results) && isdir(protein_files_dir)
+    
+    if files_exist
+        # Check for exactly one .faa file
+        faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join=true))
+        
+        if length(faa_files) == 1
+            protein_file = first(faa_files)
+            @warn "All expected CheckM2 output files already exist. Skipping execution and returning existing results." outdir
+            
+            return (
+                outdir = outdir,
+                quality_report = quality_report,
+                log_file = log_file,
+                diamond_results = diamond_results,
+                protein_file = protein_file
+            )
+        end
+    end
+    
     # CheckM2 can take comma-separated fasta files as input
     input_str = join(fasta_files, ",")
     
-    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_dir) --threads $(threads)`)
+    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads)`)
     
-    return outdir
+    # Verify output files were created
+    if !isdir(protein_files_dir)
+        error("Protein files directory not found: $(protein_files_dir)")
+    end
+    
+    faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join=true))
+    
+    if length(faa_files) != 1
+        error("Expected exactly 1 .faa file, but found $(length(faa_files)) in $(protein_files_dir)")
+    end
+    
+    protein_file = first(faa_files)
+    
+    return (
+        outdir = outdir,
+        quality_report = quality_report,
+        log_file = log_file,
+        diamond_results = diamond_results,
+        protein_file = protein_file
+    )
 end
 
 """
@@ -468,7 +519,10 @@ run_checkm2_list(files)
 ```
 """
 function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
-    setup_checkm2(db_dir=db_dir)
+    # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
+    # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
+    db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
+    @assert isfile(db_path)
     
     if isempty(fasta_files)
         error("No FASTA files provided")
@@ -487,7 +541,7 @@ function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized
     # CheckM2 can take comma-separated fasta files as input and handles mixed gz/non-gz automatically
     input_str = join(fasta_files, ",")
     
-    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_dir) --threads $(threads)`)
+    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads)`)
     
     return outdir
 end
