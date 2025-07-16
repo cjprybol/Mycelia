@@ -114,7 +114,7 @@ function _collapse_vertex!(graph::MetaGraphsNext.MetaGraph{<:Graphs.SimpleDiGrap
         pred, succ = preds[1], succs[1]
         _concatenate_sequences!(graph, pred, v)
         MetaGraphsNext.rem_vertex!(graph, v)
-        if !MetaGraphsNext.has_edge(graph, pred, succ)
+        if !haskey(graph, pred, succ)
             MetaGraphsNext.add_edge!(graph, pred, succ)
         end
     end
@@ -127,7 +127,7 @@ function _collapse_vertex!(graph::MetaGraphsNext.MetaGraph{<:Graphs.SimpleGraph}
         n1, n2 = neighbors
         _concatenate_sequences!(graph, n1, v)
         MetaGraphsNext.rem_vertex!(graph, v)
-        if !MetaGraphsNext.has_edge(graph, n1, n2)
+        if !haskey(graph, n1, n2)
             MetaGraphsNext.add_edge!(graph, n1, n2)
         end
     end

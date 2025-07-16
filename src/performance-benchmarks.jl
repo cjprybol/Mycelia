@@ -316,5 +316,5 @@ function run_full_benchmark_suite(config::BenchmarkConfig=BenchmarkConfig())
 end
 
 # Export benchmark functions
-export BenchmarkConfig, benchmark_graph_construction, benchmark_memory_patterns, 
-       benchmark_type_stability, run_full_benchmark_suite
+# export BenchmarkConfig, benchmark_graph_construction, benchmark_memory_patterns, 
+#        benchmark_type_stability, run_full_benchmark_suite

@@ -35,14 +35,14 @@ Strand information is tracked in the coverage data and edge transitions.
 
 Fields:
 - `coverage`: Vector of observation coverage data as (observation_id, position, strand_orientation) tuples
-- `canonical_kmer`: The canonical k-mer sequence (lexicographically smaller of kmer and reverse complement)
+- `canonical_kmer`: The canonical k-mer (BioSequence type - NO string conversion)
 """
-struct KmerVertexData
+struct KmerVertexData{KmerT}
     coverage::Vector{Tuple{Int, Int, StrandOrientation}}  # (observation_id, position, strand_orientation)
-    canonical_kmer::String
+    canonical_kmer::KmerT  # Actual k-mer type (DNAKmer, RNAKmer, AAKmer)
     
     # Constructor with default empty coverage
-    KmerVertexData(canonical_kmer::String) = new(Vector{Tuple{Int, Int, StrandOrientation}}(), canonical_kmer)
+    KmerVertexData(canonical_kmer::KmerT) where {KmerT} = new{KmerT}(Vector{Tuple{Int, Int, StrandOrientation}}(), canonical_kmer)
 end
 
 """
@@ -106,23 +106,22 @@ function build_kmer_graph_next(kmer_type, observations::AbstractVector{<:Union{F
     
     if isempty(canonical_kmers)
         @warn "No k-mers found in observations"
-        return _create_empty_kmer_graph()
+        return _create_empty_kmer_graph(kmer_type)
     end
     
     # Create the MetaGraphsNext graph with type-stable metadata
     graph = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=KmerVertexData,
+        label_type=kmer_type,
+        vertex_data_type=KmerVertexData{kmer_type},
         edge_data_type=KmerEdgeData,
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
     )
     
-    # Add vertices for each canonical k-mer
+    # Add vertices for each canonical k-mer (NO string conversion)
     for kmer in canonical_kmers
-        canonical_kmer_str = string(kmer)
-        graph[canonical_kmer_str] = KmerVertexData(canonical_kmer_str)
+        graph[kmer] = KmerVertexData(kmer)
     end
     
     # Process observations to build strand-aware edges
@@ -164,22 +163,18 @@ function _add_observation_to_graph!(graph, observation, obs_idx, canonical_kmers
     
     # Add coverage to first vertex
     first_canonical_kmer, first_strand = observed_path[1]
-    first_kmer_str = string(first_canonical_kmer)
-    _add_vertex_coverage!(graph, first_kmer_str, obs_idx, 1, first_strand)
+    _add_vertex_coverage!(graph, first_canonical_kmer, obs_idx, 1, first_strand)
     
     # Add strand-aware edges and vertex coverage for the rest of the path
     for i in 2:length(observed_path)
         curr_canonical_kmer, curr_strand = observed_path[i]
         prev_canonical_kmer, prev_strand = observed_path[i-1]
         
-        curr_kmer_str = string(curr_canonical_kmer)
-        prev_kmer_str = string(prev_canonical_kmer)
-        
         # Add vertex coverage
-        _add_vertex_coverage!(graph, curr_kmer_str, obs_idx, i, curr_strand)
+        _add_vertex_coverage!(graph, curr_canonical_kmer, obs_idx, i, curr_strand)
         
         # Add or update strand-aware edge
-        _add_strand_aware_edge!(graph, prev_kmer_str, curr_kmer_str, 
+        _add_strand_aware_edge!(graph, prev_canonical_kmer, curr_canonical_kmer, 
                                prev_strand, curr_strand,
                                (obs_idx, i-1, prev_strand), (obs_idx, i, curr_strand))
     end
@@ -188,8 +183,8 @@ end
 """
 Helper function to add coverage data to a vertex.
 """
-function _add_vertex_coverage!(graph, kmer_str, obs_idx, position, strand_orientation)
-    vertex_data = graph[kmer_str]
+function _add_vertex_coverage!(graph, kmer, obs_idx, position, strand_orientation)
+    vertex_data = graph[kmer]
     new_coverage = (obs_idx, position, strand_orientation)
     push!(vertex_data.coverage, new_coverage)
 end
@@ -206,7 +201,7 @@ function _add_strand_aware_edge!(graph, src_kmer, dst_kmer, src_strand, dst_stra
     existing_edge_data = nothing
     
     # Check if an edge with this strand configuration already exists
-    if MetaGraphsNext.has_edge(graph, src_kmer, dst_kmer)
+    if haskey(graph, src_kmer, dst_kmer)
         existing_edge_data = graph[src_kmer, dst_kmer]
         # Check if this edge represents the same strand transition
         if existing_edge_data.src_strand == src_strand && existing_edge_data.dst_strand == dst_strand
@@ -233,11 +228,11 @@ end
 """
 Helper function to create an empty k-mer graph.
 """
-function _create_empty_kmer_graph()
+function _create_empty_kmer_graph(kmer_type)
     return MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=KmerVertexData,
+        label_type=kmer_type,
+        vertex_data_type=KmerVertexData{kmer_type},
         edge_data_type=KmerEdgeData,
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
@@ -332,10 +327,11 @@ destination k-mer when accounting for strand orientations.
 """
 function _is_valid_transition(src_kmer, dst_kmer, src_strand, dst_strand, k)
     # Get the actual k-mer sequences considering strand orientation
-    src_seq = src_strand == Forward ? string(src_kmer) : string(BioSequences.reverse_complement(src_kmer))
-    dst_seq = dst_strand == Forward ? string(dst_kmer) : string(BioSequences.reverse_complement(dst_kmer))
+    src_seq = src_strand == Forward ? src_kmer : BioSequences.reverse_complement(src_kmer)
+    dst_seq = dst_strand == Forward ? dst_kmer : BioSequences.reverse_complement(dst_kmer)
     
-    # Check if suffix of src matches prefix of dst
+    # Check if suffix of src matches prefix of dst (k-1 overlap)
+    # For BioSequences, we can use slicing directly
     src_suffix = src_seq[2:end]  # Remove first nucleotide
     dst_prefix = dst_seq[1:end-1]  # Remove last nucleotide
     
@@ -358,16 +354,22 @@ to the new type-stable MetaGraphsNext.jl format.
 # Returns
 - `MetaGraphsNext.MetaGraph` with equivalent structure and type-stable metadata
 """
-function legacy_to_next_graph(legacy_graph)
+function legacy_to_next_graph(legacy_graph, kmer_type=nothing)
     # Extract metadata from legacy graph
     stranded_kmers = legacy_graph.gprops[:stranded_kmers]
     k = legacy_graph.gprops[:k]
     
+    # Determine k-mer type if not provided
+    if kmer_type === nothing
+        # Default to DNAKmer for backward compatibility
+        kmer_type = Kmers.DNAKmer{k}
+    end
+    
     # Create next-generation graph
     next_graph = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=KmerVertexData,
+        label_type=kmer_type,
+        vertex_data_type=KmerVertexData{kmer_type},
         edge_data_type=KmerEdgeData,
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
@@ -378,9 +380,16 @@ function legacy_to_next_graph(legacy_graph)
         kmer_str = string(stranded_kmers[v])
         
         # Convert to canonical k-mer representation
-        kmer_seq = BioSequences.DNAKmer{length(kmer_str)}(kmer_str)
-        rc_kmer_seq = BioSequences.reverse_complement(kmer_seq)
-        canonical_kmer = string(kmer_seq <= rc_kmer_seq ? kmer_seq : rc_kmer_seq)
+        kmer_seq = kmer_type(kmer_str)
+        
+        # Only calculate reverse complement for nucleic acids
+        if kmer_type <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
+            rc_kmer_seq = BioSequences.reverse_complement(kmer_seq)
+            canonical_kmer = kmer_seq <= rc_kmer_seq ? kmer_seq : rc_kmer_seq
+        else
+            # For amino acids, no reverse complement
+            canonical_kmer = kmer_seq
+        end
         
         # Convert legacy coverage format to next-generation format with strand info
         legacy_coverage = get(legacy_graph.vprops[v], :coverage, [])
@@ -409,17 +418,27 @@ function legacy_to_next_graph(legacy_graph)
         dst_kmer_str = string(stranded_kmers[Graphs.dst(edge)])
         
         # Convert to canonical representation and determine strand orientations
-        src_kmer_seq = BioSequences.DNAKmer{length(src_kmer_str)}(src_kmer_str)
-        dst_kmer_seq = BioSequences.DNAKmer{length(dst_kmer_str)}(dst_kmer_str)
+        src_kmer_seq = kmer_type(src_kmer_str)
+        dst_kmer_seq = kmer_type(dst_kmer_str)
         
-        src_rc = BioSequences.reverse_complement(src_kmer_seq)
-        dst_rc = BioSequences.reverse_complement(dst_kmer_seq)
-        
-        src_canonical = string(src_kmer_seq <= src_rc ? src_kmer_seq : src_rc)
-        dst_canonical = string(dst_kmer_seq <= dst_rc ? dst_kmer_seq : dst_rc)
-        
-        src_strand = src_kmer_seq <= src_rc ? Forward : Reverse
-        dst_strand = dst_kmer_seq <= dst_rc ? Forward : Reverse
+        # Handle canonical representation differently for nucleic acids vs amino acids
+        if kmer_type <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
+            src_rc = BioSequences.reverse_complement(src_kmer_seq)
+            dst_rc = BioSequences.reverse_complement(dst_kmer_seq)
+            
+            src_canonical = src_kmer_seq <= src_rc ? src_kmer_seq : src_rc
+            dst_canonical = dst_kmer_seq <= dst_rc ? dst_kmer_seq : dst_rc
+            
+            src_strand = src_kmer_seq <= src_rc ? Forward : Reverse
+            dst_strand = dst_kmer_seq <= dst_rc ? Forward : Reverse
+        else
+            # For amino acids, no reverse complement concept
+            src_canonical = src_kmer_seq
+            dst_canonical = dst_kmer_seq
+            
+            src_strand = Forward  # Always forward for amino acids
+            dst_strand = Forward
+        end
         
         # Convert legacy edge coverage to next-generation format
         legacy_edge_coverage = get(legacy_graph.eprops[edge], :coverage, [])
@@ -436,7 +455,7 @@ function legacy_to_next_graph(legacy_graph)
         end
         
         # Create strand-aware edge
-        if !MetaGraphsNext.has_edge(next_graph, src_canonical, dst_canonical)
+        if !haskey(next_graph, src_canonical, dst_canonical)
             next_graph[src_canonical, dst_canonical] = KmerEdgeData(src_strand, dst_strand)
         end
         
@@ -526,7 +545,7 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
         println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Next")
         
         # Write segments (vertices) - canonical k-mers
-        vertex_id_map = Dict{String, Int}()
+        vertex_id_map = Dict()  # Generic dict to handle any k-mer type
         for (i, label) in enumerate(MetaGraphsNext.labels(graph))
             vertex_id_map[label] = i
             vertex_data = graph[label]
@@ -572,33 +591,35 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Read a GFA file and convert it to a MetaGraphsNext strand-aware k-mer graph.
+Read a GFA file and convert it to a MetaGraphsNext k-mer graph with fixed-length vertices.
 
 This function parses GFA format files and creates a strand-aware k-mer graph compatible
-with the next-generation implementation.
+with the next-generation implementation using fixed-length k-mer vertices.
 
 # Arguments
 - `gfa_file`: Path to input GFA file
+- `kmer_type`: Type of k-mer to use (e.g., Kmers.DNAKmer{31})
 - `graph_mode`: GraphMode (SingleStrand or DoubleStrand, default: DoubleStrand)
 
 # Returns
-- MetaGraphsNext.MetaGraph with strand-aware edges
+- MetaGraphsNext.MetaGraph with k-mer vertices and strand-aware edges
 
 # GFA Format Support
 Supports GFA v1.0 with:
 - Header (H) lines (ignored)
-- Segment (S) lines: parsed as canonical k-mer vertices
+- Segment (S) lines: parsed as fixed-length k-mer vertices
 - Link (L) lines: parsed as strand-aware edges
 - Path (P) lines: stored as metadata (future use)
 
 # Example
 ```julia
-graph = read_gfa_next("assembly.gfa")
+# Fixed-length k-mer graph
+graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31})
 # Or with specific mode
-graph = read_gfa_next("assembly.gfa", SingleStrand)
+graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
 ```
 """
-function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand)
+function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode=DoubleStrand)
     # Parse GFA file content
     segments = Dict{String, String}()  # id -> sequence
     links = Vector{Tuple{String, Bool, String, Bool}}()  # (src_id, src_forward, dst_id, dst_forward)
@@ -650,39 +671,57 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
     # Create MetaGraphsNext graph
     graph = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=KmerVertexData,
+        label_type=kmer_type,
+        vertex_data_type=KmerVertexData{kmer_type},
         edge_data_type=KmerEdgeData,
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
     )
     
-    # Add vertices (segments)
+    # Add vertices (segments) - convert sequences to k-mer types
     for (seg_id, sequence) in segments
-        # Determine canonical sequence based on graph mode
-        canonical_seq = if graph_mode == DoubleStrand
+        # Convert sequence to k-mer type
+        kmer_seq = kmer_type(sequence)
+        
+        # Determine canonical k-mer based on graph mode
+        canonical_kmer = if graph_mode == DoubleStrand && kmer_type <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
             # Use canonical representation for double-strand mode
-            dna_seq = BioSequences.LongDNA{4}(sequence)
-            rc_seq = BioSequences.reverse_complement(dna_seq)
-            string(dna_seq <= rc_seq ? dna_seq : rc_seq)
+            rc_kmer = BioSequences.reverse_complement(kmer_seq)
+            kmer_seq <= rc_kmer ? kmer_seq : rc_kmer
         else
-            # Use sequence as-is for single-strand mode
-            sequence
+            # Use k-mer as-is for single-strand mode or amino acids
+            kmer_seq
         end
         
         # Create vertex with empty coverage (will be populated if we have observations)
-        graph[seg_id] = KmerVertexData(canonical_seq)
+        graph[canonical_kmer] = KmerVertexData(canonical_kmer)
+    end
+    
+    # Create mapping from segment IDs to k-mers
+    id_to_kmer = Dict{String, kmer_type}()
+    for (seg_id, sequence) in segments
+        kmer_seq = kmer_type(sequence)
+        canonical_kmer = if graph_mode == DoubleStrand && kmer_type <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
+            rc_kmer = BioSequences.reverse_complement(kmer_seq)
+            kmer_seq <= rc_kmer ? kmer_seq : rc_kmer
+        else
+            kmer_seq
+        end
+        id_to_kmer[seg_id] = canonical_kmer
     end
     
     # Add edges (links)
     for (src_id, src_forward, dst_id, dst_forward) in links
-        if src_id in MetaGraphsNext.labels(graph) && dst_id in MetaGraphsNext.labels(graph)
+        if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
+            src_kmer = id_to_kmer[src_id]
+            dst_kmer = id_to_kmer[dst_id]
+            
             # Convert GFA orientations to StrandOrientation
             src_strand = src_forward ? Forward : Reverse
             dst_strand = dst_forward ? Forward : Reverse
             
             # Create strand-aware edge
-            graph[src_id, dst_id] = KmerEdgeData(src_strand, dst_strand)
+            graph[src_kmer, dst_kmer] = KmerEdgeData(src_strand, dst_strand)
         else
             @warn "Link references unknown segment: $src_id -> $dst_id"
         end
@@ -691,6 +730,185 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
     # Store paths as graph metadata if needed (future enhancement)
     # MetaGraphsNext doesn't have global properties like MetaGraphs, so we'd need
     # a different approach for storing paths
+    
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Read a GFA file and auto-detect whether to create a k-mer graph or BioSequence graph.
+
+This function parses GFA format files and intelligently chooses between:
+1. **Fixed-length k-mer graph** (if all segments have the same length)
+2. **Variable-length BioSequence graph** (if segments have different lengths)
+
+# Arguments
+- `gfa_file`: Path to input GFA file
+- `graph_mode`: GraphMode (SingleStrand or DoubleStrand, default: DoubleStrand)
+- `force_biosequence_graph`: Force creation of variable-length BioSequence graph (default: false)
+
+# Returns
+- MetaGraphsNext.MetaGraph with either k-mer vertices or BioSequence vertices
+
+# Auto-Detection Logic
+- **Fixed-length detection**: If all segments are the same length k, creates `DNAKmer{k}`/`RNAKmer{k}`/`AAKmer{k}` graph
+- **Variable-length fallback**: If segments have different lengths, creates `BioSequence` graph
+- **Override**: Use `force_biosequence_graph=true` to force variable-length graph
+
+# GFA Format Support
+Supports GFA v1.0 with:
+- Header (H) lines (ignored)
+- Segment (S) lines: parsed as vertices (k-mer or BioSequence)
+- Link (L) lines: parsed as strand-aware edges
+- Path (P) lines: stored as metadata (future use)
+
+# Examples
+```julia
+# Auto-detect graph type
+graph = read_gfa_next("assembly.gfa")
+
+# Force variable-length BioSequence graph
+graph = read_gfa_next("assembly.gfa", force_biosequence_graph=true)
+
+# SingleStrand mode with auto-detection
+graph = read_gfa_next("assembly.gfa", SingleStrand)
+```
+"""
+function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand; 
+                       force_biosequence_graph::Bool=false)
+    # Parse GFA file content
+    segments = Dict{String, String}()  # id -> sequence
+    links = Vector{Tuple{String, Bool, String, Bool}}()  # (src_id, src_forward, dst_id, dst_forward)
+    paths = Dict{String, Vector{String}}()  # path_name -> vertex_ids
+    
+    for line in eachline(gfa_file)
+        fields = split(line, '\t')
+        if isempty(fields)
+            continue
+        end
+        
+        line_type = first(fields)
+        
+        if line_type == "H"
+            # Header line - skip for now
+            continue
+        elseif line_type == "S"
+            # Segment line: S<tab>id<tab>sequence<tab>optional_fields
+            if length(fields) >= 3
+                seg_id = fields[2]
+                sequence = fields[3]
+                segments[seg_id] = sequence
+            end
+        elseif line_type == "L"
+            # Link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
+            if length(fields) >= 6
+                src_id = fields[2]
+                src_orient = fields[3] == "+"
+                dst_id = fields[4]
+                dst_orient = fields[5] == "+"
+                push!(links, (src_id, src_orient, dst_id, dst_orient))
+            end
+        elseif line_type == "P"
+            # Path line: P<tab>path_name<tab>path<tab>overlaps
+            if length(fields) >= 3
+                path_name = fields[2]
+                # Parse path string (removes +/- orientations for now)
+                path_vertices = split(replace(fields[3], r"[+-]" => ""), ',')
+                paths[path_name] = string.(path_vertices)
+            end
+        elseif line_type == "A"
+            # Assembly info line (hifiasm) - skip for now
+            continue
+        else
+            @warn "Unknown GFA line type: $line_type in line: $line"
+        end
+    end
+    
+    # Check if all segments are the same length (fixed-length -> k-mer graph)
+    segment_lengths = [length(seq) for seq in values(segments)]
+    all_same_length = !isempty(segment_lengths) && all(l -> l == segment_lengths[1], segment_lengths)
+    k_value = isempty(segment_lengths) ? 0 : segment_lengths[1]
+    
+    # Auto-detect graph type unless forced
+    if !force_biosequence_graph && all_same_length && k_value > 0
+        @info "Auto-detected fixed-length sequences (k=$k_value), creating k-mer graph"
+        
+        # Determine k-mer type from first segment
+        first_seq = first(values(segments))
+        if all(c -> c in "ACGT", uppercase(first_seq))
+            kmer_type = Kmers.DNAKmer{k_value}
+        elseif all(c -> c in "ACGU", uppercase(first_seq))
+            kmer_type = Kmers.RNAKmer{k_value}
+        else
+            kmer_type = Kmers.AAKmer{k_value}
+        end
+        
+        # Call the k-mer graph reader
+        return read_gfa_next(gfa_file, kmer_type, graph_mode)
+    end
+    
+    # Determine BioSequence type for variable-length graph
+    biosequence_type = if isempty(segments)
+        BioSequences.LongDNA{4}  # Default to DNA
+    else
+        first_seq = first(values(segments))
+        if all(c -> c in "ACGT", uppercase(first_seq))
+            BioSequences.LongDNA{4}
+        elseif all(c -> c in "ACGU", uppercase(first_seq))
+            BioSequences.LongRNA{4}
+        else
+            BioSequences.LongAA
+        end
+    end
+    
+    # Create MetaGraphsNext graph with BioSequence vertices
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=biosequence_type,
+        vertex_data_type=KmerVertexData{biosequence_type},
+        edge_data_type=KmerEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0
+    )
+    
+    # Add vertices (segments) - convert sequences to BioSequence types
+    id_to_sequence = Dict{String, biosequence_type}()
+    for (seg_id, sequence) in segments
+        # Convert sequence to BioSequence type
+        biosequence = biosequence_type(sequence)
+        
+        # Determine canonical representation based on graph mode
+        canonical_seq = if graph_mode == DoubleStrand && biosequence_type <: Union{BioSequences.LongDNA, BioSequences.LongRNA}
+            # Use canonical representation for double-strand mode
+            rc_seq = BioSequences.reverse_complement(biosequence)
+            biosequence <= rc_seq ? biosequence : rc_seq
+        else
+            # Use sequence as-is for single-strand mode or amino acids
+            biosequence
+        end
+        
+        # Create vertex with empty coverage (will be populated if we have observations)
+        graph[canonical_seq] = KmerVertexData(canonical_seq)
+        id_to_sequence[seg_id] = canonical_seq
+    end
+    
+    # Add edges (links)
+    for (src_id, src_forward, dst_id, dst_forward) in links
+        if haskey(id_to_sequence, src_id) && haskey(id_to_sequence, dst_id)
+            src_seq = id_to_sequence[src_id]
+            dst_seq = id_to_sequence[dst_id]
+            
+            # Convert GFA orientations to StrandOrientation
+            src_strand = src_forward ? Forward : Reverse
+            dst_strand = dst_forward ? Forward : Reverse
+            
+            # Create strand-aware edge
+            graph[src_seq, dst_seq] = KmerEdgeData(src_strand, dst_strand)
+        else
+            @warn "Link references unknown segment: $src_id -> $dst_id"
+        end
+    end
     
     return graph
 end
@@ -2098,7 +2316,7 @@ function _reconstruct_sequence_from_path(steps)
         sequence = first_vertex_data
     else
         # Reverse complement for reverse strand
-        sequence = string(BioSequences.reverse_complement(BioSequences.DNASequence(first_vertex_data)))
+        sequence = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(first_vertex_data)))
     end
     
     # Add subsequent nucleotides
@@ -2110,7 +2328,7 @@ function _reconstruct_sequence_from_path(steps)
         if step.strand == Forward
             kmer_seq = vertex_sequence
         else
-            kmer_seq = string(BioSequences.reverse_complement(BioSequences.DNASequence(vertex_sequence)))
+            kmer_seq = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(vertex_sequence)))
         end
         
         # Add the last nucleotide (assuming k-mer overlap)

@@ -1864,3 +1864,124 @@ kmer_space_size(5, 20)
 function kmer_space_size(k::Integer, alphabet_size::Integer=4)
     return alphabet_size^k
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Clean up a directory by calculating its size and file count, then removing it.
+
+# Arguments
+- `directory::AbstractString`: Path to the directory to clean up
+- `verbose::Bool=true`: Whether to report cleanup results (default: true)
+- `force::Bool=false`: Whether to proceed without confirmation for large directories
+
+# Returns
+- Named tuple with fields:
+  - `existed`: Whether the directory existed before cleanup
+  - `files_deleted`: Number of files that were deleted
+  - `bytes_freed`: Total bytes freed up
+  - `human_readable_size`: Human-readable representation of bytes freed
+
+# Details
+This function will:
+1. Check if the directory exists and is non-empty
+2. Calculate the total size and number of files recursively
+3. Remove the directory and all its contents
+4. Report the cleanup results unless verbose=false
+
+For directories larger than 1GB or containing more than 10,000 files,
+confirmation is required unless force=true.
+
+# Examples
+```julia
+# Clean up a temporary directory with reporting
+result = cleanup_directory("/tmp/myapp_temp")
+
+# Silent cleanup
+cleanup_directory("/tmp/cache", verbose=false)
+
+# Force cleanup of large directory
+cleanup_directory("/tmp/large_data", force=true)
+```
+"""
+function cleanup_directory(directory::AbstractString; verbose::Bool=true, force::Bool=false)
+    # Check if directory exists
+    if !isdir(directory)
+        if verbose
+            println("Directory does not exist, nothing to clean up: $(directory)")
+        end
+        return (existed=false, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+    end
+    
+    # Calculate directory size and file count
+    total_bytes = 0
+    file_count = 0
+    
+    for (root, dirs, files) in walkdir(directory)
+        for file in files
+            file_path = joinpath(root, file)
+            if isfile(file_path)  # Additional check to ensure it's a file
+                try
+                    total_bytes += filesize(file_path)
+                    file_count += 1
+                catch e
+                    # Skip files that can't be read (permissions, etc.)
+                    if verbose
+                        @warn "Could not read file size for: $(file_path)"
+                    end
+                end
+            end
+        end
+    end
+    
+    # Check if directory is empty
+    if file_count == 0
+        if verbose
+            println("Directory is empty, removing: $(directory)")
+        end
+        try
+            rm(directory, recursive=true)
+        catch e
+            if verbose
+                @warn "Failed to remove empty directory: $(directory). Error: $(e)"
+            end
+            return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        end
+        return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+    end
+    
+    human_readable_size = Base.format_bytes(total_bytes)
+    
+    # Safety check for large directories
+    if !force && (total_bytes > 1_000_000_000 || file_count > 10_000)  # 1GB or 10k files
+        println("Warning: Large directory detected:")
+        println("  Path: $(directory)")
+        println("  Size: $(human_readable_size)")
+        println("  Files: $(file_count)")
+        print("Proceed with deletion? (y/N): ")
+        response = readline()
+        if lowercase(strip(response)) != "y"
+            if verbose
+                println("Cleanup cancelled by user")
+            end
+            return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        end
+    end
+    
+    # Remove the directory
+    try
+        rm(directory, recursive=true)
+        if verbose
+            println("Cleanup completed:")
+            println("  Directory: $(directory)")
+            println("  Files deleted: $(file_count)")
+            println("  Storage freed: $(human_readable_size)")
+        end
+        return (existed=true, files_deleted=file_count, bytes_freed=total_bytes, human_readable_size=human_readable_size)
+    catch e
+        if verbose
+            @warn "Failed to remove directory: $(directory). Error: $(e)"
+        end
+        return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+    end
+end
