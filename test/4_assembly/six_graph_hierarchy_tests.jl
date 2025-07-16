@@ -1,3 +1,6 @@
+# julia --project=test -e 'include("test/4_assembly/six_graph_hierarchy_tests.jl")'
+# julia --project=. -e 'include("test/4_assembly/six_graph_hierarchy_tests.jl")'
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

@@ -8,18 +8,6 @@ Migrates from the legacy implementation in viterbi-polishing-and-error-correctio
 to work with the new strand-aware k-mer graph architecture.
 """
 
-import MetaGraphsNext
-import Graphs
-import BioSequences
-import FASTX
-import LinearAlgebra
-import Statistics
-
-# export ViterbiState, ViterbiPath, ViterbiConfig
-# export viterbi_decode_next, viterbi_batch_process, viterbi_streaming
-# export create_hmm_from_graph, estimate_transition_probabilities
-# export polish_sequence_next, correct_errors_next
-
 """
     ViterbiState
 

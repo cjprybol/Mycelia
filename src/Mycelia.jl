@@ -41,6 +41,7 @@ import JLD2
 import JSON
 import Karnak
 import Kmers
+import LinearAlgebra
 import LsqFit
 import Luxor
 import Makie
