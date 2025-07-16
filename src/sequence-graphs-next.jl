@@ -737,34 +737,46 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Read a GFA file and convert it to a MetaGraphsNext FASTA graph with variable-length BioSequence vertices.
+Read a GFA file and auto-detect whether to create a k-mer graph or BioSequence graph.
 
-This function parses GFA format files and creates a strand-aware FASTA graph compatible
-with the 6-graph hierarchy using variable-length BioSequence vertices.
+This function parses GFA format files and intelligently chooses between:
+1. **Fixed-length k-mer graph** (if all segments have the same length)
+2. **Variable-length BioSequence graph** (if segments have different lengths)
 
 # Arguments
 - `gfa_file`: Path to input GFA file
 - `graph_mode`: GraphMode (SingleStrand or DoubleStrand, default: DoubleStrand)
+- `force_biosequence_graph`: Force creation of variable-length BioSequence graph (default: false)
 
 # Returns
-- MetaGraphsNext.MetaGraph with BioSequence vertices and strand-aware edges
+- MetaGraphsNext.MetaGraph with either k-mer vertices or BioSequence vertices
+
+# Auto-Detection Logic
+- **Fixed-length detection**: If all segments are the same length k, creates `DNAKmer{k}`/`RNAKmer{k}`/`AAKmer{k}` graph
+- **Variable-length fallback**: If segments have different lengths, creates `BioSequence` graph
+- **Override**: Use `force_biosequence_graph=true` to force variable-length graph
 
 # GFA Format Support
 Supports GFA v1.0 with:
 - Header (H) lines (ignored)
-- Segment (S) lines: parsed as variable-length BioSequence vertices
+- Segment (S) lines: parsed as vertices (k-mer or BioSequence)
 - Link (L) lines: parsed as strand-aware edges
 - Path (P) lines: stored as metadata (future use)
 
-# Example
+# Examples
 ```julia
-# Variable-length BioSequence graph
+# Auto-detect graph type
 graph = read_gfa_next("assembly.gfa")
-# Or with specific mode
+
+# Force variable-length BioSequence graph
+graph = read_gfa_next("assembly.gfa", force_biosequence_graph=true)
+
+# SingleStrand mode with auto-detection
 graph = read_gfa_next("assembly.gfa", SingleStrand)
 ```
 """
-function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand)
+function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand; 
+                       force_biosequence_graph::Bool=false)
     # Parse GFA file content
     segments = Dict{String, String}()  # id -> sequence
     links = Vector{Tuple{String, Bool, String, Bool}}()  # (src_id, src_forward, dst_id, dst_forward)
@@ -813,7 +825,30 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         end
     end
     
-    # Determine sequence type from first segment
+    # Check if all segments are the same length (fixed-length -> k-mer graph)
+    segment_lengths = [length(seq) for seq in values(segments)]
+    all_same_length = !isempty(segment_lengths) && all(l -> l == segment_lengths[1], segment_lengths)
+    k_value = isempty(segment_lengths) ? 0 : segment_lengths[1]
+    
+    # Auto-detect graph type unless forced
+    if !force_biosequence_graph && all_same_length && k_value > 0
+        @info "Auto-detected fixed-length sequences (k=$k_value), creating k-mer graph"
+        
+        # Determine k-mer type from first segment
+        first_seq = first(values(segments))
+        if all(c -> c in "ACGT", uppercase(first_seq))
+            kmer_type = Kmers.DNAKmer{k_value}
+        elseif all(c -> c in "ACGU", uppercase(first_seq))
+            kmer_type = Kmers.RNAKmer{k_value}
+        else
+            kmer_type = Kmers.AAKmer{k_value}
+        end
+        
+        # Call the k-mer graph reader
+        return read_gfa_next(gfa_file, kmer_type, graph_mode)
+    end
+    
+    # Determine BioSequence type for variable-length graph
     biosequence_type = if isempty(segments)
         BioSequences.LongDNA{4}  # Default to DNA
     else

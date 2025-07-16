@@ -401,18 +401,28 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
                             k::Int=31, graph_mode::GraphMode=DoubleStrand,
                             min_quality::UInt8=UInt8(10), min_coverage::Int=1)
     
-    # Create the MetaGraph
+    # Determine k-mer type from first record
+    first_seq = Mycelia.convert_sequence(FASTX.sequence(fastq_records[1]))
+    kmer_type = if first_seq isa BioSequences.LongDNA
+        Kmers.DNAKmer{k}
+    elseif first_seq isa BioSequences.LongRNA
+        Kmers.RNAKmer{k}
+    else
+        Kmers.AAKmer{k}
+    end
+    
+    # Create the MetaGraph with proper k-mer type labels
     graph = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=String,
+        label_type=kmer_type,
         vertex_data_type=QualmerVertexData,
         edge_data_type=QualmerEdgeData,
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
     )
     
-    # Track qualmer observations by canonical k-mer sequence
-    canonical_observations = Dict{String, Vector{QualmerObservation}}()
+    # Track qualmer observations by canonical k-mer
+    canonical_observations = Dict{kmer_type, Vector{QualmerObservation}}()
     
     # Process each FASTQ record
     for (seq_id, record) in enumerate(fastq_records)
@@ -430,27 +440,27 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
             if mean_qual >= min_quality
                 # Get canonical representation
                 canonical_qmer = graph_mode == DoubleStrand ? qmer : canonical(qmer)
-                canonical_seq = string(canonical_qmer.kmer)
+                canonical_kmer = canonical_qmer.kmer
                 
                 # Create observation
                 observation = QualmerObservation(qmer, seq_id, pos)
                 
                 # Store observation
-                if !haskey(canonical_observations, canonical_seq)
-                    canonical_observations[canonical_seq] = QualmerObservation[]
+                if !haskey(canonical_observations, canonical_kmer)
+                    canonical_observations[canonical_kmer] = QualmerObservation[]
                 end
-                push!(canonical_observations[canonical_seq], observation)
+                push!(canonical_observations[canonical_kmer], observation)
             end
         end
     end
     
     # Filter by minimum coverage and create vertices
-    vertex_data_map = Dict{String, QualmerVertexData}()
-    for (canonical_seq, observations) in canonical_observations
+    vertex_data_map = Dict{kmer_type, QualmerVertexData}()
+    for (canonical_kmer, observations) in canonical_observations
         if length(observations) >= min_coverage
             vertex_data = QualmerVertexData(observations)
-            vertex_data_map[canonical_seq] = vertex_data
-            graph[canonical_seq] = vertex_data
+            vertex_data_map[canonical_kmer] = vertex_data
+            graph[canonical_kmer] = vertex_data
         end
     end
     
@@ -464,13 +474,13 @@ end
 Add edges to the qualmer graph based on k-mer adjacency in sequences.
 """
 function _add_qualmer_edges!(graph::MetaGraphsNext.MetaGraph, 
-                            vertex_data_map::Dict{String, QualmerVertexData},
+                            vertex_data_map::Dict{KmerT, QualmerVertexData},
                             fastq_records::Vector{FASTX.FASTQ.Record}, 
-                            k::Int, graph_mode::GraphMode)
+                            k::Int, graph_mode::GraphMode) where {KmerT}
     
     # Track edge observations
-    edge_observations = Dict{Tuple{String, String}, Vector{Tuple{Int, Int}}}()
-    edge_strand_info = Dict{Tuple{String, String}, Tuple{StrandOrientation, StrandOrientation}}()
+    edge_observations = Dict{Tuple{KmerT, KmerT}, Vector{Tuple{Int, Int}}}()
+    edge_strand_info = Dict{Tuple{KmerT, KmerT}, Tuple{StrandOrientation, StrandOrientation}}()
     
     for (seq_id, record) in enumerate(fastq_records)
         # Extract consecutive qualmers
@@ -493,11 +503,11 @@ function _add_qualmer_edges!(graph::MetaGraphsNext.MetaGraph,
                 canonical_qmer1 = graph_mode == DoubleStrand ? qmer1 : canonical(qmer1)
                 canonical_qmer2 = graph_mode == DoubleStrand ? qmer2 : canonical(qmer2)
                 
-                canonical_seq1 = string(canonical_qmer1.kmer)
-                canonical_seq2 = string(canonical_qmer2.kmer)
+                canonical_kmer1 = canonical_qmer1.kmer
+                canonical_kmer2 = canonical_qmer2.kmer
                 
                 # Check if both vertices exist in graph
-                if haskey(vertex_data_map, canonical_seq1) && haskey(vertex_data_map, canonical_seq2)
+                if haskey(vertex_data_map, canonical_kmer1) && haskey(vertex_data_map, canonical_kmer2)
                     # Determine strand orientations
                     src_strand = _determine_strand(qmer1, canonical_qmer1)
                     dst_strand = _determine_strand(qmer2, canonical_qmer2)
@@ -505,7 +515,7 @@ function _add_qualmer_edges!(graph::MetaGraphsNext.MetaGraph,
                     # Validate biological transition
                     if _is_valid_qualmer_transition(canonical_qmer1.kmer, canonical_qmer2.kmer, src_strand, dst_strand)
                         # Track edge observation
-                        edge_key = (canonical_seq1, canonical_seq2)
+                        edge_key = (canonical_kmer1, canonical_kmer2)
                         if !haskey(edge_observations, edge_key)
                             edge_observations[edge_key] = Tuple{Int, Int}[]
                             edge_strand_info[edge_key] = (src_strand, dst_strand)
@@ -518,16 +528,16 @@ function _add_qualmer_edges!(graph::MetaGraphsNext.MetaGraph,
     end
     
     # Add edges to graph
-    for ((src_seq, dst_seq), observations) in edge_observations
-        src_strand, dst_strand = edge_strand_info[(src_seq, dst_seq)]
-        src_vertex_data = vertex_data_map[src_seq]
-        dst_vertex_data = vertex_data_map[dst_seq]
+    for ((src_kmer, dst_kmer), observations) in edge_observations
+        src_strand, dst_strand = edge_strand_info[(src_kmer, dst_kmer)]
+        src_vertex_data = vertex_data_map[src_kmer]
+        dst_vertex_data = vertex_data_map[dst_kmer]
         
         # Create edge data
         edge_data = QualmerEdgeData(observations, src_strand, dst_strand, src_vertex_data, dst_vertex_data)
         
         # Add edge to graph
-        graph[src_seq, dst_seq] = edge_data
+        graph[src_kmer, dst_kmer] = edge_data
     end
 end
 

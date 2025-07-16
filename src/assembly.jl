@@ -218,9 +218,17 @@ end
 Assembly method enumeration for unified interface.
 """
 @enum AssemblyMethod begin
-    StringGraph      # String graph assembly (for basic sequence analysis)
-    KmerGraph        # K-mer graph assembly with BioSequences.DNAKmer (for FASTA data)
+    # Fixed-length graph types (assembly foundation)
+    NgramGraph       # N-gram graph assembly (for unicode character analysis)
+    KmerGraph        # K-mer graph assembly with DNAKmer/RNAKmer/AAKmer (for FASTA data)
     QualmerGraph     # Quality-aware k-mer graph assembly (for FASTQ data) - PRIMARY METHOD
+    
+    # Variable-length graph types (simplified products)
+    StringGraph      # String graph assembly (simplified from N-gram graphs)
+    BioSequenceGraph # BioSequence graph assembly (simplified from K-mer graphs)
+    QualityBioSequenceGraph # Quality-aware BioSequence graph assembly (simplified from Qualmer graphs)
+    
+    # Hybrid approaches
     HybridOLC        # Hybrid OLC + qualmer graph approach
     MultiK           # Multi-k assembly with merging
 end
@@ -303,20 +311,26 @@ contigs = result.contigs
 stats = result.assembly_stats
 ```
 """
-function assemble_genome(reads; method::AssemblyMethod=StringGraph, config::AssemblyConfig=AssemblyConfig())
+function assemble_genome(reads; method::AssemblyMethod=QualmerGraph, config::AssemblyConfig=AssemblyConfig())
     @info "Starting unified genome assembly" method config.k config.error_rate
     
     # Phase 1: Load and validate input
     observations = _prepare_observations(reads)
     @info "Loaded $(length(observations)) sequence observations"
     
-    # Phase 2: Assembly strategy dispatch
-    if method == StringGraph
-        result = _assemble_string_graph(observations, config)
+    # Phase 2: Assembly strategy dispatch following 6-graph hierarchy
+    if method == NgramGraph
+        result = _assemble_ngram_graph(observations, config)
     elseif method == KmerGraph  
         result = _assemble_kmer_graph(observations, config)
     elseif method == QualmerGraph
         result = _assemble_qualmer_graph(observations, config)
+    elseif method == StringGraph
+        result = _assemble_string_graph(observations, config)
+    elseif method == BioSequenceGraph
+        result = _assemble_biosequence_graph(observations, config)
+    elseif method == QualityBioSequenceGraph
+        result = _assemble_quality_biosequence_graph(observations, config)
     elseif method == HybridOLC
         result = _assemble_hybrid_olc(observations, config)
     elseif method == MultiK
@@ -469,47 +483,54 @@ function _prepare_observations(reads)
 end
 
 """
-String graph assembly implementation using Phase 2 algorithms.
+String graph assembly implementation (variable-length simplified from N-gram graphs).
 """
 function _assemble_string_graph(observations, config)
-    @info "Using string graph assembly strategy"
+    @info "Using string graph assembly strategy (variable-length simplified from N-gram)"
     
-    # Build string graph from observations
-    graph = string_to_ngram_graph(join([FASTX.FASTA.sequence(obs) for obs in observations], ""), config.k)
+    # First build N-gram graph
+    text = join([FASTX.FASTA.sequence(obs) for obs in observations], "")
+    ngram_graph = string_to_ngram_graph(text, config.k)
     
-    # Collapse unbranching paths
-    collapse_unbranching_paths(graph)
+    # Simplify N-gram graph to create variable-length string graph
+    string_graph = _simplify_ngram_to_string_graph(ngram_graph)
+    
+    # Further collapse unbranching paths
+    collapse_unbranching_paths(string_graph)
     
     # If enabled, resolve bubble structures
     if config.bubble_resolution
-        # Note: This would use detect_bubbles_next from Phase 2
-        # For now, we'll use basic graph simplification
-        _simplify_string_graph(graph)
+        _simplify_string_graph(string_graph)
     end
     
     # Assemble contigs from graph
-    contigs = assemble_strings(graph)
-    contig_names = ["contig_$i" for i in 1:length(contigs)]
+    contigs = assemble_strings(string_graph)
+    contig_names = ["string_contig_$i" for i in 1:length(contigs)]
     
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "StringGraph",
+        "graph_type" => "variable_length",
+        "vertex_type" => "unicode_strings",
+        "source_graph" => "ngram_graph_simplification",
         "k" => config.k,
         "num_input_sequences" => length(observations),
         "assembly_date" => string(now())
     )
     
-    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
+    return AssemblyResult(contigs, contig_names; graph=string_graph, assembly_stats=stats)
 end
 
 """
-K-mer graph assembly implementation using Phase 2 probabilistic algorithms.
+K-mer graph assembly implementation (fixed-length k-mer foundation).
 """
 function _assemble_kmer_graph(observations, config)
-    @info "Using k-mer graph assembly strategy"
+    @info "Using k-mer graph assembly strategy (fixed-length k-mer foundation)"
+    
+    # Determine k-mer type from observations
+    kmer_type = _determine_kmer_type(observations, config.k)
     
     # Build k-mer graph using Phase 2 next-generation algorithms
-    kmer_type = Kmers.DNAKmer{config.k}
     graph = build_kmer_graph_next(kmer_type, observations; graph_mode=config.graph_mode)
     
     # Apply Phase 2 graph algorithms
@@ -541,11 +562,13 @@ function _assemble_kmer_graph(observations, config)
         contigs = _generate_contigs_probabilistic(graph, config)
     end
     
-    contig_names = ["contig_$i" for i in 1:length(contigs)]
+    contig_names = ["kmer_contig_$i" for i in 1:length(contigs)]
     
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "KmerGraph",
+        "graph_type" => "fixed_length",
+        "vertex_type" => string(kmer_type),
         "k" => config.k,
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
@@ -558,10 +581,10 @@ function _assemble_kmer_graph(observations, config)
 end
 
 """
-Quality-aware k-mer graph assembly implementation using Qualmer graphs.
+Quality-aware k-mer graph assembly implementation (fixed-length qualmer foundation).
 """
 function _assemble_qualmer_graph(observations, config)
-    @info "Using quality-aware k-mer graph assembly strategy"
+    @info "Using quality-aware k-mer graph assembly strategy (fixed-length qualmer foundation)"
     
     # Convert observations to FASTQ records for quality processing
     fastq_records = _prepare_fastq_observations(observations)
@@ -605,6 +628,8 @@ function _assemble_qualmer_graph(observations, config)
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "QualmerGraph",
+        "graph_type" => "fixed_length",
+        "vertex_type" => "quality_aware_kmers",
         "k" => config.k,
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
@@ -905,4 +930,167 @@ function _generate_contigs_from_qualmer_graph(graph, config)
     end
     
     return contigs
+end
+
+# ============================================================================
+# Additional Assembly Methods for 6-Graph Hierarchy
+# ============================================================================
+
+"""
+N-gram graph assembly implementation (fixed-length unicode character analysis).
+"""
+function _assemble_ngram_graph(observations, config)
+    @info "Using N-gram graph assembly strategy (fixed-length unicode analysis)"
+    
+    # Build N-gram graph from observations
+    text = join([FASTX.FASTA.sequence(obs) for obs in observations], "")
+    graph = string_to_ngram_graph(text, config.k)
+    
+    # Collapse unbranching paths
+    collapse_unbranching_paths(graph)
+    
+    # If enabled, resolve bubble structures
+    if config.bubble_resolution
+        _simplify_ngram_graph(graph)
+    end
+    
+    # Assemble contigs from graph
+    contigs = assemble_strings(graph)
+    contig_names = ["ngram_contig_$i" for i in 1:length(contigs)]
+    
+    # Assembly statistics
+    stats = Dict{String, Any}(
+        "method" => "NgramGraph",
+        "graph_type" => "fixed_length",
+        "vertex_type" => "unicode_character_vectors",
+        "k" => config.k,
+        "num_input_sequences" => length(observations),
+        "assembly_date" => string(now())
+    )
+    
+    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
+end
+
+"""
+BioSequence graph assembly implementation (variable-length simplified from k-mer graphs).
+"""
+function _assemble_biosequence_graph(observations, config)
+    @info "Using BioSequence graph assembly strategy (variable-length simplified from k-mer)"
+    
+    # First build fixed-length k-mer graph
+    kmer_type = _determine_kmer_type(observations, config.k)
+    kmer_graph = build_kmer_graph_next(kmer_type, observations; graph_mode=config.graph_mode)
+    
+    # Convert to variable-length BioSequence graph
+    biosequence_graph = kmer_graph_to_biosequence_graph(kmer_graph)
+    
+    # Extract sequences from graph vertices
+    contigs = String[]
+    contig_names = String[]
+    
+    for (i, vertex_label) in enumerate(MetaGraphsNext.labels(biosequence_graph))
+        sequence = string(vertex_label)
+        push!(contigs, sequence)
+        push!(contig_names, "biosequence_contig_$i")
+    end
+    
+    # Assembly statistics
+    stats = Dict{String, Any}(
+        "method" => "BioSequenceGraph",
+        "graph_type" => "variable_length",
+        "vertex_type" => "biosequences",
+        "source_graph" => "kmer_graph_simplification",
+        "k" => config.k,
+        "graph_mode" => string(config.graph_mode),
+        "num_vertices" => length(MetaGraphsNext.labels(biosequence_graph)),
+        "num_edges" => length(MetaGraphsNext.edge_labels(biosequence_graph)),
+        "num_input_sequences" => length(observations),
+        "assembly_date" => string(now())
+    )
+    
+    return AssemblyResult(contigs, contig_names; graph=biosequence_graph, assembly_stats=stats)
+end
+
+"""
+Quality-aware BioSequence graph assembly implementation (variable-length simplified from qualmer graphs).
+"""
+function _assemble_quality_biosequence_graph(observations, config)
+    @info "Using quality-aware BioSequence graph assembly strategy (variable-length simplified from qualmer)"
+    
+    # Convert observations to FASTQ records for quality processing
+    fastq_records = _prepare_fastq_observations(observations)
+    
+    # First build fixed-length qualmer graph
+    qualmer_graph = build_qualmer_graph(fastq_records; k=config.k, graph_mode=config.graph_mode)
+    
+    # Convert to variable-length quality-aware BioSequence graph
+    quality_biosequence_graph = qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+    
+    # Extract sequences from graph vertices
+    contigs = String[]
+    contig_names = String[]
+    
+    for (i, vertex_label) in enumerate(MetaGraphsNext.labels(quality_biosequence_graph))
+        sequence = string(vertex_label)
+        push!(contigs, sequence)
+        push!(contig_names, "quality_biosequence_contig_$i")
+    end
+    
+    # Assembly statistics
+    stats = Dict{String, Any}(
+        "method" => "QualityBioSequenceGraph",
+        "graph_type" => "variable_length",
+        "vertex_type" => "quality_aware_biosequences",
+        "source_graph" => "qualmer_graph_simplification",
+        "k" => config.k,
+        "graph_mode" => string(config.graph_mode),
+        "num_vertices" => length(MetaGraphsNext.labels(quality_biosequence_graph)),
+        "num_edges" => length(MetaGraphsNext.edge_labels(quality_biosequence_graph)),
+        "num_input_sequences" => length(observations),
+        "assembly_date" => string(now())
+    )
+    
+    return AssemblyResult(contigs, contig_names; graph=quality_biosequence_graph, assembly_stats=stats)
+end
+
+"""
+Simplify N-gram graph by removing unnecessary complexity.
+"""
+function _simplify_ngram_graph(graph)
+    # Basic graph simplification - remove low-weight edges, merge linear paths
+    # This is a placeholder for more sophisticated graph simplification
+    return graph
+end
+
+"""
+Convert N-gram graph to variable-length string graph.
+"""
+function _simplify_ngram_to_string_graph(ngram_graph)
+    # Placeholder for N-gram to string graph conversion
+    # This would implement path collapsing and simplification
+    return ngram_graph
+end
+
+"""
+Determine appropriate k-mer type from observations.
+"""
+function _determine_kmer_type(observations, k)
+    # Examine first observation to determine sequence type
+    if !isempty(observations)
+        sample_seq = string(FASTX.FASTA.sequence(observations[1]))
+        
+        # Check if it's protein sequence (contains amino acids)
+        if occursin(r"[ARNDCQEGHILKMFPSTWYV]", uppercase(sample_seq))
+            return Kmers.AAKmer{k}
+        # Check if it's RNA (contains U)
+        elseif occursin('U', uppercase(sample_seq))
+            return Kmers.RNAKmer{k}
+        # Default to DNA
+        else
+            return Kmers.DNAKmer{k}
+        end
+    end
+    
+    # Default to DNA k-mer
+    return Kmers.DNAKmer{k}
 end
