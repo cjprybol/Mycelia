@@ -1,33 +1,54 @@
 # Mycelia Documentation
 
-Welcome to the Mycelia documentation.
+**A comprehensive Julia package for bioinformatics and computational biology**
+
+Mycelia provides a complete toolkit for genomic analysis, from sequence processing to comparative genomics. Built for researchers who need powerful, scalable tools for modern bioinformatics workflows.
+
+## Quick Start
+
+New to Mycelia? Start with our [Getting Started Guide](getting-started.md) to install the package and complete your first genomic analysis in minutes.
+
+## Key Features
+
+- **🧬 Sequence Processing**: FASTA/FASTQ handling, simulation, and quality control
+- **🔧 Genome Assembly**: HiFi assembly with hifiasm, polishing, and error correction  
+- **📊 K-mer Analysis**: Quality-aware k-mer counting and graph construction
+- **🌐 Pangenome Analysis**: Multi-genome comparative genomics
+- **🔍 Annotation**: Gene prediction and functional annotation
+- **🌳 Phylogenetics**: Tree construction and comparative analysis
+- **📈 Visualization**: Interactive plots and data exploration
+- **⚡ HPC Integration**: SLURM job submission and cloud storage
+
+## Documentation Contents
+
+```@contents
+Pages = [
+    "getting-started.md",
+    "concepts.md",
+    "tutorials.md", 
+    "api.md",
+    "visualization-gallery.md",
+    "troubleshooting.md",
+    "contributing.md"
+]
+Depth = 2
+```
 
 ## Installation
 
-[Install Julia (if not already installed)](https://github.com/JuliaLang/juliaup)
-
-I have had trouble getting the visualization libraries Plots.jl and Makie.jl (and associated packages) to load correctly on HPC due to the complexities of the default `LD_LIBRARY_PATH`
-
-I imagine other research supercomputer users may have similar issues, although I don't have these issues on cloud vendors like GCP or AWS
-
-To enable Julia to install all of it's own necessary dependencies independent of the system, I reset the `LD_LIBRARY_PATH` variable prior to launching Julia !!
-
-This can be done easily when launching Julia from the command line by
-
-```bash
-export LD_LIBRARY_PATH="" && julia
-```
-
-[And can be done for Julia jupyter kernels by setting the `env` key => value pair in the appropriate kernel.json file](https://stackoverflow.com/a/53595397)
-
-Clone the repo as a Julia package
+### Quick Install
 ```julia
 import Pkg
-# for production usage
 Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
-# for development
+```
+
+### Development Install
+```julia
+import Pkg
 Pkg.develop(url="git@github.com:cjprybol/Mycelia.git")
 ```
+
+For detailed installation instructions including HPC setup, see the [Getting Started Guide](getting-started.md).
 
 ## Function Docstrings
 

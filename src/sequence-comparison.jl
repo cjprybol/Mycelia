@@ -1,4 +1,98 @@
 """
+    merge_and_map_single_end_samples(; 
+        fasta_reference::AbstractString, 
+        fastq_list::Vector{<:AbstractString}, 
+        minimap_index::AbstractString, 
+        mapping_type::AbstractString,
+        outbase::AbstractString = "results",
+        outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
+    ) -> DataFrames.DataFrame
+
+Merge and map single-end sequencing samples, then output results in one or more formats.
+
+# Arguments
+- `fasta_reference`: Path to the reference FASTA file.
+- `fastq_list`: Vector of paths to input FASTQ files to be merged.
+- `minimap_index`: Path to the minimap2 index file (.mmi).
+- `mapping_type`: Mapping type string for minimap2 (e.g., "map-ont").
+- `outbase`: Base name (optionally including path) for output files (default: `Mycelia.normalized_current_date() * ".joint-minimap-mapping-results"`).
+- `outformats`: Vector of output file formats to write results to. Supported: `".tsv.gz"`, `".jld2"`.
+
+# Description
+This function merges provided FASTQ files and assigns unique UUIDs to reads, maps the merged FASTQ against the provided reference using minimap2, reads mapping and UUID tables, joins them into a single DataFrame, writes this table to all requested output formats with filenames constructed from the `outbase` and the appropriate extension, and returns the resulting joined DataFrame.
+
+# Output Files
+- `.tsv.gz`: Tab-separated, gzip-compressed table of results.
+- `".jld2"`: JLD2 file containing results.
+
+# Returns
+- The joined results as a `DataFrames.DataFrame`.
+"""
+function merge_and_map_single_end_samples(; 
+    fasta_reference::AbstractString, 
+    fastq_list::Vector{<:AbstractString}, 
+    minimap_index::AbstractString, 
+    mapping_type::AbstractString,
+    outbase::AbstractString = Mycelia.normalized_current_date() * ".joint-minimap-mapping-results",
+    outformats::Vector{<:AbstractString} = [".tsv.gz", ".jld2"]
+)
+    # Join FASTQ files
+    fastq_out = outbase * ".fq.gz"
+    tsv_out = outbase * ".uuid-map.tsv.gz"
+    fastq_join_result = Mycelia.join_fastqs_with_uuid(fastq_list, fastq_out=fastq_out, tsv_out=tsv_out)
+    
+    # Run minimap if needed
+    minimap_result = Mycelia.minimap_map_with_index(
+        fasta = fasta_reference,
+        mapping_type = mapping_type,
+        fastq = fastq_out,
+        index_file = minimap_index
+    )
+    if !isfile(minimap_result.outfile)
+        @time run(minimap_result.cmd)
+    end
+    results_table_outfiles = [outbase * fmt for fmt in outformats]
+    # Determine file paths for .tsv.gz and .jld2
+    tsv_file = ".tsv.gz" in outformats ? outbase * ".tsv.gz" : nothing
+    jld2_file = ".jld2" in outformats ? outbase * ".jld2" : nothing
+    if !all(isfile, results_table_outfiles) || any(x -> filesize(x) == 0, results_table_outfiles)
+        # Read tables
+        read_id_mapping_table = CSV.read(
+            CodecZlib.GzipDecompressorStream(open(tsv_out)), DataFrames.DataFrame, delim='\t')
+        mapping_results_table = Mycelia.xam_to_dataframe(minimap_result.outfile)
+        results_table = DataFrames.innerjoin(read_id_mapping_table, mapping_results_table, on="new_uuid" => "template")
+        results_table = Mycelia.dataframe_replace_nothing_with_missing(results_table)
+        # Write outputs
+        for fmt in outformats
+            outfile = outbase * fmt
+            if fmt == ".tsv.gz"
+                @assert outfile == tsv_file
+                io = CodecZlib.GzipCompressorStream(open(outfile, "w"))
+                CSV.write(io, results_table; delim='\t')
+                close(io)
+                @assert isfile(tsv_file)
+                @show tsv_file
+            elseif fmt == ".jld2"
+                @assert outfile == jld2_file
+                JLD2_write_table(df=results_table, filename=outfile)
+                @assert isfile(jld2_file)
+            else
+                @warn "Unknown output format: $fmt"
+            end
+        end
+    end
+
+    return (
+        # results_table = results_table,
+        joint_fastq_file = fastq_out,
+        fastq_id_mapping_table = tsv_out,
+        bam_file = minimap_result.outfile,
+        tsv_file = tsv_file,
+        jld2_file = jld2_file
+    )
+end
+
+"""
     mash_distance_from_jaccard(jaccard_index::Float64, kmer_size::Int)
 
 Calculates the Mash distance (an estimate of Average Nucleotide Identity)
@@ -249,96 +343,6 @@ function pairwise_minimap_fasta_comparison(;reference_fasta, query_fasta)
         )
     end
     return results
-end
-
-"""
-    run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=10000, mash_path::String="mash")
-
-Runs a genome-by-genome comparison using the `mash` command-line tool.
-
-This function first creates sketch files for each FASTA input and then
-calculates the distance between them, capturing and parsing the result.
-
-# Arguments
-- `fasta1::String`: Path to the first FASTA file.
-- `fasta2::String`: Path to the second FASTA file.
-
-# Keyword Arguments
-- `k::Int=21`: The k-mer size to use for sketching. Default is 21.
-- `s::Int=10000`: The sketch size (number of hashes to keep). Default is 10000.
-- `mash_path::String="mash"`: The path to the mash executable if not in the system PATH.
-
-# Returns
-- `NamedTuple`: A named tuple containing the parsed results, e.g.,
-  `(reference=..., query=..., distance=..., p_value=..., shared_hashes=...)`
-- `nothing`: Returns `nothing` if the `mash` command fails.
-"""
-function run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=10000, mash_path::String="mash")
-    # --- Step 1: Check if input files exist ---
-    if !isfile(fasta1) || !isfile(fasta2)
-        error("One or both FASTA files not found.")
-    end
-
-    # --- Step 2: Create sketch files for each genome ---
-    sketch1 = fasta1 * ".msh"
-    sketch2 = fasta2 * ".msh"
-
-    println("Sketching $fasta1 (k=$k, s=$s)...")
-    sketch_cmd1 = pipeline(`$mash_path sketch -k $k -s $s -o $sketch1 $fasta1`, stdout=devnull, stderr=devnull)
-
-    println("Sketching $fasta2 (k=$k, s=$s)...")
-    sketch_cmd2 = pipeline(`$mash_path sketch -k $k -s $s -o $sketch2 $fasta2`, stdout=devnull, stderr=devnull)
-
-    try
-        run(sketch_cmd1)
-        run(sketch_cmd2)
-    catch e
-        println("Error: Failed to run 'mash sketch'. Is mash installed and in your PATH?")
-        println(e)
-        return nothing
-    end
-
-    # --- Step 3: Run 'mash dist' on the two sketches and capture output ---
-    println("Calculating distance between sketches...")
-    dist_cmd = `$mash_path dist $sketch1 $sketch2`
-
-    output = ""
-    try
-        # read() captures the standard output of the command
-        output = read(dist_cmd, String)
-    catch e
-        println("Error: Failed to run 'mash dist'.")
-        println(e)
-        return nothing
-    finally
-        # --- Step 4: Clean up the sketch files ---
-        rm(sketch1, force=true)
-        rm(sketch2, force=true)
-    end
-
-    # --- Step 5: Parse the tab-separated output from mash ---
-    if isempty(output)
-        println("Warning: Mash command produced no output.")
-        return nothing
-    end
-
-    # Example output: "genomeA.fasta\tgenomeB.fasta\t0.080539\t0.0\t491/1000"
-    parts = split(strip(output), '\t')
-
-    if length(parts) != 5
-        println("Error: Unexpected output format from Mash: ", output)
-        return nothing
-    end
-
-    parsed_result = (
-        reference = parts[1],
-        query = parts[2],
-        distance = parse(Float64, parts[3]),
-        p_value = parse(Float64, parts[4]),
-        shared_hashes = parts[5]
-    )
-
-    return parsed_result
 end
 
 # always interpret as strings to ensure changes in underlying biosequence representation don't change results

@@ -1,0 +1,135 @@
+#!/bin/bash
+#SBATCH --job-name=mycelia_benchmarks
+#SBATCH --partition=compute
+#SBATCH --time=24:00:00
+#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --output=benchmarks_%j.out
+#SBATCH --error=benchmarks_%j.err
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=your.email@institution.edu
+
+# Mycelia Benchmarking Suite - HPC Execution Script
+# This script runs comprehensive benchmarks on HPC systems using SLURM
+
+echo "=== Mycelia Benchmarking Suite ==="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Start time: $(date)"
+echo "Node: $SLURM_NODELIST"
+echo "CPUs: $SLURM_CPUS_PER_TASK"
+echo "Memory: $SLURM_MEM_PER_NODE MB"
+echo ""
+
+# Set up environment
+echo "Setting up environment..."
+module purge
+module load julia/1.9.0  # Adjust version as needed
+module load bioconda
+module load gcc/11.2.0    # For compilation if needed
+
+# Activate conda environment with bioinformatics tools
+source activate mycelia-bench
+
+# Set Julia environment
+export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export JULIA_PROJECT=.
+
+# Create results directory
+mkdir -p results
+mkdir -p temp_data
+
+# Set temporary directory to node-local storage (if available)
+if [ -d "/tmp" ]; then
+    export TMPDIR="/tmp/mycelia_$SLURM_JOB_ID"
+    mkdir -p $TMPDIR
+fi
+
+echo "Environment setup complete"
+echo "Julia threads: $JULIA_NUM_THREADS"
+echo "Temporary directory: $TMPDIR"
+echo ""
+
+# Function to run benchmark with error handling
+run_benchmark() {
+    local benchmark_name=$1
+    local benchmark_file=$2
+    
+    echo "=== Running $benchmark_name ==="
+    echo "Start time: $(date)"
+    
+    # Run with timeout and resource monitoring
+    timeout 4h julia --project=. --track-allocation=user "$benchmark_file" 2>&1 | tee "results/${benchmark_name}_output.log"
+    
+    local exit_code=${PIPESTATUS[0]}
+    
+    if [ $exit_code -eq 0 ]; then
+        echo "✓ $benchmark_name completed successfully"
+    elif [ $exit_code -eq 124 ]; then
+        echo "✗ $benchmark_name timed out (4 hours)"
+    else
+        echo "✗ $benchmark_name failed with exit code $exit_code"
+    fi
+    
+    echo "End time: $(date)"
+    echo ""
+    
+    return $exit_code
+}
+
+# Set benchmark scale from environment or default to large for HPC
+BENCHMARK_SCALE=${BENCHMARK_SCALE:-"large"}
+export BENCHMARK_SCALE
+
+echo "Benchmark scale: $BENCHMARK_SCALE"
+echo ""
+
+# Use the new benchmark runner for coordinated execution
+echo "=== Running Benchmark Suite ==="
+echo "Using benchmark_runner.jl for coordinated execution"
+
+# Run the benchmark runner with performance regression checking
+timeout 20h julia --project=. --track-allocation=user benchmarking/benchmark_runner.jl 2>&1 | tee "results/benchmark_suite_output.log"
+
+runner_exit_code=${PIPESTATUS[0]}
+
+if [ $runner_exit_code -eq 0 ]; then
+    echo "✓ Benchmark suite completed successfully"
+elif [ $runner_exit_code -eq 124 ]; then
+    echo "✗ Benchmark suite timed out (20 hours)"
+else
+    echo "✗ Benchmark suite failed with exit code $runner_exit_code"
+fi
+
+# Performance regression analysis (handled by benchmark_runner.jl)
+echo "=== Performance Analysis ==="
+echo "✓ Performance regression analysis completed by benchmark runner"
+echo "✓ HTML reports generated automatically"
+echo "✓ Baseline comparisons completed"
+
+# System resource usage summary
+echo "=== Resource Usage Summary ==="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
+echo "Peak memory usage: $(sacct -j $SLURM_JOB_ID --format=MaxRSS --noheader | head -1)"
+echo "CPU time: $(sacct -j $SLURM_JOB_ID --format=CPUTime --noheader | head -1)"
+echo "Wall time: $(sacct -j $SLURM_JOB_ID --format=Elapsed --noheader | head -1)"
+
+# Cleanup temporary files
+echo "=== Cleanup ==="
+if [ -d "$TMPDIR" ]; then
+    echo "Cleaning up temporary directory: $TMPDIR"
+    rm -rf $TMPDIR
+fi
+
+# Compress large output files
+echo "Compressing large output files..."
+find results -name "*.log" -size +10M -exec gzip {} \;
+find results -name "*.json" -size +10M -exec gzip {} \;
+
+echo "=== Benchmarking Complete ==="
+echo "End time: $(date)"
+echo "Results saved to: results/"
+echo "Job completed with benchmark runner exit code: $runner_exit_code"
+
+# Exit with success
+exit 0

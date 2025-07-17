@@ -1,17 +1,32 @@
+import Pkg
+Pkg.activate("..")
+import Test
+import Mycelia
+
 # Constants and regex tests
-@testset "Constants" begin
-    @testset "FASTQ regex" begin
-        hypothethical_fastq_files = [
+Test.@testset "Constants" begin
+    Test.@testset "FASTQ regex" begin
+        hypothetical_fastq_files = [
             "sample1.fastq",
             "sample2.fq",
         ]
-        for hypothethical_fastq_file in hypothethical_fastq_files
-            @test occursin(Mycelia.FASTQ_REGEX, hypothethical_fastq_file)
-            @test occursin(Mycelia.FASTQ_REGEX, hypothethical_fastq_file * ".gz")
+        for hypothetical_fastq_file in hypothetical_fastq_files
+            Test.@test occursin(Mycelia.FASTQ_REGEX, hypothetical_fastq_file)
+            Test.@test occursin(Mycelia.FASTQ_REGEX, hypothetical_fastq_file * ".gz")
+        end
+        invalid_fastq_files = [
+            "sample.fast",
+            "sample.fastq1",
+            "notfastq.txt",
+            "sample.fastq.gz.old",
+            "reads.fq.gz.bak",
+        ]
+        for invalid_fastq_file in invalid_fastq_files
+            Test.@test !occursin(Mycelia.FASTQ_REGEX, invalid_fastq_file)
         end
     end
-    @testset "FASTA regex" begin
-        hypothethical_fasta_files = [
+    Test.@testset "FASTA regex" begin
+        hypothetical_fasta_files = [
             "genome1.fasta",
             "fasta-sequences.fas",
             "fasta.fa",
@@ -21,21 +36,41 @@
             "multi-protein-fasta.mpfa",
             "transcriptome8.frn",
         ]
-        for hypothethical_fasta_file in hypothethical_fasta_files
-            @test occursin(Mycelia.FASTA_REGEX, hypothethical_fasta_file)
-            @test occursin(Mycelia.FASTA_REGEX, hypothethical_fasta_file * ".gz")
+        for hypothetical_fasta_file in hypothetical_fasta_files
+            Test.@test occursin(Mycelia.FASTA_REGEX, hypothetical_fasta_file)
+            Test.@test occursin(Mycelia.FASTA_REGEX, hypothetical_fasta_file * ".gz")
+        end
+        invalid_fasta_files = [
+            "genome.fasta1",
+            "file.fasta.txt",
+            "notfasta.fa.gz.old",
+            "genome.fa.bz2",
+            "fasta.fna.gz.tmp",
+        ]
+        for invalid_fasta_file in invalid_fasta_files
+            Test.@test !occursin(Mycelia.FASTA_REGEX, invalid_fasta_file)
         end
     end
-    @testset "VCF regex" begin
-        hypothethical_vcf_files = [
+    Test.@testset "VCF regex" begin
+        hypothetical_vcf_files = [
             "variants1.vcf",
             "variants2.vcf.gz",
         ]
-        for hypothethical_vcf_file in hypothethical_vcf_files
-            @test occursin(Mycelia.VCF_REGEX, hypothethical_vcf_file)
+        for hypothetical_vcf_file in hypothetical_vcf_files
+            Test.@test occursin(Mycelia.VCF_REGEX, hypothetical_vcf_file)
+        end
+        invalid_vcf_files = [
+            "variants.vcf1",
+            "vcf_variants.txt",
+            "sample.vcf.gz.old",
+            "genotypes.vcf.bz2",
+            "variants.vcf.gz.bak",
+        ]
+        for invalid_vcf_file in invalid_vcf_files
+            Test.@test !occursin(Mycelia.VCF_REGEX, invalid_vcf_file)
         end
     end
-    @testset "XAM regex" begin
+    Test.@testset "XAM regex" begin
         hypothetical_xam_files = [
             "alignment1.sam",
             "alignment2.sam.gz",
@@ -43,7 +78,18 @@
             "alignment4.cram"
         ]
         for hypothetical_xam_file in hypothetical_xam_files
-            @test occursin(Mycelia.XAM_REGEX, hypothetical_xam_file)
+            Test.@test occursin(Mycelia.XAM_REGEX, hypothetical_xam_file)
+        end
+        invalid_xam_files = [
+            "alignment.sam1",
+            "alignment.bam.gz",
+            "xam_alignment.txt",
+            "alignment.sam.gz.old",
+            "alignment.cram.gz",
+            "alignment.bam1",
+        ]
+        for invalid_xam_file in invalid_xam_files
+            Test.@test !occursin(Mycelia.XAM_REGEX, invalid_xam_file)
         end
     end
 end

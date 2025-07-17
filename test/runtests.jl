@@ -1,5 +1,8 @@
 # run me from the root of the Mycelia package directory:
-# julia --project -e 'using Pkg; Pkg.test()'
+# julia --project=. -e "import Pkg; Pkg.test()"
+# julia --project=. --color=yes -e "import Pkg; Pkg.test()"
+# julia --project=. --code-coverage=user -e "import Pkg; Pkg.test()"
+# julia --project=. -e "import Pkg; Pkg.instantiate(); Pkg.test()"
 # julia --project=test -e 'using Pkg; Pkg.test()'
 
 import Pkg

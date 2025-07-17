@@ -1,4 +1,95 @@
 """
+    find_fasta_files(input_path::String) -> Vector{String}
+
+Find all FASTA files in a directory or return single file if path is a file.
+
+Uses the existing `FASTA_REGEX` constant to identify FASTA files.
+
+# Arguments
+- `input_path`: Path to directory or single FASTA file
+
+# Returns
+- Vector of FASTA file paths
+
+# Example
+```julia
+fasta_files = find_fasta_files("./genomes/")
+```
+"""
+function find_fasta_files(input_path::String)
+    if isfile(input_path)
+        if occursin(FASTA_REGEX, input_path)
+            return [input_path]
+        else
+            error("Input file does not match FASTA format: $(input_path)")
+        end
+    elseif isdir(input_path)
+        return filter(f -> occursin(FASTA_REGEX, f), readdir(input_path, join=true))
+    else
+        error("Input path does not exist: $(input_path)")
+    end
+end
+
+"""
+    join_fastqs_with_uuid(
+        fastq_files::Vector{String};
+        fastq_out::String
+        tsv_out::String
+    )
+
+Note: does not keep track of paired-end data - assumes single end reads
+
+Designed primarily to allow joint mapping of many long-read samples
+
+Given a collection of fastq files, creates:
+- A gzipped TSV mapping original file and read_id to a new UUID per read
+- A gzipped joint fastq file with the new UUID as read header
+
+Returns: Tuple of output file paths (tsv_out, fastq_out)
+"""
+function join_fastqs_with_uuid(
+    fastq_files::Vector{String};
+    fastq_out::String = Mycelia.normalized_current_datetime() * ".joint_reads.fq.gz",
+    tsv_out::String = replace(fastq_out, Mycelia.FASTQ_REGEX => ".tsv.gz")
+)
+    # Build mapping as a DataFrame in memory
+    mapping = DataFrames.DataFrame(
+        input_file = String[],
+        original_read_id = String[],
+        new_uuid = String[]
+    )
+
+    if (!isfile(fastq_out) || filesize(fastq_out) == 0) || (!isfile(tsv_out) || filesize(tsv_out) == 0)
+        # Prepare gzipped FASTQ writer using CodecZlib
+        gz_out = CodecZlib.GzipCompressorStream(open(fastq_out, "w"))
+        writer = FASTX.FASTQ.Writer(gz_out)
+
+        for fastq_file in fastq_files
+            for record in Mycelia.open_fastx(fastq_file)
+                original_id = String(FASTX.identifier(record))
+                uuid = string(UUIDs.uuid4())
+                # Save mapping to DataFrame
+                DataFrames.push!(mapping, (fastq_file, original_id, uuid))
+                # Write record with new UUID as id
+                new_record = FASTX.FASTQ.Record(uuid, FASTX.sequence(record), FASTX.quality(record))
+                FASTX.write(writer, new_record)
+            end
+        end
+
+        FASTX.close(writer)
+        CodecZlib.close(gz_out)
+
+        # Write mapping table as gzipped TSV using CodecZlib
+        tsv_io = CodecZlib.GzipCompressorStream(open(tsv_out, "w"))
+        CSV.write(tsv_io, mapping; delim='\t')
+        CodecZlib.close(tsv_io)
+    else
+        @warn "Output files already exist and are not empty: $fastq_out, $tsv_out"
+    end
+    return (;tsv_out, fastq_out)
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 """
 function run_fastqc(;fastq, outdir = replace(fastq, Mycelia.FASTQ_REGEX => "_fastqc"))

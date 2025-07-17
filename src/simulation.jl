@@ -1,3 +1,91 @@
+const PRINTABLE_ASCII_ALPHABET = filter(isprint, [Char(c) for c in 0x21:0x7E])
+const PRINTABLE_GREEK_ALPHABET = vcat(
+    filter(isprint, [Char(c) for c in 0x391:0x3A9]),  # Capital Greek letters
+    filter(isprint, [Char(c) for c in 0x3B1:0x3C9])   # Lowercase Greek letters
+)
+const PRINTABLE_LATIN1_ALPHABET = filter(isprint, [Char(c) for c in 0x00:0xFF])
+const PRINTABLE_UNICODE_ALPHABET = [Char(c) for c in 0x0000:0x10FFFF if ((c <= 0xD7FF) || (0xE000 <= c <= 0x10FFFF)) && Base.isprint(Char(c))]
+const PRINTABLE_BMP_ALPHABET  = [Char(c) for c in 0x0020:0xFFFD if (c < 0xD800 || c > 0xDFFF) && Base.isprint(Char(c))]
+
+# Mutate a string given an alphabet, error rate, and allowed mutation types.
+# If `alphabet` is not provided, use the unique set of observed characters in the input string.
+function mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=nothing, error_rate::Float64=0.01)
+    chars = collect(s)
+    if alphabet === nothing
+        alphabet = unique(chars)
+    end
+    i = 1
+    while i <= length(chars)
+        if Random.rand() < error_rate
+            mutation = Random.rand(["sub", "ins", "del"])
+            if mutation == "sub"
+                # Substitute with random char from alphabet (not the same as current)
+                choices = setdiff(alphabet, [chars[i]])
+                if !isempty(choices)
+                    chars[i] = Random.rand(choices)
+                end
+            elseif mutation == "ins"
+                # Insert random char from alphabet
+                insert_char = Random.rand(alphabet)
+                insert!(chars, i, insert_char)
+                i += 1 # skip inserted char
+            elseif mutation == "del" && length(chars) > 1
+                # Delete the char
+                deleteat!(chars, i)
+                i -= 1 # stay at this index
+            end
+        end
+        i += 1
+    end
+    return join(chars)
+end
+
+"""
+    rand_ascii_greek_string(len::Int) -> String
+
+Generate a random string of printable ASCII and Greek characters of length `len`.
+
+The string contains random printable ASCII characters and both uppercase and lowercase Greek letters.
+"""
+function rand_ascii_greek_string(len::Int)
+    alphabet = vcat(PRINTABLE_ASCII_ALPHABET, PRINTABLE_GREEK_ALPHABET)
+    return join([Random.rand(alphabet) for _ in 1:len])
+end
+
+"""
+    rand_latin1_string(len::Int) -> String
+
+Generate a random string of printable Latin-1 characters of length `len`.
+
+The string contains random printable characters from the Latin-1 character set.
+"""
+function rand_latin1_string(len::Int)
+    return join([Random.rand(PRINTABLE_LATIN1_ALPHABET) for _ in 1:len])
+end
+
+"""
+    rand_printable_unicode_string(len::Int) -> String
+
+Generate a random string of printable Unicode characters of length `len`.
+
+The string contains random printable Unicode characters, excluding surrogate code points.
+"""
+function rand_printable_unicode_string(len::Int)
+    return join([Random.rand(PRINTABLE_UNICODE_ALPHABET) for _ in 1:len])
+end
+
+"""
+    rand_bmp_printable_string(len::Int) -> String
+
+Generate a random string of printable Basic Multilingual Plane (BMP) characters of length `len`.
+
+The string contains random printable BMP characters, excluding surrogate code points.
+"""
+function rand_bmp_printable_string(len::Int)
+    bmp_chars = [Char(c) for c in 0x0020:0xFFFD if (c < 0xD800 || c > 0xDFFF) && Base.isprint(Char(c))]
+    return join([Random.rand(PRINTABLE_BMP_ALPHABET) for _ in 1:len])
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -93,7 +181,7 @@ function simulate_illumina_paired_reads(;in_fasta::String,
             --in $(in_fasta) \
             --out $(outbase)`
     else
-        error("Either 'coverage' or 'read_count' must be provided.")
+        error("Either `coverage` or `read_count` must be provided.")
     end
 
     forward_fq = "$(outbase)1.fq"
@@ -572,6 +660,274 @@ function random_fasta_record(;moltype::Symbol=:DNA, seed=rand(0:typemax(Int)), L
     # id = Mycelia.seq2sha256(seq)
     id = string(UUIDs.uuid4())
     return FASTX.FASTA.Record(id, seq)
+end
+
+"""
+    generate_test_fastq_data(n_reads::Int, read_length::Int, filename::String)
+
+Generate test FASTQ data for benchmarking purposes.
+
+Creates a FASTQ file with random DNA sequences and realistic quality scores suitable for
+performance testing and validation.
+
+# Arguments
+- `n_reads::Int`: Number of reads to generate
+- `read_length::Int`: Length of each read in base pairs
+- `filename::String`: Output filename for the FASTQ file
+
+# Details
+- Generates random DNA sequences using BioSequences.randdnaseq
+- Assigns realistic quality scores (Phred+33 encoding, range 20-40)
+- Uses existing Mycelia I/O functions for consistency
+
+# See Also
+- `Mycelia.write_fastq`: For writing FASTQ records
+- `Mycelia.fastq_record`: For creating FASTQ records
+- `Mycelia.simulate_illumina_paired_reads`: For more sophisticated read simulation
+"""
+function generate_test_fastq_data(n_reads::Int, read_length::Int, filename::String)
+    # Generate FASTQ records
+    records = []
+    for i in 1:n_reads
+        # Generate random DNA sequence
+        seq = BioSequences.randdnaseq(read_length)
+        
+        # Generate realistic quality scores (Phred+33)
+        qual_scores = rand(20:40, read_length)  # Quality range 20-40
+        qual_string = String([Char(q + 33) for q in qual_scores])
+        
+        # Use existing fastq_record function pattern
+        record = Mycelia.fastq_record(
+            identifier="read_$i",
+            sequence=seq,
+            quality_scores=qual_string
+        )
+        
+        push!(records, record)
+    end
+    
+    # Use existing write_fastq function
+    Mycelia.write_fastq(records=records, filename=filename)
+end
+
+"""
+    generate_test_sequences(genome_size::Int, n_sequences::Int=1)
+
+Generate test DNA sequences for k-mer analysis benchmarking.
+
+Creates random DNA sequences suitable for k-mer counting and analysis performance testing.
+
+# Arguments
+- `genome_size::Int`: Size of each generated sequence in base pairs
+- `n_sequences::Int`: Number of sequences to generate (default: 1)
+
+# Returns
+- Vector of `BioSequences.LongDNA{4}` sequences
+
+# See Also
+- `random_fasta_record`: For generating FASTA records with random sequences
+- `BioSequences.randdnaseq`: For generating random DNA sequences
+"""
+function generate_test_sequences(genome_size::Int, n_sequences::Int=1)
+    sequences = BioSequences.LongDNA{4}[]
+    
+    for i in 1:n_sequences
+        # Generate random DNA sequence
+        seq = BioSequences.randdnaseq(genome_size)
+        push!(sequences, seq)
+    end
+    
+    return sequences
+end
+
+"""
+    generate_paired_end_reads(reference_seq, coverage, read_length, insert_size; error_rate=0.01)
+
+Generate realistic paired-end sequencing reads from a reference sequence.
+
+Simulates paired-end Illumina sequencing with realistic insert sizes, read lengths, and
+optional sequencing errors for assembly benchmarking.
+
+# Arguments
+- `reference_seq`: Reference sequence (BioSequences.LongDNA{4})
+- `coverage`: Target sequencing coverage depth
+- `read_length`: Length of each read in base pairs
+- `insert_size`: Insert size between paired reads
+- `error_rate`: Sequencing error rate (default: 0.01)
+
+# Returns
+- Tuple of (forward_reads, reverse_reads) as vectors of BioSequences.LongDNA{4}
+
+# See Also
+- `simulate_illumina_paired_reads`: For more sophisticated read simulation using ART
+- `introduce_sequencing_errors`: For adding realistic sequencing errors
+"""
+function generate_paired_end_reads(reference_seq, coverage, read_length, insert_size; error_rate=0.01)
+    ref_length = length(reference_seq)
+    n_reads = Int(round((coverage * ref_length) / (2 * read_length)))
+    
+    reads_1 = BioSequences.LongDNA{4}[]
+    reads_2 = BioSequences.LongDNA{4}[]
+    
+    for i in 1:n_reads
+        # Random start position ensuring we can get both reads
+        start_pos = rand(1:(ref_length - insert_size + 1))
+        
+        # Extract forward read
+        read1_seq = reference_seq[start_pos:(start_pos + read_length - 1)]
+        
+        # Extract reverse read (reverse complement from the other end)
+        read2_start = start_pos + insert_size - read_length
+        read2_seq = BioSequences.reverse_complement(reference_seq[read2_start:(read2_start + read_length - 1)])
+        
+        # Add sequencing errors
+        if error_rate > 0
+            read1_seq = introduce_sequencing_errors(read1_seq, error_rate)
+            read2_seq = introduce_sequencing_errors(read2_seq, error_rate)
+        end
+        
+        push!(reads_1, read1_seq)
+        push!(reads_2, read2_seq)
+    end
+    
+    return reads_1, reads_2
+end
+
+"""
+    introduce_sequencing_errors(sequence, error_rate)
+
+Introduce realistic sequencing errors into a DNA sequence.
+
+Simulates substitutions (70%), insertions (15%), and deletions (15%) at the specified
+error rate for realistic sequencing simulation.
+
+# Arguments
+- `sequence`: Input DNA sequence (BioSequences.LongDNA{4})
+- `error_rate`: Probability of error per base
+
+# Returns
+- Modified sequence with introduced errors (BioSequences.LongDNA{4})
+
+# See Also
+- `observe`: For more sophisticated error modeling with quality scores
+- `mutate_string`: For string-based mutation operations
+"""
+function introduce_sequencing_errors(sequence, error_rate)
+    seq_array = collect(sequence)
+    n_errors = Int(round(length(seq_array) * error_rate))
+    
+    for _ in 1:n_errors
+        pos = rand(1:length(seq_array))
+        # 70% substitutions, 15% insertions, 15% deletions
+        error_type = rand()
+        if error_type < 0.7
+            # Substitution
+            seq_array[pos] = rand([BioSequences.DNA_A, BioSequences.DNA_C, BioSequences.DNA_G, BioSequences.DNA_T])
+        elseif error_type < 0.85 && length(seq_array) < 1000  # Limit insertions to prevent sequence explosion
+            # Insertion (insert random base)
+            insert!(seq_array, pos, rand([BioSequences.DNA_A, BioSequences.DNA_C, BioSequences.DNA_G, BioSequences.DNA_T]))
+        elseif length(seq_array) > 1
+            # Deletion
+            deleteat!(seq_array, pos)
+        end
+    end
+    
+    return BioSequences.LongDNA{4}(seq_array)
+end
+
+"""
+    save_reads_as_fastq(reads, filename, base_quality=30)
+
+Save DNA reads as a FASTQ file with specified quality scores.
+
+Converts a vector of DNA sequences to FASTQ format with uniform quality scores.
+
+# Arguments
+- `reads`: Vector of DNA sequences (BioSequences.LongDNA{4})
+- `filename`: Output FASTQ filename
+- `base_quality`: Base quality score for all positions (default: 30)
+
+# See Also
+- `write_fastq`: For more flexible FASTQ writing with records
+- `fastq_record`: For creating individual FASTQ records
+- `generate_test_fastq_data`: For generating test FASTQ data with variable quality scores
+"""
+function save_reads_as_fastq(reads, filename, base_quality=30)
+    records = []
+    for (i, read) in enumerate(reads)
+        # Generate quality scores
+        qual_string = String([Char(base_quality + 33) for _ in 1:length(read)])
+        
+        record = Mycelia.fastq_record(
+            identifier="read_$i",
+            sequence=read,
+            quality_scores=qual_string
+        )
+        
+        push!(records, record)
+    end
+    
+    Mycelia.write_fastq(records=records, filename=filename)
+end
+
+"""
+    generate_test_genome_with_genes(genome_size, gene_density=0.02)
+
+Generate a test genome with simulated gene positions for annotation benchmarking.
+
+Creates a random DNA sequence with estimated gene positions based on gene density,
+suitable for testing gene prediction algorithms.
+
+# Arguments
+- `genome_size`: Size of the genome in base pairs
+- `gene_density`: Proportion of genome that consists of genes (default: 0.02)
+
+# Returns
+- Tuple of (genome_sequence, gene_positions) where gene_positions is a vector of (start, end) tuples
+
+# See Also
+- `random_fasta_record`: For generating random FASTA sequences
+- `save_genome_as_fasta`: For saving genomes to FASTA format
+"""
+function generate_test_genome_with_genes(genome_size, gene_density=0.02)
+    # Generate a random genome
+    genome = BioSequences.randdnaseq(genome_size)
+    
+    # Estimate number of genes based on gene density
+    n_genes = Int(round(genome_size * gene_density / 1000))  # Assume average gene length ~1000bp
+    
+    gene_positions = []
+    
+    # Place genes randomly (simplified)
+    for i in 1:n_genes
+        gene_length = rand(300:3000)  # Gene lengths between 300-3000 bp
+        start_pos = rand(1:(genome_size - gene_length))
+        
+        push!(gene_positions, (start_pos, start_pos + gene_length - 1))
+    end
+    
+    return genome, gene_positions
+end
+
+"""
+    save_genome_as_fasta(genome, filename)
+
+Save a genome sequence as a FASTA file.
+
+Convenience function for saving a single genome sequence to FASTA format for
+annotation benchmarking.
+
+# Arguments
+- `genome`: DNA sequence (BioSequences.LongDNA{4})
+- `filename`: Output FASTA filename
+
+# See Also
+- `write_fasta`: For more flexible FASTA writing with multiple records
+- `random_fasta_record`: For generating random FASTA records
+"""
+function save_genome_as_fasta(genome, filename)
+    record = FASTX.FASTA.Record("test_genome", genome)
+    Mycelia.write_fasta(outfile=filename, records=[record])
 end
 
 """

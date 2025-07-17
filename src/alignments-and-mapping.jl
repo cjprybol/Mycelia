@@ -185,6 +185,18 @@ end
 # function map_short_reads()
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the minimap2 index size string based on available system memory.
+
+# Arguments
+- `system_mem_gb::Real`: Amount of memory (GB) to allocate for indexing.
+- `denominator::Real`: Factor to scale the memory usage (default `Mycelia.DEFAULT_MINIMAP_DENOMINATOR`).
+
+# Returns
+- `String`: Value such as `"4G"` suitable for the minimap2 `-I` option.
+"""
 function system_mem_to_minimap_index_size(;system_mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), denominator=DEFAULT_MINIMAP_DENOMINATOR)
     value = Int(floor(system_mem_gb/denominator))
     # 4G is the default
@@ -193,6 +205,22 @@ function system_mem_to_minimap_index_size(;system_mem_gb=(Int(Sys.total_memory()
     return "$(value)G"
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a minimap2 index for the provided reference sequence.
+
+# Arguments
+- `fasta::String`: Path to the reference FASTA.
+- `mapping_type::String`: Preset (e.g. `"map-hifi"`).
+- `mem_gb::Real`: Memory available in GB.
+- `threads::Integer`: Number of threads.
+- `as_string::Bool=false`: If true, return the command string instead of `Cmd`.
+- `denominator::Real`: Scaling factor passed to `system_mem_to_minimap_index_size`.
+
+# Returns
+Named tuple `(cmd, outfile)` where `outfile` is the generated `.mmi` index path.
+"""
 function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=Sys.CPU_THREADS, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
     Mycelia.add_bioconda_env("minimap2")
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
@@ -209,7 +237,21 @@ function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1
     return (;cmd, outfile)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
+Map reads using an existing minimap2 index file.
+
+# Arguments
+- `fasta`: Path to the reference FASTA (used only if an index must be created).
+- `mapping_type`: Minimap2 preset.
+- `fastq`: Input reads.
+- `index_file::String=""`: Optional prebuilt index path. If empty, one is created.
+- `mem_gb`, `threads`, `as_string`, `denominator`: Parameters forwarded to `minimap_index`.
+
+# Returns
+Named tuple `(cmd, outfile)` producing a BAM file from the mapping.
+"""
 function minimap_map_with_index(;
         fasta,
         mapping_type,
@@ -755,65 +797,6 @@ function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwi
         --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits
         --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`)
     return output
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Runs the MMseqs2 easy-search command on the given query FASTA file against the target database.
-
-# Arguments
-- `query_fasta::String`: Path to the query FASTA file.
-- `target_database::String`: Path to the target database.
-- `out_dir::String`: Directory to store the output file. Defaults to the directory of the query FASTA file.
-- `outfile::String`: Name of the output file. Defaults to a combination of the query FASTA and target database filenames.
-- `format_output::String`: Format of the output. Defaults to a predefined set of fields.
-- `threads::Int`: Number of CPU threads to use. Defaults to the number of CPU threads available.
-- `force::Bool`: If true, forces the re-generation of the output file even if it already exists. Defaults to false.
-
-# Returns
-- `outfile_path::String`: Path to the generated output file.
-
-# Notes
-- Adds the `mmseqs2` environment using Bioconda if not already present.
-- Removes temporary files created during the process.
-"""
-function run_mmseqs_easy_search(;
-        query_fasta,
-        target_database,
-        out_dir=dirname(query_fasta),
-        outfile=basename(query_fasta) * ".mmseqs_easy_search." * basename(target_database) * ".txt",
-        format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-        threads = Sys.CPU_THREADS,
-        force=false)
-    
-    add_bioconda_env("mmseqs2")
-    outfile_path = joinpath(out_dir, outfile)
-    tmp_dir = joinpath(out_dir, "tmp")
-    if force || (!force && !isfile(outfile_path))
-        cmd = 
-        `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
-            easy-search
-            $(query_fasta)
-            $(target_database)
-            $(outfile_path)
-            $(tmp_dir)
-            --threads $(threads)
-            --format-mode 4
-            --format-output $(format_output)
-            --start-sens 1 -s 7 --sens-steps 7
-            --sort-results 1
-            --remove-tmp-files 1
-        `
-        @time run(pipeline(cmd))
-    else
-        @info "target outfile $(outfile_path) already exists, remove it or set force=true to re-generate"
-    end
-    # we set remote tmp files = 1 above, but it still doesn't seem to work?
-    if isdir(tmp_dir)
-        rm(tmp_dir, recursive=true)
-    end
-    return outfile_path
 end
 
 """

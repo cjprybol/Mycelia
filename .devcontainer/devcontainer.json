@@ -4,9 +4,9 @@
     "name": "Mycelia Development Container",
 
     // local on mac
-    "image": "mcr.microsoft.com/devcontainers/base:debian-11",
+    // "image": "mcr.microsoft.com/devcontainers/base:debian-11",
     // remote on codespaces
-    // "image": "mcr.microsoft.com/devcontainers/universal:2",
+    "image": "mcr.microsoft.com/devcontainers/universal:2",
     // for when/if I need more configuration than the base images provide
     // "build": {
     //     "dockerfile": "Dockerfile"
@@ -14,8 +14,20 @@
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	"features": {
 		// A Feature to install Julia via juliaup. More info: https://github.com/JuliaLang/devcontainer-features/tree/main/src/julia.
-		"ghcr.io/julialang/devcontainer-features/julia:1": {},
-        "ghcr.io/devcontainers/features/python:1": {},
+		"ghcr.io/julialang/devcontainer-features/julia:1": {
+            "channel": "lts"
+        },
+        "ghcr.io/devcontainers/features/python:1": {
+            "installTools": true,
+            "version": "os-provided"
+        },
+        "ghcr.io/devcontainers/features/node:1": {
+            "nodeGypDependencies": true,
+            "installYarnUsingApt": true,
+            "version": "lts",
+            "pnpmVersion": "latest",
+            "nvmVersion": "latest"
+        }
 	},
     "waitFor": "postCreateCommand",
     // "updateContentCommand": "python3 -m pip install -r requirements.txt",
@@ -41,13 +53,11 @@
                 "vadimcn.vscode-lldb",
                 "ms-python.autopep8",
                 "ms-python.debugpy",
-                "ms-python.vscode-pylance",
+                "ms-python.vscode-pylance"
             ]
         }
     },
-    "postCreateCommand": "julia -e 'using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))'"
-    // "postCreateCommand": "using Pkg; Pkg.add(\"IJulia\"); import IJulia; IJulia.installkernel(\"julia\", env=Dict(\"JULIA_NUM_THREADS\"=>\"$(Sys.CPU_THREADS)\"))"
-
+    "postCreateCommand": "bash .devcontainer/setup.sh"
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 

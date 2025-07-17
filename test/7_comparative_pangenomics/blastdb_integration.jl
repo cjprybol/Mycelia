@@ -1,39 +1,44 @@
 # BLAST Database Integration and Metadata Tests
-using Test
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+import Test
+import Mycelia
 
-@testset "BLAST Database Integration" begin
-    @testset "BLAST DB Search Paths" begin
+Test.@testset "BLAST Database Integration" begin
+    Test.@testset "BLAST DB Search Paths" begin
         search_paths = Mycelia.blastdb_search_paths()
-        @test isa(search_paths, Vector)
-        @test all(isa.(search_paths, String))
+        Test.@test isa(search_paths, Vector)
+        Test.@test all(isa.(search_paths, String))
     end
-    @testset "Download and Metadata Extraction" begin
+    Test.@testset "Download and Metadata Extraction" begin
         db_name = "ref_viroids_rep_genomes"
         db_dir = mkpath("test-blastdb")
         db_result = Mycelia.download_blastdb(db_name, outdir=db_dir)
-        @test isfile(db_result.archive)
-        @test isfile(db_result.metadata)
+        Test.@test isfile(db_result.archive)
+        Test.@test isfile(db_result.metadata)
         metadata = Mycelia.read_blastdb_metadata(db_result.metadata)
-        @test haskey(metadata, :title)
-        @test haskey(metadata, :taxid)
+        Test.@test haskey(metadata, :title)
+        Test.@test haskey(metadata, :taxid)
         rm(db_dir, recursive=true)
     end
-    @testset "BLAST DB to Arrow and FASTA" begin
+    Test.@testset "BLAST DB to Arrow and FASTA" begin
         db_name = "ref_viroids_rep_genomes"
         db_dir = mkpath("test-blastdb")
         db_result = Mycelia.download_blastdb(db_name, outdir=db_dir)
         arrow_table = Mycelia.blastdb_to_arrow(db_result.archive)
-        @test arrow_table isa Arrow.Table
+        Test.@test arrow_table isa Arrow.Table
         fasta_file = Mycelia.blastdb_to_fasta(db_result.archive, outdir=db_dir)
-        @test isfile(fasta_file)
+        Test.@test isfile(fasta_file)
         rm(db_dir, recursive=true)
     end
-    @testset "Filter by Taxid/Entry" begin
+    Test.@testset "Filter by Taxid/Entry" begin
         db_name = "ref_viroids_rep_genomes"
         db_dir = mkpath("test-blastdb")
         db_result = Mycelia.download_blastdb(db_name, outdir=db_dir)
         filtered = Mycelia.filter_blastdb_by_taxid(db_result.archive, taxid=12884)
-        @test !isempty(filtered)
+        Test.@test !isempty(filtered)
         rm(db_dir, recursive=true)
     end
 end

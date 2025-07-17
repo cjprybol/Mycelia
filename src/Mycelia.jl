@@ -33,6 +33,7 @@ import GFF3
 import GLM
 import GraphMakie
 import Graphs
+import GraphPlot
 # import HDF5
 import Hungarian
 import HTTP
@@ -40,12 +41,22 @@ import JLD2
 import JSON
 import Karnak
 import Kmers
+import LinearAlgebra
 import LsqFit
 import Luxor
 import Makie
 import MetaGraphs
+import MetaGraphsNext
 import Mmap
 import MultivariateStats
+
+# Auto-include all Julia files in src directory
+# This ensures our next-generation modules are automatically loaded:
+# - sequence-graphs-next.jl (strand-aware k-mer graphs)
+# - gfa-io-next.jl (MetaGraphsNext GFA I/O)
+# - probabilistic-algorithms-next.jl (probabilistic walks, shortest paths)
+# - viterbi-next.jl (enhanced Viterbi with batch processing)
+# - graph-algorithms-next.jl (Eulerian paths, bubble detection, repeat resolution)
 import OrderedCollections
 import Plots
 import Primes
@@ -82,12 +93,61 @@ import Base.Filesystem: stat
 # if things fall out of date but look correct, update them automatically
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Fixing-Outdated-Doctests
 
-# dynamic import of files??
-all_julia_files = filter(x -> occursin(r"\.jl$", x), readdir(dirname(pathof(Mycelia))))
-# don't recusively import this file
-all_other_julia_files = filter(x -> x != "Mycelia.jl", all_julia_files)
-for f in all_other_julia_files
-    include(f)
+# Dependency-ordered loading to ensure type-stable definitions
+# Core types and utilities must be loaded first
+include("utility-functions.jl")
+include("alphabets.jl")
+include("constants.jl")
+include("fastx.jl")
+
+# Graph type definitions and enums (foundation layer)
+include("sequence-graphs-next.jl")  # Defines GraphMode, StrandOrientation enums
+include("string-graphs.jl")         # N-gram graphs
+include("qualmer-analysis.jl")      # Qualmer types and functions
+
+# Variable-length graph implementations (depend on fixed-length types)
+include("fasta-graphs.jl")          # BioSequence graphs (depends on sequence-graphs-next.jl)
+include("fastq-graphs.jl")          # Quality-aware BioSequence graphs (depends on qualmer-analysis.jl)
+
+# Assembly pipeline (depends on all graph types and GraphMode enum)
+include("assembly.jl")
+
+# Advanced algorithms (depend on core graph types)
+include("viterbi-next.jl")
+
+# Load remaining files in alphabetical order (no critical dependencies)
+remaining_files = [
+    "alignments-and-mapping.jl",
+    "annotation.jl",
+    "bioconda.jl",
+    "classification.jl",
+    "clustering.jl",
+    "codon-optimization.jl",
+    "dimensionality-reduction.jl",
+    "distance-metrics.jl",
+    "genome-features.jl",
+    "kmer-analysis.jl",
+    "neo4jl.jl",
+    "performance-benchmarks.jl",
+    "plotting-and-visualization.jl",
+    "quality-control-and-benchmarking.jl",
+    "rclone.jl",
+    "reference-databases.jl",
+    "sequence-comparison.jl",
+    "sequence-graphs.jl",
+    "simulation.jl",
+    "slurm-sbatch.jl",
+    "taxonomy-and-trees.jl",
+    "variant-analysis.jl",
+    "viterbi-polishing-and-error-correction.jl",
+    "xam.jl"
+]
+
+for file in remaining_files
+    file_path = joinpath(dirname(pathof(Mycelia)), file)
+    if isfile(file_path)
+        include(file)
+    end
 end
 
 end # module

@@ -1,4 +1,136 @@
 """
+    dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame) -> DataFrames.DataFrame
+
+Return the DataFrame with all `nothing` values replaced by `missing`.
+"""
+function dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame)
+    for (colname, col) in zip(names(df), DataFrames.eachcol(df))
+        if any(isnothing, col)
+            df[!, colname] = map(x -> isnothing(x) ? missing : x, col)
+        end
+    end
+    return df
+end
+"""
+    check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
+
+Checks whether the specified number of bytes can fit in the computer's memory.
+
+- `bytes_needed`: The number of bytes required (output from `estimate_dense_matrix_memory` or `estimate_sparse_matrix_memory`).
+- `severity`: What to do if there is not enough available memory. Can be `:warn` (default) or `:error`.
+
+Returns a named tuple:
+    (will_fit_total, will_fit_available, total_memory, free_memory, bytes_needed)
+Where:
+- `will_fit_total`: `true` if the matrix fits in total system memory.
+- `will_fit_available`: `true` if the matrix fits in currently available (free) system memory.
+- `total_memory`: Total system RAM in bytes.
+- `free_memory`: Currently available system RAM in bytes.
+- `bytes_needed`: Bytes requested for the matrix.
+
+If `will_fit_available` is false, either warns or errors depending on `severity`.
+"""
+function check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
+    # Get total and available RAM
+    total_mem = Sys.total_memory()
+    # Sys.free_memory() is available on Linux & macOS, but not in Julia 1.6 on Windows.
+    free_mem = try
+        Sys.free_memory()
+    catch
+        # Fallback: If not available, just use total memory as a conservative estimate.
+        total_mem
+    end
+
+    will_fit_total = bytes_needed ≤ total_mem
+    will_fit_available = bytes_needed ≤ free_mem
+
+    
+    msg = 
+    """
+    Requested: $(Mycelia.bytes_human_readable(bytes_needed))
+    Free: $(Mycelia.bytes_human_readable(free_mem))
+    Total: $(Mycelia.bytes_human_readable(total_mem))"
+    """
+
+    if !will_fit_available
+        if severity == :error
+            error("Matrix will not fit in available memory! $msg")
+        elseif severity == :warn
+            @warn "Matrix may not fit in available memory! $msg"
+        end
+    end
+
+    return (
+        will_fit_total = will_fit_total,
+        will_fit_available = will_fit_available,
+        total_memory = total_mem,
+        free_memory = free_mem,
+        bytes_needed = bytes_needed
+    )
+end
+
+"""
+    estimate_dense_matrix_memory(nrows::Integer, ncols::Integer)
+    estimate_dense_matrix_memory(T::DataType, nrows::Integer, ncols::Integer)
+
+Estimate the memory required (in bytes) for a dense matrix.
+
+- If `T` is provided, estimate memory for a matrix with element type `T`.
+- If `T` is not provided, defaults to Float64.
+"""
+function estimate_dense_matrix_memory(args...)
+    if length(args) == 2
+        nrows, ncols = args
+        # T = Int
+        T = Float64
+    elseif length(args) == 3
+        T, nrows, ncols = args
+    else
+        throw(ArgumentError("Invalid arguments. Provide (nrows, ncols) or (T, nrows, ncols)."))
+    end
+    elsize = Base.sizeof(T)
+    total_bytes = elsize * nrows * ncols
+    return total_bytes
+end
+
+"""
+    estimate_sparse_matrix_memory(nrows::Integer, ncols::Integer; nnz=nothing, density=nothing)
+    estimate_sparse_matrix_memory(T::DataType, nrows::Integer, ncols::Integer; nnz=nothing, density=nothing)
+
+Estimate the memory required (in bytes) for a sparse matrix in CSC format.
+
+- If `T` is provided, estimate memory for a matrix with element type `T`.
+- If `T` is not provided, defaults to Float64.
+- You must specify either `nnz` (number of non-zeros) or `density` (proportion of non-zeros, between 0 and 1).
+"""
+function estimate_sparse_matrix_memory(args...; nnz::Union{Nothing, Integer}=nothing, density::Union{Nothing, AbstractFloat}=nothing)
+    if length(args) == 2
+        nrows, ncols = args
+        # T = Int
+        T = Float64
+    elseif length(args) == 3
+        T, nrows, ncols = args
+    else
+        throw(ArgumentError("Invalid arguments. Provide (nrows, ncols) or (T, nrows, ncols)."))
+    end
+
+    if nnz !== nothing
+        nstored = nnz
+    elseif density !== nothing
+        nstored = round(Int, density * nrows * ncols)
+    else
+        throw(ArgumentError("Must specify either nnz or density"))
+    end
+
+    val_bytes = Base.sizeof(T) * nstored
+    rowind_bytes = Base.sizeof(Int) * nstored
+    colptr_bytes = Base.sizeof(Int) * (ncols + 1)
+
+    total_bytes = val_bytes + rowind_bytes + colptr_bytes
+    return total_bytes
+end
+
+"""
 Apply breadth-first sampling to a DataFrame
 """
 function breadth_first_sample_dataframe(df::DataFrames.DataFrame, group_col::Union{Symbol, String}, 
@@ -302,6 +434,7 @@ function JLD2_read_table(filename::String)
         end
         
         # Otherwise search for any DataFrame
+        # TODO warn if we find more than one
         for key in keys(file)
             if typeof(file[key]) <: DataFrames.DataFrame
                 return file[key]
@@ -1133,7 +1266,26 @@ See Also
 * Base.format_bytes: Converts a byte count into a human-readable string. 
 """
 function filesize_human_readable(f)
+    @assert isfile(f) "File does not exist: $f"
     return Base.format_bytes(filesize(f))
+end
+
+function bytes_human_readable(num::Real)
+    return Base.format_bytes(num)
+    # units = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
+    # i = 1
+    # while num ≥ 1024 && i < length(units)
+    #     num /= 1024
+    #     i += 1
+    # end
+    # return @sprintf("%.2f %s", num, units[i])
+end
+
+function scientific_notation(num::Number; precision::Int=2)
+    if precision < 0
+        error("Number of decimal places (precision) must be non-negative.")
+    end
+    return Printf.format(Printf.Format("%.$(precision)e"), num)
 end
 
 """
@@ -1644,8 +1796,192 @@ Iterates through each column in the DataFrame and displays:
 2. A Dict mapping unique values to their frequencies using StatsBase.countmap
 """
 function countmap_columns(table)
-    for n in names(refseq_metadata)
+    for n in names(table)
         display(n)
-        display(StatsBase.countmap(refseq_metadata[!, n]))
+        display(StatsBase.countmap(table[!, n]))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Recursively include all files matching a pattern in a directory and its subdirectories.
+
+# Arguments
+- `dir::AbstractString`: Directory path to search recursively
+- `pattern::Regex=r"\\.jl\$"`: Regular expression pattern to match files (defaults to .jl files)
+
+# Details
+Files are processed in sorted order within each directory. This is useful for 
+loading test files, examples, or other Julia modules in a predictable order.
+
+# Examples
+```julia
+# Include all Julia files in a directory tree
+include_all_files("test/modules")
+
+# Include all text files
+include_all_files("docs", r"\\.txt\$")
+```
+"""
+function include_all_files(dir::AbstractString; pattern::Regex=r"\.jl$")
+    for (root, dirs, files) in walkdir(dir)
+        for file in sort(files)
+            if occursin(pattern, file)
+                include(joinpath(root, file))
+            end
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate the theoretical k-mer space size for a given k-mer length and alphabet size.
+
+# Arguments
+- `k::Integer`: K-mer length
+- `alphabet_size::Integer=4`: Size of the alphabet (defaults to 4 for DNA: A,C,G,T)
+
+# Returns
+- `Integer`: Total number of possible k-mers (alphabet_size^k)
+
+# Details
+For DNA sequences (alphabet_size=4), this computes 4^k. Useful for:
+- Memory estimation for k-mer analysis
+- Parameter validation and selection
+- Understanding computational complexity
+
+# Examples
+```julia
+# DNA 3-mers: 4^3 = 64 possible k-mers
+kmer_space_size(3)
+
+# Protein 5-mers: 20^5 = 3,200,000 possible k-mers  
+kmer_space_size(5, 20)
+```
+"""
+function kmer_space_size(k::Integer, alphabet_size::Integer=4)
+    return alphabet_size^k
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Clean up a directory by calculating its size and file count, then removing it.
+
+# Arguments
+- `directory::AbstractString`: Path to the directory to clean up
+- `verbose::Bool=true`: Whether to report cleanup results (default: true)
+- `force::Bool=false`: Whether to proceed without confirmation for large directories
+
+# Returns
+- Named tuple with fields:
+  - `existed`: Whether the directory existed before cleanup
+  - `files_deleted`: Number of files that were deleted
+  - `bytes_freed`: Total bytes freed up
+  - `human_readable_size`: Human-readable representation of bytes freed
+
+# Details
+This function will:
+1. Check if the directory exists and is non-empty
+2. Calculate the total size and number of files recursively
+3. Remove the directory and all its contents
+4. Report the cleanup results unless verbose=false
+
+For directories larger than 1GB or containing more than 10,000 files,
+confirmation is required unless force=true.
+
+# Examples
+```julia
+# Clean up a temporary directory with reporting
+result = cleanup_directory("/tmp/myapp_temp")
+
+# Silent cleanup
+cleanup_directory("/tmp/cache", verbose=false)
+
+# Force cleanup of large directory
+cleanup_directory("/tmp/large_data", force=true)
+```
+"""
+function cleanup_directory(directory::AbstractString; verbose::Bool=true, force::Bool=false)
+    # Check if directory exists
+    if !isdir(directory)
+        if verbose
+            println("Directory does not exist, nothing to clean up: $(directory)")
+        end
+        return (existed=false, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+    end
+    
+    # Calculate directory size and file count
+    total_bytes = 0
+    file_count = 0
+    
+    for (root, dirs, files) in walkdir(directory)
+        for file in files
+            file_path = joinpath(root, file)
+            if isfile(file_path)  # Additional check to ensure it's a file
+                try
+                    total_bytes += filesize(file_path)
+                    file_count += 1
+                catch e
+                    # Skip files that can't be read (permissions, etc.)
+                    if verbose
+                        @warn "Could not read file size for: $(file_path)"
+                    end
+                end
+            end
+        end
+    end
+    
+    # Check if directory is empty
+    if file_count == 0
+        if verbose
+            println("Directory is empty, removing: $(directory)")
+        end
+        try
+            rm(directory, recursive=true)
+        catch e
+            if verbose
+                @warn "Failed to remove empty directory: $(directory). Error: $(e)"
+            end
+            return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        end
+        return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+    end
+    
+    human_readable_size = Base.format_bytes(total_bytes)
+    
+    # Safety check for large directories
+    if !force && (total_bytes > 1_000_000_000 || file_count > 10_000)  # 1GB or 10k files
+        println("Warning: Large directory detected:")
+        println("  Path: $(directory)")
+        println("  Size: $(human_readable_size)")
+        println("  Files: $(file_count)")
+        print("Proceed with deletion? (y/N): ")
+        response = readline()
+        if lowercase(strip(response)) != "y"
+            if verbose
+                println("Cleanup cancelled by user")
+            end
+            return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        end
+    end
+    
+    # Remove the directory
+    try
+        rm(directory, recursive=true)
+        if verbose
+            println("Cleanup completed:")
+            println("  Directory: $(directory)")
+            println("  Files deleted: $(file_count)")
+            println("  Storage freed: $(human_readable_size)")
+        end
+        return (existed=true, files_deleted=file_count, bytes_freed=total_bytes, human_readable_size=human_readable_size)
+    catch e
+        if verbose
+            @warn "Failed to remove directory: $(directory). Error: $(e)"
+        end
+        return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
     end
 end

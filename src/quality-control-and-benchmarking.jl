@@ -186,4 +186,369 @@ function best_label_mapping(true_labels, pred_labels)
     return remapped_pred_labels, mapping
 end
 
+"""
+    assess_assembly_quality(contigs_file)
+
+Assess basic assembly quality metrics from a FASTA file.
+
+Calculates standard assembly quality metrics including contig count, total length,
+and N50 statistic for assembly evaluation.
+
+# Arguments
+- `contigs_file`: Path to FASTA file containing assembly contigs
+
+# Returns
+- Tuple of (n_contigs, total_length, n50)
+  - `n_contigs`: Number of contigs in the assembly
+  - `total_length`: Total length of all contigs in base pairs
+  - `n50`: N50 statistic (length of shortest contig in the set covering 50% of assembly)
+
+# Example
+```julia
+n_contigs, total_length, n50 = assess_assembly_quality("assembly.fasta")
+println("Assembly has \$n_contigs contigs, \$total_length bp total, N50=\$n50")
+```
+
+# See Also
+- `assess_assembly_kmer_quality`: For k-mer based assembly quality assessment
+"""
+function assess_assembly_quality(contigs_file)
+    contigs = []
+    
+    open(FASTX.FASTA.Reader, contigs_file) do reader
+        for record in reader
+            push!(contigs, length(FASTX.FASTA.sequence(record)))
+        end
+    end
+    
+    n_contigs = length(contigs)
+    total_length = sum(contigs)
+    
+    # Calculate N50
+    sorted_lengths = sort(contigs, rev=true)
+    cumsum_lengths = cumsum(sorted_lengths)
+    target_length = total_length / 2
+    n50_idx = findfirst(x -> x >= target_length, cumsum_lengths)
+    n50 = n50_idx !== nothing ? sorted_lengths[n50_idx] : 0
+    
+    return n_contigs, total_length, n50
+end
+
+# ---------- CheckM, CheckM2, CheckV Functions ----------
+
+"""
+    setup_checkv(; db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
+
+Install CheckV via Bioconda and set up its database.
+
+CheckV is a tool for assessing the quality and completeness of viral genomes.
+
+# Arguments
+- `db_dir`: Directory to store CheckV database (default: ~/.checkv)
+
+# Example
+```julia
+setup_checkv()
+```
+"""
+function setup_checkv(; db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
+    add_bioconda_env("checkv")
+    if !isdir(db_dir)
+        mkpath(db_dir)
+        run(`$(CONDA_RUNNER) run -n checkv checkv download_database $(db_dir)`)
+    end
+    return db_dir
+end
+
+"""
+    setup_checkm(; db_dir::String=joinpath(homedir(), "workspace", ".checkm"))
+
+Install CheckM via Bioconda and set up its database.
+
+CheckM is a tool for assessing the quality and completeness of bacterial genomes.
+
+# Arguments
+- `db_dir`: Directory to store CheckM database (default: ~/.checkm)
+
+# Example
+```julia
+setup_checkm()
+```
+"""
+function setup_checkm(; db_dir::String=joinpath(homedir(), "workspace", ".checkm"))
+    add_bioconda_env("checkm-genome")
+    if !isdir(db_dir)
+        mkpath(db_dir)
+        run(`$(CONDA_RUNNER) run -n checkm-genome checkm data setRoot $(db_dir)`)
+    end
+    return db_dir
+end
+
+"""
+    setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+
+Install CheckM2 via Bioconda and set up its database.
+
+CheckM2 is a rapid tool for assessing the quality and completeness of bacterial genomes.
+
+# Arguments
+- `db_dir`: Directory to store CheckM2 database (default: ~/.checkm2)
+
+# Example
+```julia
+setup_checkm2()
+```
+"""
+function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+    add_bioconda_env("checkm2")
+    if !isdir(db_dir)
+        mkpath(db_dir)
+        run(`$(CONDA_RUNNER) run -n checkm2 checkm2 database --download --path $(db_dir)`)
+    end
+    return db_dir
+end
+
+"""
+    run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
+
+Run CheckV on a single genome FASTA file.
+
+CheckV assesses the quality and completeness of viral genomes.
+
+# Arguments
+- `fasta_file`: Path to single FASTA file (can be gzipped)
+- `outdir`: Output directory for CheckV results (default: fasta_file * "_checkv")
+- `threads`: Number of threads to use (default: all available CPU threads)
+- `db_dir`: CheckV database directory (default: ~/.checkv)
+
+# Returns
+- Named tuple with fields:
+  - `outdir`: Output directory path
+  - `complete_genomes`: Path to complete_genomes.tsv
+  - `completeness`: Path to completeness.tsv
+  - `contamination`: Path to contamination.tsv
+  - `proviruses`: Path to proviruses.fna
+  - `quality_summary`: Path to quality_summary.tsv
+  - `viruses`: Path to viruses.fna
+
+# Example
+```julia
+result = run_checkv("genome.fasta")
+println("Quality summary: ", result.quality_summary)
+```
+"""
+function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=Sys.CPU_THREADS)
+    if !isfile(fasta_file)
+        error("Input file does not exist: $(fasta_file)")
+    end
+    
+    if !occursin(FASTA_REGEX, fasta_file)
+        error("Input file does not match FASTA format: $(fasta_file)")
+    end
+    
+    # Define expected output files
+    output_files = (
+        complete_genomes = joinpath(outdir, "complete_genomes.tsv"),
+        completeness = joinpath(outdir, "completeness.tsv"),
+        contamination = joinpath(outdir, "contamination.tsv"),
+        proviruses = joinpath(outdir, "proviruses.fna"),
+        quality_summary = joinpath(outdir, "quality_summary.tsv"),
+        viruses = joinpath(outdir, "viruses.fna")
+    )
+    
+    # Check if output directory exists and all expected files are present
+    if isdir(outdir) && all(isfile, output_files)
+        @warn "CheckV output directory already exists with all expected files. Skipping analysis: $(outdir)"
+    else
+        latest_db = last(readdir(Mycelia.setup_checkv(), join=true))
+        run(`$(CONDA_RUNNER) run -n checkv checkv end_to_end $(fasta_file) $(outdir) -d $(latest_db) -t $(threads)`)
+    end
+    
+    # Clean up temporary directory if it exists
+    tmp_dir = joinpath(outdir, "tmp")
+    Mycelia.cleanup_directory(tmp_dir, verbose=true, force=true)
+    
+    return (outdir=outdir, output_files...)
+end
+
+"""
+    run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta")
+
+Run CheckM on directory containing FASTA files.
+
+CheckM requires a directory of genome files as input.
+
+# Arguments
+- `input_path`: Path to directory containing FASTA files
+- `outdir`: Output directory for CheckM results (default: input_path * "_checkm")
+- `db_dir`: CheckM database directory (default: ~/.checkm)
+- `extension`: File extension for genomes (default: "fasta")
+- `threads`: Number of threads to use (default: all available CPU threads)
+
+# Example
+```julia
+run_checkm("./genomes/")
+```
+"""
+function run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta", threads::Int=Sys.CPU_THREADS)
+    setup_checkm(db_dir=db_dir)
+    
+    if !isdir(input_path)
+        error("CheckM requires a directory of genome files as input: $(input_path)")
+    end
+    
+    fasta_files = find_fasta_files(input_path)
+    if isempty(fasta_files)
+        error("No FASTA files found in directory: $(input_path)")
+    end
+    
+    # Check for potential performance issues
+    num_genomes = length(fasta_files)
+    if num_genomes > 1000
+        @warn "Processing $(num_genomes) genomes. CheckM documentation suggests splitting large datasets (>1000 genomes) into smaller groups for better performance and memory management."
+    end
+    
+    # Check available memory (convert from bytes to GB)
+    available_memory_gb = Sys.total_memory() / (1024^3)
+    if available_memory_gb < 64
+        @warn "Available system memory: $(round(available_memory_gb, digits=1)) GB. CheckM may require 64+ GB of RAM for optimal performance with large datasets. Consider reducing the number of genomes or running on a system with more memory."
+    end
+    
+    run(`$(CONDA_RUNNER) run -n checkm-genome checkm lineage_wf $(input_path) $(outdir) -x $(extension) --data $(db_dir) -t $(threads)`)
+    
+    return outdir
+end
+
+"""
+    run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+
+Run CheckM2 on FASTA file(s) or directory containing FASTA files.
+
+# Arguments
+- `input_path`: Path to FASTA file or directory containing FASTA files
+- `outdir`: Output directory for CheckM2 results (default: input_path * "_checkm2")
+- `threads`: Number of threads to use (default: all available CPU threads)
+- `db_dir`: CheckM2 database directory (default: ~/.checkm2)
+
+# Returns
+A named tuple with the following fields:
+- `outdir`: Output directory path
+- `quality_report`: Path to quality_report.tsv
+- `log_file`: Path to checkm2.log
+- `diamond_results`: Path to DIAMOND_RESULTS.tsv
+- `protein_file`: Path to the single .faa file
+"""
+function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
+    # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
+    # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
+    db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
+    @assert isfile(db_path)
+    
+    fasta_files = find_fasta_files(input_path)
+    
+    if isempty(fasta_files)
+        error("No FASTA files found in: $(input_path)")
+    end
+    
+    # Define expected output file paths
+    quality_report = joinpath(outdir, "quality_report.tsv")
+    log_file = joinpath(outdir, "checkm2.log")
+    diamond_results = joinpath(outdir, "diamond_output", "DIAMOND_RESULTS.tsv")
+    protein_files_dir = joinpath(outdir, "protein_files")
+    
+    # Check if all expected files already exist
+    files_exist = isfile(quality_report) && isfile(log_file) && isfile(diamond_results) && isdir(protein_files_dir)
+    
+    if files_exist
+        # Check for exactly one .faa file
+        faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join=true))
+        
+        if length(faa_files) == 1
+            protein_file = first(faa_files)
+            @warn "All expected CheckM2 output files already exist. Skipping execution and returning existing results." outdir
+            
+            return (
+                outdir = outdir,
+                quality_report = quality_report,
+                log_file = log_file,
+                diamond_results = diamond_results,
+                protein_file = protein_file
+            )
+        end
+    end
+    
+    # CheckM2 can take comma-separated fasta files as input
+    input_str = join(fasta_files, ",")
+    
+    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads) --force`)
+    
+    # Verify output files were created
+    if !isdir(protein_files_dir)
+        error("Protein files directory not found: $(protein_files_dir)")
+    end
+    
+    faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join=true))
+    
+    if length(faa_files) != 1
+        error("Expected exactly 1 .faa file, but found $(length(faa_files)) in $(protein_files_dir)")
+    end
+    
+    protein_file = first(faa_files)
+    
+    return (
+        outdir = outdir,
+        quality_report = quality_report,
+        log_file = log_file,
+        diamond_results = diamond_results,
+        protein_file = protein_file
+    )
+end
+
+"""
+    run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+
+Run CheckM2 on a list of FASTA files.
+
+CheckM2 can automatically handle mixed lists of gzipped and non-gzipped files when given a list.
+
+# Arguments
+- `fasta_files`: Vector of FASTA file paths (can be mixed gzipped and non-gzipped)
+- `outdir`: Output directory for CheckM2 results (default: normalized_current_datetime() * "_checkm2")
+- `threads`: Number of threads to use (default: all available CPU threads)
+- `db_dir`: CheckM2 database directory (default: ~/.checkm2)
+
+# Example
+```julia
+files = ["genome1.fasta.gz", "genome2.fasta", "genome3.fasta.gz"]
+run_checkm2_list(files)
+```
+"""
+function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
+    # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
+    # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
+    db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
+    @assert isfile(db_path)
+    
+    if isempty(fasta_files)
+        error("No FASTA files provided")
+    end
+    
+    # Validate that all files exist and match FASTA format
+    for file in fasta_files
+        if !isfile(file)
+            error("File does not exist: $(file)")
+        end
+        if !occursin(FASTA_REGEX, file)
+            error("File does not match FASTA format: $(file)")
+        end
+    end
+    
+    # CheckM2 can take comma-separated fasta files as input and handles mixed gz/non-gz automatically
+    input_str = join(fasta_files, ",")
+    
+    run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads)`)
+    
+    return outdir
+end
+
 #
