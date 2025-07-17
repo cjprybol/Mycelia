@@ -172,7 +172,15 @@ PHRED score Q relates to error probability P by: Q = -10 * log10(P)
 Therefore, correctness probability = 1 - P = 1 - 10^(-Q/10)
 """
 function phred_to_probability(phred_score::UInt8)
-    return 1.0 - 10.0^(-phred_score / 10.0)
+    # Convert PHRED score to probability that base call is correct
+    # PHRED score Q = -10 * log10(P_error)
+    # Therefore: P_error = 10^(-Q/10)
+    # P_correct = 1 - P_error = 1 - 10^(-Q/10)
+    error_prob = 10.0^(-Float64(phred_score) / 10.0)
+    correct_prob = 1.0 - error_prob
+    
+    # Ensure we don't return negative probabilities
+    return max(0.0, min(1.0, correct_prob))
 end
 
 """
@@ -279,6 +287,10 @@ function position_wise_joint_probability(qualmers::Vector{<:Qualmer}; use_log_sp
             log_pos_prob = 0.0
             for qmer in qualmers
                 prob_correct = phred_to_probability(qmer.qualities[pos])
+                if prob_correct <= 0.0
+                    @warn "Invalid probability $prob_correct for quality $(qmer.qualities[pos]). Using minimum probability."
+                    prob_correct = 1e-10  # Use a very small but positive probability
+                end
                 log_pos_prob += log(prob_correct)
             end
             log_joint_prob += log_pos_prob
@@ -326,8 +338,11 @@ struct QualmerVertexData{QualmerT<:Qualmer}
     coverage::Int                           # Number of observations
     mean_quality::Float64                   # Mean quality across all observations
     
-    function QualmerVertexData(observations::Vector{QualmerObservation{QualmerT}}) where {QualmerT<:Qualmer}
+    function QualmerVertexData(observations::Vector{<:QualmerObservation})
         @assert !isempty(observations) "Must have at least one observation"
+        
+        # Infer the QualmerT type from the first observation
+        QualmerT = typeof(observations[1].qualmer)
         
         # Get canonical qualmer (all observations should have the same canonical sequence)
         canonical_qualmer = canonical(observations[1].qualmer)
@@ -411,18 +426,9 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
         Kmers.AAKmer{k}
     end
     
-    # Create the MetaGraph with proper k-mer type labels
-    graph = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
-        label_type=kmer_type,
-        vertex_data_type=QualmerVertexData,
-        edge_data_type=QualmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
-        default_weight=0.0
-    )
-    
     # Track qualmer observations by canonical k-mer
-    canonical_observations = Dict{kmer_type, Vector{QualmerObservation}}()
+    # We'll create the graph after we know the actual k-mer type
+    canonical_observations = Dict{Any, Vector{QualmerObservation}}()
     
     # Process each FASTQ record
     for (seq_id, record) in enumerate(fastq_records)
@@ -454,8 +460,35 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
         end
     end
     
+    # Now create the graph with the actual k-mer type (inferred from data)
+    if isempty(canonical_observations)
+        @warn "No qualmer observations found"
+        return MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph(),
+            label_type=kmer_type,
+            vertex_data_type=QualmerVertexData,
+            edge_data_type=QualmerEdgeData,
+            weight_function=edge_data -> edge_data.weight,
+            default_weight=0.0
+        )
+    end
+    
+    # Infer actual k-mer type from the observations
+    first_canonical_kmer = first(keys(canonical_observations))
+    actual_kmer_type = typeof(first_canonical_kmer)
+    
+    # Create the MetaGraph with proper k-mer type labels
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=actual_kmer_type,
+        vertex_data_type=QualmerVertexData,
+        edge_data_type=QualmerEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0
+    )
+    
     # Filter by minimum coverage and create vertices
-    vertex_data_map = Dict{kmer_type, QualmerVertexData}()
+    vertex_data_map = Dict{actual_kmer_type, QualmerVertexData}()
     for (canonical_kmer, observations) in canonical_observations
         if length(observations) >= min_coverage
             vertex_data = QualmerVertexData(observations)
