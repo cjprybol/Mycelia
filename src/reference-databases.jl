@@ -615,7 +615,7 @@ function blastdb2table(;
         sequence_length = true
         sequence = true
     end
-    
+
     Mycelia.add_bioconda_env("blast")
     blast_db_info = Mycelia.local_blast_database_info()
     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
@@ -637,7 +637,6 @@ function blastdb2table(;
     needs_sequence = sequence || sequence_sha256
 
     # Define the mapping from outfmt symbols to column names and their inclusion status
-    # Using a tuple for better performance (less allocations)
     field_config = [
         ("%s", "sequence", needs_sequence),  # Need sequence for SHA256
         ("%a", "accession", accession),
@@ -665,91 +664,101 @@ function blastdb2table(;
     columns_to_fetch = [colname for (_, colname) in active_fields]
     outfmt_string = join(formats_to_fetch, '\t')
 
-    # Create mapping of format positions to column indices for faster access
-    format_positions = Dict{Int, Int}()
-    for (i, (fmt, _)) in enumerate(active_fields)
-        format_idx = findfirst(==(fmt), formats_to_fetch)
-        if format_idx !== nothing
-            format_positions[i] = format_idx
-        end
-    end
-
     # Define output columns
     output_columns = String[]
     if sequence_sha256
         push!(output_columns, "sequence_sha256")
     end
-    
-    # Add the other active columns
+
+    # Add the other active columns except "sequence" which is handled separately
     for (_, colname, include) in field_config
-        if include && colname != "sequence"  # Handle sequence separately
+        if include && colname != "sequence"
             push!(output_columns, colname)
         end
     end
-    
+
     if sequence
         push!(output_columns, "sequence")
     end
-    
-    # Get total sequences for pre-allocation
-    total_sequences = blast_db_info["number of sequences"]
-    
-    # Pre-allocate column vectors for better performance
-    # Using a dictionary of vectors for type flexibility
+
+    # Use dynamic storage for all columns
     column_data = OrderedCollections.OrderedDict{String, Vector{String}}()
     for col in output_columns
-        column_data[col] = Vector{String}(undef, total_sequences)
+        column_data[col] = String[]
     end
-    
-    progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
-    
+
+    # For progress bar, try to get total sequences, else fallback to nothing
+    total_sequences = get(blast_db_info, "number of sequences", nothing)
+    if total_sequences !== nothing
+        progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+    else
+        progress = ProgressMeter.Progress(desc="Processing BLAST DB: ", dt=1.0)
+    end
+
     # Run blastdbcmd to get data
     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    
+
     # Sequence index in fields (if needed)
     sequence_idx = findfirst(==("%s"), formats_to_fetch)
-    
+
     # Process each line from blastdbcmd
-    for (i, line) in enumerate(eachline(cmd))
+    nseqs = 0
+    for line in eachline(cmd)
+        nseqs += 1
         fields = split(strip(line), '\t')
         # Pad fields with empty strings if necessary
         if length(fields) < length(formats_to_fetch)
             append!(fields, fill("", length(formats_to_fetch) - length(fields)))
         end
-        
+
         # Process sequence if needed (for SHA256 or to include in output)
+        seq = ""
         if needs_sequence && sequence_idx !== nothing
             seq_raw = fields[sequence_idx]
             seq = uppercase(String(filter(x -> isvalid(Char, x), seq_raw)))
-            
             if sequence_sha256
                 seq_sha256 = Mycelia.seq2sha256(seq)
-                column_data["sequence_sha256"][i] = seq_sha256
+                push!(column_data["sequence_sha256"], seq_sha256)
             end
-            
-            if sequence
-                column_data["sequence"][i] = seq
-            end
+        elseif sequence_sha256
+            # If sequence is not available, push empty string for sha256
+            push!(column_data["sequence_sha256"], "")
         end
-        
-        # Add other fields directly to column vectors (avoiding dictionary lookups)
+
+        # Add other fields directly to column vectors
         for (j, colname) in enumerate(columns_to_fetch)
-            if colname != "sequence" || (colname == "sequence" && !needs_sequence)
-                column_data[colname][i] = fields[j]
+            # sequence is handled below
+            if colname != "sequence"
+                push!(column_data[colname], fields[j])
             end
         end
-        
+
+        # Add sequence field at the end if requested
+        if sequence
+            push!(column_data["sequence"], seq)
+        end
+
         # Update progress meter
-        ProgressMeter.next!(progress; showvalues = [
-            (:completed, i),
-            (:total, total_sequences),
-            (:percent, round(i/total_sequences*100, digits=1))
-        ])
+        if total_sequences !== nothing
+            ProgressMeter.next!(progress; showvalues = [
+                (:completed, nseqs),
+                (:total, total_sequences),
+                (:percent, round(nseqs/total_sequences*100, digits=1))
+            ])
+        else
+            ProgressMeter.next!(progress)
+        end
     end
-    
+
+    # Consistency check
+    nrows = length(first(values(column_data)))
+    for (col, vec) in column_data
+        @assert length(vec) == nrows "Column $col has length $(length(vec)), expected $nrows"
+    end
+
     # Construct DataFrame directly from column vectors
     result_df = DataFrames.DataFrame(column_data)
-    
+
     ProgressMeter.finish!(progress)
     return result_df
 end
