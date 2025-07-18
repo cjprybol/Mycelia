@@ -29,7 +29,7 @@ function lawrencium_sbatch(;
         mail_user::String,
         mail_type::String="ALL",
         logdir::String=mkpath(joinpath(homedir(), "workspace/slurmlogs")),
-        partition::String="lr3",
+        partition::String="lr4",
         qos::String="lr_normal",
         account::String,
         nodes::Int=1,
@@ -77,8 +77,8 @@ Submit a job to SLURM using sbatch with specified parameters.
 - `nodes::Int`: Number of nodes to allocate (default: 1)
 - `ntasks::Int`: Number of tasks to run (default: 1)
 - `time::String`: Maximum wall time in format "days-hours:minutes:seconds" (default: "1-00:00:00")
-- `cpus_per_task::Int`: CPUs per task (default: 1)
-- `mem_gb::Int`: Memory in GB, defaults to 32GB per CPU
+- `cpus_per_task::Int`: CPUs per task (default: 12)
+- `mem_gb::Int`: Memory in GB, defaults to 96GB
 - `cmd::String`: Command to execute
 
 # Returns
@@ -99,7 +99,7 @@ function scg_sbatch(;
         nodes::Int=1,
         ntasks::Int=1,
         time::String="7-00:00:00",
-        cpus_per_task::Int=16,
+        cpus_per_task::Int=12,
         mem_gb::Int=96,
         cmd::String
     )

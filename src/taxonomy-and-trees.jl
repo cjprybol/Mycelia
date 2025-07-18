@@ -242,7 +242,7 @@ function merge_xam_with_taxonomies(;
     end
 
     # sanitize nothings before writing out
-    verbose && println("Sanitizing `nothing` values and replacing with `missing")
+    verbose && println("Sanitizing `nothing` values and replacing with `missing`")
     fully_taxonomy_aware_xam_table = Mycelia.dataframe_replace_nothing_with_missing(fully_taxonomy_aware_xam_table)
     
     # Write output files
