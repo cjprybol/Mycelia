@@ -1360,16 +1360,27 @@ This function iterates over the provided dictionary `kmer_counts`, which maps k-
 - The input dictionary `kmer_counts` with all k-mers in their canonical form, sorted by k-mers.
 """
 function canonicalize_kmer_counts!(kmer_counts)
-    for (kmer, count) in kmer_counts
-        if !BioSequences.iscanonical(kmer)
-            canonical_kmer = BioSequences.canonical(kmer)
-            if haskey(kmer_counts, canonical_kmer)
-                kmer_counts[canonical_kmer] += count
-            else
-                kmer_counts[canonical_kmer] = count
+    # Only canonicalize nucleic acid k-mers (DNA/RNA), not amino acids
+    if !isempty(kmer_counts)
+        first_kmer = first(keys(kmer_counts))
+        kmer_type = typeof(first_kmer)
+        
+        # Only canonicalize if it's a nucleic acid k-mer (DNA/RNA)
+        # Check if the type parameters indicate a nucleic acid alphabet
+        if kmer_type <: Kmers.Kmer{<:BioSequences.NucleicAcidAlphabet}
+            for (kmer, count) in kmer_counts
+                if !BioSequences.iscanonical(kmer)
+                    canonical_kmer = BioSequences.canonical(kmer)
+                    if haskey(kmer_counts, canonical_kmer)
+                        kmer_counts[canonical_kmer] += count
+                    else
+                        kmer_counts[canonical_kmer] = count
+                    end
+                    delete!(kmer_counts, kmer)
+                end
             end
-            delete!(kmer_counts, kmer)
         end
+        # For amino acids, no canonicalization needed - they are already canonical
     end
     return sort!(kmer_counts)
 end

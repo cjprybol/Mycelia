@@ -109,11 +109,14 @@ function build_kmer_graph_next(kmer_type, observations::AbstractVector{<:Union{F
         return _create_empty_kmer_graph(kmer_type)
     end
     
+    # Infer the actual k-mer type with storage parameter from the data
+    actual_kmer_type = eltype(canonical_kmers)
+    
     # Create the MetaGraphsNext graph with type-stable metadata
     graph = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=kmer_type,
-        vertex_data_type=KmerVertexData{kmer_type},
+        label_type=actual_kmer_type,
+        vertex_data_type=KmerVertexData{actual_kmer_type},
         edge_data_type=KmerEdgeData,
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
@@ -285,7 +288,19 @@ function _sequence_to_canonical_path(canonical_kmers, sequence, graph_mode)
             end
         else  # DoubleStrand mode
             # Double-strand mode: find canonical representation
-            rc_kmer = BioSequences.reverse_complement(observed_kmer)
+            # Only valid for nucleic acids, not amino acids
+            if typeof(observed_kmer) <: Kmers.Kmer{<:BioSequences.NucleicAcidAlphabet}
+                rc_kmer = BioSequences.reverse_complement(observed_kmer)
+            else
+                # For amino acids, treat as single-strand even in DoubleStrand mode
+                if observed_kmer in canonical_kmer_set
+                    push!(path, (observed_kmer, Forward))
+                    continue
+                else
+                    @warn "K-mer $observed_kmer not found in graph at position $i (amino acid in DoubleStrand mode)"
+                    continue
+                end
+            end
             
             # Determine canonical k-mer (lexicographically smaller)
             if observed_kmer <= rc_kmer
