@@ -1,4 +1,81 @@
 """
+    write_tsvgz(df::DataFrames.DataFrame, filename::String; buffer_in_memory::Bool=false, threaded::Bool=true, bufsize::Int=10*1024*1024, force::Bool=false)
+
+Write a DataFrame to a gzipped TSV file.
+
+# Arguments
+- `df`: The DataFrame to write
+- `filename`: Path to the output file (will add .tsv.gz extension as needed)
+- `buffer_in_memory`: If false, uses temporary files for large data (default: false)
+- `bufsize`: Buffer size in bytes for compression stream (default: 10MB)
+- `force`: If true, overwrite existing non-empty files (default: false)
+
+# Returns
+- `String`: The final filename with proper extension
+"""
+function write_tsvgz(;df::DataFrames.DataFrame, filename::String, buffer_in_memory::Bool=false, bufsize::Int=10*1024*1024, force::Bool=false)
+    # Handle extension logic for writing
+    if endswith(lowercase(filename), ".tsv.gz")
+        # Already has full extension
+        final_filename = filename
+    elseif endswith(lowercase(filename), ".tsv")
+        # Has .tsv but missing .gz
+        final_filename = filename * ".gz"
+    else
+        # Missing both extensions
+        final_filename = filename * ".tsv.gz"
+    end
+    
+    # Check if file exists and is non-empty, prevent overwriting unless forced
+    if isfile(final_filename) && filesize(final_filename) > 0 && !force
+        error("File already exists and is non-empty: $final_filename. Use force=true to overwrite.")
+    end
+    
+    # Write the DataFrame to a gzipped TSV file with proper stream handling
+    open(final_filename, "w") do file
+        stream = CodecZlib.GzipCompressorStream(file, bufsize=bufsize)
+        CSV.write(stream, df, delim='\t', buffer_in_memory=buffer_in_memory)
+        close(stream)
+    end
+    
+    return final_filename
+end
+
+"""
+    read_tsvgz(filename::String; buffer_in_memory::Bool=false, threaded::Bool=true, bufsize::Int=10*1024*1024) -> DataFrames.DataFrame
+
+Read a DataFrame from a gzipped TSV file.
+
+# Arguments
+- `filename`: Path to the gzipped TSV file (must have .tsv.gz extension)
+- `buffer_in_memory`: If false, uses temporary files for large data (default: false)
+- `bufsize`: Buffer size in bytes for decompression stream (default: 10MB)
+
+# Returns
+- The loaded DataFrame
+"""
+function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int=10*1024*1024)
+    # For reading, be strict about extension
+    if !endswith(lowercase(filename), ".tsv.gz")
+        error("File must have .tsv.gz extension, got: $filename")
+    end
+    
+    # Check if file exists
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Read the gzipped TSV file back into a DataFrame with proper stream handling
+    df = open(filename, "r") do file
+        stream = CodecZlib.GzipDecompressorStream(file, bufsize=bufsize)
+        CSV.read(stream, DataFrames.DataFrame, delim='\t', buffer_in_memory=buffer_in_memory)
+        close(stream)
+    end
+    
+    return df
+end
+
+"""
     dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame) -> DataFrames.DataFrame
 
 Return the DataFrame with all `nothing` values replaced by `missing`.
@@ -707,7 +784,7 @@ function upload_dataframe_to_bigquery(;
 end
 
 """
-    save_df_jld2(df::DataFrames.DataFrame, filename::String; key::String="dataframe")
+    save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
 
 Save a DataFrame to a JLD2 file.
 
@@ -715,13 +792,6 @@ Save a DataFrame to a JLD2 file.
 - `df`: The DataFrame to save
 - `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
 - `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
-
-# Examples
-```julia
-import DataFrames
-df = DataFrames.DataFrame(x = 1:3, y = ["a", "b", "c"])
-save_df_jld2(df, "mydata")
-```
 """
 function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
     # Ensure filename has .jld2 extension
@@ -738,6 +808,8 @@ function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
     load_df_jld2(filename::String; key::String="dataframe") -> DataFrames.DataFrame
 
 Load a DataFrame from a JLD2 file.

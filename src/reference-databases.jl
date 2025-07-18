@@ -2218,6 +2218,10 @@ Downloads and extracts the NCBI taxonomy database required for taxonkit operatio
 Downloads `taxdump.tar.gz` from NCBI FTP server and extracts it to `~/.taxonkit/`.
 This is a prerequisite for using taxonkit-based taxonomy functions.
 
+# Arguments
+- `force_update::Bool=false`: Force download even if taxdump already exists
+- `max_age_days::Int=30`: Maximum age in days before warning about stale data
+
 # Requirements
 - Working internet connection
 - Sufficient disk space (~100MB)
@@ -2230,9 +2234,68 @@ This is a prerequisite for using taxonkit-based taxonomy functions.
 - `SystemError` if download fails or if unable to create directory
 - `ErrorException` if tar extraction fails
 """
-function setup_taxonkit_taxonomy()
-    run(`wget -q ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
-    Mycelia.tar_extract(tarchive="taxdump.tar.gz", directory=mkpath("$(homedir())/.taxonkit"))
+function setup_taxonkit_taxonomy(; force_update::Bool=false, max_age_days::Int=30)
+    
+    taxonkit_dir = joinpath(homedir(), ".taxonkit")
+    timestamp_file = joinpath(taxonkit_dir, ".last_updated")
+    
+    # Check if we need to download/update
+    needs_update = force_update
+    
+    if !needs_update
+        # Check if directory exists and has files
+        if !isdir(taxonkit_dir) || isempty(readdir(taxonkit_dir))
+            needs_update = true
+        else
+            # Check age of installation
+            if isfile(timestamp_file)
+                try
+                    last_updated = Dates.DateTime(read(timestamp_file, String))
+                    age_days = Dates.value(Dates.now() - last_updated) / (1000 * 60 * 60 * 24)
+                    
+                    if age_days > max_age_days
+                        @warn "Taxonkit taxonomy data is $(round(age_days, digits=1)) days old (> $max_age_days days). Consider updating with force_update=true."
+                    end
+                catch
+                    @warn "Could not read timestamp file. Taxonkit data age unknown."
+                end
+            else
+                @warn "No timestamp found for taxonkit data. Age unknown. Consider updating with force_update=true."
+            end
+        end
+    end
+    
+    # Download and extract if needed
+    if needs_update
+        @info "Downloading NCBI taxonomy database..."
+        
+        # Clean up existing directory if it exists
+        if isdir(taxonkit_dir)
+            @info "Removing existing taxonkit directory..."
+            rm(taxonkit_dir, recursive=true)
+        end
+        
+        # Create fresh directory
+        mkpath(taxonkit_dir)
+        
+        # Download in a temporary location first
+        temp_file = tempname() * ".tar.gz"
+        try
+            run(`wget -q -O $temp_file ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
+            
+            # Extract to taxonkit directory
+            Mycelia.tar_extract(tarchive=temp_file, directory=taxonkit_dir)
+            
+            # Write timestamp
+            write(timestamp_file, string(Dates.now()))
+            
+            @info "Taxonkit taxonomy database updated successfully"
+            
+        finally
+            # Clean up temporary file
+            isfile(temp_file) && rm(temp_file)
+        end
+    end
 end
 
 function load_bvbrc_genome_metadata(; 
