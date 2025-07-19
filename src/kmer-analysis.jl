@@ -2077,6 +2077,79 @@ function ks(;min=0, max=10_000)
     return filter(x -> min <= x <= max, results)
 end
 
+import Primes
+import DocStringExtensions
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a √2-scaled ladder of odd primes for k-mer-based assembly / error-screening.
+
+Starts with a user-supplied list of `seed_primes` (default **[3, 5, 7]**), then
+iteratively multiplies the last accepted *k* by `ratio` (default `sqrt(2)`),
+rounds **up** to the next odd prime, and appends it **only if** it differs from
+the previous accepted prime by at least `min_fractional_gap`.
+
+Keyword arguments
+=================
+- `max_k::Int = 10_000`          : Absolute upper bound.
+- `seed_primes::Vector{Int}`     : Initial primes (e.g. `[3,5,7]` for protein,
+                                   `[11,13,17]` for nucleotides).
+- `ratio::Float64 = sqrt(2)`     : Target geometric growth factor.
+- `min_fractional_gap::Float64 = 0.30` : Minimum (k_new − k_prev)/k_prev to skip
+                                         “sister” primes.
+- `read_length::Union{Int,Nothing} = nothing` : If set, cap at
+                                               `read_length − read_margin`.
+- `read_margin::Int = 20`        : Safety margin for short-read data.
+- `only_odd::Bool = true`        : Force odd *k* (recommended).
+- `return_unique::Bool = true`   : De-duplicate before returning.
+- `min_k::Int = 3`               : Drop any *k* below this after generation.
+
+Returns
+=======
+`Vector{Int}` — ascending prime *k* values suitable for `-k`/`--k-list`.
+"""
+function k_ladder(; max_k::Int           = 10_000,
+                   seed_primes::Vector{Int} = [3, 5, 7],
+                   ratio::Float64        = sqrt(2),
+                   min_fractional_gap::Float64 = 0.30,
+                   read_length::Union{Int,Nothing} = nothing,
+                   read_margin::Int      = 20,
+                   only_odd::Bool        = true,
+                   return_unique::Bool   = true,
+                   min_k::Int            = 3)
+
+    # clean & sort the seeds, keep ≥ 2
+    seeds = sort(unique(filter(>=(2), seed_primes)))
+    seeds = only_odd ? filter(isodd, seeds) : seeds
+    ks    = collect(seeds)
+
+    # set effective ceiling
+    k_ceiling = max_k
+    if read_length !== nothing
+        k_ceiling = min(k_ceiling, read_length - read_margin)
+    end
+    k_ceiling = max(k_ceiling, ks[end])  # never shrink below last seed
+
+    # ladder growth
+    lastk = ks[end]
+    while true
+        cand = ceil(Int, lastk * ratio)
+        cand += (only_odd && iseven(cand)) ? 1 : 0       # force odd
+        candp = Primes.nextprime(cand)                   # bump to next prime
+        candp > k_ceiling && break                       # stop if too large
+        if (candp - lastk) / lastk + 1e-12 >= min_fractional_gap
+            push!(ks, candp)
+            lastk = candp
+        else
+            cand   = candp + 2        # too close → move forward and retry
+        end
+    end
+
+    ks = filter(>=(min_k), ks)         # drop anything below min_k
+    return return_unique ? unique(ks) : ks
+end
+
 # function observed_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
 #     kmer_count_dict = BioSequences.kmercounts(seq, k)
 #     total_kmers = sum(values(kmer_count_dict))

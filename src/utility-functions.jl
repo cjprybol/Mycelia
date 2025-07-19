@@ -2057,3 +2057,101 @@ function cleanup_directory(directory::AbstractString; verbose::Bool=true, force:
         return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
     end
 end
+
+# =============================================================================
+# Sequence Type Utilities
+# =============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Determine the BioSequence type from an alphabet symbol.
+
+Maps alphabet symbols to the corresponding BioSequences.jl type for 
+type-safe sequence operations throughout the codebase.
+
+# Arguments
+- `alphabet::Symbol`: The alphabet symbol (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns
+- `Type{<:BioSequences.BioSequence}`: The corresponding BioSequence type
+
+# Examples
+```julia
+alphabet_to_biosequence_type(:DNA)  # Returns BioSequences.LongDNA{4}
+alphabet_to_biosequence_type(:RNA)  # Returns BioSequences.LongRNA{4}
+alphabet_to_biosequence_type(:AA)   # Returns BioSequences.LongAA
+```
+"""
+function alphabet_to_biosequence_type(alphabet::Symbol)::Type
+    if alphabet == :DNA
+        return BioSequences.LongDNA{4}
+    elseif alphabet == :RNA
+        return BioSequences.LongRNA{4}
+    elseif alphabet == :AA
+        return BioSequences.LongAA
+    else
+        throw(ArgumentError("Unknown alphabet: $alphabet"))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract sequence from FASTX record using dynamically determined type.
+
+This function provides type-safe sequence extraction by using the appropriate
+BioSequence type, avoiding hardcoded sequence types and string conversions.
+
+# Arguments
+- `record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}`: Input sequence record
+- `sequence_type::Type{<:BioSequences.BioSequence}`: Target BioSequence type
+
+# Returns
+- `BioSequences.BioSequence`: Typed sequence from the record
+
+# Examples
+```julia
+record = FASTX.FASTQ.Record("read1", "ATCG", "IIII")
+seq_type = alphabet_to_biosequence_type(:DNA)
+sequence = extract_typed_sequence(record, seq_type)
+```
+"""
+function extract_typed_sequence(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}, 
+                               sequence_type::Type{<:BioSequences.BioSequence})
+    return FASTX.sequence(sequence_type, record)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect alphabet and extract typed sequence from FASTX record in one step.
+
+Convenience function that combines alphabet detection with type-safe sequence
+extraction, ideal for workflows that need to determine sequence type once
+at the beginning.
+
+# Arguments
+- `record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}`: Input sequence record
+
+# Returns
+- `Tuple{Symbol, BioSequences.BioSequence}`: (alphabet_symbol, typed_sequence)
+
+# Examples
+```julia
+record = FASTX.FASTQ.Record("read1", "ATCG", "IIII")
+alphabet, sequence = detect_and_extract_sequence(record)
+# alphabet = :DNA, sequence = LongDNA{4} object
+```
+"""
+function detect_and_extract_sequence(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record})
+    # First extract as string to detect alphabet
+    sequence_string = FASTX.sequence(String, record)
+    alphabet = detect_alphabet(sequence_string)
+    
+    # Then extract with proper type
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    typed_sequence = extract_typed_sequence(record, sequence_type)
+    
+    return (alphabet, typed_sequence)
+end

@@ -1471,3 +1471,48 @@ function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
     end
     return fasta
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Get numerical PHRED quality scores from a FASTQ record.
+
+This is a convenience wrapper around FASTX.quality_scores() that returns
+the quality scores as a Vector{UInt8} representing PHRED scores.
+
+# Arguments
+- `record::FASTX.FASTQ.Record`: FASTQ record to extract quality scores from
+
+# Returns
+- `Vector{UInt8}`: PHRED quality scores (0-based, where 0 = lowest quality, 40+ = highest quality)
+
+# Examples
+```julia
+record = FASTX.FASTQ.Record("read1", "ATCG", "IIII")
+scores = get_phred_scores(record)  # Returns [40, 40, 40, 40]
+```
+"""
+function get_phred_scores(record::FASTX.FASTQ.Record)::Vector{UInt8}
+    return UInt8.(collect(FASTX.quality_scores(record)))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert FASTQ quality string to numerical PHRED scores.
+
+# Arguments
+- `quality_string::AbstractString`: Quality string from FASTQ record (e.g., "IIII")
+
+# Returns
+- `Vector{UInt8}`: PHRED quality scores
+
+# Examples
+```julia
+scores = quality_string_to_phred("IIII")  # Returns [40, 40, 40, 40]
+scores = quality_string_to_phred("!#%+")  # Returns [0, 2, 4, 10]
+```
+"""
+function quality_string_to_phred(quality_string::AbstractString)::Vector{UInt8}
+    return UInt8[Int(c) - 33 for c in quality_string]
+end

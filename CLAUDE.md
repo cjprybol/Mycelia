@@ -64,9 +64,16 @@ Tests are organized in numbered directories following the bioinformatics workflo
 
 ### Key Dependencies
 - **BioSequences.jl**: Core sequence data structures
-- **FASTX.jl**: FASTA/FASTQ parsing
+- **FASTX.jl**: FASTA/FASTQ parsing  
 - **BioAlignments.jl**: Sequence alignment
 - **Graphs.jl**: Graph algorithms for assembly
+
+### Sequence Type Guidelines
+- **ALWAYS use BioSequences types** - `BioSequences.LongDNA{4}`, `BioSequences.LongRNA{4}`, `BioSequences.LongAA`
+- **Extract sequences from FASTQ records using proper types**: `FASTX.sequence(BioSequences.LongDNA{4}, record)`
+- **String conversions should ONLY be used in string graphs** - everywhere else work with BioSequence objects
+- **NO string conversions in k-mer graphs, qualmer graphs, or assembly algorithms** 
+- **Use `string()` only when interfacing with external tools or final output**
 - **DataFrames.jl**: Data manipulation
 - **Makie.jl/Plots.jl**: Visualization
 - **Arrow.jl/JLD2.jl**: Data serialization
@@ -106,10 +113,12 @@ The package integrates with various bioinformatics tools:
 ## Code Style Guidelines
 
 ### Package Imports
-- **ALWAYS use `import` statements rather than `using` statements** in test files and code
-- This provides better namespace clarity and avoids conflicts
-- Example: `import Test` instead of `using Test`
-- Make sure to call functions with the module prefix when importing, e.g., `Test.@test` instead of `@test`
+- **NEVER use `using` statements or import specific functions** - ONLY import top-level packages with `import`
+- **All package dependencies are imported at the top-level** in `src/Mycelia.jl` and are available in all source files
+- **Individual source files should NOT import any packages** - they are already available through the main module
+- Always use full module namespacing: `Test.@test`, `Dates.now()`, `Statistics.mean()`, etc.
+- Example: Use `import Test` then `Test.@test`, NOT `using Test` or `using Test: @test`
+- This ensures consistent dependency management and avoids import conflicts
 
 ## Communication and Documentation Standards
 

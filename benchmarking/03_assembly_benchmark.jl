@@ -45,18 +45,56 @@ small_config = Dict(
 medium_config = Dict(
     "genome_sizes" => [500000, 1000000, 2000000],
     "coverage_depths" => [20, 30, 50],
-    "assemblers" => ["megahit", "metaspades", "flye", "canu", "hifiasm", "unicycler", "mycelia"],
+    "assemblers" => [
+        # Short read assemblers (genomic variants)
+        "spades", "megahit", "idba_ud", "velvet",
+        # Short read assemblers (metagenomic variants)
+        "metaspades", "megahit", "metavelvet", "metaidba", "faucet", "ray_meta",
+        # Long read assemblers (genomic)
+        "flye", "canu", "hifiasm", "nextdenovo", "shasta", "raven", "miniasm", "wtdbg2",
+        # Long read assemblers (metagenomic variants)
+        "metaflye", "metacanu", "metamdbg",
+        # PacBio HiFi specialized
+        "hicanu", "lja", "mbg",
+        # Hybrid assemblers (genomic)
+        "unicycler", "hybridspades", "haslr", "wengan", "masurca", "platanus_allee",
+        # Hybrid assemblers (metagenomic)
+        "metaplatanus", "dbg2olc",
+        # Scaffolding specialists
+        "opera_ms", "opera_lg",
+        # Mycelia methods
+        "mycelia_intelligent", "mycelia_iterative"
+    ],
     "n_replicates" => 5,
-    "description" => "Medium scale - realistic datasets"
+    "description" => "Medium scale - comprehensive assembler comparison including metagenomic variants (2024-2025)"
 )
 
-# Large scale configuration
+# Large scale configuration  
 large_config = Dict(
     "genome_sizes" => [5000000, 10000000, 50000000],
     "coverage_depths" => [30, 50, 100],
-    "assemblers" => ["megahit", "metaspades", "flye", "canu", "hifiasm", "unicycler", "mycelia"],
+    "assemblers" => [
+        # Short read assemblers (genomic variants)
+        "spades", "megahit", "idba_ud", "velvet",
+        # Short read assemblers (metagenomic variants)
+        "metaspades", "megahit", "metavelvet", "metaidba", "faucet", "ray_meta",
+        # Long read assemblers (genomic)
+        "flye", "canu", "hifiasm", "nextdenovo", "shasta", "raven", "miniasm", "wtdbg2",
+        # Long read assemblers (metagenomic variants)
+        "metaflye", "metacanu", "metamdbg",
+        # PacBio HiFi optimized
+        "hicanu", "lja", "mbg", 
+        # Hybrid assemblers (genomic)
+        "unicycler", "hybridspades", "haslr", "wengan", "masurca", "platanus_allee",
+        # Hybrid assemblers (metagenomic)
+        "metaplatanus", "dbg2olc",
+        # Scaffolding and metagenomic specialists
+        "opera_ms", "opera_lg",
+        # Mycelia methods
+        "mycelia_intelligent", "mycelia_iterative"
+    ],
     "n_replicates" => 10,
-    "description" => "Large scale - scalability testing"
+    "description" => "Large scale - comprehensive benchmarking against all major assemblers including metagenomic variants (2024-2025 state-of-the-art)"
 )
 
 # Select configuration
@@ -166,21 +204,96 @@ for dataset in test_datasets[1:min(3, length(test_datasets))]  # Limit for bench
     println("  Median time: $(round(BenchmarkTools.median(benchmark_result).time / 1e9, digits=2)) seconds")
     println("  Memory: $(round(BenchmarkTools.median(benchmark_result).memory / 1e6, digits=2)) MB")
     
-    # Basic assembly quality assessment
+    # Comprehensive assembly quality assessment using existing Mycelia functions
     contigs_file = joinpath(assembly_outdir, "final.contigs.fa")
     if isfile(contigs_file)
-        n_contigs, total_length, n50 = Mycelia.assess_assembly_quality(contigs_file)
-        println("  Assembly quality:")
-        println("    Contigs: $n_contigs")
-        println("    Total length: $total_length bp")
-        println("    N50: $n50 bp")
+        # Primary accuracy metrics using existing k-mer QV function
+        reads_files = [dataset["fastq1"], dataset["fastq2"]]
+        qv_results = try
+            Mycelia.assess_assembly_kmer_quality(
+                assembly=contigs_file, 
+                observations=reads_files, 
+                ks=[21]  # Use k=21 for benchmarking
+            )
+        catch e
+            @warn "K-mer QV assessment failed: $e"
+            DataFrames.DataFrame()
+        end
         
-        # Add quality metrics to results
+        # Read mapping quality using existing minimap and qualimap functions
+        mapping_results = nothing
+        try
+            # Map reads to assembly using minimap_map (no index required)
+            map_result = Mycelia.minimap_map(
+                fasta=contigs_file,
+                fastq=dataset["fastq1"],  # Map first read file
+                mapping_type="sr",
+                threads=4
+            )
+            
+            # Run the mapping command
+            run(map_result.cmd)
+            
+            # Convert compressed SAM to BAM for qualimap
+            sam_file = map_result.outfile  # This will be .sam.gz
+            if isfile(sam_file)
+                # Decompress and convert to BAM
+                bam_file = replace(sam_file, ".sam.gz" => ".bam")
+                run(`$(Mycelia.CONDA_RUNNER) run -n samtools gunzip -c $(sam_file) | samtools view -bS - > $(bam_file)`)
+                
+                # Run qualimap on the BAM file
+                if isfile(bam_file)
+                    Mycelia.add_bioconda_env("qualimap")
+                    qualimap_outdir = joinpath(assembly_outdir, "qualimap")
+                    run(`$(Mycelia.CONDA_RUNNER) run -n qualimap qualimap bamqc -bam $(bam_file) -outdir $(qualimap_outdir)`)
+                    
+                    # Parse qualimap results using existing function
+                    qualimap_txt = joinpath(qualimap_outdir, "genome_results.txt")
+                    if isfile(qualimap_txt)
+                        mapping_results = Mycelia.parse_qualimap_contig_coverage(qualimap_txt)
+                    end
+                end
+            end
+        catch e
+            @warn "Read mapping assessment failed: $e"
+        end
+        
+        # Secondary contiguity metrics
+        n_contigs, total_length, n50 = Mycelia.assess_assembly_quality(contigs_file)
+        
+        println("  Assembly quality:")
+        println("    Primary metrics (accuracy-based):")
+        if !isempty(qv_results)
+            qv_score = qv_results[1, :qv]
+            println("      QV score: $(round(qv_score, digits=2))")
+            println("      Cosine distance: $(round(qv_results[1, :cosine_distance], digits=4))")
+            println("      JS divergence: $(round(qv_results[1, :js_divergence], digits=4))")
+        end
+        if mapping_results !== nothing
+            total_mapped_bases = sum(mapping_results[!, "Mapped bases"])
+            println("      Total mapped bases: $total_mapped_bases")
+            println("      Mean coverage: $(round(Statistics.mean(mapping_results[!, "Mean coverage"]), digits=2))")
+        end
+        println("    Secondary metrics (contiguity):")
+        println("      Contigs: $n_contigs")
+        println("      Total length: $total_length bp")
+        println("      N50: $n50 bp")
+        
+        # Add comprehensive quality metrics to results
         benchmark_suite.results["megahit_$(dataset["name"])"]["assembly_quality"] = Dict(
-            "n_contigs" => n_contigs,
-            "total_length" => total_length,
-            "n50" => n50,
-            "expected_length" => dataset["genome_size"]
+            "primary_metrics" => Dict(
+                "qv_score" => !isempty(qv_results) ? qv_results[1, :qv] : missing,
+                "cosine_distance" => !isempty(qv_results) ? qv_results[1, :cosine_distance] : missing,
+                "js_divergence" => !isempty(qv_results) ? qv_results[1, :js_divergence] : missing,
+                "total_mapped_bases" => mapping_results !== nothing ? sum(mapping_results[!, "Mapped bases"]) : missing,
+                "mean_coverage" => mapping_results !== nothing ? Statistics.mean(mapping_results[!, "Mean coverage"]) : missing
+            ),
+            "secondary_metrics" => Dict(
+                "n_contigs" => n_contigs,
+                "total_length" => total_length,
+                "n50" => n50,
+                "expected_length" => dataset["genome_size"]
+            )
         )
     end
 end
@@ -225,29 +338,53 @@ println("\n--- Assembly Quality Benchmarks ---")
 
 # Assembly quality assessment using existing Mycelia function
 
-# Calculate assembly quality metrics for completed assemblies
+# Calculate comprehensive assembly quality metrics for completed assemblies
 assembly_quality_summary = Dict()
 
 for (test_name, result) in benchmark_suite.results
     if haskey(result, "assembly_quality")
         quality = result["assembly_quality"]
         
-        # Calculate quality scores
-        length_recovery = quality["total_length"] / quality["expected_length"]
-        contiguity_score = quality["n50"] / quality["total_length"]  # Normalized N50
+        # Extract primary and secondary metrics
+        primary_metrics = get(quality, "primary_metrics", Dict())
+        secondary_metrics = get(quality, "secondary_metrics", Dict())
+        
+        # Calculate derived scores
+        length_recovery = secondary_metrics["total_length"] / secondary_metrics["expected_length"]
+        contiguity_score = secondary_metrics["n50"] / secondary_metrics["total_length"]  # Normalized N50
         
         assembly_quality_summary[test_name] = Dict(
+            # Primary metrics (accuracy-based)
+            "qv_score" => get(primary_metrics, "qv_score", missing),
+            "cosine_distance" => get(primary_metrics, "cosine_distance", missing),
+            "js_divergence" => get(primary_metrics, "js_divergence", missing),
+            "total_mapped_bases" => get(primary_metrics, "total_mapped_bases", missing),
+            "mean_coverage" => get(primary_metrics, "mean_coverage", missing),
+            # Secondary metrics (contiguity-based)
             "length_recovery" => round(length_recovery, digits=3),
             "contiguity_score" => round(contiguity_score, digits=6),
-            "n_contigs" => quality["n_contigs"],
-            "n50" => quality["n50"]
+            "n_contigs" => secondary_metrics["n_contigs"],
+            "n50" => secondary_metrics["n50"]
         )
         
         println("Assembly quality for $test_name:")
-        println("  Length recovery: $(round(length_recovery * 100, digits=1))%")
-        println("  Contiguity score: $(round(contiguity_score, digits=6))")
-        println("  Contigs: $(quality["n_contigs"])")
-        println("  N50: $(quality["n50"]) bp")
+        println("  Primary metrics (accuracy-based):")
+        qv_score = get(primary_metrics, "qv_score", missing)
+        if !ismissing(qv_score)
+            println("    QV score: $(round(qv_score, digits=2))")
+            println("    Cosine distance: $(round(get(primary_metrics, "cosine_distance", 0.0), digits=4))")
+            println("    JS divergence: $(round(get(primary_metrics, "js_divergence", 0.0), digits=4))")
+        end
+        total_mapped = get(primary_metrics, "total_mapped_bases", missing)
+        if !ismissing(total_mapped)
+            println("    Total mapped bases: $total_mapped")
+            println("    Mean coverage: $(round(get(primary_metrics, "mean_coverage", 0.0), digits=2))")
+        end
+        println("  Secondary metrics (contiguity):")
+        println("    Length recovery: $(round(length_recovery * 100, digits=1))%")
+        println("    Contiguity score: $(round(contiguity_score, digits=6))")
+        println("    Contigs: $(secondary_metrics["n_contigs"])")
+        println("    N50: $(secondary_metrics["n50"]) bp")
     end
 end
 
