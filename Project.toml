@@ -3,6 +3,9 @@ uuid = "453d265d-8292-4a7b-a57c-dce3f9ae6acd"
 authors = ["Cameron Prybol <cameron.prybol@gmail.com> and contributors"]
 version = "0.1.0"
 
+[compat]
+julia = "1.10"
+
 [deps]
 AlgebraOfGraphics = "cbdf2221-f076-402e-a563-3d30da359d67"
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
