@@ -4,17 +4,49 @@ Functions for assessing and improving sequencing data quality before downstream 
 
 ## Overview
 
-Quality control is essential for reliable bioinformatics results. Mycelia provides comprehensive tools for:
+Quality control is essential for reliable bioinformatics results. Mycelia integrates with external QC tools and is developing native Julia implementations for:
 
-- **Assessing sequencing data quality** using multiple metrics
-- **Preprocessing reads** to improve data quality
-- **Identifying and removing contaminants**
-- **Filtering and trimming** based on quality thresholds
-- **Generating quality reports** for documentation
+- **External tool integration** for quality filtering (fastp, filtlong, trim_galore)
+- **Basic FASTQ file operations** (reading/writing)
+- **Planned features**: Native quality assessment, contamination detection, and reporting
 
 ## Common Workflows
 
-### 1. Basic Quality Assessment
+### Currently Available (via External Tools)
+
+#### Quality Filtering
+```julia
+# Short read QC with fastp
+Mycelia.qc_filter_short_reads_fastp(
+    input_file="reads.fastq",
+    output_file="filtered.fastq"
+)
+
+# Long read QC with fastplong
+Mycelia.qc_filter_long_reads_fastplong(
+    input_file="long_reads.fastq",
+    output_file="filtered_long.fastq"
+)
+
+# Long read QC with filtlong
+Mycelia.qc_filter_long_reads_filtlong(
+    input_file="long_reads.fastq",
+    output_file="filtered_long.fastq",
+    min_length=1000,
+    min_mean_q=7
+)
+
+# Paired-end trimming with trim_galore
+Mycelia.trim_galore_paired(
+    R1="reads_R1.fastq",
+    R2="reads_R2.fastq",
+    output_dir="trimmed/"
+)
+```
+
+### Planned Native Implementations
+
+#### 1. Basic Quality Assessment (planned)
 ```julia
 # Analyze FASTQ quality
 quality_stats = Mycelia.analyze_fastq_quality("reads.fastq")
@@ -23,7 +55,7 @@ quality_stats = Mycelia.analyze_fastq_quality("reads.fastq")
 quality_report = Mycelia.generate_quality_report(quality_stats)
 ```
 
-### 2. Read Preprocessing
+#### 2. Read Preprocessing (planned)
 ```julia
 # Quality trimming and filtering
 clean_reads = Mycelia.preprocess_reads(
@@ -34,7 +66,7 @@ clean_reads = Mycelia.preprocess_reads(
 )
 ```
 
-### 3. Contamination Removal
+#### 3. Contamination Removal (planned)
 ```julia
 # Remove host contamination
 decontaminated_reads = Mycelia.remove_contamination(
@@ -47,6 +79,10 @@ decontaminated_reads = Mycelia.remove_contamination(
 ## Quality Assessment
 
 ### FASTQ Quality Analysis
+
+> **Note**: The functions in this section and below are planned but not yet implemented. 
+> They represent the intended API design for native Julia quality control functionality.
+> Currently, use the external tool wrappers shown above for quality control tasks.
 
 ```@docs
 Mycelia.analyze_fastq_quality

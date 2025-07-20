@@ -1,6 +1,6 @@
 # API Documentation
 
-Welcome to the Mycelia API documentation! This guide organizes functions by **biological workflows** and **user tasks** rather than source code structure, making it easy to find the right tools for your analysis.
+Welcome to the Mycelia API documentation! This guide organizes both **implemented functions** and **planned features** by biological workflows. Note that Mycelia is in early development - many documented functions represent the intended API design but are not yet implemented.
 
 ## 🧬 Quick Start
 
@@ -31,42 +31,47 @@ Depth = 2
 ### 1. [Data Acquisition & Simulation](api/workflows/data-acquisition.md)
 Download genomic data from public databases and simulate synthetic datasets for testing.
 
-**Key Functions:** `download_genome_by_accession`, `simulate_hifi_reads`, `ncbi_genome_download`
+**Working Functions:** `download_genome_by_accession`, `simulate_pacbio_reads`, `simulate_nanopore_reads`
 
-### 2. [Quality Control & Preprocessing](api/workflows/quality-control.md)
+### 2. [Quality Control & Preprocessing](api/workflows/quality-control.md)  
 Assess and improve sequencing data quality before analysis.
 
-**Key Functions:** `analyze_fastq_quality`, `trim_reads`, `filter_sequences`
+**Working Functions:** `qc_filter_short_reads_fastp`, `qc_filter_long_reads_filtlong`, `trim_galore_paired`  
+**Planned:** `analyze_fastq_quality`, `filter_by_quality`
 
 ### 3. [Sequence Analysis & K-mers](api/workflows/sequence-analysis.md)
 Analyze sequence composition, count k-mers, and extract genomic features.
 
-**Key Functions:** `count_kmers`, `kmer_frequency_spectrum`, `estimate_genome_size`
+**Working Functions:** `count_canonical_kmers`, `jaccard_distance`, `kmer_counts_to_js_divergence`  
+**Planned:** `kmer_frequency_spectrum`, `estimate_genome_size`
 
 ### 4. [Genome Assembly](api/workflows/genome-assembly.md)
-Assemble genomes from sequencing reads using modern HiFi approaches.
+Assemble genomes from sequencing reads using various approaches.
 
-**Key Functions:** `assemble_genome`, `hifiasm_assembly`, `polish_assembly`
+**Working Functions:** `assemble_metagenome_megahit`, `assemble_metagenome_metaspades` (external tools)  
+**Experimental:** Graph-based assembly framework  
+**Planned:** `assemble_genome`, `polish_assembly`
 
 ### 5. [Assembly Validation](api/workflows/assembly-validation.md)
 Validate and assess the quality of genome assemblies.
 
-**Key Functions:** `evaluate_assembly`, `calculate_assembly_stats`, `busco_analysis`
+**Planned:** `evaluate_assembly`, `calculate_assembly_stats`, `busco_analysis`
 
 ### 6. [Gene Annotation](api/workflows/gene-annotation.md)
 Predict genes and assign functional annotations.
 
-**Key Functions:** `predict_genes`, `annotate_functions`, `analyze_go_terms`
+**Planned:** `predict_genes`, `annotate_functions`, `analyze_go_terms`
 
 ### 7. [Comparative Genomics](api/workflows/comparative-genomics.md)
 Compare genomes, build pangenomes, and construct phylogenetic trees.
 
-**Key Functions:** `build_pangenome`, `construct_phylogeny`, `calculate_synteny`
+**Working Functions:** `analyze_pangenome_kmers`, `build_genome_distance_matrix`  
+**Planned:** `construct_phylogeny`, `calculate_synteny`
 
 ### 8. [Visualization & Reporting](api/workflows/visualization.md)
 Create plots, figures, and reports for analysis results.
 
-**Key Functions:** `plot_assembly_stats`, `plot_phylogenetic_tree`, `generate_report`
+**Planned:** `plot_assembly_stats`, `plot_phylogenetic_tree`, `generate_report`
 
 ## 📁 By Data Type
 
