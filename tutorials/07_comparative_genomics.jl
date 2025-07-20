@@ -26,6 +26,7 @@ import Random
 import Plots
 import Statistics
 import Graphs
+import Kmers
 
 Random.seed!(42)
 
@@ -65,12 +66,7 @@ core_genes = 200
 accessory_genes = 100
 unique_genes = 50
 
-# TODO: Implement realistic genome simulation
-# - Generate core genes with variation
-# - Add accessory genes with different frequencies
-# - Include unique genes per genome
-# - Simulate horizontal gene transfer
-
+# Generate simulated genomes with different characteristics
 genome_files = String[]
 for i in 1:n_genomes
     genome_size = core_genes * 1000 + rand(0:accessory_genes) * 1000 + rand(0:unique_genes) * 1000
@@ -98,37 +94,39 @@ println("\n=== Gene Clustering ===")
 
 println("--- All-vs-All Comparison ---")
 
-# TODO: Implement all-vs-all comparison
-# - Extract genes from all genomes
-# - Perform sequence similarity search
-# - Calculate similarity matrices
-# - Handle paralogs and orthologs
+# Perform k-mer based pangenome analysis using implemented functions
+println("Performing k-mer based pangenome analysis...")
 
-# ### Clustering Methods
-#
-# Group genes into ortholog clusters
-
-println("--- Ortholog Clustering ---")
-
-# TODO: Implement ortholog clustering
-# - Single-linkage clustering
-# - Markov clustering (MCL)
-# - Hierarchical clustering
-# - Graph-based clustering
-
-# Simulate clustering results
-n_clusters = 250
-cluster_sizes = [rand(1:n_genomes) for _ in 1:n_clusters]
-cluster_results = Dict(
-    "n_clusters" => n_clusters,
-    "core_clusters" => sum(cluster_sizes .== n_genomes),
-    "accessory_clusters" => sum(1 .< cluster_sizes .< n_genomes),
-    "unique_clusters" => sum(cluster_sizes .== 1)
+# Use implemented pangenome analysis function
+pangenome_result = Mycelia.analyze_pangenome_kmers(
+    genome_files, 
+    kmer_type=Kmers.DNAKmer{21}
 )
 
-println("Ortholog Clustering Results:")
-for (metric, value) in cluster_results
-    println("  $metric: $value")
+println("Pangenome Analysis Results:")
+println("  Core k-mers: $(length(pangenome_result.core_kmers))")
+println("  Accessory k-mers: $(length(pangenome_result.accessory_kmers))")
+println("  Total pangenome size: $(pangenome_result.similarity_stats.pangenome_size)")
+
+# ### Genome Similarity Analysis
+#
+# Compare genome similarity using multiple metrics
+
+println("--- Genome Similarity Analysis ---")
+
+# Build distance matrix using different metrics
+js_matrix = Mycelia.build_genome_distance_matrix(
+    genome_files, 
+    kmer_type=Kmers.DNAKmer{21}, 
+    metric=:js_divergence
+)
+
+println("Distance Matrix (JS Divergence):")
+for i in 1:n_genomes
+    for j in 1:n_genomes
+        print("$(round(js_matrix.distance_matrix[i,j], digits=3)) ")
+    end
+    println()
 end
 
 # ## Part 4: Pangenome Construction
@@ -143,38 +141,36 @@ println("\n=== Pangenome Construction ===")
 
 println("--- Core Genome Analysis ---")
 
-core_genome_size = cluster_results["core_clusters"]
-core_genome_percentage = core_genome_size / n_clusters * 100
+# Use results from pangenome analysis
+core_genome_size = length(pangenome_result.core_kmers)
+core_genome_percentage = pangenome_result.similarity_stats.core_percentage
 
 println("Core Genome:")
-println("  Size: $core_genome_size genes")
+println("  Size: $core_genome_size k-mers")
 println("  Percentage: $(round(core_genome_percentage, digits=1))%")
 
-# TODO: Implement core genome analysis
-# - Identify core genes
-# - Analyze core gene functions
-# - Calculate core genome conservation
-# - Validate core gene presence
+# Core genome represents k-mers present in ALL genomes
+println("Core genome represents conserved genomic content across all $(n_genomes) genomes")
 
 # ### Accessory Genome Analysis
 #
-# Analyze genes with variable presence
+# Analyze k-mers with variable presence
 
 println("--- Accessory Genome Analysis ---")
 
-accessory_genome_size = cluster_results["accessory_clusters"]
-unique_genome_size = cluster_results["unique_clusters"]
+accessory_genome_size = length(pangenome_result.accessory_kmers)
+unique_genome_total = sum(length(kmers) for kmers in values(pangenome_result.unique_kmers_by_genome))
 
 println("Accessory Genome:")
-println("  Variable genes: $accessory_genome_size")
-println("  Unique genes: $unique_genome_size")
-println("  Total accessory: $(accessory_genome_size + unique_genome_size)")
+println("  Variable k-mers: $accessory_genome_size")
+println("  Unique k-mers: $unique_genome_total")
+println("  Total accessory: $(accessory_genome_size + unique_genome_total)")
 
-# TODO: Implement accessory genome analysis
-# - Analyze gene presence/absence patterns
-# - Identify strain-specific genes
-# - Calculate accessory genome diversity
-# - Functional analysis of accessory genes
+# Analyze unique k-mers per genome
+println("Unique k-mers per genome:")
+for (genome, unique_kmers) in pangenome_result.unique_kmers_by_genome
+    println("  $genome: $(length(unique_kmers)) unique k-mers")
+end
 
 # ### Pangenome Curves
 #

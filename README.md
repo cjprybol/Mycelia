@@ -21,10 +21,16 @@ import Pkg
 Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 
 # Run your first analysis
-using Mycelia
-genome = simulate_random_genome(length=10000)
-reads = simulate_hifi_reads(genome, coverage=20)
-assembly = assemble_genome(reads)
+import Mycelia
+
+# Download a reference genome (phiX174 bacteriophage)
+genome_file = Mycelia.download_genome_by_accession(accession="NC_001422.1")
+
+# Generate test reads from the reference
+reads_file = Mycelia.simulate_pacbio_reads(fasta=genome_file, quantity="50x")
+
+# Assemble the genome
+assembly = Mycelia.assemble_genome(reads_file)
 ```
 
 ## ✨ Key Features

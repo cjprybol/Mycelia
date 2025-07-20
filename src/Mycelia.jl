@@ -59,10 +59,12 @@ import MultivariateStats
 # - graph-algorithms-next.jl (Eulerian paths, bubble detection, repeat resolution)
 import OrderedCollections
 import Plots
+import POMDPs
 import Primes
 import Printf
 import ProgressMeter
 import Random
+import ReinforcementLearning
 import SankeyPlots
 import SHA
 import SparseArrays
@@ -140,6 +142,7 @@ remaining_files = [
     "genome-features.jl",
     "kmer-analysis.jl",
     "neo4jl.jl",
+    "pangenome-analysis.jl",
     "performance-benchmarks.jl",
     "plotting-and-visualization.jl",
     "quality-control-and-benchmarking.jl",

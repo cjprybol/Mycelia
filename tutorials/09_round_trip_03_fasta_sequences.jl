@@ -708,8 +708,8 @@ println("  • Apply biological sequence metrics for validation")
 
 println("\\n🚀 NEXT STEPS IN BIOLOGICAL GRAPH HIERARCHY:")
 println("  • Tutorial 4: FASTA → K-mer graphs → Sequence graphs (fixed→variable)")
-println("  • Tutorial 5: FASTQ → Qualmer graphs → FASTQ graphs (quality-aware)")
-println("  • Tutorial 6: Direct quality-aware BioSequence workflows")
+println("  • Tutorial 5: FASTQ → FASTQ graphs (direct quality-aware)")
+println("  • Tutorial 6: FASTQ → Qualmer graphs → FASTQ graphs (quality-aware)")
 println("  • Advanced: Error correction and assembly optimization")
 
 println("\\n🎯 APPLICATIONS DEMONSTRATED:")

@@ -551,4 +551,133 @@ function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized
     return outdir
 end
 
+# FASTQ Quality Analysis
+#
+
+"""
+Stores quality distribution statistics for FASTQ analysis.
+"""
+struct QualityDistribution
+    q20_percent::Float64
+    q30_percent::Float64
+    q40_percent::Float64
+end
+
+"""
+Stores comprehensive FASTQ quality analysis results.
+"""
+struct FastqQualityResults
+    n_reads::Int
+    mean_quality::Float64
+    mean_length::Float64
+    gc_content::Float64
+    quality_distribution::QualityDistribution
+end
+
+"""
+    analyze_fastq_quality(fastq_file::String)
+
+Analyzes quality metrics for a FASTQ file.
+
+Calculates comprehensive quality statistics including read count, quality scores,
+length distribution, GC content, and quality threshold percentages.
+
+# Arguments
+- `fastq_file`: Path to FASTQ file (can be gzipped)
+
+# Returns
+FastqQualityResults with the following fields:
+- `n_reads`: Total number of reads
+- `mean_quality`: Average Phred quality score across all reads
+- `mean_length`: Average read length
+- `gc_content`: GC content percentage
+- `quality_distribution`: QualityDistribution with Q20+, Q30+, Q40+ percentages
+
+# Example
+```julia
+quality_stats = Mycelia.analyze_fastq_quality("reads.fastq")
+println("Total reads: \$(quality_stats.n_reads)")
+println("Mean quality: \$(quality_stats.mean_quality)")
+println("Q30+ reads: \$(quality_stats.quality_distribution.q30_percent)%")
+```
+"""
+function analyze_fastq_quality(fastq_file::String)
+    if !isfile(fastq_file)
+        error("FASTQ file does not exist: $(fastq_file)")
+    end
+
+    n_reads = 0
+    total_quality = 0.0
+    total_length = 0
+    gc_count = 0
+    total_bases = 0
+    q20_reads = 0
+    q30_reads = 0
+    q40_reads = 0
+
+    reader = FASTX.FASTQ.Reader(open(fastq_file, "r"))
+    
+    try
+        for record in reader
+            n_reads += 1
+            
+            # Get sequence and quality
+            sequence = FASTX.sequence(record)
+            quality_scores = FASTX.quality_scores(record)
+            
+            # Calculate length
+            read_length = length(sequence)
+            total_length += read_length
+            total_bases += read_length
+            
+            # Calculate quality metrics
+            mean_read_quality = Statistics.mean(quality_scores)
+            total_quality += mean_read_quality
+            
+            # Count quality thresholds
+            if mean_read_quality >= 20
+                q20_reads += 1
+            end
+            if mean_read_quality >= 30
+                q30_reads += 1
+            end
+            if mean_read_quality >= 40
+                q40_reads += 1
+            end
+            
+            # Count GC content
+            for base in sequence
+                if base == BioSequences.DNA_G || base == BioSequences.DNA_C
+                    gc_count += 1
+                end
+            end
+        end
+    finally
+        close(reader)
+    end
+    
+    if n_reads == 0
+        error("No reads found in FASTQ file: $(fastq_file)")
+    end
+    
+    # Calculate final metrics
+    mean_quality = total_quality / n_reads
+    mean_length = total_length / n_reads
+    gc_content = (gc_count / total_bases) * 100.0
+    
+    quality_dist = QualityDistribution(
+        (q20_reads / n_reads) * 100.0,
+        (q30_reads / n_reads) * 100.0,
+        (q40_reads / n_reads) * 100.0
+    )
+    
+    return FastqQualityResults(
+        n_reads,
+        mean_quality,
+        mean_length,
+        gc_content,
+        quality_dist
+    )
+end
+
 #

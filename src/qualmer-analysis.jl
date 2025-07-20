@@ -635,3 +635,138 @@ function get_qualmer_statistics(graph::MetaGraphsNext.MetaGraph)
         "total_observations" => sum(Int(c) for c in coverages)
     )
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find a quality-weighted path through a qualmer graph starting from a given vertex.
+Uses joint probability as the primary weighting factor for path selection.
+
+# Arguments
+- `graph`: Qualmer graph (MetaGraphsNext with QualmerVertexData)
+- `start_vertex`: Starting vertex for path traversal
+- `max_path_length::Int=1000`: Maximum path length to prevent infinite loops
+
+# Returns
+- `Vector{Int}`: Path as sequence of vertex indices
+
+# Details
+At each step, selects the unvisited neighbor with the highest joint probability.
+Terminates when no unvisited neighbors are available or max length is reached.
+"""
+function find_quality_weighted_path(graph, start_vertex; max_path_length::Int=1000)
+    path = [start_vertex]
+    current = start_vertex
+    visited = Set([current])
+    
+    while length(path) < max_path_length
+        # Get outgoing edges
+        neighbors = Graphs.outneighbors(graph, current)
+        
+        # Filter out visited vertices
+        unvisited = filter(n -> n ∉ visited, neighbors)
+        
+        if isempty(unvisited)
+            break
+        end
+        
+        # Choose next vertex based on joint probability
+        next_vertex = unvisited[argmax([graph[v].joint_probability for v in unvisited])]
+        
+        push!(path, next_vertex)
+        push!(visited, next_vertex)
+        current = next_vertex
+    end
+    
+    return path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate comprehensive assembly quality metrics for a qualmer graph.
+
+# Arguments
+- `graph`: Qualmer graph (MetaGraphsNext with QualmerVertexData)
+- `low_confidence_threshold::Float64=0.95`: Threshold for identifying low-confidence k-mers
+
+# Returns
+- `NamedTuple`: Assembly quality metrics including coverage, quality, and confidence statistics
+
+# Details
+Calculates mean values for coverage, quality scores, and joint probabilities.
+Identifies fraction of k-mers below confidence threshold as potential error indicators.
+"""
+function calculate_assembly_quality_metrics(qualmer_graph; low_confidence_threshold::Float64=0.95)
+    # Get all vertex data
+    vertices = [qualmer_graph[v] for v in Graphs.vertices(qualmer_graph)]
+    
+    if isempty(vertices)
+        return (
+            mean_coverage = 0.0,
+            mean_quality = 0.0,
+            mean_confidence = 0.0,
+            low_confidence_fraction = 0.0,
+            total_kmers = 0
+        )
+    end
+    
+    # Calculate metrics
+    mean_coverage = Statistics.mean([v.coverage for v in vertices])
+    mean_quality = Statistics.mean([v.mean_quality for v in vertices])
+    mean_confidence = Statistics.mean([v.joint_probability for v in vertices])
+    
+    # Find low-confidence k-mers (potential errors)
+    low_conf_kmers = filter(v -> v.joint_probability < low_confidence_threshold, vertices)
+    
+    return (
+        mean_coverage = mean_coverage,
+        mean_quality = mean_quality,
+        mean_confidence = mean_confidence,
+        low_confidence_fraction = length(low_conf_kmers) / length(vertices),
+        total_kmers = length(vertices)
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Identify potential sequencing errors based on quality scores and coverage patterns.
+
+# Arguments
+- `graph`: Qualmer graph (MetaGraphsNext with QualmerVertexData)
+- `min_coverage::Int=2`: Minimum coverage for reliable k-mers
+- `min_quality::Float64=20.0`: Minimum mean quality score
+- `min_confidence::Float64=0.95`: Minimum joint probability threshold
+
+# Returns
+- `Vector{Int}`: Vertex indices of potential error k-mers
+
+# Details
+Identifies k-mers that are likely errors based on:
+- Low coverage (singleton or few observations)
+- Low quality scores
+- Low joint probability (low confidence)
+"""
+function identify_potential_errors(graph; 
+                                 min_coverage::Int=2, 
+                                 min_quality::Float64=20.0, 
+                                 min_confidence::Float64=0.95)
+    error_vertices = Int[]
+    
+    for v in Graphs.vertices(graph)
+        vdata = graph[v]
+        
+        # Check if vertex meets error criteria
+        is_low_coverage = vdata.coverage < min_coverage
+        is_low_quality = vdata.mean_quality < min_quality
+        is_low_confidence = vdata.joint_probability < min_confidence
+        
+        # Consider it an error if it fails any criterion
+        if is_low_coverage || is_low_quality || is_low_confidence
+            push!(error_vertices, v)
+        end
+    end
+    
+    return error_vertices
+end

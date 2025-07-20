@@ -83,7 +83,7 @@ Let's walk through a complete workflow using small test datasets included with M
 ### 1. Load Mycelia
 
 ```julia
-using Mycelia
+import Mycelia
 ```
 
 ### 2. Simulate Test Data
@@ -92,13 +92,13 @@ Create synthetic genomic data for testing:
 
 ```julia
 # Generate random genome sequence
-genome = simulate_random_genome(length=10000, gc_content=0.45)
+genome = Mycelia.simulate_random_genome(length=10000, gc_content=0.45)
 
 # Simulate HiFi reads
-reads = simulate_hifi_reads(genome, coverage=20, error_rate=0.001)
+reads = Mycelia.simulate_hifi_reads(genome, coverage=20, error_rate=0.001)
 
 # Write to FASTQ format
-write_fastq("test_reads.fastq", reads)
+Mycelia.write_fastq("test_reads.fastq", reads)
 ```
 
 ### 3. Quality Control
@@ -107,7 +107,7 @@ Assess read quality and characteristics:
 
 ```julia
 # Load reads and calculate statistics
-read_stats = analyze_fastq_quality("test_reads.fastq")
+read_stats = Mycelia.analyze_fastq_quality("test_reads.fastq")
 println("Read count: $(read_stats.n_reads)")
 println("Mean length: $(read_stats.mean_length)")
 println("Mean quality: $(read_stats.mean_quality)")
@@ -119,11 +119,11 @@ Analyze k-mer composition:
 
 ```julia
 # Count k-mers
-kmer_counts = count_kmers("test_reads.fastq", k=21)
+kmer_counts = Mycelia.count_kmers("test_reads.fastq", k=21)
 
 # Analyze k-mer frequency spectrum
-spectrum = kmer_frequency_spectrum(kmer_counts)
-plot_kmer_spectrum(spectrum)
+spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
+Mycelia.plot_kmer_spectrum(spectrum)
 ```
 
 ### 5. Genome Assembly
@@ -132,12 +132,12 @@ Assemble the genome from reads:
 
 ```julia
 # Run hifiasm assembly
-assembly = assemble_genome("test_reads.fastq", 
+assembly = Mycelia.assemble_genome("test_reads.fastq", 
                           output_dir="assembly_output",
                           threads=4)
 
 # Assess assembly quality
-assembly_stats = evaluate_assembly(assembly)
+assembly_stats = Mycelia.evaluate_assembly(assembly)
 println("Contigs: $(assembly_stats.n_contigs)")
 println("N50: $(assembly_stats.n50)")
 println("Total length: $(assembly_stats.total_length)")
@@ -149,11 +149,11 @@ Predict genes in the assembled genome:
 
 ```julia
 # Predict genes with Pyrodigal
-genes = predict_genes(assembly, genetic_code="standard")
+genes = Mycelia.predict_genes(assembly, genetic_code="standard")
 println("Predicted genes: $(length(genes))")
 
 # Write annotations to GFF3
-write_gff3("annotations.gff3", genes)
+Mycelia.write_gff3("annotations.gff3", genes)
 ```
 
 ### 7. Visualization
@@ -162,13 +162,13 @@ Create plots to visualize your results:
 
 ```julia
 # Plot assembly statistics
-plot_assembly_stats(assembly_stats)
+Mycelia.plot_assembly_stats(assembly_stats)
 
 # Create k-mer spectrum plot
-plot_kmer_spectrum(spectrum)
+Mycelia.plot_kmer_spectrum(spectrum)
 
 # Visualize gene features
-plot_genome_features(assembly, genes)
+Mycelia.plot_genome_features(assembly, genes)
 ```
 
 ## What's Next?
@@ -214,12 +214,12 @@ For large-scale analyses:
 
 ```julia
 # Check memory requirements
-estimated_memory = estimate_memory_usage(input_file="large_reads.fastq")
+estimated_memory = Mycelia.estimate_memory_usage(input_file="large_reads.fastq")
 println("Estimated memory needed: $(estimated_memory) GB")
 
 # Monitor memory during analysis
-with_memory_monitoring() do
-    result = assemble_genome("large_reads.fastq")
+Mycelia.with_memory_monitoring() do
+    result = Mycelia.assemble_genome("large_reads.fastq")
 end
 ```
 

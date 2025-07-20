@@ -16,26 +16,26 @@ Data acquisition is the first step in any bioinformatics analysis. Mycelia provi
 ### 1. Download Reference Genome
 ```julia
 # Download a specific genome by accession
-genome_file = download_genome_by_accession("NC_001422.1")
+genome_file = Mycelia.download_genome_by_accession("NC_001422.1")
 
 # Download complete assembly with annotations
-assembly_data = ncbi_genome_download_accession("GCF_000819615.1")
+assembly_data = Mycelia.ncbi_genome_download_accession("GCF_000819615.1")
 ```
 
 ### 2. Simulate Test Data
 ```julia
 # Create synthetic genome
-reference = simulate_random_genome(length=100000, gc_content=0.45)
+reference = Mycelia.simulate_random_genome(length=100000, gc_content=0.45)
 
 # Generate HiFi reads
-reads = simulate_hifi_reads(reference, coverage=30, error_rate=0.001)
+reads = Mycelia.simulate_hifi_reads(reference, coverage=30, error_rate=0.001)
 ```
 
 ### 3. Batch Download
 ```julia
 # Download multiple genomes
 accessions = ["GCF_000005825.2", "GCF_000009605.1", "GCF_000027325.1"]
-genomes = download_genomes_batch(accessions, output_dir="genomes/")
+genomes = Mycelia.download_genomes_batch(accessions, output_dir="genomes/")
 ```
 
 ## Public Database Downloads
@@ -43,22 +43,23 @@ genomes = download_genomes_batch(accessions, output_dir="genomes/")
 ### NCBI Genome Downloads
 
 ```@docs
-download_genome_by_accession
-ncbi_genome_download_accession
-download_genomes_batch
+Mycelia.download_genome_by_accession
+Mycelia.ncbi_genome_download_accession
 ```
+
+<!-- download_genomes_batch not yet implemented, use download_genomes_by_ftp -->
 
 #### Example: Download phiX174 Genome
 ```julia
 # Download the classic phiX174 bacteriophage genome
-phix_file = download_genome_by_accession("NC_001422.1")
+phix_file = Mycelia.download_genome_by_accession("NC_001422.1")
 
 # Verify download
 @assert isfile(phix_file)
 @assert endswith(phix_file, ".fna.gz")
 
 # Read the genome
-genome_record = first(read_fasta(phix_file))
+genome_record = first(Mycelia.read_fasta(phix_file))
 sequence = String(FASTX.sequence(genome_record))
 println("Downloaded genome: $(length(sequence)) bp")
 ```
@@ -66,7 +67,7 @@ println("Downloaded genome: $(length(sequence)) bp")
 #### Example: Complete Assembly Package
 ```julia
 # Download complete E. coli assembly with all associated files
-assembly = ncbi_genome_download_accession("GCF_000005825.2")
+assembly = Mycelia.ncbi_genome_download_accession("GCF_000005825.2")
 
 # Available files
 println("Genome: $(assembly.genome)")
@@ -78,16 +79,16 @@ println("CDS: $(assembly.cds)")
 ### SRA Data Downloads
 
 ```@docs
-download_sra_data
-prefetch_sra_runs
-fasterq_dump_parallel
+Mycelia.download_sra_data
+Mycelia.prefetch_sra_runs
+Mycelia.fasterq_dump_parallel
 ```
 
 #### Example: Download Sequencing Reads
 ```julia
 # Download reads from SRA
 sra_run = "SRR1234567"
-fastq_files = download_sra_data(sra_run, output_dir="reads/")
+fastq_files = Mycelia.download_sra_data(sra_run, output_dir="reads/")
 
 # Process paired-end reads
 if length(fastq_files) == 2
@@ -102,23 +103,19 @@ end
 
 ### Genome Simulation
 
-```@docs
-simulate_random_genome
-simulate_genome_with_features
-generate_synthetic_chromosome
-```
+<!-- Genome simulation functions not yet implemented -->
 
 #### Example: Create Test Genome
 ```julia
 # Generate random genome with realistic GC content
-test_genome = simulate_random_genome(
+test_genome = Mycelia.simulate_random_genome(
     length=50000,
     gc_content=0.42,
     seed=123  # for reproducibility
 )
 
 # Add realistic features
-genome_with_genes = simulate_genome_with_features(
+genome_with_genes = Mycelia.simulate_genome_with_features(
     test_genome,
     n_genes=50,
     gene_length_dist=(500, 2000),
@@ -129,16 +126,18 @@ genome_with_genes = simulate_genome_with_features(
 ### Sequencing Read Simulation
 
 ```@docs
-simulate_hifi_reads
-simulate_illumina_reads
-simulate_nanopore_reads
-add_sequencing_errors
+Mycelia.simulate_illumina_paired_reads
+Mycelia.simulate_pacbio_reads
+Mycelia.simulate_nanopore_reads
 ```
+
+<!-- Note: simulate_hifi_reads maps to simulate_pacbio_reads
+add_sequencing_errors not yet implemented as standalone function -->
 
 #### Example: HiFi Read Simulation
 ```julia
 # Simulate high-quality HiFi reads
-hifi_reads = simulate_hifi_reads(
+hifi_reads = Mycelia.simulate_hifi_reads(
     reference_genome,
     coverage=25,
     read_length_mean=15000,
@@ -147,13 +146,13 @@ hifi_reads = simulate_hifi_reads(
 )
 
 # Write to FASTQ
-write_fastq("hifi_reads.fastq", hifi_reads)
+Mycelia.write_fastq("hifi_reads.fastq", hifi_reads)
 ```
 
 #### Example: Illumina Read Simulation
 ```julia
 # Simulate paired-end Illumina reads
-illumina_reads = simulate_illumina_reads(
+illumina_reads = Mycelia.simulate_illumina_reads(
     reference_genome,
     coverage=50,
     read_length=150,
@@ -163,51 +162,43 @@ illumina_reads = simulate_illumina_reads(
 )
 
 # Write paired-end files
-write_fastq("illumina_R1.fastq", illumina_reads.read1)
-write_fastq("illumina_R2.fastq", illumina_reads.read2)
+Mycelia.write_fastq("illumina_R1.fastq", illumina_reads.read1)
+Mycelia.write_fastq("illumina_R2.fastq", illumina_reads.read2)
 ```
 
 ## Data Validation
 
 ### Download Validation
 
-```@docs
-validate_download_integrity
-check_file_format
-verify_genome_completeness
-```
+<!-- Download validation functions not yet implemented -->
 
 #### Example: Validate Downloaded Data
 ```julia
 # Check file integrity
-integrity_ok = validate_download_integrity("genome.fna.gz")
+integrity_ok = Mycelia.validate_download_integrity("genome.fna.gz")
 
 # Verify file format
-format_ok = check_file_format("genome.fna.gz", expected_format="fasta")
+format_ok = Mycelia.check_file_format("genome.fna.gz", expected_format="fasta")
 
 # Check genome completeness
-completeness = verify_genome_completeness("genome.fna.gz")
+completeness = Mycelia.verify_genome_completeness("genome.fna.gz")
 println("Genome completeness: $(completeness.complete_sequences)/$(completeness.total_sequences)")
 ```
 
 ### Simulation Validation
 
-```@docs
-validate_simulation_parameters
-calculate_simulation_statistics
-compare_simulated_vs_real
-```
+<!-- Simulation validation functions not yet implemented -->
 
 #### Example: Validate Simulated Data
 ```julia
 # Check simulation statistics
-sim_stats = calculate_simulation_statistics(simulated_reads)
+sim_stats = Mycelia.calculate_simulation_statistics(simulated_reads)
 println("Simulated reads: $(sim_stats.n_reads)")
 println("Mean length: $(sim_stats.mean_length)")
 println("Coverage: $(sim_stats.coverage)x")
 
 # Compare with real data characteristics
-comparison = compare_simulated_vs_real(simulated_reads, real_reads)
+comparison = Mycelia.compare_simulated_vs_real(simulated_reads, real_reads)
 println("Length distribution similarity: $(comparison.length_similarity)")
 println("Quality distribution similarity: $(comparison.quality_similarity)")
 ```
@@ -216,16 +207,12 @@ println("Quality distribution similarity: $(comparison.quality_similarity)")
 
 ### Data Provenance
 
-```@docs
-create_data_manifest
-track_data_provenance
-generate_metadata_report
-```
+<!-- Metadata management functions not yet implemented -->
 
 #### Example: Track Data Sources
 ```julia
 # Create manifest for downloaded data
-manifest = create_data_manifest(
+manifest = Mycelia.create_data_manifest(
     files=["genome.fna.gz", "annotations.gff3"],
     sources=["NCBI:NC_001422.1", "NCBI:GCF_000819615.1"],
     download_date=now(),
@@ -233,23 +220,21 @@ manifest = create_data_manifest(
 )
 
 # Save manifest
-save_manifest(manifest, "data_manifest.json")
+Mycelia.save_manifest(manifest, "data_manifest.json")
 ```
 
 ### Batch Processing
 
-```@docs
-process_accession_list
-download_with_retry
-parallel_download
-```
+<!-- Batch processing functions not yet implemented
+Available: Mycelia.download_genomes_by_ftp for batch downloads
+-->
 
 #### Example: Batch Download with Error Handling
 ```julia
 # Download multiple genomes with retry logic
 accession_list = ["GCF_000005825.2", "GCF_000009605.1", "GCF_000027325.1"]
 
-results = parallel_download(
+results = Mycelia.parallel_download(
     accession_list,
     max_retries=3,
     delay_between_retries=30,
@@ -292,17 +277,17 @@ end
 ```julia
 # Handle network timeouts
 try
-    genome = download_genome_by_accession("NC_001422.1", timeout=300)
+    genome = Mycelia.download_genome_by_accession("NC_001422.1", timeout=300)
 catch NetworkError
     println("Download failed - retrying with longer timeout")
-    genome = download_genome_by_accession("NC_001422.1", timeout=600)
+    genome = Mycelia.download_genome_by_accession("NC_001422.1", timeout=600)
 end
 ```
 
 ### Simulation Validation
 ```julia
 # Validate simulation parameters before large runs
-validate_simulation_parameters(
+Mycelia.validate_simulation_parameters(
     genome_size=1000000,
     coverage=30,
     read_length=15000

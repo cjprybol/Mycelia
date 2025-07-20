@@ -17,22 +17,22 @@ Sequence analysis forms the foundation of many bioinformatics algorithms. Myceli
 ### 1. Basic K-mer Analysis
 ```julia
 # Count k-mers in sequencing reads
-kmer_counts = count_kmers("reads.fastq", k=21)
+kmer_counts = Mycelia.count_kmers("reads.fastq", k=21)
 
 # Analyze k-mer frequency spectrum
-spectrum = kmer_frequency_spectrum(kmer_counts)
+spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
 ```
 
 ### 2. Genome Size Estimation
 ```julia
 # Estimate genome size from k-mer spectrum
-genome_size = estimate_genome_size_from_kmers(kmer_counts, coverage_peak=30)
+genome_size = Mycelia.estimate_genome_size_from_kmers(kmer_counts, coverage_peak=30)
 ```
 
 ### 3. Contamination Detection
 ```julia
 # Detect contamination using k-mer profiles
-contamination = detect_contamination_kmers("reads.fastq", expected_profile)
+contamination = Mycelia.detect_contamination_kmers("reads.fastq", expected_profile)
 ```
 
 ## K-mer Counting
@@ -40,10 +40,10 @@ contamination = detect_contamination_kmers("reads.fastq", expected_profile)
 ### Basic K-mer Counting
 
 ```@docs
-count_kmers
-count_canonical_kmers
-fasta_list_to_dense_kmer_counts
-fasta_list_to_sparse_kmer_counts
+Mycelia.count_kmers
+Mycelia.count_canonical_kmers
+Mycelia.fasta_list_to_dense_kmer_counts
+Mycelia.fasta_list_to_sparse_kmer_counts
 ```
 
 #### Example: K-mer Counting Comparison
@@ -52,31 +52,32 @@ fasta_list_to_sparse_kmer_counts
 reads_file = "reads.fastq"
 
 # Dense counting (stores all possible k-mers)
-dense_counts = count_kmers(reads_file, k=15, method="dense")
+dense_counts = Mycelia.count_kmers(reads_file, k=15, method="dense")
 println("Dense matrix size: $(size(dense_counts))")
 
 # Sparse counting (only observed k-mers)
-sparse_counts = count_kmers(reads_file, k=21, method="sparse")
+sparse_counts = Mycelia.count_kmers(reads_file, k=21, method="sparse")
 println("Unique k-mers: $(length(sparse_counts))")
 
 # Canonical k-mers (combines forward and reverse complement)
-canonical_counts = count_canonical_kmers(reads_file, k=21)
+canonical_counts = Mycelia.count_canonical_kmers(reads_file, k=21)
 println("Canonical k-mers: $(length(canonical_counts))")
 ```
 
 ### Advanced K-mer Analysis
 
+<!-- build_kmer_graph, find_kmer_overlaps, extract_kmer_paths, analyze_kmer_connectivity not yet implemented as documented -->
+
 ```@docs
-build_kmer_graph
-find_kmer_overlaps
-extract_kmer_paths
-analyze_kmer_connectivity
+Mycelia.build_kmer_graph_next
+Mycelia.build_stranded_kmer_graph
+Mycelia.build_directed_kmer_graph
 ```
 
 #### Example: K-mer Graph Construction
 ```julia
 # Build k-mer overlap graph
-kmer_graph = build_kmer_graph(
+kmer_graph = Mycelia.build_kmer_graph(
     sequences,
     k=31,
     min_overlap=20,
@@ -84,7 +85,7 @@ kmer_graph = build_kmer_graph(
 )
 
 # Analyze graph properties
-graph_stats = analyze_kmer_connectivity(kmer_graph)
+graph_stats = Mycelia.analyze_kmer_connectivity(kmer_graph)
 println("Graph nodes: $(graph_stats.n_nodes)")
 println("Graph edges: $(graph_stats.n_edges)")
 println("Connected components: $(graph_stats.n_components)")
@@ -94,46 +95,41 @@ println("Connected components: $(graph_stats.n_components)")
 
 ### Frequency Spectra
 
+<!-- kmer_frequency_spectrum, analyze_spectrum_peaks, fit_spectrum_model not yet implemented as documented -->
+
 ```@docs
-kmer_frequency_spectrum
-analyze_spectrum_peaks
-fit_spectrum_model
-plot_kmer_spectrum
+Mycelia.jellyfish_counts_to_kmer_frequency_histogram
+Mycelia.plot_kmer_frequency_spectra
 ```
 
 #### Example: K-mer Spectrum Analysis
 ```julia
 # Generate and analyze k-mer frequency spectrum
-kmer_counts = count_kmers("reads.fastq", k=21)
-spectrum = kmer_frequency_spectrum(kmer_counts)
+kmer_counts = Mycelia.count_kmers("reads.fastq", k=21)
+spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
 
 # Identify characteristic peaks
-peaks = analyze_spectrum_peaks(spectrum)
+peaks = Mycelia.analyze_spectrum_peaks(spectrum)
 println("Coverage peak at frequency: $(peaks.main_peak)")
 println("Error peak at frequency: $(peaks.error_peak)")
 
 # Fit mathematical model to spectrum
-model = fit_spectrum_model(spectrum, model_type="negative_binomial")
+model = Mycelia.fit_spectrum_model(spectrum, model_type="negative_binomial")
 println("Model fit R²: $(model.r_squared)")
 ```
 
 ### Genome Characteristics from K-mers
 
-```@docs
-estimate_genome_size_from_kmers
-estimate_coverage_from_kmers
-detect_repetitive_kmers
-calculate_genome_complexity
-```
+<!-- estimate_genome_size_from_kmers, estimate_coverage_from_kmers, detect_repetitive_kmers, calculate_genome_complexity not yet implemented as documented -->
 
 #### Example: Genome Size Estimation
 ```julia
 # Estimate genome size using k-mer spectrum
-kmer_counts = count_kmers("reads.fastq", k=21)
-spectrum = kmer_frequency_spectrum(kmer_counts)
+kmer_counts = Mycelia.count_kmers("reads.fastq", k=21)
+spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
 
 # Find coverage peak
-coverage_peak = find_coverage_peak(spectrum)
+coverage_peak = Mycelia.find_coverage_peak(spectrum)
 println("Estimated coverage: $(coverage_peak)x")
 
 # Calculate genome size
@@ -142,7 +138,7 @@ genome_size = total_kmers ÷ coverage_peak
 println("Estimated genome size: $(genome_size) bp")
 
 # Alternative method with error correction
-corrected_estimate = estimate_genome_size_from_kmers(
+corrected_estimate = Mycelia.estimate_genome_size_from_kmers(
     kmer_counts,
     error_correction=true,
     ploidy=1
@@ -155,16 +151,12 @@ println("Confidence interval: $(corrected_estimate.confidence_interval)")
 
 ### K-mer Based Error Detection
 
-```@docs
-identify_error_kmers
-correct_sequencing_errors
-validate_error_correction
-```
+<!-- identify_error_kmers, correct_sequencing_errors, validate_error_correction not yet implemented as documented -->
 
 #### Example: Error Detection
 ```julia
 # Identify likely error k-mers
-error_kmers = identify_error_kmers(
+error_kmers = Mycelia.identify_error_kmers(
     kmer_counts,
     min_coverage=3,
     max_coverage=100
@@ -174,14 +166,14 @@ println("Potential error k-mers: $(length(error_kmers))")
 println("Error rate estimate: $(length(error_kmers) / length(kmer_counts) * 100)%")
 
 # Correct errors in reads
-corrected_reads = correct_sequencing_errors(
+corrected_reads = Mycelia.correct_sequencing_errors(
     "reads.fastq",
     error_kmers,
     correction_method="consensus"
 )
 
 # Validate correction effectiveness
-validation = validate_error_correction(
+validation = Mycelia.validate_error_correction(
     "reads.fastq",
     corrected_reads,
     reference_genome="reference.fasta"
@@ -193,28 +185,23 @@ println("Error reduction: $(validation.error_reduction_percent)%")
 
 ### Nucleotide Composition
 
-```@docs
-calculate_nucleotide_frequencies
-analyze_dinucleotide_frequencies
-calculate_codon_usage
-detect_sequence_bias
-```
+<!-- calculate_nucleotide_frequencies, analyze_dinucleotide_frequencies, calculate_codon_usage, detect_sequence_bias not yet implemented as documented -->
 
 #### Example: Comprehensive Composition Analysis
 ```julia
 # Analyze nucleotide composition
-composition = calculate_nucleotide_frequencies("sequences.fasta")
+composition = Mycelia.calculate_nucleotide_frequencies("sequences.fasta")
 println("GC content: $(composition.gc_content)%")
 println("AT content: $(composition.at_content)%")
 
 # Dinucleotide analysis
-dinuc_freq = analyze_dinucleotide_frequencies("sequences.fasta")
+dinuc_freq = Mycelia.analyze_dinucleotide_frequencies("sequences.fasta")
 println("CpG frequency: $(dinuc_freq.CG)")
 println("Expected CpG: $(dinuc_freq.expected_CG)")
 println("CpG O/E ratio: $(dinuc_freq.CG_oe_ratio)")
 
 # Detect composition bias
-bias_analysis = detect_sequence_bias(composition)
+bias_analysis = Mycelia.detect_sequence_bias(composition)
 if bias_analysis.bias_detected
     println("Sequence bias detected:")
     println("  Type: $(bias_analysis.bias_type)")
@@ -224,28 +211,23 @@ end
 
 ### Codon Usage Analysis
 
-```@docs
-calculate_codon_usage
-analyze_codon_bias
-compare_codon_usage
-optimize_codon_usage
-```
+<!-- calculate_codon_usage, analyze_codon_bias, compare_codon_usage, optimize_codon_usage not yet implemented as documented -->
 
 #### Example: Codon Usage Analysis
 ```julia
 # Analyze codon usage in coding sequences
 cds_file = "coding_sequences.fasta"
-codon_usage = calculate_codon_usage(cds_file, genetic_code="standard")
+codon_usage = Mycelia.calculate_codon_usage(cds_file, genetic_code="standard")
 
 # Calculate codon bias metrics
-bias_metrics = analyze_codon_bias(codon_usage)
+bias_metrics = Mycelia.analyze_codon_bias(codon_usage)
 println("Effective Number of Codons (ENC): $(bias_metrics.enc)")
 println("Codon Adaptation Index (CAI): $(bias_metrics.cai)")
 println("Frequency of Optimal Codons (FOP): $(bias_metrics.fop)")
 
 # Compare with reference organism
-reference_usage = load_reference_codon_usage("escherichia_coli")
-comparison = compare_codon_usage(codon_usage, reference_usage)
+reference_usage = Mycelia.load_reference_codon_usage("escherichia_coli")
+comparison = Mycelia.compare_codon_usage(codon_usage, reference_usage)
 println("Similarity to E. coli: $(comparison.similarity_score)")
 ```
 
@@ -253,12 +235,7 @@ println("Similarity to E. coli: $(comparison.similarity_score)")
 
 ### Large Dataset Handling
 
-```@docs
-stream_kmer_counting
-process_kmers_in_chunks
-parallel_kmer_analysis
-memory_efficient_counting
-```
+<!-- stream_kmer_counting, process_kmers_in_chunks, parallel_kmer_analysis, memory_efficient_counting not yet implemented as documented -->
 
 #### Example: Large File Processing
 ```julia
@@ -266,7 +243,7 @@ memory_efficient_counting
 large_file = "large_dataset.fastq"
 
 # Stream processing for memory efficiency
-kmer_counts = stream_kmer_counting(
+kmer_counts = Mycelia.stream_kmer_counting(
     large_file,
     k=21,
     chunk_size=100000,
@@ -274,7 +251,7 @@ kmer_counts = stream_kmer_counting(
 )
 
 # Parallel processing for speed
-parallel_counts = parallel_kmer_analysis(
+parallel_counts = Mycelia.parallel_kmer_analysis(
     large_file,
     k=21,
     n_workers=8,
@@ -284,27 +261,22 @@ parallel_counts = parallel_kmer_analysis(
 
 ### Optimized Data Structures
 
-```@docs
-create_sparse_kmer_matrix
-build_compressed_kmer_index
-use_bloom_filter_counting
-implement_count_min_sketch
-```
+<!-- create_sparse_kmer_matrix, build_compressed_kmer_index, use_bloom_filter_counting, implement_count_min_sketch not yet implemented as documented -->
 
 #### Example: Memory Optimization
 ```julia
 # Use probabilistic data structures for very large datasets
-bloom_filter = create_kmer_bloom_filter(
+bloom_filter = Mycelia.create_kmer_bloom_filter(
     estimated_kmers=1_000_000_000,
     false_positive_rate=0.01
 )
 
 # Streaming k-mer presence testing
-for read in stream_fastq("huge_dataset.fastq")
-    for kmer in extract_kmers(read, k=21)
-        if probably_present(bloom_filter, kmer)
+for read in Mycelia.stream_fastq("huge_dataset.fastq")
+    for kmer in Mycelia.extract_kmers(read, k=21)
+        if Mycelia.probably_present(bloom_filter, kmer)
             # Process likely present k-mer
-            process_kmer(kmer)
+            Mycelia.process_kmer(kmer)
         end
     end
 end
@@ -314,12 +286,7 @@ end
 
 ### Multi-Sample Analysis
 
-```@docs
-compare_kmer_profiles
-build_kmer_distance_matrix
-cluster_by_kmer_similarity
-identify_sample_specific_kmers
-```
+<!-- compare_kmer_profiles, build_kmer_distance_matrix, cluster_by_kmer_similarity, identify_sample_specific_kmers not yet implemented as documented -->
 
 #### Example: Multi-Sample K-mer Comparison
 ```julia
@@ -327,35 +294,30 @@ identify_sample_specific_kmers
 sample_files = ["sample1.fastq", "sample2.fastq", "sample3.fastq"]
 
 # Build k-mer profiles for each sample
-profiles = [count_kmers(file, k=21) for file in sample_files]
+profiles = [Mycelia.count_kmers(file, k=21) for file in sample_files]
 
 # Calculate pairwise distances
-distance_matrix = build_kmer_distance_matrix(profiles, metric="jaccard")
+distance_matrix = Mycelia.build_kmer_distance_matrix(profiles, metric="jaccard")
 println("Pairwise k-mer distances:")
 display(distance_matrix)
 
 # Cluster samples by k-mer similarity
-clusters = cluster_by_kmer_similarity(profiles, method="hierarchical")
+clusters = Mycelia.cluster_by_kmer_similarity(profiles, method="hierarchical")
 println("Sample clusters: $(clusters)")
 ```
 
 ### Contamination Detection
 
-```@docs
-detect_contamination_kmers
-identify_foreign_kmers
-classify_kmer_sources
-remove_contaminating_kmers
-```
+<!-- detect_contamination_kmers, identify_foreign_kmers, classify_kmer_sources, remove_contaminating_kmers not yet implemented as documented -->
 
 #### Example: Contamination Detection
 ```julia
 # Detect contamination using k-mer profiles
-sample_kmers = count_kmers("sample.fastq", k=21)
-reference_kmers = count_kmers("reference_genome.fasta", k=21)
+sample_kmers = Mycelia.count_kmers("sample.fastq", k=21)
+reference_kmers = Mycelia.count_kmers("reference_genome.fasta", k=21)
 
 # Identify foreign k-mers
-foreign_kmers = identify_foreign_kmers(
+foreign_kmers = Mycelia.identify_foreign_kmers(
     sample_kmers,
     reference_kmers,
     min_abundance=5
@@ -365,7 +327,7 @@ contamination_rate = length(foreign_kmers) / length(sample_kmers)
 println("Contamination rate: $(contamination_rate * 100)%")
 
 # Classify contamination sources
-contamination_sources = classify_kmer_sources(
+contamination_sources = Mycelia.classify_kmer_sources(
     foreign_kmers,
     database_kmers=["human", "bacterial", "viral"]
 )
@@ -379,30 +341,25 @@ end
 
 ### K-mer Plots
 
-```@docs
-plot_kmer_spectrum
-plot_kmer_composition
-plot_genome_size_estimation
-create_kmer_dashboard
-```
+<!-- plot_kmer_spectrum, plot_kmer_composition, plot_genome_size_estimation, create_kmer_dashboard not yet implemented as individual functions -->
 
 #### Example: K-mer Visualization
 ```julia
 # Create comprehensive k-mer analysis plots
-kmer_counts = count_kmers("reads.fastq", k=21)
+kmer_counts = Mycelia.count_kmers("reads.fastq", k=21)
 
 # K-mer frequency spectrum
-spectrum_plot = plot_kmer_spectrum(kmer_counts, 
+spectrum_plot = Mycelia.plot_kmer_spectrum(kmer_counts, 
                                   title="21-mer Frequency Spectrum",
                                   log_scale=true)
 
 # Genome size estimation plot
-size_plot = plot_genome_size_estimation(kmer_counts,
+size_plot = Mycelia.plot_genome_size_estimation(kmer_counts,
                                        show_confidence_interval=true)
 
 # Combined dashboard
-kmer_dashboard = create_kmer_dashboard(kmer_counts)
-save_plot(kmer_dashboard, "kmer_analysis.png")
+kmer_dashboard = Mycelia.create_kmer_dashboard(kmer_counts)
+Mycelia.save_plot(kmer_dashboard, "kmer_analysis.png")
 ```
 
 ## Performance Considerations
@@ -429,19 +386,19 @@ save_plot(kmer_dashboard, "kmer_analysis.png")
 ### Memory Limitations
 ```julia
 # Handle memory constraints
-if estimate_memory_usage(file, k=21) > available_memory()
+if Mycelia.estimate_memory_usage(file, k=21) > Mycelia.available_memory()
     # Use streaming approach
-    kmer_counts = stream_kmer_counting(file, k=21, chunk_size=50000)
+    kmer_counts = Mycelia.stream_kmer_counting(file, k=21, chunk_size=50000)
 else
     # Use standard approach
-    kmer_counts = count_kmers(file, k=21)
+    kmer_counts = Mycelia.count_kmers(file, k=21)
 end
 ```
 
 ### Parameter Selection
 ```julia
 # Choose optimal k-mer size
-optimal_k = select_optimal_k(
+optimal_k = Mycelia.select_optimal_k(
     genome_size_estimate=5_000_000,
     error_rate=0.01,
     coverage=30

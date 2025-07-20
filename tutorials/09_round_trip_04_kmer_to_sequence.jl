@@ -1024,8 +1024,8 @@ println("    • k=4-5: Domain boundary detection")
 println("    • k=6+: Functional site identification")
 
 println("\n🚀 NEXT STEPS IN QUALITY-AWARE WORKFLOWS:")
-println("  • Tutorial 5: FASTQ → Qualmer graphs → FASTQ graphs (quality integration)")
-println("  • Tutorial 6: FASTQ → Quality-aware sequence graphs (direct approach)")
+println("  • Tutorial 5: FASTQ → FASTQ graphs (direct quality-aware approach)")
+println("  • Tutorial 6: FASTQ → Qualmer graphs → FASTQ graphs (quality integration)")
 println("  • Advanced: Error correction and quality-guided assembly")
 println("  • Optimization: Memory-efficient streaming algorithms")
 
@@ -1039,5 +1039,5 @@ println("  ✓ Quality assessment with biological accuracy metrics")
 
 println("\n" * "="^80)
 println("K-mer to Sequence graph hierarchy mastery achieved!")
-println("Ready for quality-aware FASTQ workflows in Tutorial 5!")
+println("Ready for direct quality-aware FASTQ workflows in Tutorial 5!")
 println("="^80)

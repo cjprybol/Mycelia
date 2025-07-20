@@ -17,16 +17,16 @@ Quality control is essential for reliable bioinformatics results. Mycelia provid
 ### 1. Basic Quality Assessment
 ```julia
 # Analyze FASTQ quality
-quality_stats = analyze_fastq_quality("reads.fastq")
+quality_stats = Mycelia.analyze_fastq_quality("reads.fastq")
 
 # Generate quality report
-quality_report = generate_quality_report(quality_stats)
+quality_report = Mycelia.generate_quality_report(quality_stats)
 ```
 
 ### 2. Read Preprocessing
 ```julia
 # Quality trimming and filtering
-clean_reads = preprocess_reads(
+clean_reads = Mycelia.preprocess_reads(
     "raw_reads.fastq",
     min_quality=20,
     min_length=1000,
@@ -37,7 +37,7 @@ clean_reads = preprocess_reads(
 ### 3. Contamination Removal
 ```julia
 # Remove host contamination
-decontaminated_reads = remove_contamination(
+decontaminated_reads = Mycelia.remove_contamination(
     "reads.fastq",
     reference_genome="host_genome.fasta",
     output="clean_reads.fastq"
@@ -49,16 +49,15 @@ decontaminated_reads = remove_contamination(
 ### FASTQ Quality Analysis
 
 ```@docs
-analyze_fastq_quality
-calculate_per_base_quality
-calculate_per_sequence_quality
-assess_quality_degradation
+Mycelia.analyze_fastq_quality
 ```
+
+<!-- calculate_per_base_quality, calculate_per_sequence_quality, assess_quality_degradation not yet implemented as documented -->
 
 #### Example: Comprehensive Quality Analysis
 ```julia
 # Analyze quality across multiple metrics
-quality_data = analyze_fastq_quality("reads.fastq")
+quality_data = Mycelia.analyze_fastq_quality("reads.fastq")
 
 # Access quality metrics
 println("Total reads: $(quality_data.n_reads)")
@@ -74,20 +73,15 @@ println("Q30+ reads: $(quality_dist.q30_percent)%")
 
 ### Sequence Composition Analysis
 
-```@docs
-calculate_gc_content
-analyze_nucleotide_composition
-detect_composition_bias
-calculate_complexity_scores
-```
+<!-- calculate_gc_content, analyze_nucleotide_composition, detect_composition_bias, calculate_complexity_scores not yet implemented as documented -->
 
 #### Example: Composition Analysis
 ```julia
 # Analyze sequence composition
-composition = analyze_nucleotide_composition("reads.fastq")
+composition = Mycelia.analyze_nucleotide_composition("reads.fastq")
 
 # Check for bias
-bias_detected = detect_composition_bias(composition)
+bias_detected = Mycelia.detect_composition_bias(composition)
 if bias_detected.has_bias
     println("Composition bias detected:")
     println("  Type: $(bias_detected.bias_type)")
@@ -98,16 +92,12 @@ end
 
 ### Read Length Analysis
 
-```@docs
-calculate_read_length_distribution
-analyze_length_uniformity
-detect_length_artifacts
-```
+<!-- calculate_read_length_distribution, analyze_length_uniformity, detect_length_artifacts not yet implemented as documented -->
 
 #### Example: Length Distribution Analysis
 ```julia
 # Analyze read length characteristics
-length_stats = calculate_read_length_distribution("reads.fastq")
+length_stats = Mycelia.calculate_read_length_distribution("reads.fastq")
 
 println("Read length statistics:")
 println("  Mean: $(length_stats.mean)")
@@ -117,7 +107,7 @@ println("  Max: $(length_stats.maximum)")
 println("  Std Dev: $(length_stats.std)")
 
 # Check for length artifacts
-artifacts = detect_length_artifacts(length_stats)
+artifacts = Mycelia.detect_length_artifacts(length_stats)
 if !isempty(artifacts)
     println("Length artifacts detected: $(length(artifacts))")
 end
@@ -127,17 +117,19 @@ end
 
 ### Quality-Based Filtering
 
+<!-- filter_by_quality, trim_low_quality_ends, remove_low_quality_reads, adaptive_quality_filtering not yet implemented as individual functions -->
+
 ```@docs
-filter_by_quality
-trim_low_quality_ends
-remove_low_quality_reads
-adaptive_quality_filtering
+Mycelia.qc_filter_short_reads_fastp
+Mycelia.qc_filter_long_reads_fastplong
+Mycelia.qc_filter_long_reads_filtlong
+Mycelia.trim_galore_paired
 ```
 
 #### Example: Quality Filtering
 ```julia
 # Filter reads by quality thresholds
-filtered_reads = filter_by_quality(
+filtered_reads = Mycelia.filter_by_quality(
     "reads.fastq",
     min_mean_quality=25,
     min_length=1000,
@@ -145,27 +137,23 @@ filtered_reads = filter_by_quality(
 )
 
 # Save filtered reads
-write_fastq("filtered_reads.fastq", filtered_reads)
+Mycelia.write_fastq("filtered_reads.fastq", filtered_reads)
 
 # Report filtering statistics
-println("Original reads: $(count_reads("reads.fastq"))")
+println("Original reads: $(Mycelia.count_reads("reads.fastq"))")
 println("Filtered reads: $(length(filtered_reads))")
-println("Retention rate: $(length(filtered_reads) / count_reads("reads.fastq") * 100)%")
+println("Retention rate: $(length(filtered_reads) / Mycelia.count_reads("reads.fastq") * 100)%")
 ```
 
 ### Adapter and Contamination Removal
 
-```@docs
-remove_adapters
-detect_adapter_contamination
-remove_host_contamination
-remove_vector_contamination
-```
+<!-- remove_adapters, detect_adapter_contamination, remove_host_contamination, remove_vector_contamination not yet implemented as individual functions
+Adapter removal available through trim_galore_paired and QC filtering functions -->
 
 #### Example: Adapter Removal
 ```julia
 # Detect and remove adapters
-adapter_results = detect_adapter_contamination("reads.fastq")
+adapter_results = Mycelia.detect_adapter_contamination("reads.fastq")
 
 if adapter_results.contamination_detected
     println("Adapter contamination detected:")
@@ -173,36 +161,37 @@ if adapter_results.contamination_detected
     println("  Contamination rate: $(adapter_results.contamination_rate)%")
     
     # Remove adapters
-    clean_reads = remove_adapters(
+    clean_reads = Mycelia.remove_adapters(
         "reads.fastq",
         adapter_sequences=adapter_results.adapter_sequences,
         min_overlap=10
     )
     
-    write_fastq("adapter_trimmed.fastq", clean_reads)
+    Mycelia.write_fastq("adapter_trimmed.fastq", clean_reads)
 end
 ```
 
 ### Length-Based Filtering
 
+<!-- filter_by_length, trim_to_length, remove_short_reads, normalize_read_lengths not yet implemented as individual functions -->
+
 ```@docs
-filter_by_length
-trim_to_length
-remove_short_reads
-normalize_read_lengths
+Mycelia.qc_filter_short_reads_fastp
+Mycelia.qc_filter_long_reads_fastplong
+Mycelia.qc_filter_long_reads_filtlong
 ```
 
 #### Example: Length Filtering
 ```julia
 # Filter reads by length criteria
-length_filtered = filter_by_length(
+length_filtered = Mycelia.filter_by_length(
     "reads.fastq",
     min_length=1000,
     max_length=50000
 )
 
 # Normalize length distribution (optional)
-normalized_reads = normalize_read_lengths(
+normalized_reads = Mycelia.normalize_read_lengths(
     length_filtered,
     target_length=15000,
     tolerance=0.2
@@ -213,16 +202,12 @@ normalized_reads = normalize_read_lengths(
 
 ### Host Contamination
 
-```@docs
-detect_host_contamination
-remove_host_sequences
-classify_contamination_sources
-```
+<!-- detect_host_contamination, remove_host_sequences, classify_contamination_sources not yet implemented as documented -->
 
 #### Example: Host Contamination Removal
 ```julia
 # Screen for host contamination
-contamination_results = detect_host_contamination(
+contamination_results = Mycelia.detect_host_contamination(
     "reads.fastq",
     host_genome="human_genome.fasta",
     min_identity=0.9
@@ -231,7 +216,7 @@ contamination_results = detect_host_contamination(
 println("Host contamination: $(contamination_results.contamination_rate)%")
 
 # Remove contaminated reads
-clean_reads = remove_host_sequences(
+clean_reads = Mycelia.remove_host_sequences(
     "reads.fastq",
     contamination_results.contaminated_reads
 )
@@ -239,16 +224,12 @@ clean_reads = remove_host_sequences(
 
 ### Vector and Adapter Contamination
 
-```@docs
-screen_vector_contamination
-detect_primer_contamination
-remove_synthetic_sequences
-```
+<!-- screen_vector_contamination, detect_primer_contamination, remove_synthetic_sequences not yet implemented as documented -->
 
 #### Example: Vector Screening
 ```julia
 # Screen for vector contamination
-vector_results = screen_vector_contamination(
+vector_results = Mycelia.screen_vector_contamination(
     "reads.fastq",
     vector_database="vector_db.fasta"
 )
@@ -265,66 +246,53 @@ end
 
 ### Standard Quality Metrics
 
-```@docs
-calculate_phred_scores
-assess_base_call_accuracy
-calculate_error_rates
-estimate_sequencing_quality
-```
+<!-- calculate_phred_scores, assess_base_call_accuracy, calculate_error_rates, estimate_sequencing_quality not yet implemented as documented -->
 
 #### Example: Quality Metrics Calculation
 ```julia
 # Calculate comprehensive quality metrics
-quality_metrics = calculate_comprehensive_metrics("reads.fastq")
+quality_metrics = Mycelia.calculate_comprehensive_metrics("reads.fastq")
 
 # Phred score analysis
-phred_analysis = calculate_phred_scores(quality_metrics)
+phred_analysis = Mycelia.calculate_phred_scores(quality_metrics)
 println("Mean Phred score: $(phred_analysis.mean_phred)")
 println("Q30+ rate: $(phred_analysis.q30_rate)%")
 
 # Error rate estimation
-error_rates = calculate_error_rates(quality_metrics)
+error_rates = Mycelia.calculate_error_rates(quality_metrics)
 println("Estimated error rate: $(error_rates.overall_error_rate)")
 ```
 
 ### Quality Control Reports
 
-```@docs
-generate_quality_report
-create_quality_dashboard
-export_quality_metrics
-```
+<!-- generate_quality_report, create_quality_dashboard, export_quality_metrics not yet implemented as documented -->
 
 #### Example: Quality Report Generation
 ```julia
 # Generate comprehensive quality report
-quality_report = generate_quality_report(
+quality_report = Mycelia.generate_quality_report(
     "reads.fastq",
     output_format="html",
     include_plots=true
 )
 
 # Save report
-save_quality_report(quality_report, "quality_report.html")
+Mycelia.save_quality_report(quality_report, "quality_report.html")
 
 # Export metrics for further analysis
-metrics_data = export_quality_metrics(quality_report, format="csv")
+metrics_data = Mycelia.export_quality_metrics(quality_report, format="csv")
 ```
 
 ## Specialized Quality Control
 
 ### Platform-Specific QC
 
-```@docs
-assess_hifi_quality
-assess_nanopore_quality
-assess_illumina_quality
-```
+<!-- assess_hifi_quality, assess_nanopore_quality, assess_illumina_quality not yet implemented as documented -->
 
 #### Example: HiFi-Specific Quality Control
 ```julia
 # HiFi-specific quality assessment
-hifi_qc = assess_hifi_quality("hifi_reads.fastq")
+hifi_qc = Mycelia.assess_hifi_quality("hifi_reads.fastq")
 
 println("HiFi Quality Assessment:")
 println("  Mean accuracy: $(hifi_qc.mean_accuracy)")
@@ -338,16 +306,12 @@ println("    Q40+: $(hifi_qc.q40_percent)%")
 
 ### Application-Specific QC
 
-```@docs
-assess_assembly_readiness
-assess_annotation_readiness
-assess_variant_calling_readiness
-```
+<!-- assess_assembly_readiness, assess_annotation_readiness, assess_variant_calling_readiness not yet implemented as documented -->
 
 #### Example: Assembly Readiness Assessment
 ```julia
 # Check if reads are suitable for assembly
-assembly_readiness = assess_assembly_readiness("reads.fastq")
+assembly_readiness = Mycelia.assess_assembly_readiness("reads.fastq")
 
 println("Assembly Readiness:")
 println("  Overall score: $(assembly_readiness.overall_score)/10")
@@ -367,44 +331,36 @@ end
 
 ### Quality Plots
 
-```@docs
-plot_quality_distribution
-plot_length_distribution
-plot_gc_content_distribution
-plot_base_composition
-```
+<!-- plot_quality_distribution, plot_length_distribution, plot_gc_content_distribution, plot_base_composition not yet implemented as individual functions
+Visualization functions available in Mycelia plotting module -->
 
 #### Example: Quality Visualization
 ```julia
 # Create quality visualization plots
-quality_plots = create_quality_plots("reads.fastq")
+quality_plots = Mycelia.create_quality_plots("reads.fastq")
 
 # Individual plots
-plot_quality_distribution(quality_plots.quality_data, 
+Mycelia.plot_quality_distribution(quality_plots.quality_data, 
                          title="Per-Base Quality Scores")
 
-plot_length_distribution(quality_plots.length_data,
+Mycelia.plot_length_distribution(quality_plots.length_data,
                         title="Read Length Distribution")
 
 # Combined quality dashboard
-quality_dashboard = plot_quality_dashboard(quality_plots)
-save_plot(quality_dashboard, "quality_dashboard.png")
+quality_dashboard = Mycelia.plot_quality_dashboard(quality_plots)
+Mycelia.save_plot(quality_dashboard, "quality_dashboard.png")
 ```
 
 ## Performance Optimization
 
 ### Memory-Efficient Processing
 
-```@docs
-stream_quality_analysis
-process_in_chunks
-parallel_quality_assessment
-```
+<!-- stream_quality_analysis, process_in_chunks, parallel_quality_assessment not yet implemented as documented -->
 
 #### Example: Large File Processing
 ```julia
 # Process large files efficiently
-large_file_qc = stream_quality_analysis(
+large_file_qc = Mycelia.stream_quality_analysis(
     "large_reads.fastq",
     chunk_size=10000,
     parallel=true,
@@ -412,7 +368,7 @@ large_file_qc = stream_quality_analysis(
 )
 
 # Memory-efficient filtering
-filtered_output = process_in_chunks(
+filtered_output = Mycelia.process_in_chunks(
     "large_reads.fastq",
     "filtered_reads.fastq",
     chunk_size=50000,
@@ -425,7 +381,7 @@ filtered_output = process_in_chunks(
 ### Low Quality Data
 ```julia
 # Identify quality issues
-quality_issues = diagnose_quality_issues("reads.fastq")
+quality_issues = Mycelia.diagnose_quality_issues("reads.fastq")
 
 for issue in quality_issues
     println("Issue: $(issue.type)")
@@ -438,13 +394,13 @@ end
 ### Contamination Problems
 ```julia
 # Comprehensive contamination screening
-contamination_screen = comprehensive_contamination_screening(
+contamination_screen = Mycelia.comprehensive_contamination_screening(
     "reads.fastq",
     databases=["host", "vector", "adapter", "primer"]
 )
 
 # Generate contamination report
-contamination_report = generate_contamination_report(contamination_screen)
+contamination_report = Mycelia.generate_contamination_report(contamination_screen)
 ```
 
 ## Related Functions

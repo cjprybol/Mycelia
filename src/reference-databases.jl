@@ -942,24 +942,190 @@ end
 # - `trim_galore/[srr_identifier]_1_val_1.fq.gz`: Trimmed forward reads
 # - `trim_galore/[srr_identifier]_2_val_2.fq.gz`: Trimmed reverse reads
 # """
-# function download_and_filter_sra_reads(;outdir="", srr_identifier="")
-#     forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
-#     reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
-#     forward_reads_gz = forward_reads * ".gz"
-#     reverse_reads_gz = reverse_reads * ".gz"
-#     trimmed_forward_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_1_val_1.fq.gz")
-#     trimmed_reverse_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_2_val_2.fq.gz")
+"""
+Downloads sequencing reads from NCBI's Sequence Read Archive (SRA).
 
-#     if !(isfile(trimmed_forward_reads) && isfile(trimmed_reverse_reads))
-#         @info "processing $(srr_identifier)"
-#         fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
-#         trim_galore(outdir=outdir, identifier=srr_identifier)
-#     # else
-#         # @info "$(srr_identifier) already processed..."
-#     end
-#     isfile(forward_reads_gz) && rm(forward_reads_gz)
-#     isfile(reverse_reads_gz) && rm(reverse_reads_gz)
-# end
+Downloads reads using fasterq-dump. The function automatically detects whether
+the data is single-end or paired-end and returns appropriate file paths.
+Users should apply quality control based on their knowledge of the data type.
+
+# Arguments
+- `srr_identifier`: SRA run identifier (e.g., "SRR1234567")
+- `outdir`: Output directory for downloaded files (default: current directory)
+
+# Returns
+Named tuple with:
+- `srr_id`: The SRA identifier
+- `outdir`: Output directory path
+- `files`: Vector of downloaded file paths (1 file for single-end, 2 for paired-end)
+- `is_paired`: Boolean indicating if data is paired-end
+
+# Example
+```julia
+# Download SRA data
+result = Mycelia.download_sra_data("SRR1234567", outdir="./data")
+
+# Apply appropriate QC based on data type
+if result.is_paired
+    # Paired-end data - use paired-end QC
+    Mycelia.trim_galore_paired(forward_reads=result.files[1], reverse_reads=result.files[2])
+else
+    # Single-end data - use single-end QC
+    Mycelia.qc_filter_short_reads_fastp(input=result.files[1])
+end
+```
+"""
+function download_sra_data(srr_identifier::String; outdir::String=pwd())
+    if isempty(srr_identifier)
+        error("SRA identifier cannot be empty")
+    end
+    
+    @info "Downloading SRA data: $(srr_identifier)"
+    fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
+    
+    # Check what files were created to determine data type
+    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
+    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
+    single_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
+    
+    if isfile(forward_reads) && isfile(reverse_reads)
+        # Paired-end data
+        return (
+            srr_id = srr_identifier,
+            outdir = outdir,
+            files = [forward_reads, reverse_reads],
+            is_paired = true
+        )
+    elseif isfile(single_reads)
+        # Single-end data
+        return (
+            srr_id = srr_identifier,
+            outdir = outdir,
+            files = [single_reads],
+            is_paired = false
+        )
+    else
+        error("No FASTQ files found after download. Check SRA identifier: $(srr_identifier)")
+    end
+end
+
+"""
+Prefetches multiple SRA runs in parallel.
+
+Downloads SRA run files (.sra) to local storage without converting to FASTQ.
+Useful for batch downloading before processing with fasterq-dump.
+
+# Arguments
+- `srr_identifiers`: Vector of SRA run identifiers
+- `outdir`: Output directory for prefetched files (default: current directory)
+- `max_parallel`: Maximum number of parallel downloads (default: 4)
+
+# Returns
+Vector of named tuples with prefetch results for each SRA run
+
+# Example
+```julia
+runs = ["SRR1234567", "SRR1234568", "SRR1234569"]
+results = Mycelia.prefetch_sra_runs(runs, outdir="./sra_data")
+```
+"""
+function prefetch_sra_runs(srr_identifiers::Vector{String}; outdir::String=pwd(), max_parallel::Int=4)
+    if isempty(srr_identifiers)
+        error("No SRA identifiers provided")
+    end
+    
+    results = []
+    
+    @info "Prefetching $(length(srr_identifiers)) SRA runs with max $(max_parallel) parallel downloads"
+    
+    # Process in chunks to respect max_parallel limit
+    for chunk in Iterators.partition(srr_identifiers, max_parallel)
+        chunk_tasks = []
+        
+        for srr_id in chunk
+            task = Threads.@spawn begin
+                try
+                    @info "Prefetching $(srr_id)"
+                    result = prefetch(SRR=srr_id, outdir=outdir)
+                    @info "Completed prefetch for $(srr_id)"
+                    (srr_id=srr_id, success=true, result=result, error=nothing)
+                catch e
+                    @error "Failed to prefetch $(srr_id): $(e)"
+                    (srr_id=srr_id, success=false, result=nothing, error=string(e))
+                end
+            end
+            push!(chunk_tasks, task)
+        end
+        
+        # Wait for chunk to complete
+        chunk_results = [fetch(task) for task in chunk_tasks]
+        append!(results, chunk_results)
+    end
+    
+    successful = sum([r.success for r in results])
+    @info "Prefetch completed: $(successful)/$(length(srr_identifiers)) successful"
+    
+    return results
+end
+
+"""
+Parallel FASTQ dump for multiple SRA files.
+
+Converts multiple SRA files to FASTQ format in parallel. More efficient than
+sequential processing for large batches.
+
+# Arguments
+- `srr_identifiers`: Vector of SRA run identifiers
+- `outdir`: Output directory for FASTQ files (default: current directory)
+- `max_parallel`: Maximum number of parallel conversions (default: 2)
+
+# Returns
+Vector of named tuples with conversion results
+
+# Example
+```julia
+runs = ["SRR1234567", "SRR1234568"]
+results = Mycelia.fasterq_dump_parallel(runs, outdir="./fastq_data")
+```
+"""
+function fasterq_dump_parallel(srr_identifiers::Vector{String}; outdir::String=pwd(), max_parallel::Int=2)
+    if isempty(srr_identifiers)
+        error("No SRA identifiers provided")
+    end
+    
+    results = []
+    
+    @info "Converting $(length(srr_identifiers)) SRA runs to FASTQ with max $(max_parallel) parallel processes"
+    
+    # Process in chunks - fewer parallel for fasterq-dump as it's more resource intensive
+    for chunk in Iterators.partition(srr_identifiers, max_parallel)
+        chunk_tasks = []
+        
+        for srr_id in chunk
+            task = Threads.@spawn begin
+                try
+                    @info "Converting $(srr_id) to FASTQ"
+                    fasterq_dump(outdir=outdir, srr_identifier=srr_id)
+                    @info "Completed FASTQ conversion for $(srr_id)"
+                    (srr_id=srr_id, success=true, error=nothing)
+                catch e
+                    @error "Failed to convert $(srr_id): $(e)"
+                    (srr_id=srr_id, success=false, error=string(e))
+                end
+            end
+            push!(chunk_tasks, task)
+        end
+        
+        # Wait for chunk to complete
+        chunk_results = [fetch(task) for task in chunk_tasks]
+        append!(results, chunk_results)
+    end
+    
+    successful = sum([r.success for r in results])
+    @info "FASTQ conversion completed: $(successful)/$(length(srr_identifiers)) successful"
+    
+    return results
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
