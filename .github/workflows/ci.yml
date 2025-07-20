@@ -37,10 +37,10 @@ jobs:
 
       - name: Install dependencies
         if: steps.cache-artifacts.outputs.cache-hit != 'true'
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate();'
+        run: julia --project=. -e 'using Pkg; Pkg.build("Conda"); Pkg.instantiate();'
 
       - name: Run tests with coverage
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test(coverage=true);'
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.build("Conda"); Pkg.test(coverage=true);'
 
       - name: Submit coverage
         run: julia --project=. -e 'using Coverage; Codecov.submit(process_folder())'
