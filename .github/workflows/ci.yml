@@ -26,12 +26,6 @@ jobs:
         with:
           version: ${{ matrix.julia-version }}
 
-      - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          auto-update-conda: true
-          python-version: 3.8
-
       - name: Cache Julia packages
         id: cache-artifacts
         uses: actions/cache@v3
@@ -43,12 +37,12 @@ jobs:
 
       - name: Install dependencies
         if: steps.cache-artifacts.outputs.cache-hit != 'true'
-        run: CONDA_JL_USE_SYSTEM_CONDA=1 julia --project=. -e 'using Pkg; Pkg.instantiate();'
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate();'
 
       - name: Run tests with coverage
-        run: CONDA_JL_USE_SYSTEM_CONDA=1 julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test(coverage=true);'
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test(coverage=true);'
 
       - name: Submit coverage
-        run: CONDA_JL_USE_SYSTEM_CONDA=1 julia --project=. -e 'using Coverage; Codecov.submit(process_folder())'
+        run: julia --project=. -e 'using Coverage; Codecov.submit(process_folder())'
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
