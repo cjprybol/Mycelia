@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back · Mycelia</title><meta name="title" content="Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back · Mycelia"/><meta property="og:title" content="Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back · Mycelia"/><meta property="twitter:title" content="Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/09_round_trip_06_qualmer_graphs.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-6:-FASTQ-Sequences-to-Qualmer-Graphs-and-Back"><a class="docs-heading-anchor" href="#Tutorial-6:-FASTQ-Sequences-to-Qualmer-Graphs-and-Back">Tutorial 6: FASTQ Sequences to Qualmer Graphs and Back</a><a id="Tutorial-6:-FASTQ-Sequences-to-Qualmer-Graphs-and-Back-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-6:-FASTQ-Sequences-to-Qualmer-Graphs-and-Back" title="Permalink"></a></h1><p>This tutorial demonstrates the round-trip workflow from FASTQ sequences through quality-aware k-mer (qualmer) graphs and back to reconstructed sequences. Qualmers incorporate both sequence information and quality scores for more accurate assembly decisions.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will understand:</p><ol><li>How to create qualmer graphs from FASTQ data</li><li>How quality scores influence k-mer confidence</li><li>How to perform quality-aware assembly using package functions</li><li>How to reconstruct sequences while preserving quality information</li><li>The advantages of quality-aware vs coverage-only assembly</li></ol><h2 id="Setup-and-Imports"><a class="docs-heading-anchor" href="#Setup-and-Imports">Setup and Imports</a><a id="Setup-and-Imports-1"></a><a class="docs-heading-anchor-permalink" href="#Setup-and-Imports" title="Permalink"></a></h2><p>Following CLAUDE.md standards: only import top-level packages, use full namespacing</p><pre><code class="language-julia hljs">import Mycelia
+import FASTX
+import Graphs
+import Test
+import Statistics</code></pre><h2 id="Part-1:-Understanding-Qualmers"><a class="docs-heading-anchor" href="#Part-1:-Understanding-Qualmers">Part 1: Understanding Qualmers</a><a id="Part-1:-Understanding-Qualmers-1"></a><a class="docs-heading-anchor-permalink" href="#Part-1:-Understanding-Qualmers" title="Permalink"></a></h2><p>Qualmers are k-mers with associated quality information. When the same k-mer is observed multiple times with different quality scores, we calculate a joint probability that represents our confidence in that k-mer&#39;s correctness.</p><h3 id="Creating-Sample-FASTQ-Data-with-Varying-Quality"><a class="docs-heading-anchor" href="#Creating-Sample-FASTQ-Data-with-Varying-Quality">Creating Sample FASTQ Data with Varying Quality</a><a id="Creating-Sample-FASTQ-Data-with-Varying-Quality-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-Sample-FASTQ-Data-with-Varying-Quality" title="Permalink"></a></h3><pre><code class="language-julia hljs">function create_sample_fastq_data()
+    # High-quality read
+    hq_seq = &quot;ATCGATCGATCGATCGATCG&quot;
+    hq_qual = &quot;IIIIIIIIIIIIIIIIIIII&quot;  ## Phred 40 (99.99% accuracy)
+
+    # Medium-quality read with overlap
+    mq_seq = &quot;GATCGATCGATCGATCGTAG&quot;
+    mq_qual = &quot;FFFFFFFFFFFFFFFFFF@@&quot;  ## Phred 37 (99.98%) with lower end
+
+    # Low-quality read with errors
+    lq_seq = &quot;GATCGATCGATCGATCGTAC&quot;  ## Error at end (C instead of G)
+    lq_qual = &quot;555555555555555555##&quot;  ## Phred 20 (99%) with very low end
+
+    # Create FASTQ records
+    records = [
+        FASTX.FASTQ.Record(&quot;read1&quot;, hq_seq, hq_qual),
+        FASTX.FASTQ.Record(&quot;read2&quot;, mq_seq, mq_qual),
+        FASTX.FASTQ.Record(&quot;read3&quot;, lq_seq, lq_qual)
+    ]
+
+    return records
+end
+
+println(&quot;Creating sample FASTQ data with varying quality scores...&quot;)
+fastq_records = create_sample_fastq_data()</code></pre><p>Display the records</p><pre><code class="language-julia hljs">for (i, record) in enumerate(fastq_records)
+    println(&quot;\nRead $i:&quot;)
+    println(&quot;  Sequence: &quot;, String(FASTX.sequence(record)))
+    println(&quot;  Quality:  &quot;, String(FASTX.quality(record)))
+    println(&quot;  Phred scores: &quot;, FASTX.quality_scores(record))
+end</code></pre><h2 id="Part-2:-Building-Qualmer-Graphs"><a class="docs-heading-anchor" href="#Part-2:-Building-Qualmer-Graphs">Part 2: Building Qualmer Graphs</a><a id="Part-2:-Building-Qualmer-Graphs-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Building-Qualmer-Graphs" title="Permalink"></a></h2><p>Qualmer graphs combine k-mer information with quality scores to make more informed assembly decisions.</p><h3 id="Build-a-qualmer-graph-with-k7"><a class="docs-heading-anchor" href="#Build-a-qualmer-graph-with-k7">Build a qualmer graph with k=7</a><a id="Build-a-qualmer-graph-with-k7-1"></a><a class="docs-heading-anchor-permalink" href="#Build-a-qualmer-graph-with-k7" title="Permalink"></a></h3><pre><code class="language-julia hljs">k = 7
+println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Building qualmer graph with k=$k...&quot;)
+
+qualmer_graph = Mycelia.build_qualmer_graph(fastq_records; k=k, graph_mode=Mycelia.DoubleStrand)</code></pre><p>Examine graph properties</p><pre><code class="language-julia hljs">println(&quot;\nQualmer graph statistics:&quot;)
+println(&quot;  Number of vertices (unique k-mers): &quot;, Graphs.nv(qualmer_graph))
+println(&quot;  Number of edges: &quot;, Graphs.ne(qualmer_graph))</code></pre><h3 id="Inspect-qualmer-properties"><a class="docs-heading-anchor" href="#Inspect-qualmer-properties">Inspect qualmer properties</a><a id="Inspect-qualmer-properties-1"></a><a class="docs-heading-anchor-permalink" href="#Inspect-qualmer-properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Examining qualmer vertices and their properties:&quot;)</code></pre><p>Get first few vertices to examine</p><pre><code class="language-julia hljs">for v in Iterators.take(Graphs.vertices(qualmer_graph), 5)
+    vertex_data = qualmer_graph[v]
+    println(&quot;\nVertex $v:&quot;)
+    println(&quot;  K-mer: &quot;, vertex_data.kmer)
+    println(&quot;  Coverage: &quot;, vertex_data.coverage)
+    println(&quot;  Mean quality: &quot;, round(vertex_data.mean_quality, digits=2))
+    println(&quot;  Joint probability: &quot;, round(vertex_data.joint_probability, digits=4))
+end</code></pre><h2 id="Part-3:-Quality-Aware-vs-Coverage-Only-Assembly"><a class="docs-heading-anchor" href="#Part-3:-Quality-Aware-vs-Coverage-Only-Assembly">Part 3: Quality-Aware vs Coverage-Only Assembly</a><a id="Part-3:-Quality-Aware-vs-Coverage-Only-Assembly-1"></a><a class="docs-heading-anchor-permalink" href="#Part-3:-Quality-Aware-vs-Coverage-Only-Assembly" title="Permalink"></a></h2><p>Let&#39;s compare how quality information affects assembly decisions.</p><h3 id="Find-high-confidence-paths-using-quality-information"><a class="docs-heading-anchor" href="#Find-high-confidence-paths-using-quality-information">Find high-confidence paths using quality information</a><a id="Find-high-confidence-paths-using-quality-information-1"></a><a class="docs-heading-anchor-permalink" href="#Find-high-confidence-paths-using-quality-information" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Finding high-confidence paths through the qualmer graph...&quot;)</code></pre><p>Get all vertices sorted by joint probability (confidence)</p><pre><code class="language-julia hljs">vertices_by_confidence = sort(collect(Graphs.vertices(qualmer_graph)),
+    by=v -&gt; qualmer_graph[v].joint_probability, rev=true)
+
+println(&quot;\nTop 5 most confident k-mers:&quot;)
+for v in vertices_by_confidence[1:min(5, length(vertices_by_confidence))]
+    vdata = qualmer_graph[v]
+    println(&quot;  &quot;, vdata.kmer,
+            &quot; - Coverage: &quot;, vdata.coverage,
+            &quot;, Joint prob: &quot;, round(vdata.joint_probability, digits=4),
+            &quot;, Mean quality: &quot;, round(vdata.mean_quality, digits=1))
+end</code></pre><h3 id="Compare-with-coverage-only-approach"><a class="docs-heading-anchor" href="#Compare-with-coverage-only-approach">Compare with coverage-only approach</a><a id="Compare-with-coverage-only-approach-1"></a><a class="docs-heading-anchor-permalink" href="#Compare-with-coverage-only-approach" title="Permalink"></a></h3><pre><code class="language-julia hljs">vertices_by_coverage = sort(collect(Graphs.vertices(qualmer_graph)),
+    by=v -&gt; qualmer_graph[v].coverage, rev=true)
+
+println(&quot;\nTop 5 highest coverage k-mers:&quot;)
+for v in vertices_by_coverage[1:min(5, length(vertices_by_coverage))]
+    vdata = qualmer_graph[v]
+    println(&quot;  &quot;, vdata.kmer,
+            &quot; - Coverage: &quot;, vdata.coverage,
+            &quot;, Joint prob: &quot;, round(vdata.joint_probability, digits=4),
+            &quot;, Mean quality: &quot;, round(vdata.mean_quality, digits=1))
+end</code></pre><h2 id="Part-4:-Quality-Aware-Path-Finding"><a class="docs-heading-anchor" href="#Part-4:-Quality-Aware-Path-Finding">Part 4: Quality-Aware Path Finding</a><a id="Part-4:-Quality-Aware-Path-Finding-1"></a><a class="docs-heading-anchor-permalink" href="#Part-4:-Quality-Aware-Path-Finding" title="Permalink"></a></h2><p>Use the package function to find the most likely path through the graph.</p><p>Find best starting vertex (highest confidence)</p><pre><code class="language-julia hljs">start_vertex = vertices_by_confidence[1]
+quality_path = Mycelia.find_quality_weighted_path(qualmer_graph, start_vertex)
+
+println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Quality-weighted path through graph:&quot;)
+println(&quot;Path length: &quot;, length(quality_path), &quot; vertices&quot;)</code></pre><p>Show path k-mers and qualities</p><pre><code class="language-julia hljs">println(&quot;\nPath details:&quot;)
+for (i, v) in enumerate(quality_path[1:min(10, length(quality_path))])
+    vdata = qualmer_graph[v]
+    println(&quot;  Step $i: &quot;, vdata.kmer,
+            &quot; (prob: &quot;, round(vdata.joint_probability, digits=3), &quot;)&quot;)
+end</code></pre><h2 id="Part-5:-Converting-to-Quality-Aware-BioSequence-Graph"><a class="docs-heading-anchor" href="#Part-5:-Converting-to-Quality-Aware-BioSequence-Graph">Part 5: Converting to Quality-Aware BioSequence Graph</a><a id="Part-5:-Converting-to-Quality-Aware-BioSequence-Graph-1"></a><a class="docs-heading-anchor-permalink" href="#Part-5:-Converting-to-Quality-Aware-BioSequence-Graph" title="Permalink"></a></h2><p>Convert the qualmer graph to a variable-length quality-aware sequence graph.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Converting qualmer graph to quality-aware BioSequence graph...&quot;)</code></pre><p>Convert to FASTQ graph (variable-length with quality)</p><pre><code class="language-julia hljs">fastq_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph, k)
+
+println(&quot;\nFASTQ graph statistics:&quot;)
+println(&quot;  Number of vertices: &quot;, Graphs.nv(fastq_graph))
+println(&quot;  Number of edges: &quot;, Graphs.ne(fastq_graph))</code></pre><p>Examine simplified vertices</p><pre><code class="language-julia hljs">println(&quot;\nExamining quality-aware sequence vertices:&quot;)
+for v in Iterators.take(Graphs.vertices(fastq_graph), 3)
+    vertex_data = fastq_graph[v]
+    println(&quot;\nVertex $v:&quot;)
+    println(&quot;  Sequence: &quot;, vertex_data.sequence)
+    println(&quot;  Length: &quot;, length(vertex_data.sequence))
+    println(&quot;  Quality scores: &quot;, vertex_data.quality_scores[1:min(20, length(vertex_data.quality_scores))], &quot;...&quot;)
+    println(&quot;  Mean quality: &quot;, round(Statistics.mean(vertex_data.quality_scores), digits=1))
+end</code></pre><h2 id="Part-6:-Round-Trip-Reconstruction"><a class="docs-heading-anchor" href="#Part-6:-Round-Trip-Reconstruction">Part 6: Round-Trip Reconstruction</a><a id="Part-6:-Round-Trip-Reconstruction-1"></a><a class="docs-heading-anchor-permalink" href="#Part-6:-Round-Trip-Reconstruction" title="Permalink"></a></h2><p>Reconstruct FASTQ records from the quality-aware graph.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Reconstructing FASTQ records from the graph...&quot;)</code></pre><p>Extract paths and convert to FASTQ records</p><pre><code class="language-julia hljs">reconstructed_records = Mycelia.quality_biosequence_graph_to_fastq(fastq_graph, &quot;reconstructed&quot;)
+
+println(&quot;\nReconstructed &quot;, length(reconstructed_records), &quot; FASTQ records&quot;)</code></pre><p>Compare with original</p><pre><code class="language-julia hljs">println(&quot;\nComparison with original reads:&quot;)
+for (i, (orig, recon)) in enumerate(zip(fastq_records[1:min(3, length(reconstructed_records))],
+                                        reconstructed_records[1:min(3, length(reconstructed_records))]))
+    orig_seq = String(FASTX.sequence(orig))
+    recon_seq = String(FASTX.sequence(recon))
+
+    println(&quot;\nRead $i:&quot;)
+    println(&quot;  Original:      &quot;, orig_seq)
+    println(&quot;  Reconstructed: &quot;, recon_seq)
+    println(&quot;  Match: &quot;, orig_seq == recon_seq ? &quot;✓&quot; : &quot;✗&quot;)
+
+    # Compare quality scores
+    orig_qual = FASTX.quality_scores(orig)
+    recon_qual = FASTX.quality_scores(recon)
+    println(&quot;  Original quality range: &quot;, minimum(orig_qual), &quot;-&quot;, maximum(orig_qual))
+    println(&quot;  Reconstructed quality range: &quot;, minimum(recon_qual), &quot;-&quot;, maximum(recon_qual))
+end</code></pre><h2 id="Part-7:-Error-Correction-Using-Quality-Information"><a class="docs-heading-anchor" href="#Part-7:-Error-Correction-Using-Quality-Information">Part 7: Error Correction Using Quality Information</a><a id="Part-7:-Error-Correction-Using-Quality-Information-1"></a><a class="docs-heading-anchor-permalink" href="#Part-7:-Error-Correction-Using-Quality-Information" title="Permalink"></a></h2><p>Demonstrate how quality scores help identify and correct errors using package functions.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Demonstrating quality-aware error correction...&quot;)</code></pre><p>Create reads with a known error</p><pre><code class="language-julia hljs">error_reads = [
+    FASTX.FASTQ.Record(&quot;good1&quot;, &quot;ATCGATCGATCG&quot;, &quot;IIIIIIIIIIII&quot;),  ## High quality
+    FASTX.FASTQ.Record(&quot;good2&quot;, &quot;TCGATCGATCGA&quot;, &quot;IIIIIIIIIIII&quot;),  ## High quality
+    FASTX.FASTQ.Record(&quot;error&quot;, &quot;TCGATCTATCGA&quot;, &quot;IIIIII##IIII&quot;),  ## Error at low quality position
+]</code></pre><p>Build qualmer graph</p><pre><code class="language-julia hljs">error_graph = Mycelia.build_qualmer_graph(error_reads; k=5, graph_mode=Mycelia.SingleStrand)
+
+println(&quot;\nAnalyzing k-mers around error position:&quot;)</code></pre><p>The error creates k-mers: GATCT (wrong) vs GATCG (correct)</p><pre><code class="language-julia hljs">for v in Graphs.vertices(error_graph)
+    vdata = error_graph[v]
+    kmer_str = String(vdata.kmer)
+    if occursin(&quot;GATC&quot;, kmer_str)
+        println(&quot;  K-mer: &quot;, kmer_str,
+                &quot; - Coverage: &quot;, vdata.coverage,
+                &quot;, Joint prob: &quot;, round(vdata.joint_probability, digits=4))
+    end
+end</code></pre><p>Use package function to identify potential errors</p><pre><code class="language-julia hljs">potential_errors = Mycelia.identify_potential_errors(error_graph)
+println(&quot;\nPotential error k-mers identified: &quot;, length(potential_errors))
+
+for error_v in potential_errors
+    vdata = error_graph[error_v]
+    println(&quot;  Error k-mer: &quot;, vdata.kmer,
+            &quot; - Coverage: &quot;, vdata.coverage,
+            &quot;, Quality: &quot;, round(vdata.mean_quality, digits=1),
+            &quot;, Confidence: &quot;, round(vdata.joint_probability, digits=4))
+end</code></pre><h2 id="Part-8:-Advanced-Quality-Metrics"><a class="docs-heading-anchor" href="#Part-8:-Advanced-Quality-Metrics">Part 8: Advanced Quality Metrics</a><a id="Part-8:-Advanced-Quality-Metrics-1"></a><a class="docs-heading-anchor-permalink" href="#Part-8:-Advanced-Quality-Metrics" title="Permalink"></a></h2><p>Calculate assembly quality metrics using the package function.</p><pre><code class="language-julia hljs">metrics = Mycelia.calculate_assembly_quality_metrics(qualmer_graph)
+
+println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Assembly quality metrics:&quot;)
+println(&quot;  Mean k-mer coverage: &quot;, round(metrics.mean_coverage, digits=2))
+println(&quot;  Mean quality score: &quot;, round(metrics.mean_quality, digits=1))
+println(&quot;  Mean k-mer confidence: &quot;, round(metrics.mean_confidence, digits=4))
+println(&quot;  Fraction of low-confidence k-mers: &quot;, round(metrics.low_confidence_fraction, digits=3))
+println(&quot;  Total unique k-mers: &quot;, metrics.total_kmers)</code></pre><h2 id="Part-9:-Practical-Example-Assembling-a-Small-Genome-Region"><a class="docs-heading-anchor" href="#Part-9:-Practical-Example-Assembling-a-Small-Genome-Region">Part 9: Practical Example - Assembling a Small Genome Region</a><a id="Part-9:-Practical-Example-Assembling-a-Small-Genome-Region-1"></a><a class="docs-heading-anchor-permalink" href="#Part-9:-Practical-Example-Assembling-a-Small-Genome-Region" title="Permalink"></a></h2><p>Let&#39;s create a more realistic example with overlapping reads from a genome region.</p><pre><code class="language-julia hljs">function create_genome_region_reads()
+    # Simulate a 50bp genome region
+    true_sequence = &quot;ATCGATCGATCGTAGCTAGCTAGCTTGCATGCATGCATGCATGCATGCAT&quot;
+
+    # Generate overlapping reads with varying quality
+    reads = []
+
+    # High quality reads
+    push!(reads, FASTX.FASTQ.Record(&quot;hq1&quot;, true_sequence[1:25], &quot;I&quot;^25))
+    push!(reads, FASTX.FASTQ.Record(&quot;hq2&quot;, true_sequence[15:40], &quot;I&quot;^26))
+    push!(reads, FASTX.FASTQ.Record(&quot;hq3&quot;, true_sequence[30:50], &quot;I&quot;^21))
+
+    # Medium quality reads with some errors
+    read_mq1 = true_sequence[5:30]
+    qual_mq1 = &quot;FFFFFFFFFFFFFFFFFFFFFFFFFF&quot;
+    push!(reads, FASTX.FASTQ.Record(&quot;mq1&quot;, read_mq1, qual_mq1))
+
+    # Low quality read with error
+    read_lq1 = true_sequence[20:45]
+    read_lq1 = read_lq1[1:10] * &quot;T&quot; * read_lq1[12:end]  ## Error at position 11
+    qual_lq1 = &quot;AAAAAAAAAA#AAAAAAAAAAAAAA&quot;  ## Low quality at error
+    push!(reads, FASTX.FASTQ.Record(&quot;lq1&quot;, read_lq1, qual_lq1))
+
+    return reads, true_sequence
+end
+
+genome_reads, true_seq = create_genome_region_reads()
+
+println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Assembling genome region from overlapping reads...&quot;)
+println(&quot;True sequence: &quot;, true_seq)
+println(&quot;Number of reads: &quot;, length(genome_reads))</code></pre><p>Build qualmer graph</p><pre><code class="language-julia hljs">genome_graph = Mycelia.build_qualmer_graph(genome_reads; k=9, graph_mode=Mycelia.SingleStrand)</code></pre><p>Convert to sequence graph and extract contigs</p><pre><code class="language-julia hljs">seq_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(genome_graph, 9)
+
+println(&quot;\nAssembly results:&quot;)
+println(&quot;  Qualmer graph: &quot;, Graphs.nv(genome_graph), &quot; vertices, &quot;, Graphs.ne(genome_graph), &quot; edges&quot;)
+println(&quot;  Sequence graph: &quot;, Graphs.nv(seq_graph), &quot; vertices, &quot;, Graphs.ne(seq_graph), &quot; edges&quot;)</code></pre><p>Use package function to find quality-weighted path</p><pre><code class="language-julia hljs">if Graphs.nv(genome_graph) &gt; 0
+    # Start from highest confidence vertex
+    confidence_sorted = sort(collect(Graphs.vertices(genome_graph)),
+        by=v -&gt; genome_graph[v].joint_probability, rev=true)
+    best_path = Mycelia.find_quality_weighted_path(genome_graph, confidence_sorted[1])
+
+    println(&quot;\nBest quality-weighted path:&quot;)
+    println(&quot;  Path length: &quot;, length(best_path), &quot; k-mers&quot;)
+
+    # Reconstruct sequence from path
+    if length(best_path) &gt; 1
+        path_kmers = [String(genome_graph[v].kmer) for v in best_path]
+        # Simple reconstruction: first k-mer + last base of each subsequent k-mer
+        reconstructed = path_kmers[1] * join([kmer[end] for kmer in path_kmers[2:end]])
+
+        println(&quot;  Reconstructed length: &quot;, length(reconstructed))
+        println(&quot;  Reconstructed: &quot;, reconstructed)
+
+        # Check accuracy
+        if reconstructed == true_seq
+            println(&quot;  ✓ Perfect reconstruction!&quot;)
+        elseif occursin(reconstructed, true_seq)
+            println(&quot;  ✓ Assembled sequence is a substring of true sequence&quot;)
+        elseif occursin(true_seq, reconstructed)
+            println(&quot;  ✓ True sequence is a substring of assembled sequence&quot;)
+        else
+            println(&quot;  ✗ Assembly differs from true sequence&quot;)
+            println(&quot;  True:      &quot;, true_seq)
+            println(&quot;  Assembled: &quot;, reconstructed)
+        end
+    end
+end</code></pre><p>Find longest path (contig) from sequence graph</p><pre><code class="language-julia hljs">if Graphs.nv(seq_graph) &gt; 0
+    # Get vertex with longest sequence
+    longest_v = argmax(v -&gt; length(seq_graph[v].sequence), Graphs.vertices(seq_graph))
+    longest_seq = seq_graph[longest_v].sequence
+    longest_qual = seq_graph[longest_v].quality_scores
+
+    println(&quot;\nLongest contig from simplified graph:&quot;)
+    println(&quot;  Length: &quot;, length(longest_seq))
+    println(&quot;  Sequence: &quot;, longest_seq)
+    println(&quot;  Mean quality: &quot;, round(Statistics.mean(longest_qual), digits=1))
+
+    # Check accuracy
+    if String(longest_seq) == true_seq
+        println(&quot;  ✓ Perfect reconstruction!&quot;)
+    else
+        # Find best alignment
+        true_str = true_seq
+        assembled_str = String(longest_seq)
+        if occursin(assembled_str, true_str)
+            println(&quot;  ✓ Assembled sequence is a substring of true sequence&quot;)
+        elseif occursin(true_str, assembled_str)
+            println(&quot;  ✓ True sequence is a substring of assembled sequence&quot;)
+        else
+            println(&quot;  ✗ Assembly differs from true sequence&quot;)
+        end
+    end
+end</code></pre><p>Calculate final quality metrics for the genome assembly</p><pre><code class="language-julia hljs">final_metrics = Mycelia.calculate_assembly_quality_metrics(genome_graph)
+println(&quot;\nFinal assembly quality metrics:&quot;)
+println(&quot;  Mean coverage: &quot;, round(final_metrics.mean_coverage, digits=2))
+println(&quot;  Mean quality: &quot;, round(final_metrics.mean_quality, digits=1))
+println(&quot;  Mean confidence: &quot;, round(final_metrics.mean_confidence, digits=4))
+println(&quot;  Low confidence fraction: &quot;, round(final_metrics.low_confidence_fraction, digits=3))</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>In this tutorial, we&#39;ve demonstrated:</p><ol><li><strong>Qualmer Construction</strong>: Building quality-aware k-mer graphs from FASTQ data</li><li><strong>Joint Probability</strong>: How multiple observations with different qualities are combined</li><li><strong>Quality vs Coverage</strong>: The advantage of using quality scores over coverage alone</li><li><strong>Package Functions</strong>: Using Mycelia&#39;s built-in functions for quality-weighted analysis:<ul><li><code>find_quality_weighted_path()</code> for optimal path finding</li><li><code>calculate_assembly_quality_metrics()</code> for comprehensive quality assessment</li><li><code>identify_potential_errors()</code> for error detection</li></ul></li><li><strong>Round-Trip Conversion</strong>: Maintaining quality information through graph transformations</li><li><strong>Practical Assembly</strong>: Using quality information for more accurate genome assembly</li></ol><p>Key advantages of qualmer graphs:</p><ul><li>Better discrimination between true k-mers and errors</li><li>Quality-weighted path finding for more accurate assembly</li><li>Preservation of quality information for downstream analysis</li><li>Improved handling of repetitive regions with varying quality</li><li>Built-in error detection and quality assessment capabilities</li></ul><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Tutorial 6 completed!&quot;)
+println(&quot;You&#39;ve learned how to use quality-aware k-mer graphs for improved assembly accuracy.&quot;)
+println(&quot;All analysis was performed using Mycelia&#39;s built-in qualmer analysis functions.&quot;)</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

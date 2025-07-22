@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorial 5: Assembly Validation · Mycelia</title><meta name="title" content="Tutorial 5: Assembly Validation · Mycelia"/><meta property="og:title" content="Tutorial 5: Assembly Validation · Mycelia"/><meta property="twitter:title" content="Tutorial 5: Assembly Validation · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Tutorial 5: Assembly Validation</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial 5: Assembly Validation</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/05_assembly_validation.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-5:-Assembly-Validation"><a class="docs-heading-anchor" href="#Tutorial-5:-Assembly-Validation">Tutorial 5: Assembly Validation</a><a id="Tutorial-5:-Assembly-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-5:-Assembly-Validation" title="Permalink"></a></h1><p>This tutorial covers comprehensive validation techniques for genome assemblies, including reference-based and reference-free approaches.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will understand:</p><ul><li>Reference-based validation using alignment and comparison tools</li><li>Reference-free validation using k-mer and read-based approaches</li><li>BUSCO analysis for gene completeness assessment</li><li>Merqury for k-mer based quality assessment</li><li>Statistical validation and confidence intervals</li><li>Comparative validation across multiple assemblies</li></ul><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import Test
+import Mycelia
+import FASTX
+import Random
+import Statistics
+
+Random.seed!(42)</code></pre><h2 id="Part-1:-Validation-Strategy-Overview"><a class="docs-heading-anchor" href="#Part-1:-Validation-Strategy-Overview">Part 1: Validation Strategy Overview</a><a id="Part-1:-Validation-Strategy-Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Part-1:-Validation-Strategy-Overview" title="Permalink"></a></h2><p>Assembly validation requires multiple complementary approaches to ensure comprehensive quality assessment.</p><pre><code class="language-julia hljs">println(&quot;=== Assembly Validation Tutorial ===&quot;)
+
+println(&quot;Validation Approaches:&quot;)
+println(&quot;1. Reference-based validation&quot;)
+println(&quot;   - Alignment to known reference&quot;)
+println(&quot;   - Synteny analysis&quot;)
+println(&quot;   - Structural variant detection&quot;)
+println()
+println(&quot;2. Reference-free validation&quot;)
+println(&quot;   - K-mer based approaches (Merqury)&quot;)
+println(&quot;   - Read mapping validation&quot;)
+println(&quot;   - Internal consistency checks&quot;)
+println()
+println(&quot;3. Functional validation&quot;)
+println(&quot;   - Gene completeness (BUSCO)&quot;)
+println(&quot;   - Annotation quality&quot;)
+println(&quot;   - Comparative genomics&quot;)</code></pre><h2 id="Part-2:-Reference-Based-Validation"><a class="docs-heading-anchor" href="#Part-2:-Reference-Based-Validation">Part 2: Reference-Based Validation</a><a id="Part-2:-Reference-Based-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Reference-Based-Validation" title="Permalink"></a></h2><p>When reference genomes are available, direct comparison provides the most straightforward validation approach.</p><pre><code class="language-julia hljs">println(&quot;\n=== Reference-Based Validation ===&quot;)</code></pre><h3 id="Preparing-Test-Data"><a class="docs-heading-anchor" href="#Preparing-Test-Data">Preparing Test Data</a><a id="Preparing-Test-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Preparing-Test-Data" title="Permalink"></a></h3><p>Create reference and assembly for validation demonstration</p><pre><code class="language-julia hljs">println(&quot;--- Preparing Test Data ---&quot;)</code></pre><p>Reference genome</p><pre><code class="language-julia hljs">reference_size = 100000  ## 100 kb
+reference_genome = Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=reference_size)
+reference_file = &quot;reference.fasta&quot;
+Mycelia.write_fasta(outfile=reference_file, records=[reference_genome])</code></pre><p>Simulated assembly with some differences</p><pre><code class="language-julia hljs">assembly_contigs = [
+    # Contig 1: Perfect match to reference positions 1-40000
+    Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=40000),
+    # Contig 2: Reference positions 40001-80000 with some variants
+    Mycelia.random_fasta_record(moltype=:DNA, seed=2, L=40000),
+    # Contig 3: Reference positions 80001-100000
+    Mycelia.random_fasta_record(moltype=:DNA, seed=3, L=20000)
+]
+
+assembly_file = &quot;assembly.fasta&quot;
+Mycelia.write_fasta(outfile=assembly_file, records=assembly_contigs)
+
+println(&quot;Test data prepared:&quot;)
+println(&quot;  Reference: $(reference_size) bp&quot;)
+println(&quot;  Assembly: $(length(assembly_contigs)) contigs&quot;)</code></pre><h3 id="Alignment-Based-Validation"><a class="docs-heading-anchor" href="#Alignment-Based-Validation">Alignment-Based Validation</a><a id="Alignment-Based-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Alignment-Based-Validation" title="Permalink"></a></h3><p>Use alignment tools to compare assembly to reference</p><pre><code class="language-julia hljs">println(&quot;--- Alignment-Based Validation ---&quot;)</code></pre><p>TODO: Implement alignment-based validation</p><ul><li>Whole genome alignment (MUMmer, minimap2)</li><li>Calculate alignment statistics</li><li>Identify structural differences</li><li>Assess coverage and identity</li></ul><pre><code class="language-julia hljs">alignment_stats = Dict(
+    &quot;total_aligned&quot; =&gt; 98500,
+    &quot;percent_identity&quot; =&gt; 99.2,
+    &quot;coverage&quot; =&gt; 98.5,
+    &quot;n_mismatches&quot; =&gt; 800,
+    &quot;n_indels&quot; =&gt; 45,
+    &quot;n_structural_variants&quot; =&gt; 3
+)
+
+println(&quot;Alignment Statistics:&quot;)
+for (metric, value) in alignment_stats
+    println(&quot;  $metric: $value&quot;)
+end</code></pre><h3 id="Synteny-Analysis"><a class="docs-heading-anchor" href="#Synteny-Analysis">Synteny Analysis</a><a id="Synteny-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Synteny-Analysis" title="Permalink"></a></h3><p>Analyze conserved gene order and chromosomal structure</p><pre><code class="language-julia hljs">println(&quot;--- Synteny Analysis ---&quot;)</code></pre><p>TODO: Implement synteny analysis</p><ul><li>Identify orthologous regions</li><li>Analyze gene order conservation</li><li>Detect chromosomal rearrangements</li><li>Visualize synteny relationships</li></ul><h3 id="Structural-Variant-Detection"><a class="docs-heading-anchor" href="#Structural-Variant-Detection">Structural Variant Detection</a><a id="Structural-Variant-Detection-1"></a><a class="docs-heading-anchor-permalink" href="#Structural-Variant-Detection" title="Permalink"></a></h3><p>Identify large-scale differences between assembly and reference</p><pre><code class="language-julia hljs">println(&quot;--- Structural Variant Detection ---&quot;)</code></pre><p>TODO: Implement structural variant detection</p><ul><li>Detect insertions, deletions, inversions</li><li>Identify duplications and translocations</li><li>Validate with read evidence</li><li>Classify variant types and sizes</li></ul><h2 id="Part-3:-Reference-Free-Validation"><a class="docs-heading-anchor" href="#Part-3:-Reference-Free-Validation">Part 3: Reference-Free Validation</a><a id="Part-3:-Reference-Free-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Part-3:-Reference-Free-Validation" title="Permalink"></a></h2><p>When no reference is available, use intrinsic data properties for validation.</p><pre><code class="language-julia hljs">println(&quot;\n=== Reference-Free Validation ===&quot;)</code></pre><h3 id="K-mer-Based-Validation-(Merqury)"><a class="docs-heading-anchor" href="#K-mer-Based-Validation-(Merqury)">K-mer Based Validation (Merqury)</a><a id="K-mer-Based-Validation-(Merqury)-1"></a><a class="docs-heading-anchor-permalink" href="#K-mer-Based-Validation-(Merqury)" title="Permalink"></a></h3><p>Use k-mer analysis to assess assembly quality without reference</p><pre><code class="language-julia hljs">println(&quot;--- K-mer Based Validation ---&quot;)</code></pre><p>TODO: Implement Merqury-style validation</p><ul><li>Generate k-mer database from reads</li><li>Calculate assembly QV (Quality Value)</li><li>Assess k-mer completeness</li><li>Detect assembly errors</li></ul><p>Simulate k-mer validation results</p><pre><code class="language-julia hljs">merqury_results = Dict(
+    &quot;assembly_qv&quot; =&gt; 35.2,        ## Phred-scaled quality
+    &quot;kmer_completeness&quot; =&gt; 98.7,   ## Percentage of read k-mers in assembly
+    &quot;false_duplications&quot; =&gt; 0.8,   ## Percentage of duplicated k-mers
+    &quot;solid_kmers&quot; =&gt; 1250000,     ## Number of reliable k-mers
+    &quot;error_kmers&quot; =&gt; 15000        ## Number of error k-mers
+)
+
+println(&quot;Merqury Results:&quot;)
+for (metric, value) in merqury_results
+    println(&quot;  $metric: $value&quot;)
+end</code></pre><h3 id="Read-Mapping-Validation"><a class="docs-heading-anchor" href="#Read-Mapping-Validation">Read Mapping Validation</a><a id="Read-Mapping-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Read-Mapping-Validation" title="Permalink"></a></h3><p>Map original reads back to assembly for validation</p><pre><code class="language-julia hljs">println(&quot;--- Read Mapping Validation ---&quot;)</code></pre><p>TODO: Implement read mapping validation</p><ul><li>Map reads to assembly</li><li>Calculate mapping statistics</li><li>Identify unmapped regions</li><li>Assess coverage uniformity</li></ul><pre><code class="language-julia hljs">mapping_stats = Dict(
+    &quot;mapped_reads&quot; =&gt; 95.4,       ## Percentage of reads mapped
+    &quot;properly_paired&quot; =&gt; 92.1,    ## Percentage of properly paired reads
+    &quot;mean_coverage&quot; =&gt; 24.8,      ## Average coverage depth
+    &quot;coverage_uniformity&quot; =&gt; 0.85, # Coefficient of variation
+    &quot;unmapped_regions&quot; =&gt; 147     ## Number of unmapped regions
+)
+
+println(&quot;Read Mapping Statistics:&quot;)
+for (metric, value) in mapping_stats
+    println(&quot;  $metric: $value&quot;)
+end</code></pre><h3 id="Internal-Consistency-Validation"><a class="docs-heading-anchor" href="#Internal-Consistency-Validation">Internal Consistency Validation</a><a id="Internal-Consistency-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Internal-Consistency-Validation" title="Permalink"></a></h3><p>Check assembly internal consistency</p><pre><code class="language-julia hljs">println(&quot;--- Internal Consistency ---&quot;)</code></pre><p>TODO: Implement internal consistency checks</p><ul><li>Check for overlapping contigs</li><li>Validate contig connections</li><li>Identify potential misassemblies</li><li>Assess gap consistency</li></ul><h2 id="Part-4:-Functional-Validation"><a class="docs-heading-anchor" href="#Part-4:-Functional-Validation">Part 4: Functional Validation</a><a id="Part-4:-Functional-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Part-4:-Functional-Validation" title="Permalink"></a></h2><p>Validate assembly quality through functional analysis</p><pre><code class="language-julia hljs">println(&quot;\n=== Functional Validation ===&quot;)</code></pre><h3 id="BUSCO-Analysis"><a class="docs-heading-anchor" href="#BUSCO-Analysis">BUSCO Analysis</a><a id="BUSCO-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#BUSCO-Analysis" title="Permalink"></a></h3><p>Assess gene completeness using conserved orthologs</p><pre><code class="language-julia hljs">println(&quot;--- BUSCO Analysis ---&quot;)</code></pre><p>TODO: Implement BUSCO analysis</p><ul><li>Run BUSCO on assembly</li><li>Calculate completeness scores</li><li>Identify missing genes</li><li>Compare with related species</li></ul><pre><code class="language-julia hljs">busco_results = Dict(
+    &quot;complete_single_copy&quot; =&gt; 92.4,
+    &quot;complete_duplicated&quot; =&gt; 3.2,
+    &quot;fragmented&quot; =&gt; 2.8,
+    &quot;missing&quot; =&gt; 1.6,
+    &quot;total_buscos&quot; =&gt; 1440
+)
+
+println(&quot;BUSCO Results:&quot;)
+for (metric, value) in busco_results
+    println(&quot;  $metric: $value&quot;)
+end</code></pre><h3 id="Gene-Annotation-Quality"><a class="docs-heading-anchor" href="#Gene-Annotation-Quality">Gene Annotation Quality</a><a id="Gene-Annotation-Quality-1"></a><a class="docs-heading-anchor-permalink" href="#Gene-Annotation-Quality" title="Permalink"></a></h3><p>Validate through gene prediction and annotation</p><pre><code class="language-julia hljs">println(&quot;--- Gene Annotation Quality ---&quot;)</code></pre><p>TODO: Implement annotation quality assessment</p><ul><li>Predict genes in assembly</li><li>Compare with known gene sets</li><li>Assess annotation consistency</li><li>Validate gene structures</li></ul><h2 id="Part-5:-Comparative-Validation"><a class="docs-heading-anchor" href="#Part-5:-Comparative-Validation">Part 5: Comparative Validation</a><a id="Part-5:-Comparative-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Part-5:-Comparative-Validation" title="Permalink"></a></h2><p>Compare multiple assemblies to identify best approach</p><pre><code class="language-julia hljs">println(&quot;\n=== Comparative Validation ===&quot;)</code></pre><h3 id="Multi-Assembly-Comparison"><a class="docs-heading-anchor" href="#Multi-Assembly-Comparison">Multi-Assembly Comparison</a><a id="Multi-Assembly-Comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Assembly-Comparison" title="Permalink"></a></h3><p>Compare assemblies from different tools or parameters</p><pre><code class="language-julia hljs">println(&quot;--- Multi-Assembly Comparison ---&quot;)</code></pre><p>TODO: Implement multi-assembly comparison</p><ul><li>Compare multiple assemblies</li><li>Identify consistent regions</li><li>Assess tool-specific biases</li><li>Generate consensus assessments</li></ul><p>Simulate comparison results</p><pre><code class="language-julia hljs">assembly_comparison = Dict(
+    &quot;hifiasm&quot; =&gt; Dict(&quot;n50&quot; =&gt; 25000, &quot;busco&quot; =&gt; 94.2, &quot;qv&quot; =&gt; 35.8),
+    &quot;canu&quot; =&gt; Dict(&quot;n50&quot; =&gt; 18000, &quot;busco&quot; =&gt; 91.5, &quot;qv&quot; =&gt; 33.1),
+    &quot;flye&quot; =&gt; Dict(&quot;n50&quot; =&gt; 22000, &quot;busco&quot; =&gt; 92.8, &quot;qv&quot; =&gt; 34.5)
+)
+
+println(&quot;Assembly Comparison:&quot;)
+for (assembler, metrics) in assembly_comparison
+    println(&quot;  $assembler:&quot;)
+    for (metric, value) in metrics
+        println(&quot;    $metric: $value&quot;)
+    end
+end</code></pre><h3 id="Statistical-Validation"><a class="docs-heading-anchor" href="#Statistical-Validation">Statistical Validation</a><a id="Statistical-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Statistical-Validation" title="Permalink"></a></h3><p>Apply statistical tests to validation results</p><pre><code class="language-julia hljs">println(&quot;--- Statistical Validation ---&quot;)</code></pre><p>TODO: Implement statistical validation</p><ul><li>Bootstrap confidence intervals</li><li>Significance testing</li><li>Multiple testing correction</li><li>Effect size estimation</li></ul><h2 id="Part-6:-Validation-Metrics-Integration"><a class="docs-heading-anchor" href="#Part-6:-Validation-Metrics-Integration">Part 6: Validation Metrics Integration</a><a id="Part-6:-Validation-Metrics-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Part-6:-Validation-Metrics-Integration" title="Permalink"></a></h2><p>Combine multiple validation approaches for comprehensive assessment</p><pre><code class="language-julia hljs">println(&quot;\n=== Integrated Validation ===&quot;)</code></pre><h3 id="Composite-Quality-Scores"><a class="docs-heading-anchor" href="#Composite-Quality-Scores">Composite Quality Scores</a><a id="Composite-Quality-Scores-1"></a><a class="docs-heading-anchor-permalink" href="#Composite-Quality-Scores" title="Permalink"></a></h3><p>Combine multiple metrics into overall quality assessment</p><pre><code class="language-julia hljs">println(&quot;--- Composite Quality Scores ---&quot;)</code></pre><p>TODO: Implement composite scoring</p><ul><li>Weight different validation metrics</li><li>Generate overall quality scores</li><li>Rank assemblies by quality</li><li>Provide confidence intervals</li></ul><pre><code class="language-julia hljs">composite_score = Dict(
+    &quot;overall_quality&quot; =&gt; 8.7,     ## Scale 0-10
+    &quot;confidence_interval&quot; =&gt; (8.2, 9.1),
+    &quot;primary_strengths&quot; =&gt; [&quot;High contiguity&quot;, &quot;Good gene completeness&quot;],
+    &quot;primary_weaknesses&quot; =&gt; [&quot;Some structural variants&quot;, &quot;Coverage gaps&quot;]
+)
+
+println(&quot;Composite Quality Assessment:&quot;)
+for (metric, value) in composite_score
+    println(&quot;  $metric: $value&quot;)
+end</code></pre><h3 id="Validation-Report-Generation"><a class="docs-heading-anchor" href="#Validation-Report-Generation">Validation Report Generation</a><a id="Validation-Report-Generation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation-Report-Generation" title="Permalink"></a></h3><p>Create comprehensive validation reports</p><pre><code class="language-julia hljs">println(&quot;--- Validation Report ---&quot;)</code></pre><p>TODO: Implement report generation</p><ul><li>Generate HTML/PDF reports</li><li>Include visualizations</li><li>Provide recommendations</li><li>Export results to standard formats</li></ul><h2 id="Part-7:-Validation-Visualization"><a class="docs-heading-anchor" href="#Part-7:-Validation-Visualization">Part 7: Validation Visualization</a><a id="Part-7:-Validation-Visualization-1"></a><a class="docs-heading-anchor-permalink" href="#Part-7:-Validation-Visualization" title="Permalink"></a></h2><p>Create visualizations for validation results</p><pre><code class="language-julia hljs">println(&quot;\n=== Validation Visualization ===&quot;)</code></pre><h3 id="Quality-Metric-Plots"><a class="docs-heading-anchor" href="#Quality-Metric-Plots">Quality Metric Plots</a><a id="Quality-Metric-Plots-1"></a><a class="docs-heading-anchor-permalink" href="#Quality-Metric-Plots" title="Permalink"></a></h3><p>Visualize validation metrics</p><pre><code class="language-julia hljs">println(&quot;--- Quality Metric Plots ---&quot;)</code></pre><p>TODO: Implement validation visualization</p><ul><li>Quality score distributions</li><li>Metric correlation plots</li><li>Validation timeline plots</li><li>Comparative assembly plots</li></ul><h3 id="Genome-Browser-Integration"><a class="docs-heading-anchor" href="#Genome-Browser-Integration">Genome Browser Integration</a><a id="Genome-Browser-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Genome-Browser-Integration" title="Permalink"></a></h3><p>Visualize validation results in genome browser context</p><pre><code class="language-julia hljs">println(&quot;--- Genome Browser Integration ---&quot;)</code></pre><p>TODO: Implement genome browser integration</p><ul><li>Generate browser tracks</li><li>Highlight validation issues</li><li>Interactive exploration</li><li>Export visualization formats</li></ul><h2 id="Part-8:-Validation-Best-Practices"><a class="docs-heading-anchor" href="#Part-8:-Validation-Best-Practices">Part 8: Validation Best Practices</a><a id="Part-8:-Validation-Best-Practices-1"></a><a class="docs-heading-anchor-permalink" href="#Part-8:-Validation-Best-Practices" title="Permalink"></a></h2><p>Guidelines for effective assembly validation</p><pre><code class="language-julia hljs">println(&quot;\n=== Validation Best Practices ===&quot;)
+
+println(&quot;Validation Strategy:&quot;)
+println(&quot;- Use multiple complementary approaches&quot;)
+println(&quot;- Always validate with original data&quot;)
+println(&quot;- Compare with related genomes when available&quot;)
+println(&quot;- Focus on metrics relevant to your research goals&quot;)
+println()
+println(&quot;Quality Thresholds:&quot;)
+println(&quot;- BUSCO completeness: &gt;90% for eukaryotes, &gt;95% for prokaryotes&quot;)
+println(&quot;- Assembly QV: &gt;30 for high-quality assemblies&quot;)
+println(&quot;- Read mapping: &gt;95% of reads should map&quot;)
+println(&quot;- Contig N50: Should be substantial fraction of chromosome size&quot;)
+println()
+println(&quot;Common Pitfalls:&quot;)
+println(&quot;- Relying on single validation metric&quot;)
+println(&quot;- Ignoring biological context&quot;)
+println(&quot;- Not validating with original data&quot;)
+println(&quot;- Accepting assemblies without proper validation&quot;)</code></pre><h2 id="Part-9:-Troubleshooting-Assembly-Issues"><a class="docs-heading-anchor" href="#Part-9:-Troubleshooting-Assembly-Issues">Part 9: Troubleshooting Assembly Issues</a><a id="Part-9:-Troubleshooting-Assembly-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#Part-9:-Troubleshooting-Assembly-Issues" title="Permalink"></a></h2><p>Identify and address common assembly problems</p><pre><code class="language-julia hljs">println(&quot;\n=== Troubleshooting Assembly Issues ===&quot;)</code></pre><h3 id="Common-Problems-and-Solutions"><a class="docs-heading-anchor" href="#Common-Problems-and-Solutions">Common Problems and Solutions</a><a id="Common-Problems-and-Solutions-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Problems-and-Solutions" title="Permalink"></a></h3><p>Systematic approach to assembly problem diagnosis</p><pre><code class="language-julia hljs">println(&quot;--- Common Assembly Problems ---&quot;)
+
+problems_solutions = Dict(
+    &quot;Low contiguity&quot; =&gt; [
+        &quot;Increase read length or coverage&quot;,
+        &quot;Optimize assembly parameters&quot;,
+        &quot;Use scaffolding approaches&quot;,
+        &quot;Check for contamination&quot;
+    ],
+    &quot;Poor gene completeness&quot; =&gt; [
+        &quot;Check assembly coverage&quot;,
+        &quot;Examine repeat resolution&quot;,
+        &quot;Validate gene prediction parameters&quot;,
+        &quot;Consider alternative assemblers&quot;
+    ],
+    &quot;High error rate&quot; =&gt; [
+        &quot;Increase polishing iterations&quot;,
+        &quot;Check read quality&quot;,
+        &quot;Validate assembly parameters&quot;,
+        &quot;Consider consensus approaches&quot;
+    ],
+    &quot;Missing sequences&quot; =&gt; [
+        &quot;Check for contamination filtering&quot;,
+        &quot;Examine coverage bias&quot;,
+        &quot;Validate input data quality&quot;,
+        &quot;Consider hybrid approaches&quot;
+    ]
+)
+
+for (problem, solutions) in problems_solutions
+    println(&quot;$problem:&quot;)
+    for solution in solutions
+        println(&quot;  - $solution&quot;)
+    end
+    println()
+end</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;=== Assembly Validation Summary ===&quot;)
+println(&quot;✓ Understanding multiple validation approaches&quot;)
+println(&quot;✓ Implementing reference-based validation techniques&quot;)
+println(&quot;✓ Applying reference-free validation methods&quot;)
+println(&quot;✓ Functional validation through gene completeness&quot;)
+println(&quot;✓ Comparative validation across multiple assemblies&quot;)
+println(&quot;✓ Statistical validation and confidence assessment&quot;)
+println(&quot;✓ Integrated quality scoring and reporting&quot;)
+println(&quot;✓ Troubleshooting common assembly issues&quot;)</code></pre><p>Cleanup</p><pre><code class="language-julia hljs">cleanup_files = [reference_file, assembly_file]
+for file in cleanup_files
+    if isfile(file)
+        rm(file, force=true)
+    end
+end
+
+println(&quot;\nNext: Tutorial 6 - Gene Annotation&quot;)
+
+nothing</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

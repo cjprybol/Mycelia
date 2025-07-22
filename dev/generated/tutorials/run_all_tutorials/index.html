@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Run All Mycelia Tutorials · Mycelia</title><meta name="title" content="Run All Mycelia Tutorials · Mycelia"/><meta property="og:title" content="Run All Mycelia Tutorials · Mycelia"/><meta property="twitter:title" content="Run All Mycelia Tutorials · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Run All Mycelia Tutorials</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Run All Mycelia Tutorials</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/run_all_tutorials.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Run-All-Mycelia-Tutorials"><a class="docs-heading-anchor" href="#Run-All-Mycelia-Tutorials">Run All Mycelia Tutorials</a><a id="Run-All-Mycelia-Tutorials-1"></a><a class="docs-heading-anchor-permalink" href="#Run-All-Mycelia-Tutorials" title="Permalink"></a></h1><p>This script executes all Mycelia tutorials in sequence. Use with caution - may take significant time and resources.</p><h2 id="Usage"><a class="docs-heading-anchor" href="#Usage">Usage</a><a id="Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Usage" title="Permalink"></a></h2><pre><code class="language-bash hljs"># Run all tutorials
+julia --project=. tutorials/run_all_tutorials.jl
+
+# Run specific tutorial
+julia --project=. tutorials/01_data_acquisition.jl
+
+# Convert to notebooks
+julia --project=. -e &#39;include(&quot;tutorials/run_all_tutorials.jl&quot;); convert_all_to_notebooks()&#39;</code></pre><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import Dates
+import Literate</code></pre><p>List of all tutorials in execution order</p><pre><code class="language-julia hljs">TUTORIALS = [
+    &quot;01_data_acquisition.jl&quot;,
+    &quot;02_quality_control.jl&quot;,
+    &quot;03_kmer_analysis.jl&quot;,
+    &quot;04_genome_assembly.jl&quot;,
+    &quot;05_assembly_validation.jl&quot;,
+    &quot;06_gene_annotation.jl&quot;,
+    &quot;07_comparative_genomics.jl&quot;,
+    &quot;08_tool_integration.jl&quot;,
+]
+
+&quot;&quot;&quot;
+    run_all_tutorials()
+
+Execute all tutorials in sequence, collecting timing and status information.
+&quot;&quot;&quot;
+function run_all_tutorials()
+    println(&quot;=== Running All Mycelia Tutorials ===&quot;)
+    println(&quot;Start time: $(Dates.now())&quot;)
+    println()
+
+    results = []
+    total_start = time()
+
+    for tutorial in TUTORIALS
+        if isfile(tutorial)
+            println(&quot;Running $tutorial...&quot;)
+            start_time = time()
+
+            try
+                # Execute tutorial
+                include(tutorial)
+
+                elapsed = time() - start_time
+                push!(results, (tutorial, :success, elapsed))
+                println(&quot;✓ $tutorial completed in $(round(elapsed, digits=2))s&quot;)
+
+            catch e
+                elapsed = time() - start_time
+                push!(results, (tutorial, :error, elapsed, e))
+                println(&quot;✗ $tutorial failed after $(round(elapsed, digits=2))s&quot;)
+                println(&quot;  Error: $e&quot;)
+            end
+
+            println()
+        else
+            println(&quot;⚠ $tutorial not found, skipping...&quot;)
+            push!(results, (tutorial, :not_found, 0.0))
+        end
+    end
+
+    total_elapsed = time() - total_start
+
+    # Print summary
+    println(&quot;=== Tutorial Execution Summary ===&quot;)
+    println(&quot;Total time: $(round(total_elapsed, digits=2))s&quot;)
+    println()
+
+    successful = 0
+    for (tutorial, status, elapsed, error...) in results
+        if status == :success
+            println(&quot;✓ $tutorial ($(round(elapsed, digits=2))s)&quot;)
+            successful += 1
+        elseif status == :error
+            println(&quot;✗ $tutorial ($(round(elapsed, digits=2))s) - $(error[1])&quot;)
+        else
+            println(&quot;⚠ $tutorial (not found)&quot;)
+        end
+    end
+
+    println()
+    println(&quot;Successful: $successful/$(length(TUTORIALS))&quot;)
+    println(&quot;End time: $(Dates.now())&quot;)
+
+    return results
+end
+
+&quot;&quot;&quot;
+    convert_all_to_notebooks()
+
+Convert all tutorials to Jupyter notebooks using Literate.jl.
+&quot;&quot;&quot;
+function convert_all_to_notebooks()
+    println(&quot;=== Converting Tutorials to Notebooks ===&quot;)
+
+    # Create notebooks directory if it doesn&#39;t exist
+    notebooks_dir = &quot;notebooks&quot;
+    if !isdir(notebooks_dir)
+        mkdir(notebooks_dir)
+    end
+
+    for tutorial in TUTORIALS
+        if isfile(tutorial)
+            println(&quot;Converting $tutorial to notebook...&quot;)
+
+            try
+                # Convert to notebook
+                Literate.notebook(tutorial, notebooks_dir, execute=false)
+                println(&quot;✓ Converted $tutorial&quot;)
+
+            catch e
+                println(&quot;✗ Failed to convert $tutorial: $e&quot;)
+            end
+        else
+            println(&quot;⚠ $tutorial not found, skipping...&quot;)
+        end
+    end
+
+    println()
+    println(&quot;Notebooks saved to: $notebooks_dir&quot;)
+end
+
+&quot;&quot;&quot;
+    run_tutorial(tutorial_name)
+
+Run a specific tutorial by name.
+&quot;&quot;&quot;
+function run_tutorial(tutorial_name)
+    if !endswith(tutorial_name, &quot;.jl&quot;)
+        tutorial_name *= &quot;.jl&quot;
+    end
+
+    if isfile(tutorial_name)
+        println(&quot;Running $tutorial_name...&quot;)
+        start_time = time()
+
+        try
+            include(tutorial_name)
+            elapsed = time() - start_time
+            println(&quot;✓ $tutorial_name completed in $(round(elapsed, digits=2))s&quot;)
+            return true
+        catch e
+            elapsed = time() - start_time
+            println(&quot;✗ $tutorial_name failed after $(round(elapsed, digits=2))s&quot;)
+            println(&quot;  Error: $e&quot;)
+            return false
+        end
+    else
+        println(&quot;✗ $tutorial_name not found&quot;)
+        return false
+    end
+end</code></pre><p>Main execution</p><pre><code class="language-julia hljs">if abspath(PROGRAM_FILE) == @__FILE__
+    # Only run if this script is executed directly
+    if length(ARGS) == 0
+        # Run all tutorials
+        results = run_all_tutorials()
+    elseif ARGS[1] == &quot;convert&quot;
+        # Convert to notebooks
+        convert_all_to_notebooks()
+    else
+        # Run specific tutorial
+        tutorial_name = ARGS[1]
+        run_tutorial(tutorial_name)
+    end
+end</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

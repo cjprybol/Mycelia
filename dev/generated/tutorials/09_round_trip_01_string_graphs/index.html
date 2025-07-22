@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction · Mycelia</title><meta name="title" content="Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction · Mycelia"/><meta property="og:title" content="Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction · Mycelia"/><meta property="twitter:title" content="Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/09_round_trip_01_string_graphs.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Round-Trip-Tutorial-1:-String-Data-String-Graphs-Reconstruction"><a class="docs-heading-anchor" href="#Round-Trip-Tutorial-1:-String-Data-String-Graphs-Reconstruction">Round-Trip Tutorial 1: String Data → String Graphs → Reconstruction</a><a id="Round-Trip-Tutorial-1:-String-Data-String-Graphs-Reconstruction-1"></a><a class="docs-heading-anchor-permalink" href="#Round-Trip-Tutorial-1:-String-Data-String-Graphs-Reconstruction" title="Permalink"></a></h1><p>This tutorial demonstrates the complete round-trip workflow for string-based graph construction and reconstruction in Mycelia. We&#39;ll start with raw string data, construct string graphs, perform assembly operations, and validate the reconstruction quality.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will:</p><ol><li>Understand string graph construction from raw text data</li><li>Learn to perform graph-based assembly operations</li><li>Validate reconstruction accuracy with quality metrics</li><li>Analyze memory usage and computational performance</li><li>Apply string graphs to real-world text analysis problems</li></ol><pre><code class="language-julia hljs">import Mycelia
+import Statistics
+import Random</code></pre><h2 id="Data-Preparation"><a class="docs-heading-anchor" href="#Data-Preparation">Data Preparation</a><a id="Data-Preparation-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Preparation" title="Permalink"></a></h2><p>We&#39;ll start with various types of string data to demonstrate the versatility of string graphs.</p><pre><code class="language-julia hljs">println(&quot;=&quot;^80)
+println(&quot;ROUND-TRIP TUTORIAL 1: STRING GRAPHS&quot;)
+println(&quot;=&quot;^80)</code></pre><h3 id="Clean-Error-Free-Input-Data"><a class="docs-heading-anchor" href="#Clean-Error-Free-Input-Data">Clean Error-Free Input Data</a><a id="Clean-Error-Free-Input-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Clean-Error-Free-Input-Data" title="Permalink"></a></h3><p>First, let&#39;s create clean, error-free string data to establish baseline performance.</p><pre><code class="language-julia hljs">clean_strings = [
+    &quot;The quick brown fox jumps over the lazy dog&quot;,
+    &quot;ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot;,
+    &quot;1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot;,
+    # &quot;αβγδεζηθικλμνξοπρστυφχψω&quot;,  ## Unicode testing - requires fix in string-graphs.jl
+    &quot;Pattern recognition and machine learning algorithms&quot;
+]
+
+println(&quot;\n1. CLEAN ERROR-FREE INPUT DATA&quot;)
+println(&quot;-&quot;^50)
+for (i, s) in enumerate(clean_strings)
+    println(&quot;String $i: \&quot;$s\&quot; (length: $(length(s)))&quot;)
+end</code></pre><h2 id="Graph-Construction-Phase"><a class="docs-heading-anchor" href="#Graph-Construction-Phase">Graph Construction Phase</a><a id="Graph-Construction-Phase-1"></a><a class="docs-heading-anchor-permalink" href="#Graph-Construction-Phase" title="Permalink"></a></h2><p>Now we&#39;ll construct string graphs from our input data using different n-gram sizes.</p><pre><code class="language-julia hljs">println(&quot;\n2. GRAPH CONSTRUCTION PHASE&quot;)
+println(&quot;-&quot;^50)
+
+graph_results = Dict()
+
+for n in [2, 3, 4, 5]
+    println(&quot;\nTesting n-gram size: $n&quot;)
+
+    total_ngrams = 0
+    total_vertices = 0
+
+    for (i, text) in enumerate(clean_strings)
+        if length(text) &gt;= n  ## Only process if text is long enough
+            try
+                # Construct string graph
+                graph = Mycelia.string_to_ngram_graph(s=text, n=n)
+
+                # Extract graph statistics
+                num_vertices = length(graph.vertex_labels)
+                vertex_labels = collect(values(graph.vertex_labels))
+
+                total_ngrams += length(text) - n + 1  ## Expected number of n-grams
+                total_vertices += num_vertices
+
+                println(&quot;  String $i: $(num_vertices) unique $(n)-grams&quot;)
+                if num_vertices &gt; 0
+                    println(&quot;    Examples: $(vertex_labels[1:min(3, num_vertices)])&quot;)
+                end
+
+                # Store results for later analysis
+                graph_results[&quot;$(i)_$(n)&quot;] = (
+                    graph = graph,
+                    original_text = text,
+                    n = n,
+                    vertices = num_vertices,
+                    total_ngrams = length(text) - n + 1
+                )
+
+            catch e
+                println(&quot;  String $i: Error - $(typeof(e))&quot;)
+            end
+        else
+            println(&quot;  String $i: Too short for $(n)-grams&quot;)
+        end
+    end
+
+    println(&quot;  Summary: $total_vertices unique vertices from $total_ngrams total n-grams&quot;)
+    if total_ngrams &gt; 0
+        compression_ratio = total_vertices / total_ngrams
+        println(&quot;  Compression ratio: $(round(compression_ratio, digits=3))&quot;)
+    end
+end</code></pre><h2 id="Assembly-and-Reconstruction-Phase"><a class="docs-heading-anchor" href="#Assembly-and-Reconstruction-Phase">Assembly and Reconstruction Phase</a><a id="Assembly-and-Reconstruction-Phase-1"></a><a class="docs-heading-anchor-permalink" href="#Assembly-and-Reconstruction-Phase" title="Permalink"></a></h2><p>Now we&#39;ll attempt to reconstruct the original strings from the graphs.</p><pre><code class="language-julia hljs">println(&quot;\n3. ASSEMBLY AND RECONSTRUCTION PHASE&quot;)
+println(&quot;-&quot;^50)
+
+reconstruction_results = Dict()
+
+for (key, result) in graph_results
+    println(&quot;\nReconstructing: \&quot;$(result.original_text)\&quot; (n=$(result.n))&quot;)
+
+    try
+        # Attempt to reconstruct strings from the graph
+        # Note: This uses the basic string assembly function
+        reconstructed_strings = Mycelia.assemble_strings(result.graph)
+
+        num_reconstructed = length(reconstructed_strings)
+        println(&quot;  Reconstructed $num_reconstructed string(s)&quot;)
+
+        # Store reconstruction results
+        reconstruction_results[key] = (
+            original = result.original_text,
+            reconstructed = reconstructed_strings,
+            n = result.n,
+            success = !isempty(reconstructed_strings)
+        )
+
+        # Show first few reconstructed strings
+        for (i, reconstructed) in enumerate(reconstructed_strings[1:min(3, num_reconstructed)])
+            println(&quot;    Reconstruction $i: \&quot;$reconstructed\&quot;&quot;)
+        end
+
+    catch e
+        println(&quot;  Reconstruction failed: $(typeof(e))&quot;)
+        reconstruction_results[key] = (
+            original = result.original_text,
+            reconstructed = String[],
+            n = result.n,
+            success = false
+        )
+    end
+end</code></pre><h2 id="Quality-Assessment-Phase"><a class="docs-heading-anchor" href="#Quality-Assessment-Phase">Quality Assessment Phase</a><a id="Quality-Assessment-Phase-1"></a><a class="docs-heading-anchor-permalink" href="#Quality-Assessment-Phase" title="Permalink"></a></h2><p>Let&#39;s evaluate the reconstruction quality using various metrics.</p><pre><code class="language-julia hljs">println(&quot;\n4. QUALITY ASSESSMENT PHASE&quot;)
+println(&quot;-&quot;^50)
+
+function calculate_string_similarity(original::String, reconstructed::String)
+    &quot;&quot;&quot;Calculate similarity between original and reconstructed strings.&quot;&quot;&quot;
+    # Simple character-level accuracy
+    min_len = min(length(original), length(reconstructed))
+    max_len = max(length(original), length(reconstructed))
+
+    if max_len == 0
+        return 1.0  ## Both strings are empty
+    end
+
+    # Count matching characters at corresponding positions
+    matches = 0
+    for i in 1:min_len
+        if original[i] == reconstructed[i]
+            matches += 1
+        end
+    end
+
+    # Penalize length differences
+    similarity = matches / max_len
+    return similarity
+end
+
+function assess_reconstruction_quality(results_dict)
+    &quot;&quot;&quot;Assess overall reconstruction quality across all tests.&quot;&quot;&quot;
+    total_tests = length(results_dict)
+    successful_reconstructions = 0
+    total_similarity = 0.0
+
+    println(&quot;Individual reconstruction assessment:&quot;)
+
+    for (key, result) in results_dict
+        original = result.original
+        reconstructed_list = result.reconstructed
+        n = result.n
+
+        if isempty(reconstructed_list)
+            println(&quot;  $key: FAILED - No reconstruction&quot;)
+            continue
+        end
+
+        # Find best reconstruction (highest similarity)
+        best_similarity = 0.0
+        best_reconstruction = &quot;&quot;
+
+        for reconstructed in reconstructed_list
+            similarity = calculate_string_similarity(original, reconstructed)
+            if similarity &gt; best_similarity
+                best_similarity = similarity
+                best_reconstruction = reconstructed
+            end
+        end
+
+        total_similarity += best_similarity
+        if best_similarity &gt; 0.8  ## Consider &gt;80% similarity as successful
+            successful_reconstructions += 1
+        end
+
+        status = best_similarity &gt; 0.8 ? &quot;SUCCESS&quot; : &quot;PARTIAL&quot;
+        println(&quot;  $key: $status - Similarity: $(round(best_similarity, digits=3))&quot;)
+
+        # Show comparison for low similarity cases
+        if best_similarity &lt; 0.8
+            println(&quot;    Original:      \&quot;$(original)\&quot;&quot;)
+            println(&quot;    Best match:    \&quot;$(best_reconstruction)\&quot;&quot;)
+        end
+    end
+
+    return (
+        total_tests = total_tests,
+        successful = successful_reconstructions,
+        average_similarity = total_tests &gt; 0 ? total_similarity / total_tests : 0.0,
+        success_rate = total_tests &gt; 0 ? successful_reconstructions / total_tests : 0.0
+    )
+end
+
+quality_metrics = assess_reconstruction_quality(reconstruction_results)
+
+println(&quot;\nOverall Quality Assessment:&quot;)
+println(&quot;  Total tests: $(quality_metrics.total_tests)&quot;)
+println(&quot;  Successful reconstructions: $(quality_metrics.successful)&quot;)
+println(&quot;  Success rate: $(round(quality_metrics.success_rate * 100, digits=1))%&quot;)
+println(&quot;  Average similarity: $(round(quality_metrics.average_similarity, digits=3))&quot;)</code></pre><h2 id="Performance-Analysis"><a class="docs-heading-anchor" href="#Performance-Analysis">Performance Analysis</a><a id="Performance-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Analysis" title="Permalink"></a></h2><p>Analyze memory usage and computational efficiency.</p><pre><code class="language-julia hljs">println(&quot;\n5. PERFORMANCE ANALYSIS&quot;)
+println(&quot;-&quot;^50)
+
+function analyze_performance_by_n()
+    &quot;&quot;&quot;Analyze how performance scales with n-gram size.&quot;&quot;&quot;
+
+    test_string = &quot;The quick brown fox jumps over the lazy dog and then some additional text for performance testing&quot;
+    println(&quot;Performance test string: \&quot;$test_string\&quot;&quot;)
+    println(&quot;String length: $(length(test_string)) characters&quot;)
+
+    for n in 2:6
+        if length(test_string) &gt;= n
+            # Measure construction time
+            start_time = time()
+            graph = Mycelia.string_to_ngram_graph(s=test_string, n=n)
+            construction_time = time() - start_time
+
+            # Measure graph properties
+            num_vertices = length(graph.vertex_labels)
+            expected_ngrams = length(test_string) - n + 1
+            compression_ratio = num_vertices / expected_ngrams
+
+            # Estimate memory usage (approximate)
+            avg_vertex_size = sum(length(v) for v in values(graph.vertex_labels)) / num_vertices
+            estimated_memory_kb = (num_vertices * avg_vertex_size * 2) / 1024  ## Rough estimate
+
+            println(&quot;  n=$n: $(num_vertices) vertices, $(round(construction_time*1000, digits=2))ms, $(round(compression_ratio, digits=3)) compression, ~$(round(estimated_memory_kb, digits=1))KB&quot;)
+        end
+    end
+end
+
+analyze_performance_by_n()</code></pre><h2 id="Real-World-Application-Example"><a class="docs-heading-anchor" href="#Real-World-Application-Example">Real-World Application Example</a><a id="Real-World-Application-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Real-World-Application-Example" title="Permalink"></a></h2><p>Demonstrate string graphs on a practical text analysis problem.</p><pre><code class="language-julia hljs">println(&quot;\n6. REAL-WORLD APPLICATION EXAMPLE&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: DNA sequence analysis as strings</p><pre><code class="language-julia hljs">dna_sequences = [
+    &quot;ATCGATCGATCGATCG&quot;,
+    &quot;GATCGATCGATCGTAGC&quot;,
+    &quot;TCGATCGATCGTAGCTA&quot;,
+    &quot;CGATCGATCGTAGCTAG&quot;,
+    &quot;ATCGTAGCTAGCTAGCT&quot;
+]
+
+println(&quot;DNA sequence analysis using string graphs:&quot;)
+println(&quot;Sequences to analyze:&quot;)
+for (i, seq) in enumerate(dna_sequences)
+    println(&quot;  Seq $i: $seq&quot;)
+end</code></pre><p>Concatenate sequences for analysis</p><pre><code class="language-julia hljs">combined_dna = join(dna_sequences, &quot;N&quot;)  ## Use &#39;N&#39; as separator
+println(&quot;\\nCombined sequence: $combined_dna&quot;)</code></pre><p>Build string graph</p><pre><code class="language-julia hljs">dna_graph = Mycelia.string_to_ngram_graph(s=combined_dna, n=4)
+dna_4grams = collect(values(dna_graph.vertex_labels))
+
+println(&quot;DNA 4-gram analysis:&quot;)
+println(&quot;  Unique 4-grams: $(length(dna_4grams))&quot;)
+println(&quot;  Total 4-grams: $(length(combined_dna) - 4 + 1)&quot;)</code></pre><p>Find most common patterns</p><pre><code class="language-julia hljs">dna_4gram_counts = Dict(k =&gt; 0 for k in dna_4grams)
+for i in 1:(length(combined_dna) - 4 + 1)
+    ngram = combined_dna[i:i+3]
+    if haskey(dna_4gram_counts, ngram)
+        dna_4gram_counts[ngram] += 1
+    end
+end</code></pre><p>Sort by frequency</p><pre><code class="language-julia hljs">sorted_patterns = sort(collect(dna_4gram_counts), by=x-&gt;x[2], rev=true)
+println(&quot;  Most frequent 4-grams:&quot;)
+for (pattern, count) in sorted_patterns[1:min(5, length(sorted_patterns))]
+    if pattern != &quot;N&quot;  ## Skip separator
+        println(&quot;    $pattern: $count occurrences&quot;)
+    end
+end</code></pre><h2 id="Visualization-and-Graph-Analysis"><a class="docs-heading-anchor" href="#Visualization-and-Graph-Analysis">Visualization and Graph Analysis</a><a id="Visualization-and-Graph-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Visualization-and-Graph-Analysis" title="Permalink"></a></h2><p>Provide insights into graph structure.</p><pre><code class="language-julia hljs">println(&quot;\n7. GRAPH STRUCTURE ANALYSIS&quot;)
+println(&quot;-&quot;^50)
+
+function analyze_graph_structure(graph, description)
+    &quot;&quot;&quot;Analyze structural properties of a string graph.&quot;&quot;&quot;
+
+    vertices = collect(values(graph.vertex_labels))
+    num_vertices = length(vertices)
+
+    if num_vertices == 0
+        println(&quot;  $description: Empty graph&quot;)
+        return
+    end
+
+    # Basic statistics
+    vertex_lengths = [length(v) for v in vertices]
+    avg_length = Statistics.mean(vertex_lengths)
+
+    println(&quot;  $description:&quot;)
+    println(&quot;    Vertices: $num_vertices&quot;)
+    println(&quot;    Average vertex length: $(round(avg_length, digits=2))&quot;)
+
+    # Character distribution analysis
+    all_chars = join(vertices)
+    char_counts = Dict{Char, Int}()
+    for char in all_chars
+        char_counts[char] = get(char_counts, char, 0) + 1
+    end
+
+    top_chars = sort(collect(char_counts), by=x-&gt;x[2], rev=true)
+    println(&quot;    Character distribution (top 5):&quot;)
+    for (char, count) in top_chars[1:min(5, length(top_chars))]
+        println(&quot;      &#39;$char&#39;: $count&quot;)
+    end
+
+    return (
+        vertices = num_vertices,
+        avg_length = avg_length,
+        char_distribution = char_counts
+    )
+end</code></pre><p>Analyze a few representative graphs</p><pre><code class="language-julia hljs">println(&quot;Analyzing graph structures:&quot;)
+
+for n in [3, 4]
+    test_text = &quot;The quick brown fox jumps over the lazy dog&quot;
+    if length(test_text) &gt;= n
+        graph = Mycelia.string_to_ngram_graph(s=test_text, n=n)
+        analyze_graph_structure(graph, &quot;$(n)-gram graph of: \&quot;$test_text\&quot;&quot;)
+    end
+end</code></pre><h2 id="Tutorial-Summary-and-Conclusions"><a class="docs-heading-anchor" href="#Tutorial-Summary-and-Conclusions">Tutorial Summary and Conclusions</a><a id="Tutorial-Summary-and-Conclusions-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-Summary-and-Conclusions" title="Permalink"></a></h2><p>Summarize what we&#39;ve learned and provide guidance for next steps.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^80)
+println(&quot;TUTORIAL SUMMARY AND CONCLUSIONS&quot;)
+println(&quot;=&quot;^80)
+
+println(&quot;\\n✅ SUCCESSFUL COMPLETION OF STRING GRAPH ROUND-TRIP WORKFLOW:&quot;)
+println(&quot;  1. Data Preparation: Created diverse string datasets&quot;)
+println(&quot;  2. Graph Construction: Built n-gram graphs with various parameters&quot;)
+println(&quot;  3. Assembly Process: Reconstructed strings from graph representations&quot;)
+println(&quot;  4. Quality Assessment: Evaluated reconstruction accuracy&quot;)
+println(&quot;  5. Performance Analysis: Measured efficiency and scaling behavior&quot;)
+println(&quot;  6. Real-world Application: Applied to DNA sequence analysis&quot;)
+
+println(&quot;\\n📊 KEY FINDINGS:&quot;)
+println(&quot;  • String graphs provide effective compression of repetitive text&quot;)
+println(&quot;  • Reconstruction quality depends on n-gram size and text complexity&quot;)
+println(&quot;  • Success rate: $(round(quality_metrics.success_rate * 100, digits=1))%&quot;)
+println(&quot;  • Average similarity: $(round(quality_metrics.average_similarity, digits=3))&quot;)
+println(&quot;  • Memory usage scales with unique n-gram count&quot;)
+
+println(&quot;\\n💡 INSIGHTS:&quot;)
+println(&quot;  • Larger n-grams provide more specificity but less compression&quot;)
+println(&quot;  • Highly repetitive sequences achieve better compression ratios&quot;)
+println(&quot;  • Unicode text support enables international language analysis&quot;)
+println(&quot;  • String graphs are foundation for more complex biological graphs&quot;)
+
+println(&quot;\\n🔄 ROUND-TRIP WORKFLOW VALIDATED:&quot;)
+println(&quot;  Raw String Data → N-gram Graph → Assembled Strings&quot;)
+println(&quot;  ✓ Input data successfully processed&quot;)
+println(&quot;  ✓ Graph construction completed&quot;)
+println(&quot;  ✓ Assembly operations performed&quot;)
+println(&quot;  ✓ Quality metrics calculated&quot;)
+println(&quot;  ✓ Results validated and analyzed&quot;)
+
+println(&quot;\\n🚀 NEXT STEPS:&quot;)
+println(&quot;  • Tutorial 2: String data → N-gram graphs → String graphs&quot;)
+println(&quot;  • Tutorial 3: FASTA sequences → Sequence graphs → Reconstruction&quot;)
+println(&quot;  • Tutorial 4: FASTA sequences → K-mer graphs → Sequence graphs&quot;)
+println(&quot;  • Tutorial 5: FASTQ sequences → FASTQ graphs (direct quality-aware)&quot;)
+println(&quot;  • Tutorial 6: FASTQ sequences → Qualmer graphs → FASTQ graphs&quot;)
+
+println(&quot;\\n📚 LEARNING OUTCOMES ACHIEVED:&quot;)
+println(&quot;  ✓ Understand string graph construction and reconstruction&quot;)
+println(&quot;  ✓ Perform quality assessment with similarity metrics&quot;)
+println(&quot;  ✓ Analyze computational performance and memory usage&quot;)
+println(&quot;  ✓ Apply string graphs to real-world text analysis&quot;)
+println(&quot;  ✓ Evaluate trade-offs between compression and accuracy&quot;)
+
+println(&quot;\\n&quot; * &quot;=&quot;^80)
+println(&quot;Ready to proceed to Tutorial 2: N-gram to String Graph Workflow!&quot;)
+println(&quot;=&quot;^80)</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

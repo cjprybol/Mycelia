@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorial 5: Direct FASTQ Sequence Graphs · Mycelia</title><meta name="title" content="Tutorial 5: Direct FASTQ Sequence Graphs · Mycelia"/><meta property="og:title" content="Tutorial 5: Direct FASTQ Sequence Graphs · Mycelia"/><meta property="twitter:title" content="Tutorial 5: Direct FASTQ Sequence Graphs · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Tutorial 5: Direct FASTQ Sequence Graphs</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial 5: Direct FASTQ Sequence Graphs</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/09_round_trip_05_fastq_graphs.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-5:-Direct-FASTQ-Sequence-Graphs"><a class="docs-heading-anchor" href="#Tutorial-5:-Direct-FASTQ-Sequence-Graphs">Tutorial 5: Direct FASTQ Sequence Graphs</a><a id="Tutorial-5:-Direct-FASTQ-Sequence-Graphs-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-5:-Direct-FASTQ-Sequence-Graphs" title="Permalink"></a></h1><p>This tutorial demonstrates the direct workflow from FASTQ sequences to quality-aware sequence graphs without the intermediate qualmer step. This approach is useful when you want variable-length contigs with quality information from the start.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will understand:</p><ol><li>How to create quality-aware sequence graphs directly from FASTQ data</li><li>The difference between qualmer-based and direct approaches</li><li>How to perform assembly with preserved per-base quality scores</li><li>When to use direct vs qualmer-mediated approaches</li><li>Quality-aware contig assembly and validation</li></ol><h2 id="Setup-and-Imports"><a class="docs-heading-anchor" href="#Setup-and-Imports">Setup and Imports</a><a id="Setup-and-Imports-1"></a><a class="docs-heading-anchor-permalink" href="#Setup-and-Imports" title="Permalink"></a></h2><p>Following CLAUDE.md standards: only import top-level packages, use full namespacing</p><pre><code class="language-julia hljs">import Mycelia
+import FASTX
+import Test
+import Statistics</code></pre><h2 id="Part-1:-Direct-Quality-Aware-Sequence-Graph-Construction"><a class="docs-heading-anchor" href="#Part-1:-Direct-Quality-Aware-Sequence-Graph-Construction">Part 1: Direct Quality-Aware Sequence Graph Construction</a><a id="Part-1:-Direct-Quality-Aware-Sequence-Graph-Construction-1"></a><a class="docs-heading-anchor-permalink" href="#Part-1:-Direct-Quality-Aware-Sequence-Graph-Construction" title="Permalink"></a></h2><p>Unlike Tutorial 6 which goes FASTQ → Qualmer → FASTQ graphs, this tutorial demonstrates the direct FASTQ → FASTQ graphs approach.</p><h3 id="Creating-Diverse-FASTQ-Data"><a class="docs-heading-anchor" href="#Creating-Diverse-FASTQ-Data">Creating Diverse FASTQ Data</a><a id="Creating-Diverse-FASTQ-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-Diverse-FASTQ-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">function create_diverse_fastq_data()
+    # Simulated reads from a 60bp region with overlaps
+    true_sequence = &quot;ATCGATCGATCGTAGCTAGCTAGCTTGCATGCATGCATGCATGCATGCATTAGCTAGC&quot;
+
+    reads = []
+
+    # High-quality overlapping reads (perfect assembly case)
+    push!(reads, FASTX.FASTQ.Record(&quot;read1&quot;, true_sequence[1:25], &quot;I&quot;^25))
+    push!(reads, FASTX.FASTQ.Record(&quot;read2&quot;, true_sequence[20:45], &quot;I&quot;^26))
+    push!(reads, FASTX.FASTQ.Record(&quot;read3&quot;, true_sequence[40:60], &quot;I&quot;^21))
+
+    # Medium-quality reads with slight variations
+    push!(reads, FASTX.FASTQ.Record(&quot;read4&quot;, true_sequence[10:35], &quot;F&quot;^26))
+    push!(reads, FASTX.FASTQ.Record(&quot;read5&quot;, true_sequence[30:55], &quot;F&quot;^26))
+
+    # Low-quality read with potential error
+    error_seq = true_sequence[15:40]
+    error_seq = error_seq[1:10] * &quot;T&quot; * error_seq[12:end]  ## Introduce error
+    push!(reads, FASTX.FASTQ.Record(&quot;read6&quot;, error_seq, &quot;AAA###AAA&quot; * &quot;A&quot;^17))
+
+    # Short high-quality reads
+    push!(reads, FASTX.FASTQ.Record(&quot;read7&quot;, true_sequence[5:20], &quot;I&quot;^16))
+    push!(reads, FASTX.FASTQ.Record(&quot;read8&quot;, true_sequence[45:60], &quot;I&quot;^16))
+
+    return reads, true_sequence
+end
+
+println(&quot;Creating diverse FASTQ dataset for direct assembly...&quot;)
+fastq_reads, reference_seq = create_diverse_fastq_data()
+
+println(&quot;Dataset overview:&quot;)
+println(&quot;  Reference sequence: &quot;, reference_seq)
+println(&quot;  Number of reads: &quot;, length(fastq_reads))
+for (i, read) in enumerate(fastq_reads)
+    seq = String(FASTX.sequence(read))
+    qual_scores = FASTX.quality_scores(read)
+    mean_qual = round(Statistics.mean(qual_scores), digits=1)
+    println(&quot;  Read $i: length $(length(seq)), mean quality $mean_qual&quot;)
+end</code></pre><h2 id="Part-2:-Direct-Quality-Aware-BioSequence-Graph-Construction"><a class="docs-heading-anchor" href="#Part-2:-Direct-Quality-Aware-BioSequence-Graph-Construction">Part 2: Direct Quality-Aware BioSequence Graph Construction</a><a id="Part-2:-Direct-Quality-Aware-BioSequence-Graph-Construction-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Direct-Quality-Aware-BioSequence-Graph-Construction" title="Permalink"></a></h2><p>Build a quality-aware sequence graph directly from FASTQ reads.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Building quality-aware BioSequence graph directly from FASTQ...&quot;)
+
+# Use the direct build function
+fastq_graph = Mycelia.build_quality_biosequence_graph(fastq_reads)
+
+println(&quot;\nDirect FASTQ graph statistics:&quot;)
+println(&quot;  Number of vertices: &quot;, Graphs.nv(fastq_graph))
+println(&quot;  Number of edges: &quot;, Graphs.ne(fastq_graph))
+
+# Examine the vertices (these should be variable-length sequences)
+println(&quot;\nExamining quality-aware sequence vertices:&quot;)
+for v in Iterators.take(Graphs.vertices(fastq_graph), min(5, Graphs.nv(fastq_graph)))
+    vertex_data = fastq_graph[v]
+    mean_qual = round(Statistics.mean(vertex_data.quality_scores), digits=1)
+    println(&quot;\nVertex $v:&quot;)
+    println(&quot;  Sequence: &quot;, vertex_data.sequence)
+    println(&quot;  Length: &quot;, length(vertex_data.sequence))
+    println(&quot;  Mean quality: &quot;, mean_qual)
+    println(&quot;  Quality range: &quot;, minimum(vertex_data.quality_scores), &quot;-&quot;, maximum(vertex_data.quality_scores))
+end</code></pre><h2 id="Part-3:-Comparison-with-Qualmer-Mediated-Approach"><a class="docs-heading-anchor" href="#Part-3:-Comparison-with-Qualmer-Mediated-Approach">Part 3: Comparison with Qualmer-Mediated Approach</a><a id="Part-3:-Comparison-with-Qualmer-Mediated-Approach-1"></a><a class="docs-heading-anchor-permalink" href="#Part-3:-Comparison-with-Qualmer-Mediated-Approach" title="Permalink"></a></h2><p>Let&#39;s compare the direct approach with the qualmer-mediated approach.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Comparing direct vs qualmer-mediated approaches...&quot;)
+
+# Build qualmer graph first, then convert to sequence graph
+k = 15  ## Use larger k for better comparison
+qualmer_graph = Mycelia.build_qualmer_graph(fastq_reads; k=k, graph_mode=Mycelia.SingleStrand)
+qualmer_to_fastq = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph, k)
+
+println(&quot;\nApproach comparison:&quot;)
+println(&quot;  Direct FASTQ graph:&quot;)
+println(&quot;    Vertices: &quot;, Graphs.nv(fastq_graph))
+println(&quot;    Edges: &quot;, Graphs.ne(fastq_graph))
+
+println(&quot;  Qualmer-mediated graph (k=$k):&quot;)
+println(&quot;    Qualmer vertices: &quot;, Graphs.nv(qualmer_graph))
+println(&quot;    Qualmer edges: &quot;, Graphs.ne(qualmer_graph))
+println(&quot;    Final FASTQ vertices: &quot;, Graphs.nv(qualmer_to_fastq))
+println(&quot;    Final FASTQ edges: &quot;, Graphs.ne(qualmer_to_fastq))</code></pre><h2 id="Part-4:-Quality-Aware-Assembly-Analysis"><a class="docs-heading-anchor" href="#Part-4:-Quality-Aware-Assembly-Analysis">Part 4: Quality-Aware Assembly Analysis</a><a id="Part-4:-Quality-Aware-Assembly-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Part-4:-Quality-Aware-Assembly-Analysis" title="Permalink"></a></h2><p>Analyze assembly quality using both approaches.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Analyzing assembly quality for both approaches...&quot;)
+
+# For direct approach - analyze sequence lengths and qualities
+direct_sequences = [fastq_graph[v].sequence for v in Graphs.vertices(fastq_graph)]
+direct_qualities = [fastq_graph[v].quality_scores for v in Graphs.vertices(fastq_graph)]
+
+if !isempty(direct_sequences)
+    direct_lengths = [length(seq) for seq in direct_sequences]
+    direct_mean_quals = [Statistics.mean(quals) for quals in direct_qualities]
+
+    println(&quot;\nDirect approach analysis:&quot;)
+    println(&quot;  Sequence count: &quot;, length(direct_sequences))
+    println(&quot;  Mean sequence length: &quot;, round(Statistics.mean(direct_lengths), digits=1))
+    println(&quot;  Longest sequence: &quot;, maximum(direct_lengths), &quot; bp&quot;)
+    println(&quot;  Mean quality across all sequences: &quot;, round(Statistics.mean(vcat(direct_mean_quals...)), digits=1))
+end
+
+# For qualmer approach - use the package quality metrics
+if Graphs.nv(qualmer_graph) &gt; 0
+    qualmer_metrics = Mycelia.calculate_assembly_quality_metrics(qualmer_graph)
+
+    println(&quot;\nQualmer approach analysis:&quot;)
+    println(&quot;  K-mer count: &quot;, qualmer_metrics.total_kmers)
+    println(&quot;  Mean k-mer coverage: &quot;, round(qualmer_metrics.mean_coverage, digits=1))
+    println(&quot;  Mean k-mer quality: &quot;, round(qualmer_metrics.mean_quality, digits=1))
+    println(&quot;  Mean k-mer confidence: &quot;, round(qualmer_metrics.mean_confidence, digits=4))
+end</code></pre><h2 id="Part-5:-Contig-Assembly-and-Reconstruction"><a class="docs-heading-anchor" href="#Part-5:-Contig-Assembly-and-Reconstruction">Part 5: Contig Assembly and Reconstruction</a><a id="Part-5:-Contig-Assembly-and-Reconstruction-1"></a><a class="docs-heading-anchor-permalink" href="#Part-5:-Contig-Assembly-and-Reconstruction" title="Permalink"></a></h2><p>Extract contigs from the quality-aware sequence graph.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Extracting contigs and performing reconstruction...&quot;)
+
+# Find the longest contigs from direct approach
+if !isempty(direct_sequences)
+    # Sort by length
+    seq_length_pairs = [(i, length(seq)) for (i, seq) in enumerate(direct_sequences)]
+    sort!(seq_length_pairs, by=x -&gt; x[2], rev=true)
+
+    println(&quot;\nTop contigs from direct approach:&quot;)
+    for (rank, (vertex_idx, length)) in enumerate(seq_length_pairs[1:min(3, length(seq_length_pairs))])
+        actual_vertex = collect(Graphs.vertices(fastq_graph))[vertex_idx]
+        vertex_data = fastq_graph[actual_vertex]
+        mean_qual = round(Statistics.mean(vertex_data.quality_scores), digits=1)
+
+        println(&quot;  Contig $rank:&quot;)
+        println(&quot;    Length: $length bp&quot;)
+        println(&quot;    Mean quality: $mean_qual&quot;)
+        println(&quot;    Sequence: &quot;, vertex_data.sequence)
+
+        # Check if this contig matches part of the reference
+        contig_seq = String(vertex_data.sequence)
+        if occursin(contig_seq, reference_seq)
+            println(&quot;    ✓ Perfect match in reference&quot;)
+        elseif occursin(reference_seq, contig_seq)
+            println(&quot;    ✓ Contains entire reference&quot;)
+        else
+            # Check for partial matches
+            best_match_len = 0
+            for i in 1:(length(reference_seq) - length(contig_seq) + 1)
+                if reference_seq[i:(i + length(contig_seq) - 1)] == contig_seq
+                    best_match_len = length(contig_seq)
+                    break
+                end
+            end
+            if best_match_len &gt; 0
+                println(&quot;    ✓ Partial match ($best_match_len bp)&quot;)
+            else
+                println(&quot;    ✗ No direct match found&quot;)
+            end
+        end
+    end
+end</code></pre><h2 id="Part-6:-Round-Trip-Validation"><a class="docs-heading-anchor" href="#Part-6:-Round-Trip-Validation">Part 6: Round-Trip Validation</a><a id="Part-6:-Round-Trip-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Part-6:-Round-Trip-Validation" title="Permalink"></a></h2><p>Convert back to FASTQ records and validate quality preservation.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Performing round-trip validation...&quot;)
+
+# Convert graph back to FASTQ records
+reconstructed_fastq = Mycelia.quality_biosequence_graph_to_fastq(fastq_graph, &quot;reconstructed&quot;)
+
+println(&quot;\nRound-trip validation:&quot;)
+println(&quot;  Original reads: &quot;, length(fastq_reads))
+println(&quot;  Reconstructed reads: &quot;, length(reconstructed_fastq))
+
+# Analyze quality preservation
+original_qualities = []
+reconstructed_qualities = []
+
+for read in fastq_reads
+    append!(original_qualities, FASTX.quality_scores(read))
+end
+
+for read in reconstructed_fastq
+    append!(reconstructed_qualities, FASTX.quality_scores(read))
+end
+
+if !isempty(original_qualities) &amp;&amp; !isempty(reconstructed_qualities)
+    println(&quot;\nQuality score analysis:&quot;)
+    println(&quot;  Original mean quality: &quot;, round(Statistics.mean(original_qualities), digits=1))
+    println(&quot;  Reconstructed mean quality: &quot;, round(Statistics.mean(reconstructed_qualities), digits=1))
+    println(&quot;  Original quality range: &quot;, minimum(original_qualities), &quot;-&quot;, maximum(original_qualities))
+    println(&quot;  Reconstructed quality range: &quot;, minimum(reconstructed_qualities), &quot;-&quot;, maximum(reconstructed_qualities))
+end
+
+# Compare individual reads
+println(&quot;\nIndividual read comparison:&quot;)
+for i in 1:min(3, length(fastq_reads), length(reconstructed_fastq))
+    orig = fastq_reads[i]
+    recon = reconstructed_fastq[i]
+
+    orig_seq = String(FASTX.sequence(orig))
+    recon_seq = String(FASTX.sequence(recon))
+
+    println(&quot;\nRead $i:&quot;)
+    println(&quot;  Original:      &quot;, orig_seq)
+    println(&quot;  Reconstructed: &quot;, recon_seq)
+    println(&quot;  Length match: &quot;, length(orig_seq) == length(recon_seq) ? &quot;✓&quot; : &quot;✗&quot;)
+    println(&quot;  Sequence match: &quot;, orig_seq == recon_seq ? &quot;✓&quot; : &quot;✗&quot;)
+end</code></pre><h2 id="Part-7:-Error-Detection-and-Quality-Assessment"><a class="docs-heading-anchor" href="#Part-7:-Error-Detection-and-Quality-Assessment">Part 7: Error Detection and Quality Assessment</a><a id="Part-7:-Error-Detection-and-Quality-Assessment-1"></a><a class="docs-heading-anchor-permalink" href="#Part-7:-Error-Detection-and-Quality-Assessment" title="Permalink"></a></h2><p>Use quality information to identify potential assembly issues.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Quality-based error detection and assessment...&quot;)
+
+# Analyze quality distribution across contigs
+if !isempty(direct_qualities)
+    all_quals = vcat(direct_qualities...)
+    quality_stats = (
+        mean = Statistics.mean(all_quals),
+        median = Statistics.median(all_quals),
+        std = Statistics.std(all_quals),
+        min = minimum(all_quals),
+        max = maximum(all_quals)
+    )
+
+    println(&quot;\nQuality distribution analysis:&quot;)
+    println(&quot;  Mean: &quot;, round(quality_stats.mean, digits=1))
+    println(&quot;  Median: &quot;, round(quality_stats.median, digits=1))
+    println(&quot;  Std dev: &quot;, round(quality_stats.std, digits=1))
+    println(&quot;  Range: &quot;, quality_stats.min, &quot;-&quot;, quality_stats.max)
+
+    # Identify low-quality regions
+    low_quality_threshold = 20.0
+    low_qual_count = count(q -&gt; q &lt; low_quality_threshold, all_quals)
+    low_qual_fraction = low_qual_count / length(all_quals)
+
+    println(&quot;\nLow-quality region analysis:&quot;)
+    println(&quot;  Positions below Q$low_quality_threshold: &quot;, low_qual_count)
+    println(&quot;  Fraction of low-quality positions: &quot;, round(low_qual_fraction, digits=3))
+
+    if low_qual_fraction &gt; 0.1
+        println(&quot;  ⚠️  High fraction of low-quality positions detected&quot;)
+    else
+        println(&quot;  ✓ Good overall quality distribution&quot;)
+    end
+end</code></pre><h2 id="Part-8:-Performance-and-Use-Case-Analysis"><a class="docs-heading-anchor" href="#Part-8:-Performance-and-Use-Case-Analysis">Part 8: Performance and Use Case Analysis</a><a id="Part-8:-Performance-and-Use-Case-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Part-8:-Performance-and-Use-Case-Analysis" title="Permalink"></a></h2><p>Discuss when to use direct vs qualmer-mediated approaches.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Performance and use case analysis...&quot;)
+
+println(&quot;\nApproach comparison summary:&quot;)
+println(&quot;\nDirect FASTQ → FASTQ graphs:&quot;)
+println(&quot;  ✓ Faster construction (no intermediate k-mer step)&quot;)
+println(&quot;  ✓ Variable-length sequences from start&quot;)
+println(&quot;  ✓ Natural read-level quality preservation&quot;)
+println(&quot;  ✓ Good for high-quality, long reads&quot;)
+println(&quot;  ✗ Less granular error detection&quot;)
+println(&quot;  ✗ May struggle with complex repeat regions&quot;)
+
+println(&quot;\nQualmer-mediated approach:&quot;)
+println(&quot;  ✓ Fine-grained quality analysis at k-mer level&quot;)
+println(&quot;  ✓ Better error detection and correction&quot;)
+println(&quot;  ✓ Handles complex genomic features better&quot;)
+println(&quot;  ✓ Quality-weighted assembly decisions&quot;)
+println(&quot;  ✗ More computationally intensive&quot;)
+println(&quot;  ✗ Requires k-mer size optimization&quot;)
+
+println(&quot;\nRecommended use cases:&quot;)
+println(&quot;  Direct approach:&quot;)
+println(&quot;    - High-quality PacBio HiFi or ONT reads&quot;)
+println(&quot;    - Simple genomes without complex repeats&quot;)
+println(&quot;    - Rapid prototyping and initial assembly&quot;)
+println(&quot;    - When computational resources are limited&quot;)
+println(&quot;\n  Qualmer approach:&quot;)
+println(&quot;    - Short reads (Illumina)&quot;)
+println(&quot;    - Error-prone long reads&quot;)
+println(&quot;    - Complex genomes with repeats&quot;)
+println(&quot;    - When maximum accuracy is required&quot;)</code></pre><h2 id="Part-9:-Practical-Assembly-Example"><a class="docs-heading-anchor" href="#Part-9:-Practical-Assembly-Example">Part 9: Practical Assembly Example</a><a id="Part-9:-Practical-Assembly-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Part-9:-Practical-Assembly-Example" title="Permalink"></a></h2><p>Demonstrate a complete assembly workflow using the direct approach.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Complete assembly workflow example...&quot;)
+
+function create_realistic_reads()
+    # Simulate a 100bp region with realistic read coverage
+    true_seq = &quot;ATCGATCGATCGTAGCTAGCTAGCTTGCATGCATGCATGCATGCATGCATTAGCTAGCATCGATCGTAGCTAGCTAGCTTGCATGCATGCAT&quot;
+    reads = []
+
+    # Simulate 10x coverage with 25bp reads
+    read_length = 25
+    step_size = 10  ## Overlap by 15bp
+
+    for start in 1:step_size:(length(true_seq) - read_length + 1)
+        end_pos = min(start + read_length - 1, length(true_seq))
+        read_seq = true_seq[start:end_pos]
+
+        # Vary quality based on position (simulate quality degradation)
+        base_quality = 35
+        qual_scores = [max(20, base_quality - abs(i - read_length÷2)) for i in 1:length(read_seq)]
+        qual_string = String([Char(33 + q) for q in qual_scores])
+
+        push!(reads, FASTX.FASTQ.Record(&quot;read_$(start)&quot;, read_seq, qual_string))
+    end
+
+    return reads, true_seq
+end
+
+realistic_reads, true_genome = create_realistic_reads()
+
+println(&quot;\nRealistic assembly example:&quot;)
+println(&quot;  True genome length: &quot;, length(true_genome))
+println(&quot;  Number of reads: &quot;, length(realistic_reads))
+println(&quot;  Expected coverage: ~10x&quot;)
+
+# Build graph and assemble
+realistic_graph = Mycelia.build_quality_biosequence_graph(realistic_reads)
+println(&quot;  Graph vertices: &quot;, Graphs.nv(realistic_graph))
+println(&quot;  Graph edges: &quot;, Graphs.ne(realistic_graph))
+
+# Find best assembly
+if Graphs.nv(realistic_graph) &gt; 0
+    sequences = [realistic_graph[v].sequence for v in Graphs.vertices(realistic_graph)]
+    qualities = [realistic_graph[v].quality_scores for v in Graphs.vertices(realistic_graph)]
+
+    # Find longest sequence
+    longest_idx = argmax(length.(sequences))
+    best_assembly = String(sequences[longest_idx])
+    best_quality = Statistics.mean(qualities[longest_idx])
+
+    println(&quot;\nBest assembly result:&quot;)
+    println(&quot;  Assembled length: &quot;, length(best_assembly))
+    println(&quot;  True length: &quot;, length(true_genome))
+    println(&quot;  Mean quality: &quot;, round(best_quality, digits=1))
+
+    # Check assembly accuracy
+    if best_assembly == true_genome
+        println(&quot;  ✓ Perfect assembly!&quot;)
+    elseif occursin(best_assembly, true_genome)
+        println(&quot;  ✓ Assembly is subset of true genome&quot;)
+        coverage = length(best_assembly) / length(true_genome)
+        println(&quot;  Coverage: &quot;, round(coverage * 100, digits=1), &quot;%&quot;)
+    elseif occursin(true_genome, best_assembly)
+        println(&quot;  ✓ Assembly contains entire true genome&quot;)
+    else
+        println(&quot;  ⚠️  Assembly differs from true genome&quot;)
+        println(&quot;  True:      &quot;, true_genome[1:min(50, length(true_genome))], &quot;...&quot;)
+        println(&quot;  Assembled: &quot;, best_assembly[1:min(50, length(best_assembly))], &quot;...&quot;)
+    end
+end</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>In this tutorial, we&#39;ve demonstrated:</p><ol><li><strong>Direct Construction</strong>: Building quality-aware sequence graphs directly from FASTQ</li><li><strong>Approach Comparison</strong>: Direct vs qualmer-mediated assembly strategies</li><li><strong>Quality Preservation</strong>: Maintaining per-base quality through assembly</li><li><strong>Contig Assembly</strong>: Extracting variable-length contigs with quality scores</li><li><strong>Error Detection</strong>: Using quality information for assembly validation</li><li><strong>Use Case Analysis</strong>: When to choose each approach</li><li><strong>Practical Workflow</strong>: Complete assembly pipeline demonstration</li></ol><p>Key insights:</p><ul><li>Direct approach is faster and simpler for high-quality data</li><li>Qualmer approach provides better error handling for challenging data</li><li>Quality information is preserved throughout both workflows</li><li>Choice of approach depends on data quality and computational requirements</li><li>Both approaches support the complete graph hierarchy for downstream analysis</li></ul><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;Tutorial 5 completed!&quot;)
+println(&quot;You&#39;ve learned to choose between direct and qualmer-mediated quality-aware assembly.&quot;)
+println(&quot;Both approaches preserve quality information for downstream analysis.&quot;)</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

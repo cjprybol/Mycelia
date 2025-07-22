@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Basic Workflows · Mycelia</title><meta name="title" content="Basic Workflows · Mycelia"/><meta property="og:title" content="Basic Workflows · Mycelia"/><meta property="twitter:title" content="Basic Workflows · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox" checked/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li class="is-active"><a class="tocitem" href>Basic Workflows</a><ul class="internal"><li><a class="tocitem" href="#Overview"><span>Overview</span></a></li><li><a class="tocitem" href="#Workflow-1:-Bacterial-Genome-Assembly"><span>Workflow 1: Bacterial Genome Assembly</span></a></li><li><a class="tocitem" href="#Workflow-2:-Comparative-Genomics-Analysis"><span>Workflow 2: Comparative Genomics Analysis</span></a></li><li><a class="tocitem" href="#Workflow-3:-Quality-Control-Pipeline"><span>Workflow 3: Quality Control Pipeline</span></a></li><li><a class="tocitem" href="#Workflow-4:-Assembly-Optimization"><span>Workflow 4: Assembly Optimization</span></a></li><li><a class="tocitem" href="#Workflow-5:-Contamination-Detection-and-Removal"><span>Workflow 5: Contamination Detection and Removal</span></a></li><li><a class="tocitem" href="#Error-Handling-and-Robustness"><span>Error Handling and Robustness</span></a></li><li><a class="tocitem" href="#Performance-Optimization"><span>Performance Optimization</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li></ul></li><li><a class="tocitem" href="../../">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">API Reference</a></li><li><a class="is-disabled">Examples</a></li><li class="is-active"><a href>Basic Workflows</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Basic Workflows</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/docs/src/api/examples/basic-workflows.md#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Basic-Workflows"><a class="docs-heading-anchor" href="#Basic-Workflows">Basic Workflows</a><a id="Basic-Workflows-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Workflows" title="Permalink"></a></h1><p>Complete examples of common bioinformatics analysis workflows using Mycelia functions. These examples show how to combine functions from different modules to accomplish typical research tasks.</p><h2 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h2><p>These workflows demonstrate:</p><ul><li><strong>Complete analysis pipelines</strong> from start to finish</li><li><strong>Function integration</strong> across different modules</li><li><strong>Parameter selection</strong> for common use cases</li><li><strong>Error handling</strong> and quality control</li><li><strong>Result interpretation</strong> and next steps</li></ul><h2 id="Workflow-1:-Bacterial-Genome-Assembly"><a class="docs-heading-anchor" href="#Workflow-1:-Bacterial-Genome-Assembly">Workflow 1: Bacterial Genome Assembly</a><a id="Workflow-1:-Bacterial-Genome-Assembly-1"></a><a class="docs-heading-anchor-permalink" href="#Workflow-1:-Bacterial-Genome-Assembly" title="Permalink"></a></h2><p>Complete bacterial genome analysis from raw reads to annotated assembly.</p><h3 id="Step-1:-Data-Acquisition"><a class="docs-heading-anchor" href="#Step-1:-Data-Acquisition">Step 1: Data Acquisition</a><a id="Step-1:-Data-Acquisition-1"></a><a class="docs-heading-anchor-permalink" href="#Step-1:-Data-Acquisition" title="Permalink"></a></h3><pre><code class="language-julia hljs">import Mycelia
+
+# Download reference genome for comparison
+reference = Mycelia.download_genome_by_accession(&quot;NC_000913.3&quot;)  # E. coli K-12
+
+# Or use your own sequencing data
+reads_file = &quot;bacterial_reads.fastq&quot;</code></pre><h3 id="Step-2:-Quality-Control"><a class="docs-heading-anchor" href="#Step-2:-Quality-Control">Step 2: Quality Control</a><a id="Step-2:-Quality-Control-1"></a><a class="docs-heading-anchor-permalink" href="#Step-2:-Quality-Control" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Assess initial data quality
+println(&quot;=== Initial Quality Assessment ===&quot;)
+initial_quality = Mycelia.analyze_fastq_quality(reads_file)
+println(&quot;Total reads: $(initial_quality.n_reads)&quot;)
+println(&quot;Mean quality: $(initial_quality.mean_quality)&quot;)
+println(&quot;Mean length: $(initial_quality.mean_length)&quot;)
+
+# Filter low-quality reads
+println(&quot;\n=== Quality Filtering ===&quot;)
+filtered_reads = Mycelia.filter_by_quality(
+    reads_file,
+    min_quality=25,      # Q25 threshold
+    min_length=1000,     # Minimum 1kb reads
+    max_n_percent=5      # Maximum 5% N&#39;s
+)
+
+Mycelia.write_fastq(&quot;filtered_reads.fastq&quot;, filtered_reads)
+println(&quot;Filtered reads: $(length(filtered_reads))&quot;)</code></pre><h3 id="Step-3:-K-mer-Analysis"><a class="docs-heading-anchor" href="#Step-3:-K-mer-Analysis">Step 3: K-mer Analysis</a><a id="Step-3:-K-mer-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Step-3:-K-mer-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== K-mer Analysis ===&quot;)
+# Count k-mers for genome size estimation
+kmer_counts = Mycelia.count_kmers(&quot;filtered_reads.fastq&quot;, k=21)
+spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
+
+# Estimate genome size
+genome_size = Mycelia.estimate_genome_size_from_kmers(kmer_counts)
+println(&quot;Estimated genome size: $(genome_size.size) bp&quot;)
+println(&quot;Estimated coverage: $(genome_size.coverage)x&quot;)
+
+# Plot k-mer spectrum
+Mycelia.plot_kmer_spectrum(spectrum, title=&quot;21-mer Frequency Spectrum&quot;)</code></pre><h3 id="Step-4:-Genome-Assembly"><a class="docs-heading-anchor" href="#Step-4:-Genome-Assembly">Step 4: Genome Assembly</a><a id="Step-4:-Genome-Assembly-1"></a><a class="docs-heading-anchor-permalink" href="#Step-4:-Genome-Assembly" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Genome Assembly ===&quot;)
+# Assemble genome using hifiasm (for HiFi reads) or adjust for your data type
+assembly_result = Mycelia.assemble_genome(
+    &quot;filtered_reads.fastq&quot;,
+    assembler=&quot;hifiasm&quot;,     # Use &quot;spades&quot; for Illumina
+    output_dir=&quot;assembly&quot;,
+    threads=8,
+    min_contig_length=500
+)
+
+println(&quot;Assembly completed: $(assembly_result.contigs)&quot;)</code></pre><h3 id="Step-5:-Assembly-Validation"><a class="docs-heading-anchor" href="#Step-5:-Assembly-Validation">Step 5: Assembly Validation</a><a id="Step-5:-Assembly-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Step-5:-Assembly-Validation" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Assembly Validation ===&quot;)
+# Calculate assembly statistics
+assembly_stats = Mycelia.calculate_assembly_stats(assembly_result.contigs)
+println(&quot;Assembly Statistics:&quot;)
+println(&quot;  Contigs: $(assembly_stats.n_contigs)&quot;)
+println(&quot;  Total length: $(assembly_stats.total_length) bp&quot;)
+println(&quot;  N50: $(assembly_stats.n50)&quot;)
+println(&quot;  Largest contig: $(assembly_stats.largest_contig)&quot;)
+
+# Validate assembly quality
+validation_result = Mycelia.validate_assembly(
+    assembly_result.contigs,
+    &quot;filtered_reads.fastq&quot;,
+    reference_genome=reference
+)
+
+println(&quot;Assembly Quality:&quot;)
+println(&quot;  Completeness: $(validation_result.completeness)%&quot;)
+println(&quot;  Accuracy: $(validation_result.accuracy)%&quot;)</code></pre><h3 id="Step-6:-Gene-Annotation"><a class="docs-heading-anchor" href="#Step-6:-Gene-Annotation">Step 6: Gene Annotation</a><a id="Step-6:-Gene-Annotation-1"></a><a class="docs-heading-anchor-permalink" href="#Step-6:-Gene-Annotation" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Gene Annotation ===&quot;)
+# Predict genes
+predicted_genes = Mycelia.predict_genes(
+    assembly_result.contigs,
+    method=&quot;prodigal&quot;,
+    genetic_code=&quot;standard&quot;
+)
+
+println(&quot;Predicted genes: $(length(predicted_genes))&quot;)
+
+# Functional annotation
+functional_annotations = Mycelia.annotate_functions(
+    predicted_genes,
+    database=&quot;uniprot&quot;,
+    evalue_threshold=1e-5
+)
+
+println(&quot;Functionally annotated genes: $(Mycelia.count_annotated(functional_annotations)))&quot;)
+
+# Save annotations
+Mycelia.write_gff3(&quot;bacterial_genome.gff3&quot;, predicted_genes, functional_annotations)</code></pre><h3 id="Step-7:-Results-Summary"><a class="docs-heading-anchor" href="#Step-7:-Results-Summary">Step 7: Results Summary</a><a id="Step-7:-Results-Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Step-7:-Results-Summary" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Analysis Summary ===&quot;)
+println(&quot;Workflow completed successfully!&quot;)
+println(&quot;Files generated:&quot;)
+println(&quot;  - filtered_reads.fastq: Quality-controlled reads&quot;)
+println(&quot;  - assembly/contigs.fasta: Assembled genome&quot;)
+println(&quot;  - bacterial_genome.gff3: Gene annotations&quot;)
+println(&quot;  - assembly_stats.json: Assembly statistics&quot;)</code></pre><h2 id="Workflow-2:-Comparative-Genomics-Analysis"><a class="docs-heading-anchor" href="#Workflow-2:-Comparative-Genomics-Analysis">Workflow 2: Comparative Genomics Analysis</a><a id="Workflow-2:-Comparative-Genomics-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Workflow-2:-Comparative-Genomics-Analysis" title="Permalink"></a></h2><p>Compare multiple bacterial genomes to build a pangenome and phylogenetic tree.</p><h3 id="Step-1:-Data-Preparation"><a class="docs-heading-anchor" href="#Step-1:-Data-Preparation">Step 1: Data Preparation</a><a id="Step-1:-Data-Preparation-1"></a><a class="docs-heading-anchor-permalink" href="#Step-1:-Data-Preparation" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Download multiple related genomes
+species_genomes = [
+    &quot;GCF_000005825.2&quot;,  # E. coli K-12 MG1655
+    &quot;GCF_000009605.1&quot;,  # Salmonella enterica
+    &quot;GCF_000027325.1&quot;,  # Yersinia pestis
+    &quot;GCF_000006945.2&quot;,  # Shigella flexneri
+]
+
+println(&quot;=== Downloading Genomes ===&quot;)
+genome_files = []
+for accession in species_genomes
+    result = Mycelia.ncbi_genome_download_accession(accession)
+    push!(genome_files, result.genome)
+    println(&quot;Downloaded: $accession&quot;)
+end</code></pre><h3 id="Step-2:-Gene-Prediction"><a class="docs-heading-anchor" href="#Step-2:-Gene-Prediction">Step 2: Gene Prediction</a><a id="Step-2:-Gene-Prediction-1"></a><a class="docs-heading-anchor-permalink" href="#Step-2:-Gene-Prediction" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Gene Prediction ===&quot;)
+all_genes = []
+for (i, genome_file) in enumerate(genome_files)
+    genes = Mycelia.predict_genes(genome_file, method=&quot;prodigal&quot;)
+    push!(all_genes, genes)
+    println(&quot;Genome $i: $(length(genes)) genes predicted&quot;)
+end</code></pre><h3 id="Step-3:-Pangenome-Construction"><a class="docs-heading-anchor" href="#Step-3:-Pangenome-Construction">Step 3: Pangenome Construction</a><a id="Step-3:-Pangenome-Construction-1"></a><a class="docs-heading-anchor-permalink" href="#Step-3:-Pangenome-Construction" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Pangenome Construction ===&quot;)
+# Build pangenome from all genomes
+pangenome = Mycelia.build_pangenome(
+    all_genes,
+    similarity_threshold=0.9,
+    coverage_threshold=0.8
+)
+
+println(&quot;Pangenome Statistics:&quot;)
+println(&quot;  Core genes: $(pangenome.core_genes)&quot;)
+println(&quot;  Accessory genes: $(pangenome.accessory_genes)&quot;)
+println(&quot;  Unique genes: $(pangenome.unique_genes)&quot;)
+println(&quot;  Total gene families: $(pangenome.total_families)&quot;)
+
+# Visualize pangenome
+Mycelia.plot_pangenome_heatmap(pangenome, title=&quot;Gene Presence/Absence Matrix&quot;)</code></pre><h3 id="Step-4:-Phylogenetic-Analysis"><a class="docs-heading-anchor" href="#Step-4:-Phylogenetic-Analysis">Step 4: Phylogenetic Analysis</a><a id="Step-4:-Phylogenetic-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Step-4:-Phylogenetic-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Phylogenetic Analysis ===&quot;)
+# Extract core genes for phylogeny
+core_gene_alignments = Mycelia.extract_core_gene_alignments(pangenome)
+
+# Build phylogenetic tree
+phylo_tree = Mycelia.build_phylogenetic_tree(
+    core_gene_alignments,
+    method=&quot;ml&quot;,
+    model=&quot;GTR+G&quot;,
+    bootstrap=100
+)
+
+println(&quot;Phylogenetic tree constructed with $(Mycelia.get_bootstrap_support(phylo_tree)) average support&quot;)
+
+# Visualize tree
+Mycelia.plot_phylogenetic_tree(phylo_tree, layout=&quot;rectangular&quot;, show_support=true)</code></pre><h3 id="Step-5:-Functional-Analysis"><a class="docs-heading-anchor" href="#Step-5:-Functional-Analysis">Step 5: Functional Analysis</a><a id="Step-5:-Functional-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Step-5:-Functional-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Functional Analysis ===&quot;)
+# Analyze functional categories
+functional_analysis = Mycelia.analyze_pangenome_functions(pangenome)
+
+println(&quot;Functional Distribution:&quot;)
+for (category, count) in functional_analysis.categories
+    println(&quot;  $category: $count genes&quot;)
+end
+
+# Identify core vs accessory functional differences
+functional_comparison = Mycelia.compare_core_accessory_functions(pangenome)</code></pre><h2 id="Workflow-3:-Quality-Control-Pipeline"><a class="docs-heading-anchor" href="#Workflow-3:-Quality-Control-Pipeline">Workflow 3: Quality Control Pipeline</a><a id="Workflow-3:-Quality-Control-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Workflow-3:-Quality-Control-Pipeline" title="Permalink"></a></h2><p>Comprehensive quality control workflow for different sequencing platforms.</p><h3 id="HiFi-Sequencing-Data"><a class="docs-heading-anchor" href="#HiFi-Sequencing-Data">HiFi Sequencing Data</a><a id="HiFi-Sequencing-Data-1"></a><a class="docs-heading-anchor-permalink" href="#HiFi-Sequencing-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;=== HiFi Quality Control ===&quot;)
+
+# HiFi-specific quality assessment
+hifi_quality = Mycelia.assess_hifi_quality(&quot;hifi_reads.fastq&quot;)
+println(&quot;HiFi Quality Metrics:&quot;)
+println(&quot;  Mean accuracy: $(hifi_quality.mean_accuracy)&quot;)
+println(&quot;  Mean length: $(hifi_quality.mean_length)&quot;)
+println(&quot;  Length N50: $(hifi_quality.length_n50)&quot;)
+
+# HiFi-optimized filtering
+hifi_filtered = Mycelia.filter_hifi_reads(
+    &quot;hifi_reads.fastq&quot;,
+    min_accuracy=0.99,
+    min_length=5000,
+    max_length=30000
+)
+
+println(&quot;HiFi reads after filtering: $(length(hifi_filtered))&quot;)</code></pre><h3 id="Illumina-Sequencing-Data"><a class="docs-heading-anchor" href="#Illumina-Sequencing-Data">Illumina Sequencing Data</a><a id="Illumina-Sequencing-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Illumina-Sequencing-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Illumina Quality Control ===&quot;)
+
+# Paired-end Illumina data
+illumina_quality = Mycelia.assess_illumina_quality(&quot;illumina_R1.fastq&quot;, &quot;illumina_R2.fastq&quot;)
+
+# Remove adapters and low-quality bases
+cleaned_reads = Mycelia.preprocess_illumina_reads(
+    &quot;illumina_R1.fastq&quot;, &quot;illumina_R2.fastq&quot;,
+    adapter_removal=true,
+    quality_trimming=true,
+    min_quality=20,
+    min_length=50
+)
+
+Mycelia.write_fastq(&quot;illumina_R1_clean.fastq&quot;, cleaned_reads.read1)
+Mycelia.write_fastq(&quot;illumina_R2_clean.fastq&quot;, cleaned_reads.read2)</code></pre><h3 id="Nanopore-Sequencing-Data"><a class="docs-heading-anchor" href="#Nanopore-Sequencing-Data">Nanopore Sequencing Data</a><a id="Nanopore-Sequencing-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Nanopore-Sequencing-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Nanopore Quality Control ===&quot;)
+
+# Nanopore-specific assessment
+nanopore_quality = Mycelia.assess_nanopore_quality(&quot;nanopore_reads.fastq&quot;)
+
+# Filter based on quality and length
+nanopore_filtered = Mycelia.filter_nanopore_reads(
+    &quot;nanopore_reads.fastq&quot;,
+    min_quality=7,       # Lower threshold for Nanopore
+    min_length=500,
+    max_length=100000
+)</code></pre><h2 id="Workflow-4:-Assembly-Optimization"><a class="docs-heading-anchor" href="#Workflow-4:-Assembly-Optimization">Workflow 4: Assembly Optimization</a><a id="Workflow-4:-Assembly-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Workflow-4:-Assembly-Optimization" title="Permalink"></a></h2><p>Optimize assembly parameters for best results.</p><h3 id="Parameter-Testing"><a class="docs-heading-anchor" href="#Parameter-Testing">Parameter Testing</a><a id="Parameter-Testing-1"></a><a class="docs-heading-anchor-permalink" href="#Parameter-Testing" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;=== Assembly Parameter Optimization ===&quot;)
+
+# Test different k-mer sizes
+k_values = [19, 21, 25, 31, 35]
+assembly_results = []
+
+for k in k_values
+    println(&quot;Testing k=$k...&quot;)
+    result = Mycelia.assemble_genome(
+        &quot;reads.fastq&quot;,
+        assembler=&quot;hifiasm&quot;,
+        k=k,
+        output_dir=&quot;assembly_k$k&quot;
+    )
+    
+    stats = Mycelia.calculate_assembly_stats(result.contigs)
+    push!(assembly_results, (k=k, n50=stats.n50, contigs=stats.n_contigs))
+end
+
+# Find optimal k-mer size
+optimal_k = Mycelia.find_optimal_assembly_parameters(assembly_results)
+println(&quot;Optimal k-mer size: $(optimal_k.k)&quot;)</code></pre><h3 id="Multi-Assembler-Comparison"><a class="docs-heading-anchor" href="#Multi-Assembler-Comparison">Multi-Assembler Comparison</a><a id="Multi-Assembler-Comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Assembler-Comparison" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;\n=== Multi-Assembler Comparison ===&quot;)
+
+assemblers = [&quot;hifiasm&quot;, &quot;canu&quot;, &quot;flye&quot;]
+assembler_results = []
+
+for assembler in assemblers
+    println(&quot;Running $assembler...&quot;)
+    result = Mycelia.assemble_genome(
+        &quot;reads.fastq&quot;,
+        assembler=assembler,
+        output_dir=&quot;assembly_$assembler&quot;
+    )
+    
+    validation = Mycelia.validate_assembly(result.contigs, &quot;reads.fastq&quot;)
+    push!(assembler_results, (
+        assembler=assembler,
+        n50=validation.n50,
+        completeness=validation.completeness
+    ))
+end
+
+# Select best assembler
+best_assembler = Mycelia.select_best_assembly(assembler_results)
+println(&quot;Best assembler: $(best_assembler.assembler)&quot;)</code></pre><h2 id="Workflow-5:-Contamination-Detection-and-Removal"><a class="docs-heading-anchor" href="#Workflow-5:-Contamination-Detection-and-Removal">Workflow 5: Contamination Detection and Removal</a><a id="Workflow-5:-Contamination-Detection-and-Removal-1"></a><a class="docs-heading-anchor-permalink" href="#Workflow-5:-Contamination-Detection-and-Removal" title="Permalink"></a></h2><p>Comprehensive contamination screening and removal pipeline.</p><h3 id="Multi-Source-Contamination-Screening"><a class="docs-heading-anchor" href="#Multi-Source-Contamination-Screening">Multi-Source Contamination Screening</a><a id="Multi-Source-Contamination-Screening-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Source-Contamination-Screening" title="Permalink"></a></h3><pre><code class="language-julia hljs">println(&quot;=== Contamination Screening ===&quot;)
+
+# Screen for multiple contamination sources
+contamination_results = Mycelia.screen_all_contamination(
+    &quot;reads.fastq&quot;,
+    host_genome=&quot;human_genome.fasta&quot;,
+    vector_db=&quot;vector_database.fasta&quot;,
+    adapter_db=&quot;adapter_sequences.fasta&quot;
+)
+
+println(&quot;Contamination Summary:&quot;)
+println(&quot;  Host contamination: $(contamination_results.host_rate)%&quot;)
+println(&quot;  Vector contamination: $(contamination_results.vector_rate)%&quot;)
+println(&quot;  Adapter contamination: $(contamination_results.adapter_rate)%&quot;)
+
+# Remove all contamination
+clean_reads = Mycelia.remove_all_contamination(
+    &quot;reads.fastq&quot;,
+    contamination_results
+)
+
+Mycelia.write_fastq(&quot;decontaminated_reads.fastq&quot;, clean_reads)</code></pre><h2 id="Error-Handling-and-Robustness"><a class="docs-heading-anchor" href="#Error-Handling-and-Robustness">Error Handling and Robustness</a><a id="Error-Handling-and-Robustness-1"></a><a class="docs-heading-anchor-permalink" href="#Error-Handling-and-Robustness" title="Permalink"></a></h2><h3 id="Robust-Pipeline-with-Error-Handling"><a class="docs-heading-anchor" href="#Robust-Pipeline-with-Error-Handling">Robust Pipeline with Error Handling</a><a id="Robust-Pipeline-with-Error-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Robust-Pipeline-with-Error-Handling" title="Permalink"></a></h3><pre><code class="language-julia hljs">function robust_genome_analysis(reads_file::String)
+    try
+        # Quality control with validation
+        if !isfile(reads_file)
+            error(&quot;Input file not found: $reads_file&quot;)
+        end
+        
+        quality_data = Mycelia.analyze_fastq_quality(reads_file)
+        if quality_data.mean_quality &lt; 15
+            @warn &quot;Low quality data detected (Q$(quality_data.mean_quality))&quot;
+        end
+        
+        # Assembly with retry logic
+        assembly_result = nothing
+        for attempt in 1:3
+            try
+                assembly_result = Mycelia.assemble_genome(reads_file)
+                break
+            catch e
+                @warn &quot;Assembly attempt $attempt failed: $e&quot;
+                if attempt == 3
+                    rethrow(e)
+                end
+            end
+        end
+        
+        # Validation with quality checks
+        validation = Mycelia.validate_assembly(assembly_result.contigs, reads_file)
+        if validation.completeness &lt; 90
+            @warn &quot;Low assembly completeness: $(validation.completeness)%&quot;
+        end
+        
+        return assembly_result
+        
+    catch e
+        @error &quot;Analysis failed&quot; exception=(e, catch_backtrace())
+        return nothing
+    end
+end</code></pre><h2 id="Performance-Optimization"><a class="docs-heading-anchor" href="#Performance-Optimization">Performance Optimization</a><a id="Performance-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Optimization" title="Permalink"></a></h2><h3 id="Memory-Efficient-Large-File-Processing"><a class="docs-heading-anchor" href="#Memory-Efficient-Large-File-Processing">Memory-Efficient Large File Processing</a><a id="Memory-Efficient-Large-File-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Efficient-Large-File-Processing" title="Permalink"></a></h3><pre><code class="language-julia hljs">function process_large_dataset(large_file::String)
+    # Check available memory
+    available_memory = Mycelia.get_available_memory_gb()
+    if available_memory &lt; 8
+        @warn &quot;Limited memory available: $(available_memory)GB&quot;
+    end
+    
+    # Use streaming for large files
+    file_size_gb = filesize(large_file) / 1024^3
+    if file_size_gb &gt; available_memory / 2
+        println(&quot;Using streaming processing for $(file_size_gb)GB file&quot;)
+        return Mycelia.stream_kmer_counting(large_file, k=21, chunk_size=50000)
+    else
+        return Mycelia.count_kmers(large_file, k=21)
+    end
+end</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><p>After completing these basic workflows, you can:</p><ol><li><strong>Explore advanced techniques</strong> in <a href="advanced-usage.md">Advanced Usage</a></li><li><strong>Customize parameters</strong> using the <a href="../../quick-reference/parameter-guide/">Parameter Guide</a></li><li><strong>Integrate external tools</strong> following Tool Integration <em>(planned)</em></li><li><strong>Scale to HPC systems</strong> with <a href="../../../deployment-guide.md">Deployment Guide</a></li></ol><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../quick-reference/function-index/">Function Index</a> - Complete function reference</li><li><a href="../workflows/">Workflow-Specific Guides</a> - Detailed workflow documentation</li><li><a href="../../tutorials.md">Tutorials</a> - Step-by-step learning materials</li><li><a href="../../troubleshooting.md">Troubleshooting Guide</a> - Common issues and solutions</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../quick-reference/parameter-guide/">« Parameter Guide</a><a class="docs-footer-nextpage" href="../../">API Documentation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>- · Mycelia</title><meta name="title" content="- · Mycelia"/><meta property="og:title" content="- · Mycelia"/><meta property="twitter:title" content="- · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><span class="tocitem">API Reference</span><ul><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>-</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>-</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/04_graph_type_tutorials.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><pre><code class="language-julia hljs">&quot;&quot;&quot;
+Mycelia Graph Type Tutorials
+
+This tutorial demonstrates the usage of all 6 graph types in Mycelia:
+1. N-gram Graphs - For unicode text analysis
+2. K-mer Graphs - For DNA/RNA/protein sequence analysis
+3. Qualmer Graphs - For quality-aware sequence analysis
+4. String Graphs - For simplified N-gram analysis
+5. FASTA Graphs - For variable-length BioSequence analysis
+6. FASTQ Graphs - For quality-aware BioSequence analysis
+
+Each section shows practical examples with real data.
+&quot;&quot;&quot;
+
+import Mycelia
+import FASTX
+import BioSequences
+
+println(&quot;=&quot;^80)
+println(&quot;MYCELIA GRAPH TYPE TUTORIALS&quot;)
+println(&quot;=&quot;^80)</code></pre><p>============================================================================= Tutorial 1: N-gram Graphs - Unicode Text Analysis =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n1. N-GRAM GRAPHS - Unicode Text Analysis&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: Analyzing text patterns</p><pre><code class="language-julia hljs">text = &quot;The quick brown fox jumps over the lazy dog&quot;
+println(&quot;Input text: \&quot;$text\&quot;&quot;)</code></pre><p>Create N-gram graph</p><pre><code class="language-julia hljs">ngram_graph = Mycelia.string_to_ngram_graph(s=text, n=3)
+println(&quot;Number of 3-grams: $(length(ngram_graph.vertex_labels))&quot;)</code></pre><p>Show some N-grams</p><pre><code class="language-julia hljs">ngrams = collect(values(ngram_graph.vertex_labels))
+println(&quot;Example 3-grams: $(ngrams[1:min(5, length(ngrams))])&quot;)</code></pre><p>Use case: Text compression, pattern detection, linguistic analysis</p><pre><code class="language-julia hljs">println(&quot;Use cases: Text compression, pattern detection, linguistic analysis&quot;)</code></pre><p>============================================================================= Tutorial 2: K-mer Graphs - BioSequence Analysis =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n2. K-MER GRAPHS - BioSequence Analysis&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: DNA sequence analysis</p><pre><code class="language-julia hljs">dna_sequence = &quot;ATCGATCGATCGATCGTAGCTAGCTAGCT&quot;
+println(&quot;DNA sequence: $dna_sequence&quot;)</code></pre><p>Create FASTA record</p><pre><code class="language-julia hljs">dna_record = FASTX.FASTA.Record(&quot;sample_dna&quot;, dna_sequence)
+dna_records = [dna_record]</code></pre><p>Create k-mer graph</p><pre><code class="language-julia hljs">dna_kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.DNAKmer{5}, dna_records)
+dna_kmers = collect(values(dna_kmer_graph.vertex_labels))
+println(&quot;DNA k-mers (k=5): $(length(dna_kmers)) unique k-mers&quot;)
+println(&quot;Example k-mers: $(dna_kmers[1:min(3, length(dna_kmers))])&quot;)</code></pre><p>Get vertex data to see coverage information</p><pre><code class="language-julia hljs">first_kmer = first(dna_kmers)
+vertex_data = dna_kmer_graph[first_kmer]
+println(&quot;Coverage for $(first_kmer): $(length(vertex_data.coverage)) observations&quot;)</code></pre><p>Example: RNA sequence analysis</p><pre><code class="language-julia hljs">rna_sequence = &quot;AUCGAUCGAUCGAUCGUAGCUAGCUAGCU&quot;
+println(&quot;\\nRNA sequence: $rna_sequence&quot;)
+
+rna_record = FASTX.FASTA.Record(&quot;sample_rna&quot;, rna_sequence)
+rna_records = [rna_record]</code></pre><p>Create RNA k-mer graph</p><pre><code class="language-julia hljs">rna_kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.RNAKmer{4}, rna_records)
+rna_kmers = collect(values(rna_kmer_graph.vertex_labels))
+println(&quot;RNA k-mers (k=4): $(length(rna_kmers)) unique k-mers&quot;)
+println(&quot;Example k-mers: $(rna_kmers[1:min(3, length(rna_kmers))])&quot;)</code></pre><p>Example: Protein sequence analysis</p><pre><code class="language-julia hljs">protein_sequence = &quot;ALAVALINEGLUTAMINELEUCINE&quot;
+println(&quot;\\nProtein sequence: $protein_sequence&quot;)
+
+protein_record = FASTX.FASTA.Record(&quot;sample_protein&quot;, protein_sequence)
+protein_records = [protein_record]</code></pre><p>Create protein k-mer graph</p><pre><code class="language-julia hljs">protein_kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.AAKmer{3}, protein_records)
+protein_kmers = collect(values(protein_kmer_graph.vertex_labels))
+println(&quot;Protein k-mers (k=3): $(length(protein_kmers)) unique k-mers&quot;)
+println(&quot;Example k-mers: $(protein_kmers[1:min(3, length(protein_kmers))])&quot;)</code></pre><p>Use cases</p><pre><code class="language-julia hljs">println(&quot;Use cases: Genome assembly, repeat detection, sequence comparison&quot;)</code></pre><p>============================================================================= Tutorial 3: Qualmer Graphs - Quality-Aware Sequence Analysis =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n3. QUALMER GRAPHS - Quality-Aware Sequence Analysis&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: High-quality sequencing data</p><pre><code class="language-julia hljs">high_quality_seq = &quot;ATCGATCGATCGATCGTAGCTAGCT&quot;
+high_quality_scores = &quot;HHHHHHHHHHHHHHHHHHHHHHHHH&quot;  ## PHRED 39
+println(&quot;High-quality sequence: $high_quality_seq&quot;)</code></pre><p>Create FASTQ record</p><pre><code class="language-julia hljs">hq_record = FASTX.FASTQ.Record(&quot;high_quality&quot;, high_quality_seq, high_quality_scores)
+hq_records = [hq_record]</code></pre><p>Create qualmer graph</p><pre><code class="language-julia hljs">hq_qualmer_graph = Mycelia.build_qualmer_graph(hq_records, k=5)
+hq_kmers = collect(values(hq_qualmer_graph.vertex_labels))
+println(&quot;High-quality k-mers: $(length(hq_kmers)) unique k-mers&quot;)</code></pre><p>Show quality information</p><pre><code class="language-julia hljs">first_hq_kmer = first(hq_kmers)
+hq_vertex_data = hq_qualmer_graph[first_hq_kmer]
+println(&quot;$(first_hq_kmer): joint prob = $(round(hq_vertex_data.joint_probability, digits=4)), mean quality = $(hq_vertex_data.mean_quality)&quot;)</code></pre><p>Example: Medium-quality sequencing data</p><pre><code class="language-julia hljs">medium_quality_seq = &quot;ATCGATCGATCGATCGTAGCTAGCT&quot;
+medium_quality_scores = &quot;?????????????????????????&quot;  ## PHRED 30
+println(&quot;\\nMedium-quality sequence: $medium_quality_seq&quot;)
+
+mq_record = FASTX.FASTQ.Record(&quot;medium_quality&quot;, medium_quality_seq, medium_quality_scores)
+mq_records = [mq_record]</code></pre><p>Create qualmer graph</p><pre><code class="language-julia hljs">mq_qualmer_graph = Mycelia.build_qualmer_graph(mq_records, k=5)
+mq_kmers = collect(values(mq_qualmer_graph.vertex_labels))
+println(&quot;Medium-quality k-mers: $(length(mq_kmers)) unique k-mers&quot;)
+
+first_mq_kmer = first(mq_kmers)
+mq_vertex_data = mq_qualmer_graph[first_mq_kmer]
+println(&quot;$(first_mq_kmer): joint prob = $(round(mq_vertex_data.joint_probability, digits=4)), mean quality = $(mq_vertex_data.mean_quality)&quot;)</code></pre><p>Quality comparison</p><pre><code class="language-julia hljs">println(&quot;\\nQuality comparison:&quot;)
+println(&quot;High-quality joint probability: $(round(hq_vertex_data.joint_probability, digits=4))&quot;)
+println(&quot;Medium-quality joint probability: $(round(mq_vertex_data.joint_probability, digits=4))&quot;)
+println(&quot;Quality-aware assembly can make better decisions using this information!&quot;)</code></pre><p>Use cases</p><pre><code class="language-julia hljs">println(&quot;Use cases: Error correction, quality-aware assembly, variant calling&quot;)</code></pre><p>============================================================================= Tutorial 4: String Graphs - Simplified N-gram Analysis =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n4. STRING GRAPHS - Simplified N-gram Analysis&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: Text processing with simplification</p><pre><code class="language-julia hljs">text_for_strings = &quot;ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot;
+println(&quot;Input text: $text_for_strings&quot;)</code></pre><p>Create N-gram graph first</p><pre><code class="language-julia hljs">string_ngram_graph = Mycelia.string_to_ngram_graph(s=text_for_strings, n=3)
+original_ngrams = collect(values(string_ngram_graph.vertex_labels))
+println(&quot;Original N-grams: $(length(original_ngrams)) 3-grams&quot;)</code></pre><p>String graphs are created by simplifying N-gram graphs (Path collapsing functionality may be work in progress)</p><pre><code class="language-julia hljs">try
+    collapsed_paths = Mycelia.collapse_unbranching_paths(string_ngram_graph)
+    println(&quot;Simplified paths: $(length(collapsed_paths)) paths&quot;)
+catch e
+    println(&quot;Path simplification: Work in progress - $(typeof(e))&quot;)
+end</code></pre><p>Use cases</p><pre><code class="language-julia hljs">println(&quot;Use cases: Text compression, sequence simplification, path analysis&quot;)</code></pre><p>============================================================================= Tutorial 5: FASTA Graphs - Variable-Length BioSequence Analysis =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n5. FASTA GRAPHS - Variable-Length BioSequence Analysis&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: Direct BioSequence graph construction</p><pre><code class="language-julia hljs">fasta_sequence = &quot;ATCGATCGATCGATCGTAGCTAGCTAGCTGCGCGCGC&quot;
+println(&quot;FASTA sequence: $fasta_sequence&quot;)
+
+fasta_record = FASTX.FASTA.Record(&quot;sample&quot;, fasta_sequence)
+fasta_records = [fasta_record]</code></pre><p>Create BioSequence graph directly</p><pre><code class="language-julia hljs">bio_graph = Mycelia.build_biosequence_graph(fasta_records)
+bio_sequences = collect(values(bio_graph.vertex_labels))
+println(&quot;BioSequence graph: $(length(bio_sequences)) sequences&quot;)
+
+if !isempty(bio_sequences)
+    first_seq = first(bio_sequences)
+    println(&quot;First sequence: $first_seq (length: $(length(first_seq)))&quot;)
+    println(&quot;Sequence type: $(typeof(first_seq))&quot;)
+end</code></pre><p>Example: K-mer to BioSequence conversion</p><pre><code class="language-julia hljs">println(&quot;\\nK-mer to BioSequence conversion:&quot;)
+kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.DNAKmer{5}, fasta_records)
+bio_converted = Mycelia.kmer_graph_to_biosequence_graph(kmer_graph)
+converted_sequences = collect(values(bio_converted.vertex_labels))
+println(&quot;Converted $(length(kmer_graph.vertex_labels)) k-mers to $(length(converted_sequences)) BioSequences&quot;)</code></pre><p>Use cases</p><pre><code class="language-julia hljs">println(&quot;Use cases: Genome assembly, contig construction, sequence alignment&quot;)</code></pre><p>============================================================================= Tutorial 6: FASTQ Graphs - Quality-Aware BioSequence Analysis =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n6. FASTQ GRAPHS - Quality-Aware BioSequence Analysis&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Example: Quality-aware BioSequence graph</p><pre><code class="language-julia hljs">fastq_sequence = &quot;ATCGATCGATCGATCGTAGCTAGCTAGCTGCGCGCGC&quot;
+fastq_quality = repeat(&quot;H&quot;, length(fastq_sequence))  ## High quality
+println(&quot;FASTQ sequence: $fastq_sequence&quot;)
+println(&quot;Quality string: $fastq_quality&quot;)
+
+fastq_record = FASTX.FASTQ.Record(&quot;quality_sample&quot;, fastq_sequence, fastq_quality)
+fastq_records = [fastq_record]</code></pre><p>Create quality-aware BioSequence graph</p><pre><code class="language-julia hljs">quality_bio_graph = Mycelia.build_quality_biosequence_graph(fastq_records)
+quality_sequences = collect(values(quality_bio_graph.vertex_labels))
+println(&quot;Quality BioSequence graph: $(length(quality_sequences)) sequences&quot;)
+
+if !isempty(quality_sequences)
+    first_quality_seq = first(quality_sequences)
+    quality_vertex_data = quality_bio_graph[first_quality_seq]
+    println(&quot;First sequence: $first_quality_seq&quot;)
+    println(&quot;Quality scores: $(quality_vertex_data.quality_scores[1:min(10, length(quality_vertex_data.quality_scores))]...)&quot;)
+end</code></pre><p>Example: Qualmer to quality BioSequence conversion</p><pre><code class="language-julia hljs">println(&quot;\\nQualmer to quality BioSequence conversion:&quot;)
+qualmer_graph = Mycelia.build_qualmer_graph(fastq_records, k=5)
+quality_converted = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+quality_converted_sequences = collect(values(quality_converted.vertex_labels))
+println(&quot;Converted $(length(qualmer_graph.vertex_labels)) qualmers to $(length(quality_converted_sequences)) quality BioSequences&quot;)</code></pre><p>Use cases</p><pre><code class="language-julia hljs">println(&quot;Use cases: Quality-aware assembly, error correction, variant calling&quot;)</code></pre><p>============================================================================= Tutorial 7: Graph Type Hierarchy and Conversions =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n7. GRAPH TYPE HIERARCHY AND CONVERSIONS&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Demonstrate the hierarchy: Fixed-length → Variable-length</p><pre><code class="language-julia hljs">sequence_for_hierarchy = &quot;ATCGATCGATCGATCGTAGCTAGCTAGCTGCGCGCGC&quot;
+records_for_hierarchy = [FASTX.FASTA.Record(&quot;hierarchy_demo&quot;, sequence_for_hierarchy)]
+fastq_records_for_hierarchy = [FASTX.FASTQ.Record(&quot;hierarchy_demo&quot;, sequence_for_hierarchy, repeat(&quot;H&quot;, length(sequence_for_hierarchy)))]
+
+println(&quot;Original sequence: $sequence_for_hierarchy&quot;)</code></pre><p>Fixed-length graphs</p><pre><code class="language-julia hljs">ngram_result = Mycelia.string_to_ngram_graph(s=sequence_for_hierarchy, n=3)
+kmer_result = Mycelia.build_kmer_graph_next(Mycelia.Kmers.DNAKmer{5}, records_for_hierarchy)
+qualmer_result = Mycelia.build_qualmer_graph(fastq_records_for_hierarchy, k=5)
+
+println(&quot;\\nFixed-length graphs:&quot;)
+println(&quot;  N-grams (n=3): $(length(ngram_result.vertex_labels)) vertices&quot;)
+println(&quot;  K-mers (k=5): $(length(kmer_result.vertex_labels)) vertices&quot;)
+println(&quot;  Qualmers (k=5): $(length(qualmer_result.vertex_labels)) vertices&quot;)</code></pre><p>Variable-length graphs</p><pre><code class="language-julia hljs">bio_result = Mycelia.build_biosequence_graph(records_for_hierarchy)
+quality_bio_result = Mycelia.build_quality_biosequence_graph(fastq_records_for_hierarchy)
+
+println(&quot;\\nVariable-length graphs:&quot;)
+println(&quot;  BioSequences: $(length(bio_result.vertex_labels)) vertices&quot;)
+println(&quot;  Quality BioSequences: $(length(quality_bio_result.vertex_labels)) vertices&quot;)</code></pre><p>Conversions</p><pre><code class="language-julia hljs">kmer_to_bio = Mycelia.kmer_graph_to_biosequence_graph(kmer_result)
+qualmer_to_quality_bio = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_result)
+
+println(&quot;\\nConversions:&quot;)
+println(&quot;  K-mer → BioSequence: $(length(kmer_result.vertex_labels)) → $(length(kmer_to_bio.vertex_labels))&quot;)
+println(&quot;  Qualmer → Quality BioSequence: $(length(qualmer_result.vertex_labels)) → $(length(qualmer_to_quality_bio.vertex_labels))&quot;)</code></pre><p>============================================================================= Tutorial 8: Practical Assembly Workflow =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n8. PRACTICAL ASSEMBLY WORKFLOW&quot;)
+println(&quot;-&quot;^50)</code></pre><p>Simulate a realistic assembly scenario</p><pre><code class="language-julia hljs">simulated_reads = [
+    &quot;ATCGATCGATCGATCGTAGC&quot;,
+    &quot;GATCGATCGATCGTAGCTAG&quot;,
+    &quot;TCGATCGATCGTAGCTAGCT&quot;,
+    &quot;GATCGATCGTAGCTAGCTGC&quot;,
+    &quot;TCGATCGTAGCTAGCTGCGC&quot;
+]
+
+println(&quot;Simulated sequencing reads:&quot;)
+for (i, read) in enumerate(simulated_reads)
+    println(&quot;  Read $i: $read&quot;)
+end</code></pre><p>Create records</p><pre><code class="language-julia hljs">fasta_reads = [FASTX.FASTA.Record(&quot;read_$i&quot;, read) for (i, read) in enumerate(simulated_reads)]
+fastq_reads = [FASTX.FASTQ.Record(&quot;read_$i&quot;, read, repeat(&quot;H&quot;, length(read))) for (i, read) in enumerate(simulated_reads)]</code></pre><p>Method 1: K-mer graph assembly</p><pre><code class="language-julia hljs">println(&quot;\\nMethod 1: K-mer graph assembly&quot;)
+assembly_kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.DNAKmer{5}, fasta_reads)
+assembly_kmers = collect(values(assembly_kmer_graph.vertex_labels))
+println(&quot;  K-mer graph: $(length(assembly_kmers)) unique k-mers&quot;)</code></pre><p>Method 2: Quality-aware Qualmer assembly</p><pre><code class="language-julia hljs">println(&quot;\\nMethod 2: Quality-aware Qualmer assembly&quot;)
+assembly_qualmer_graph = Mycelia.build_qualmer_graph(fastq_reads, k=5)
+assembly_qualmers = collect(values(assembly_qualmer_graph.vertex_labels))
+println(&quot;  Qualmer graph: $(length(assembly_qualmers)) unique qualmers&quot;)</code></pre><p>Show quality information</p><pre><code class="language-julia hljs">if !isempty(assembly_qualmers)
+    first_qualmer = first(assembly_qualmers)
+    qualmer_vertex_data = assembly_qualmer_graph[first_qualmer]
+    println(&quot;  Quality example: $(first_qualmer) with joint prob = $(round(qualmer_vertex_data.joint_probability, digits=4))&quot;)
+end</code></pre><p>Method 3: BioSequence graph assembly</p><pre><code class="language-julia hljs">println(&quot;\\nMethod 3: BioSequence graph assembly&quot;)
+assembly_bio_graph = Mycelia.build_biosequence_graph(fasta_reads)
+assembly_sequences = collect(values(assembly_bio_graph.vertex_labels))
+println(&quot;  BioSequence graph: $(length(assembly_sequences)) sequences&quot;)
+
+println(&quot;\\nWorkflow summary:&quot;)
+println(&quot;  1. Choose graph type based on data: FASTA → K-mer/BioSequence, FASTQ → Qualmer/Quality BioSequence&quot;)
+println(&quot;  2. Consider quality: Use Qualmer graphs for quality-aware assembly&quot;)
+println(&quot;  3. Use appropriate k-mer size: Smaller k for higher sensitivity, larger k for specificity&quot;)
+println(&quot;  4. Convert between graph types as needed for different analysis steps&quot;)</code></pre><p>============================================================================= Summary =============================================================================</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^80)
+println(&quot;TUTORIAL SUMMARY&quot;)
+println(&quot;=&quot;^80)
+println(&quot;You&#39;ve learned about all 6 graph types in Mycelia:&quot;)
+println()
+println(&quot;FIXED-LENGTH GRAPHS (Assembly Foundation):&quot;)
+println(&quot;  1. N-gram Graphs - Unicode text analysis&quot;)
+println(&quot;  2. K-mer Graphs - DNA/RNA/protein sequence analysis&quot;)
+println(&quot;  3. Qualmer Graphs - Quality-aware sequence analysis&quot;)
+println()
+println(&quot;VARIABLE-LENGTH GRAPHS (Simplified Products):&quot;)
+println(&quot;  4. String Graphs - Simplified N-gram analysis&quot;)
+println(&quot;  5. FASTA Graphs - Variable-length BioSequence analysis&quot;)
+println(&quot;  6. FASTQ Graphs - Quality-aware BioSequence analysis&quot;)
+println()
+println(&quot;KEY FEATURES:&quot;)
+println(&quot;  ✓ Type-stable implementation with storage parameters&quot;)
+println(&quot;  ✓ Quality-aware assembly with per-base quality scores&quot;)
+println(&quot;  ✓ Multi-alphabet support (DNA, RNA, amino acids)&quot;)
+println(&quot;  ✓ Strand-aware graph construction&quot;)
+println(&quot;  ✓ Graph type conversions and hierarchy&quot;)
+println(&quot;  ✓ MetaGraphsNext.jl foundation for performance&quot;)
+println()
+println(&quot;Choose the right graph type for your analysis:&quot;)
+println(&quot;  - Use N-gram graphs for text analysis&quot;)
+println(&quot;  - Use K-mer graphs for basic sequence analysis&quot;)
+println(&quot;  - Use Qualmer graphs for quality-aware assembly&quot;)
+println(&quot;  - Use BioSequence graphs for variable-length analysis&quot;)
+println(&quot;  - Use Quality BioSequence graphs for quality-aware variable-length analysis&quot;)
+println(&quot;=&quot;^80)</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Tuesday 22 July 2025 22:01">Tuesday 22 July 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
