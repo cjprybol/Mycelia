@@ -23,7 +23,6 @@ import Test
 import Mycelia
 import FASTX
 import Random
-import Plots
 import Statistics
 
 Random.seed!(42)
@@ -65,18 +64,18 @@ println("\n=== Reference-Based Validation ===")
 println("--- Preparing Test Data ---")
 
 # Reference genome
-reference_size = 100000  # 100 kb
+reference_size = 100000  ## 100 kb
 reference_genome = Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=reference_size)
 reference_file = "reference.fasta"
 Mycelia.write_fasta(outfile=reference_file, records=[reference_genome])
 
 # Simulated assembly with some differences
 assembly_contigs = [
-    # Contig 1: Perfect match to reference positions 1-40000
+    ## Contig 1: Perfect match to reference positions 1-40000
     Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=40000),
-    # Contig 2: Reference positions 40001-80000 with some variants
+    ## Contig 2: Reference positions 40001-80000 with some variants
     Mycelia.random_fasta_record(moltype=:DNA, seed=2, L=40000),
-    # Contig 3: Reference positions 80001-100000
+    ## Contig 3: Reference positions 80001-100000
     Mycelia.random_fasta_record(moltype=:DNA, seed=3, L=20000)
 ]
 
@@ -158,11 +157,11 @@ println("--- K-mer Based Validation ---")
 
 # Simulate k-mer validation results
 merqury_results = Dict(
-    "assembly_qv" => 35.2,        # Phred-scaled quality
-    "kmer_completeness" => 98.7,   # Percentage of read k-mers in assembly
-    "false_duplications" => 0.8,   # Percentage of duplicated k-mers
-    "solid_kmers" => 1250000,     # Number of reliable k-mers
-    "error_kmers" => 15000        # Number of error k-mers
+    "assembly_qv" => 35.2,        ## Phred-scaled quality
+    "kmer_completeness" => 98.7,   ## Percentage of read k-mers in assembly
+    "false_duplications" => 0.8,   ## Percentage of duplicated k-mers
+    "solid_kmers" => 1250000,     ## Number of reliable k-mers
+    "error_kmers" => 15000        ## Number of error k-mers
 )
 
 println("Merqury Results:")
@@ -183,11 +182,11 @@ println("--- Read Mapping Validation ---")
 # - Assess coverage uniformity
 
 mapping_stats = Dict(
-    "mapped_reads" => 95.4,       # Percentage of reads mapped
-    "properly_paired" => 92.1,    # Percentage of properly paired reads
-    "mean_coverage" => 24.8,      # Average coverage depth
+    "mapped_reads" => 95.4,       ## Percentage of reads mapped
+    "properly_paired" => 92.1,    ## Percentage of properly paired reads
+    "mean_coverage" => 24.8,      ## Average coverage depth
     "coverage_uniformity" => 0.85, # Coefficient of variation
-    "unmapped_regions" => 147     # Number of unmapped regions
+    "unmapped_regions" => 147     ## Number of unmapped regions
 )
 
 println("Read Mapping Statistics:")
@@ -314,7 +313,7 @@ println("--- Composite Quality Scores ---")
 # - Provide confidence intervals
 
 composite_score = Dict(
-    "overall_quality" => 8.7,     # Scale 0-10
+    "overall_quality" => 8.7,     ## Scale 0-10
     "confidence_interval" => (8.2, 9.1),
     "primary_strengths" => ["High contiguity", "Good gene completeness"],
     "primary_weaknesses" => ["Some structural variants", "Coverage gaps"]

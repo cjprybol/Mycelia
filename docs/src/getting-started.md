@@ -1,19 +1,27 @@
 # Getting Started with Mycelia
 
-Welcome to Mycelia, a Julia package for bioinformatics and computational biology. This guide will help you install Mycelia and complete your first genomic analysis.
+Welcome to Mycelia, an experimental Julia package for bioinformatics and computational biology. This guide will help you install Mycelia and explore its current capabilities.
 
 ## What is Mycelia?
 
-Mycelia is a modular bioinformatics toolkit that provides:
+Mycelia is a research-oriented bioinformatics package that currently provides:
 
-- **Sequence Processing**: FASTA/FASTQ handling, simulation, and quality control
-- **Genome Assembly**: HiFi assembly with hifiasm, polishing, and error correction
-- **K-mer Analysis**: Quality-aware k-mer counting and graph construction
-- **Pangenome Analysis**: Multi-genome comparative genomics
-- **Annotation**: Gene prediction and functional annotation
-- **Phylogenetics**: Tree construction and comparative analysis
-- **Visualization**: Interactive plots and data exploration
-- **HPC Integration**: SLURM job submission and cloud storage
+### Working Features
+- **Basic Sequence I/O**: FASTA/FASTQ file reading and writing
+- **Read Simulation**: PacBio and Nanopore read simulators  
+- **Tool Integration**: Wrappers for established assemblers (MEGAHIT, SPAdes, hifiasm)
+- **K-mer Analysis**: Canonical k-mer counting and distance calculations
+- **HPC Support**: SLURM job submission and rclone integration
+
+### Experimental Features
+- **Novel Assembly Algorithms**: Graph-based approaches incorporating quality scores
+- **Pangenome Analysis**: K-mer based comparative genomics
+- **Quality Control**: Integration with external QC tools
+
+### Planned Features  
+- **Annotation**: Gene prediction integration
+- **Phylogenetics**: Tree construction from pangenome data
+- **Visualization**: Interactive genomic plots
 
 ## Prerequisites
 
@@ -83,34 +91,40 @@ Let's walk through a complete workflow using small test datasets included with M
 ### 1. Load Mycelia
 
 ```julia
-using Mycelia
+import Mycelia
 ```
 
-### 2. Simulate Test Data
+### 2. Download Test Data
 
-Create synthetic genomic data for testing:
+Download a reference genome for testing:
 
 ```julia
-# Generate random genome sequence
-genome = simulate_random_genome(length=10000, gc_content=0.45)
+# Download a small viral genome (phiX174)
+genome_file = Mycelia.download_genome_by_accession(accession="NC_001422.1")
 
-# Simulate HiFi reads
-reads = simulate_hifi_reads(genome, coverage=20, error_rate=0.001)
+# Or create a random test sequence
+test_genome = Mycelia.random_fasta_record(moltype=:DNA, L=10000)
+Mycelia.write_fasta(outfile="test_genome.fasta", records=[test_genome])
 
-# Write to FASTQ format
-write_fastq("test_reads.fastq", reads)
+# Simulate reads from the genome
+reads_file = Mycelia.simulate_pacbio_reads(fasta="test_genome.fasta", quantity="20x")
+Mycelia.write_fastq("test_reads.fastq", reads)
 ```
 
-### 3. Quality Control
+### 3. Quality Control (Using External Tools)
 
-Assess read quality and characteristics:
+Filter reads using integrated external tools:
 
 ```julia
-# Load reads and calculate statistics
-read_stats = analyze_fastq_quality("test_reads.fastq")
-println("Read count: $(read_stats.n_reads)")
-println("Mean length: $(read_stats.mean_length)")
-println("Mean quality: $(read_stats.mean_quality)")
+# Filter long reads with filtlong
+Mycelia.qc_filter_long_reads_filtlong(
+    input_file="test_reads.fastq",
+    output_file="filtered_reads.fastq",
+    min_length=1000,
+    min_mean_q=7
+)
+
+# Note: Native quality assessment functions are planned but not yet implemented
 ```
 
 ### 4. K-mer Analysis
@@ -118,83 +132,69 @@ println("Mean quality: $(read_stats.mean_quality)")
 Analyze k-mer composition:
 
 ```julia
-# Count k-mers
-kmer_counts = count_kmers("test_reads.fastq", k=21)
+# Count canonical k-mers
+import Kmers
+kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{21}, "test_reads.fastq")
+println("Unique k-mers: $(length(kmer_counts))")
 
-# Analyze k-mer frequency spectrum
-spectrum = kmer_frequency_spectrum(kmer_counts)
-plot_kmer_spectrum(spectrum)
+# Note: K-mer spectrum analysis and plotting functions are planned
 ```
 
-### 5. Genome Assembly
+### 5. Genome Assembly  
 
-Assemble the genome from reads:
+Assemble using external tools through Mycelia wrappers:
 
 ```julia
-# Run hifiasm assembly
-assembly = assemble_genome("test_reads.fastq", 
-                          output_dir="assembly_output",
-                          threads=4)
+# Use MEGAHIT for assembly (works with short reads)
+Mycelia.assemble_metagenome_megahit(
+    reads=["test_reads.fastq"],
+    output_dir="megahit_assembly"
+)
 
-# Assess assembly quality
-assembly_stats = evaluate_assembly(assembly)
-println("Contigs: $(assembly_stats.n_contigs)")
-println("N50: $(assembly_stats.n50)")
-println("Total length: $(assembly_stats.total_length)")
+# Or use experimental graph-based assembly (research feature)
+# Note: This is experimental and may not produce optimal results
+# assembly = Mycelia.assemble_with_graph_framework("test_reads.fastq")
+
+# Assembly evaluation functions are planned but not yet implemented
 ```
 
-### 6. Annotation
+### 6. Comparative Analysis (Experimental)
 
-Predict genes in the assembled genome:
-
-```julia
-# Predict genes with Pyrodigal
-genes = predict_genes(assembly, genetic_code="standard")
-println("Predicted genes: $(length(genes))")
-
-# Write annotations to GFF3
-write_gff3("annotations.gff3", genes)
-```
-
-### 7. Visualization
-
-Create plots to visualize your results:
+Compare multiple genomes using k-mer analysis:
 
 ```julia
-# Plot assembly statistics
-plot_assembly_stats(assembly_stats)
+# Compare two genomes
+genome_files = ["genome1.fasta", "genome2.fasta"]
+pangenome_result = Mycelia.analyze_pangenome_kmers(
+    genome_files,
+    kmer_type=Kmers.DNAKmer{21}
+)
+println("Core k-mers: $(length(pangenome_result.core_kmers))")
+println("Unique k-mers: $(sum(length(v) for v in values(pangenome_result.unique_kmers_by_genome)))")
 
-# Create k-mer spectrum plot
-plot_kmer_spectrum(spectrum)
-
-# Visualize gene features
-plot_genome_features(assembly, genes)
+# Note: Gene prediction and visualization functions are planned
 ```
 
 ## What's Next?
 
-Now that you've completed your first analysis, explore these advanced topics:
+Explore the available features and help improve the package:
 
-### Tutorials (Coming Soon)
-- **Genome Assembly Tutorial**: Complete HiFi assembly workflow
-- **Pangenome Analysis**: Multi-genome comparative analysis
-- **Phylogenetic Analysis**: Tree construction and visualization
-- **HPC Deployment**: Running large-scale analyses on clusters
+### Available Tutorials
+- See the [tutorials](tutorials.md) section for numbered examples
+- Focus on working examples that demonstrate current capabilities
 
-### CLI Usage
+### Research Features
+- Explore the experimental graph-based assembly algorithms
+- Test the quality-aware k-mer (qualmer) graph implementation
+- Try the reinforcement learning guided assembly (very experimental)
 
-Mycelia includes command-line tools for common workflows:
+### Contributing
+- Report issues or feature requests on [GitHub](https://github.com/cjprybol/Mycelia/issues)
+- Help implement planned features
+- Improve documentation for existing functions
 
-```bash
-# Run complete assembly pipeline
-mycelia assemble --input reads.fastq --output assembly/ --threads 8
-
-# Perform k-mer analysis
-mycelia kmer-analysis --input reads.fastq --k 21 --output kmers/
-
-# Annotate genome
-mycelia annotate --genome assembly.fasta --output annotations.gff3
-```
+### Note on CLI Tools
+Command-line interface tools are planned but not yet implemented.
 
 ### API Reference
 
@@ -214,12 +214,12 @@ For large-scale analyses:
 
 ```julia
 # Check memory requirements
-estimated_memory = estimate_memory_usage(input_file="large_reads.fastq")
+estimated_memory = Mycelia.estimate_memory_usage(input_file="large_reads.fastq")
 println("Estimated memory needed: $(estimated_memory) GB")
 
 # Monitor memory during analysis
-with_memory_monitoring() do
-    result = assemble_genome("large_reads.fastq")
+Mycelia.with_memory_monitoring() do
+    result = Mycelia.assemble_genome("large_reads.fastq")
 end
 ```
 

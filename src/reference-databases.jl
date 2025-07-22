@@ -615,7 +615,7 @@ function blastdb2table(;
         sequence_length = true
         sequence = true
     end
-    
+
     Mycelia.add_bioconda_env("blast")
     blast_db_info = Mycelia.local_blast_database_info()
     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
@@ -637,7 +637,6 @@ function blastdb2table(;
     needs_sequence = sequence || sequence_sha256
 
     # Define the mapping from outfmt symbols to column names and their inclusion status
-    # Using a tuple for better performance (less allocations)
     field_config = [
         ("%s", "sequence", needs_sequence),  # Need sequence for SHA256
         ("%a", "accession", accession),
@@ -665,91 +664,101 @@ function blastdb2table(;
     columns_to_fetch = [colname for (_, colname) in active_fields]
     outfmt_string = join(formats_to_fetch, '\t')
 
-    # Create mapping of format positions to column indices for faster access
-    format_positions = Dict{Int, Int}()
-    for (i, (fmt, _)) in enumerate(active_fields)
-        format_idx = findfirst(==(fmt), formats_to_fetch)
-        if format_idx !== nothing
-            format_positions[i] = format_idx
-        end
-    end
-
     # Define output columns
     output_columns = String[]
     if sequence_sha256
         push!(output_columns, "sequence_sha256")
     end
-    
-    # Add the other active columns
+
+    # Add the other active columns except "sequence" which is handled separately
     for (_, colname, include) in field_config
-        if include && colname != "sequence"  # Handle sequence separately
+        if include && colname != "sequence"
             push!(output_columns, colname)
         end
     end
-    
+
     if sequence
         push!(output_columns, "sequence")
     end
-    
-    # Get total sequences for pre-allocation
-    total_sequences = blast_db_info["number of sequences"]
-    
-    # Pre-allocate column vectors for better performance
-    # Using a dictionary of vectors for type flexibility
+
+    # Use dynamic storage for all columns
     column_data = OrderedCollections.OrderedDict{String, Vector{String}}()
     for col in output_columns
-        column_data[col] = Vector{String}(undef, total_sequences)
+        column_data[col] = String[]
     end
-    
-    progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
-    
+
+    # For progress bar, try to get total sequences, else fallback to nothing
+    total_sequences = get(blast_db_info, "number of sequences", nothing)
+    if total_sequences !== nothing
+        progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+    else
+        progress = ProgressMeter.Progress(desc="Processing BLAST DB: ", dt=1.0)
+    end
+
     # Run blastdbcmd to get data
     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    
+
     # Sequence index in fields (if needed)
     sequence_idx = findfirst(==("%s"), formats_to_fetch)
-    
+
     # Process each line from blastdbcmd
-    for (i, line) in enumerate(eachline(cmd))
+    nseqs = 0
+    for line in eachline(cmd)
+        nseqs += 1
         fields = split(strip(line), '\t')
         # Pad fields with empty strings if necessary
         if length(fields) < length(formats_to_fetch)
             append!(fields, fill("", length(formats_to_fetch) - length(fields)))
         end
-        
+
         # Process sequence if needed (for SHA256 or to include in output)
+        seq = ""
         if needs_sequence && sequence_idx !== nothing
             seq_raw = fields[sequence_idx]
             seq = uppercase(String(filter(x -> isvalid(Char, x), seq_raw)))
-            
             if sequence_sha256
                 seq_sha256 = Mycelia.seq2sha256(seq)
-                column_data["sequence_sha256"][i] = seq_sha256
+                push!(column_data["sequence_sha256"], seq_sha256)
             end
-            
-            if sequence
-                column_data["sequence"][i] = seq
-            end
+        elseif sequence_sha256
+            # If sequence is not available, push empty string for sha256
+            push!(column_data["sequence_sha256"], "")
         end
-        
-        # Add other fields directly to column vectors (avoiding dictionary lookups)
+
+        # Add other fields directly to column vectors
         for (j, colname) in enumerate(columns_to_fetch)
-            if colname != "sequence" || (colname == "sequence" && !needs_sequence)
-                column_data[colname][i] = fields[j]
+            # sequence is handled below
+            if colname != "sequence"
+                push!(column_data[colname], fields[j])
             end
         end
-        
+
+        # Add sequence field at the end if requested
+        if sequence
+            push!(column_data["sequence"], seq)
+        end
+
         # Update progress meter
-        ProgressMeter.next!(progress; showvalues = [
-            (:completed, i),
-            (:total, total_sequences),
-            (:percent, round(i/total_sequences*100, digits=1))
-        ])
+        if total_sequences !== nothing
+            ProgressMeter.next!(progress; showvalues = [
+                (:completed, nseqs),
+                (:total, total_sequences),
+                (:percent, round(nseqs/total_sequences*100, digits=1))
+            ])
+        else
+            ProgressMeter.next!(progress)
+        end
     end
-    
+
+    # Consistency check
+    nrows = length(first(values(column_data)))
+    for (col, vec) in column_data
+        @assert length(vec) == nrows "Column $col has length $(length(vec)), expected $nrows"
+    end
+
     # Construct DataFrame directly from column vectors
     result_df = DataFrames.DataFrame(column_data)
-    
+
     ProgressMeter.finish!(progress)
     return result_df
 end
@@ -933,24 +942,190 @@ end
 # - `trim_galore/[srr_identifier]_1_val_1.fq.gz`: Trimmed forward reads
 # - `trim_galore/[srr_identifier]_2_val_2.fq.gz`: Trimmed reverse reads
 # """
-# function download_and_filter_sra_reads(;outdir="", srr_identifier="")
-#     forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq")
-#     reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq")
-#     forward_reads_gz = forward_reads * ".gz"
-#     reverse_reads_gz = reverse_reads * ".gz"
-#     trimmed_forward_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_1_val_1.fq.gz")
-#     trimmed_reverse_reads = joinpath(outdir, "trim_galore", "$(srr_identifier)_2_val_2.fq.gz")
+"""
+Downloads sequencing reads from NCBI's Sequence Read Archive (SRA).
 
-#     if !(isfile(trimmed_forward_reads) && isfile(trimmed_reverse_reads))
-#         @info "processing $(srr_identifier)"
-#         fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
-#         trim_galore(outdir=outdir, identifier=srr_identifier)
-#     # else
-#         # @info "$(srr_identifier) already processed..."
-#     end
-#     isfile(forward_reads_gz) && rm(forward_reads_gz)
-#     isfile(reverse_reads_gz) && rm(reverse_reads_gz)
-# end
+Downloads reads using fasterq-dump. The function automatically detects whether
+the data is single-end or paired-end and returns appropriate file paths.
+Users should apply quality control based on their knowledge of the data type.
+
+# Arguments
+- `srr_identifier`: SRA run identifier (e.g., "SRR1234567")
+- `outdir`: Output directory for downloaded files (default: current directory)
+
+# Returns
+Named tuple with:
+- `srr_id`: The SRA identifier
+- `outdir`: Output directory path
+- `files`: Vector of downloaded file paths (1 file for single-end, 2 for paired-end)
+- `is_paired`: Boolean indicating if data is paired-end
+
+# Example
+```julia
+# Download SRA data
+result = Mycelia.download_sra_data("SRR1234567", outdir="./data")
+
+# Apply appropriate QC based on data type
+if result.is_paired
+    # Paired-end data - use paired-end QC
+    Mycelia.trim_galore_paired(forward_reads=result.files[1], reverse_reads=result.files[2])
+else
+    # Single-end data - use single-end QC
+    Mycelia.qc_filter_short_reads_fastp(input=result.files[1])
+end
+```
+"""
+function download_sra_data(srr_identifier::String; outdir::String=pwd())
+    if isempty(srr_identifier)
+        error("SRA identifier cannot be empty")
+    end
+    
+    @info "Downloading SRA data: $(srr_identifier)"
+    fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
+    
+    # Check what files were created to determine data type
+    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
+    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
+    single_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
+    
+    if isfile(forward_reads) && isfile(reverse_reads)
+        # Paired-end data
+        return (
+            srr_id = srr_identifier,
+            outdir = outdir,
+            files = [forward_reads, reverse_reads],
+            is_paired = true
+        )
+    elseif isfile(single_reads)
+        # Single-end data
+        return (
+            srr_id = srr_identifier,
+            outdir = outdir,
+            files = [single_reads],
+            is_paired = false
+        )
+    else
+        error("No FASTQ files found after download. Check SRA identifier: $(srr_identifier)")
+    end
+end
+
+"""
+Prefetches multiple SRA runs in parallel.
+
+Downloads SRA run files (.sra) to local storage without converting to FASTQ.
+Useful for batch downloading before processing with fasterq-dump.
+
+# Arguments
+- `srr_identifiers`: Vector of SRA run identifiers
+- `outdir`: Output directory for prefetched files (default: current directory)
+- `max_parallel`: Maximum number of parallel downloads (default: 4)
+
+# Returns
+Vector of named tuples with prefetch results for each SRA run
+
+# Example
+```julia
+runs = ["SRR1234567", "SRR1234568", "SRR1234569"]
+results = Mycelia.prefetch_sra_runs(runs, outdir="./sra_data")
+```
+"""
+function prefetch_sra_runs(srr_identifiers::Vector{String}; outdir::String=pwd(), max_parallel::Int=4)
+    if isempty(srr_identifiers)
+        error("No SRA identifiers provided")
+    end
+    
+    results = []
+    
+    @info "Prefetching $(length(srr_identifiers)) SRA runs with max $(max_parallel) parallel downloads"
+    
+    # Process in chunks to respect max_parallel limit
+    for chunk in Iterators.partition(srr_identifiers, max_parallel)
+        chunk_tasks = []
+        
+        for srr_id in chunk
+            task = Threads.@spawn begin
+                try
+                    @info "Prefetching $(srr_id)"
+                    result = prefetch(SRR=srr_id, outdir=outdir)
+                    @info "Completed prefetch for $(srr_id)"
+                    (srr_id=srr_id, success=true, result=result, error=nothing)
+                catch e
+                    @error "Failed to prefetch $(srr_id): $(e)"
+                    (srr_id=srr_id, success=false, result=nothing, error=string(e))
+                end
+            end
+            push!(chunk_tasks, task)
+        end
+        
+        # Wait for chunk to complete
+        chunk_results = [fetch(task) for task in chunk_tasks]
+        append!(results, chunk_results)
+    end
+    
+    successful = sum([r.success for r in results])
+    @info "Prefetch completed: $(successful)/$(length(srr_identifiers)) successful"
+    
+    return results
+end
+
+"""
+Parallel FASTQ dump for multiple SRA files.
+
+Converts multiple SRA files to FASTQ format in parallel. More efficient than
+sequential processing for large batches.
+
+# Arguments
+- `srr_identifiers`: Vector of SRA run identifiers
+- `outdir`: Output directory for FASTQ files (default: current directory)
+- `max_parallel`: Maximum number of parallel conversions (default: 2)
+
+# Returns
+Vector of named tuples with conversion results
+
+# Example
+```julia
+runs = ["SRR1234567", "SRR1234568"]
+results = Mycelia.fasterq_dump_parallel(runs, outdir="./fastq_data")
+```
+"""
+function fasterq_dump_parallel(srr_identifiers::Vector{String}; outdir::String=pwd(), max_parallel::Int=2)
+    if isempty(srr_identifiers)
+        error("No SRA identifiers provided")
+    end
+    
+    results = []
+    
+    @info "Converting $(length(srr_identifiers)) SRA runs to FASTQ with max $(max_parallel) parallel processes"
+    
+    # Process in chunks - fewer parallel for fasterq-dump as it's more resource intensive
+    for chunk in Iterators.partition(srr_identifiers, max_parallel)
+        chunk_tasks = []
+        
+        for srr_id in chunk
+            task = Threads.@spawn begin
+                try
+                    @info "Converting $(srr_id) to FASTQ"
+                    fasterq_dump(outdir=outdir, srr_identifier=srr_id)
+                    @info "Completed FASTQ conversion for $(srr_id)"
+                    (srr_id=srr_id, success=true, error=nothing)
+                catch e
+                    @error "Failed to convert $(srr_id): $(e)"
+                    (srr_id=srr_id, success=false, error=string(e))
+                end
+            end
+            push!(chunk_tasks, task)
+        end
+        
+        # Wait for chunk to complete
+        chunk_results = [fetch(task) for task in chunk_tasks]
+        append!(results, chunk_results)
+    end
+    
+    successful = sum([r.success for r in results])
+    @info "FASTQ conversion completed: $(successful)/$(length(srr_identifiers)) successful"
+    
+    return results
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2209,6 +2384,10 @@ Downloads and extracts the NCBI taxonomy database required for taxonkit operatio
 Downloads `taxdump.tar.gz` from NCBI FTP server and extracts it to `~/.taxonkit/`.
 This is a prerequisite for using taxonkit-based taxonomy functions.
 
+# Arguments
+- `force_update::Bool=false`: Force download even if taxdump already exists
+- `max_age_days::Int=30`: Maximum age in days before warning about stale data
+
 # Requirements
 - Working internet connection
 - Sufficient disk space (~100MB)
@@ -2221,9 +2400,68 @@ This is a prerequisite for using taxonkit-based taxonomy functions.
 - `SystemError` if download fails or if unable to create directory
 - `ErrorException` if tar extraction fails
 """
-function setup_taxonkit_taxonomy()
-    run(`wget -q ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
-    Mycelia.tar_extract(tarchive="taxdump.tar.gz", directory=mkpath("$(homedir())/.taxonkit"))
+function setup_taxonkit_taxonomy(; force_update::Bool=false, max_age_days::Int=30)
+    
+    taxonkit_dir = joinpath(homedir(), ".taxonkit")
+    timestamp_file = joinpath(taxonkit_dir, ".last_updated")
+    
+    # Check if we need to download/update
+    needs_update = force_update
+    
+    if !needs_update
+        # Check if directory exists and has files
+        if !isdir(taxonkit_dir) || isempty(readdir(taxonkit_dir))
+            needs_update = true
+        else
+            # Check age of installation
+            if isfile(timestamp_file)
+                try
+                    last_updated = Dates.DateTime(read(timestamp_file, String))
+                    age_days = Dates.value(Dates.now() - last_updated) / (1000 * 60 * 60 * 24)
+                    
+                    if age_days > max_age_days
+                        @warn "Taxonkit taxonomy data is $(round(age_days, digits=1)) days old (> $max_age_days days). Consider updating with force_update=true."
+                    end
+                catch
+                    @warn "Could not read timestamp file. Taxonkit data age unknown."
+                end
+            else
+                @warn "No timestamp found for taxonkit data. Age unknown. Consider updating with force_update=true."
+            end
+        end
+    end
+    
+    # Download and extract if needed
+    if needs_update
+        @info "Downloading NCBI taxonomy database..."
+        
+        # Clean up existing directory if it exists
+        if isdir(taxonkit_dir)
+            @info "Removing existing taxonkit directory..."
+            rm(taxonkit_dir, recursive=true)
+        end
+        
+        # Create fresh directory
+        mkpath(taxonkit_dir)
+        
+        # Download in a temporary location first
+        temp_file = tempname() * ".tar.gz"
+        try
+            run(`wget -q -O $temp_file ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
+            
+            # Extract to taxonkit directory
+            Mycelia.tar_extract(tarchive=temp_file, directory=taxonkit_dir)
+            
+            # Write timestamp
+            write(timestamp_file, string(Dates.now()))
+            
+            @info "Taxonkit taxonomy database updated successfully"
+            
+        finally
+            # Clean up temporary file
+            isfile(temp_file) && rm(temp_file)
+        end
+    end
 end
 
 function load_bvbrc_genome_metadata(; 

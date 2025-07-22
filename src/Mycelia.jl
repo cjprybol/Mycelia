@@ -59,10 +59,12 @@ import MultivariateStats
 # - graph-algorithms-next.jl (Eulerian paths, bubble detection, repeat resolution)
 import OrderedCollections
 import Plots
+import POMDPs
 import Primes
 import Printf
 import ProgressMeter
 import Random
+import ReinforcementLearning
 import SankeyPlots
 import SHA
 import SparseArrays
@@ -112,6 +114,18 @@ include("fastq-graphs.jl")          # Quality-aware BioSequence graphs (depends 
 # Assembly pipeline (depends on all graph types and GraphMode enum)
 include("assembly.jl")
 
+# Intelligent assembly algorithms (depends on assembly.jl and core graph types)
+include("intelligent-assembly.jl")
+
+# Iterative assembly algorithms (depends on intelligent-assembly.jl)
+include("iterative-assembly.jl")
+
+# Cross-validation pipeline (depends on both intelligent and iterative assembly)
+include("cross-validation.jl")
+
+# Reinforcement learning framework (depends on intelligent-assembly.jl and iterative-assembly.jl)
+include("reinforcement-learning.jl")
+
 # Advanced algorithms (depend on core graph types)
 include("viterbi-next.jl")
 
@@ -128,6 +142,7 @@ remaining_files = [
     "genome-features.jl",
     "kmer-analysis.jl",
     "neo4jl.jl",
+    "pangenome-analysis.jl",
     "performance-benchmarks.jl",
     "plotting-and-visualization.jl",
     "quality-control-and-benchmarking.jl",

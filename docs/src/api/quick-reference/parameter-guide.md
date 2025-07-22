@@ -18,13 +18,13 @@ Most functions accept file paths as input. Common patterns:
 
 ```julia
 # Single file input
-result = analyze_function("input.fastq")
+result = Mycelia.analyze_function("input.fastq")
 
 # Multiple file input
-result = analyze_function(["file1.fastq", "file2.fastq"])
+result = Mycelia.analyze_function(["file1.fastq", "file2.fastq"])
 
 # Directory input (processes all files)
-result = analyze_function("input_directory/")
+result = Mycelia.analyze_function("input_directory/")
 ```
 
 **Common Parameters:**
@@ -40,13 +40,13 @@ result = analyze_function("input_directory/")
 ### Output Specification
 ```julia
 # Output file specification
-result = process_function("input.fastq", output="output.fastq")
+result = Mycelia.process_function("input.fastq", output="output.fastq")
 
 # Output directory
-result = process_function("input.fastq", output_dir="results/")
+result = Mycelia.process_function("input.fastq", output_dir="results/")
 
 # Auto-generated output names
-result = process_function("input.fastq", auto_output=true)
+result = Mycelia.process_function("input.fastq", auto_output=true)
 ```
 
 **Common Parameters:**
@@ -60,7 +60,7 @@ result = process_function("input.fastq", auto_output=true)
 ### Quality Thresholds
 ```julia
 # Quality score thresholds
-filter_by_quality("reads.fastq", 
+Mycelia.filter_by_quality("reads.fastq", 
     min_quality=20,        # Minimum average quality score
     min_base_quality=15,   # Minimum per-base quality
     quality_window=10      # Sliding window size
@@ -80,7 +80,7 @@ filter_by_quality("reads.fastq",
 
 ### Length Filtering
 ```julia
-filter_by_length("reads.fastq",
+Mycelia.filter_by_length("reads.fastq",
     min_length=1000,       # Minimum read length
     max_length=50000,      # Maximum read length
     length_tolerance=0.1   # Tolerance for length variation
@@ -101,7 +101,7 @@ filter_by_length("reads.fastq",
 
 ### K-mer Size Selection
 ```julia
-count_kmers("reads.fastq", 
+Mycelia.count_kmers("reads.fastq", 
     k=21,                  # K-mer size
     alphabet=:DNA,         # Sequence alphabet
     canonical=true         # Use canonical k-mers
@@ -127,7 +127,7 @@ count_kmers("reads.fastq",
 
 ### Counting Methods
 ```julia
-count_kmers("reads.fastq",
+Mycelia.count_kmers("reads.fastq",
     method="sparse",       # Counting method
     min_count=1,          # Minimum count threshold
     max_count=1000        # Maximum count threshold
@@ -143,7 +143,7 @@ count_kmers("reads.fastq",
 
 ### Assembly Configuration
 ```julia
-assemble_genome("reads.fastq",
+Mycelia.assemble_genome("reads.fastq",
     assembler="hifiasm",   # Assembly software
     k=31,                 # K-mer size for assembly
     min_overlap=1000,     # Minimum overlap length
@@ -164,7 +164,7 @@ assemble_genome("reads.fastq",
 
 ### Assembly Quality Control
 ```julia
-assemble_genome("reads.fastq",
+Mycelia.assemble_genome("reads.fastq",
     min_contig_length=1000,  # Minimum contig size
     min_coverage=5,          # Minimum coverage depth
     error_correction=true,   # Enable error correction
@@ -176,7 +176,7 @@ assemble_genome("reads.fastq",
 
 ### Pangenome Construction
 ```julia
-build_pangenome(genomes,
+Mycelia.build_pangenome(genomes,
     similarity_threshold=0.95,  # Gene similarity cutoff
     coverage_threshold=0.8,     # Minimum coverage for alignment
     clustering_method="mcl",    # Clustering algorithm
@@ -192,7 +192,7 @@ build_pangenome(genomes,
 
 ### Phylogenetic Analysis
 ```julia
-build_phylogenetic_tree(alignment,
+Mycelia.build_phylogenetic_tree(alignment,
     method="ml",              # Tree construction method
     model="GTR+G",           # Evolutionary model
     bootstrap=1000,          # Bootstrap replicates
@@ -209,7 +209,7 @@ build_phylogenetic_tree(alignment,
 
 ### Parallel Processing
 ```julia
-parallel_function(data,
+Mycelia.parallel_function(data,
     threads=8,               # Number of CPU threads
     workers=4,              # Number of worker processes
     chunk_size=1000,        # Data chunk size
@@ -225,7 +225,7 @@ parallel_function(data,
 
 ### Memory Management
 ```julia
-memory_intensive_function(data,
+Mycelia.memory_intensive_function(data,
     memory_limit_gb=16,      # Maximum memory usage
     chunk_processing=true,   # Process in chunks
     gc_frequency=1000,      # Garbage collection frequency
@@ -242,7 +242,7 @@ memory_intensive_function(data,
 
 ### Compression
 ```julia
-write_output(data,
+Mycelia.write_output(data,
     compress=true,          # Enable compression
     compression_level=6,    # Compression level (1-9)
     format="auto"          # Output format detection
@@ -256,7 +256,7 @@ write_output(data,
 
 ### Format Specification
 ```julia
-read_sequences("input.file",
+Mycelia.read_sequences("input.file",
     format="auto",          # Format detection
     validate=true,         # Validate file format
     encoding="utf-8"       # Text encoding
@@ -273,7 +273,7 @@ read_sequences("input.file",
 
 ### Validation and Checks
 ```julia
-robust_function(input,
+Mycelia.robust_function(input,
     validate_input=true,    # Validate input data
     strict_mode=false,     # Strict error checking
     continue_on_error=false, # Continue despite errors
@@ -283,7 +283,7 @@ robust_function(input,
 
 ### Retry Logic
 ```julia
-network_function(url,
+Mycelia.network_function(url,
     max_retries=3,         # Maximum retry attempts
     retry_delay=30,        # Delay between retries (seconds)
     exponential_backoff=true, # Increase delay each retry
@@ -330,7 +330,7 @@ output_params = Dict(
 ```julia
 # Most functions automatically validate parameters
 try
-    result = count_kmers("reads.fastq", k=0)  # Invalid k
+    result = Mycelia.count_kmers("reads.fastq", k=0)  # Invalid k
 catch ArgumentError as e
     println("Parameter error: $e")
 end
@@ -339,7 +339,7 @@ end
 ### Manual Validation
 ```julia
 # Validate parameters before expensive operations
-if !validate_parameters(k=21, min_quality=20, threads=8)
+if !Mycelia.validate_parameters(k=21, min_quality=20, threads=8)
     error("Invalid parameter combination")
 end
 ```
@@ -349,7 +349,7 @@ end
 ### Memory Problems
 ```julia
 # Reduce memory usage
-count_kmers("large_file.fastq", 
+Mycelia.count_kmers("large_file.fastq", 
     k=21,
     method="sparse",        # Use sparse instead of dense
     chunk_size=50000,      # Process in smaller chunks
@@ -360,7 +360,7 @@ count_kmers("large_file.fastq",
 ### Performance Issues
 ```julia
 # Optimize for speed
-process_function(data,
+Mycelia.process_function(data,
     threads=Sys.CPU_THREADS,  # Use all available cores
     chunk_size=1000,          # Optimize chunk size
     parallel=true,            # Enable parallelization
@@ -371,7 +371,7 @@ process_function(data,
 ### File I/O Problems
 ```julia
 # Handle file I/O robustly
-read_function("file.fastq",
+Mycelia.read_function("file.fastq",
     validate=true,            # Validate file format
     buffer_size=8192,        # Optimize buffer size
     encoding="utf-8",        # Specify encoding

@@ -6,33 +6,103 @@ using Mycelia
 import Literate
 
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, ".."))
+const TUTORIALS_DIR = joinpath(PROJECT_ROOT, "tutorials")
 const LITERATE_SRC_DIR = joinpath(PROJECT_ROOT, "test")
 const GENERATED_DOCS_DIR = joinpath(@__DIR__, "src", "generated")
 
-# --- TEMPORARY: Only process the example tutorial for debugging Literate integration ---
+# Process tutorials from tutorials/ directory
 mkpath(GENERATED_DOCS_DIR)
-Literate.markdown(
-    joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"),
-    GENERATED_DOCS_DIR;
-    credit = false,
-    flavor = Literate.DocumenterFlavor()
-)
+tutorials_output_dir = joinpath(GENERATED_DOCS_DIR, "tutorials")
+mkpath(tutorials_output_dir)
 
-# # --- ORIGINAL: Process all .jl files in test/ (reactivate later) ---
-# for (root, _, files) in walkdir(LITERATE_SRC_DIR)
-#     relative_path = relpath(root, LITERATE_SRC_DIR)
-#     for file in filter(f -> endswith(f, ".jl") && f != "runtests.jl", files)
-#         input_file = joinpath(root, file)
-#         output_dir = joinpath(GENERATED_DOCS_DIR, relative_path)
-#         mkpath(output_dir)
-#         Literate.markdown(input_file, output_dir, credit = false, flavor = Literate.DocumenterFlavor())
-#     end
-# end
+# Initialize tutorial_files array
+tutorial_files = []
 
-# Only include the generated tutorial for now
-tutorial_pages = [
-    joinpath("generated", "test-driven-tutorial.md")
+# Process ALL tutorial files from the tutorials directory
+if isdir(TUTORIALS_DIR)
+    for file in readdir(TUTORIALS_DIR)
+        if endswith(file, ".jl")
+            file_path = joinpath(TUTORIALS_DIR, file)
+            if isfile(file_path)
+                println("Processing tutorial: $file")
+                Literate.markdown(
+                    file_path, 
+                    tutorials_output_dir;
+                    credit = false,
+                    flavor = Literate.DocumenterFlavor()
+                )
+                # Add to our list for the sidebar
+                md_filename = replace(file, ".jl" => ".md")
+                push!(tutorial_files, joinpath("generated", "tutorials", md_filename))
+            end
+        end
+    end
+end
+
+# Also process the test tutorial for debugging
+if isfile(joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"))
+    Literate.markdown(
+        joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"),
+        GENERATED_DOCS_DIR;
+        credit = false,
+        flavor = Literate.DocumenterFlavor()
+    )
+    push!(tutorial_files, joinpath("generated", "test-driven-tutorial.md"))
+end
+
+# Create tutorial pages list
+tutorial_pages = []
+
+# Add tutorials in logical order
+tutorial_order = [
+    # Main tutorial series (01-08)
+    ("1. Data Acquisition", "01_data_acquisition.md"),
+    ("2. Quality Control", "02_quality_control.md"),
+    ("3. K-mer Analysis", "03_kmer_analysis.md"),
+    ("4. Genome Assembly", "04_genome_assembly.md"),
+    ("4b. Graph Type Tutorials", "04_graph_type_tutorials.md"),
+    ("5. Assembly Validation", "05_assembly_validation.md"),
+    ("6. Gene Annotation", "06_gene_annotation.md"),
+    ("7. Comparative Genomics", "07_comparative_genomics.md"),
+    ("8. Tool Integration", "08_tool_integration.md"),
+    
+    # Round-trip tutorial series (09)
+    ("Round-Trip 1: String Graphs", "09_round_trip_01_string_graphs.md"),
+    ("Round-Trip 2: N-gram to String", "09_round_trip_02_ngram_to_string.md"), 
+    ("Round-Trip 3: FASTA Sequences", "09_round_trip_03_fasta_sequences.md"),
+    ("Round-Trip 4: K-mer to Sequence", "09_round_trip_04_kmer_to_sequence.md"),
+    ("Round-Trip 5: FASTQ Graphs", "09_round_trip_05_fastq_graphs.md"),
+    ("Round-Trip 6: Qualmer Graphs", "09_round_trip_06_qualmer_graphs.md")
 ]
+
+# Add tutorials that exist in the specified order
+for (title, filename) in tutorial_order
+    tutorial_path = joinpath("generated", "tutorials", filename)
+    if tutorial_path in tutorial_files
+        push!(tutorial_pages, title => tutorial_path)
+        println("Added tutorial: $title -> $tutorial_path")
+    else
+        println("Tutorial not found: $tutorial_path")
+    end
+end
+
+# Add any remaining tutorials that weren't in the ordered list
+for tutorial_file in tutorial_files
+    # Skip if already added
+    if !any(page -> page.second == tutorial_file, tutorial_pages)
+        # Extract a title from the filename
+        filename = basename(tutorial_file)
+        title = replace(filename, ".md" => "", "_" => " ", r"^\d+[-_]?" => "")
+        title = titlecase(title)
+        push!(tutorial_pages, title => tutorial_file)
+        println("Added additional tutorial: $title -> $tutorial_file")
+    end
+end
+
+# # Add test tutorial if it exists
+# if joinpath("generated", "test-driven-tutorial.md") in tutorial_files
+#     push!(tutorial_pages, "Test Tutorial" => joinpath("generated", "test-driven-tutorial.md"))
+# end
 
 makedocs(
     sitename = "Mycelia",
@@ -40,9 +110,30 @@ makedocs(
     authors = "Cameron Prybol <cameron.prybol@gmail.com> and contributors",
     repo = "https://github.com/cjprybol/Mycelia/blob/{commit}{path}#L{line}",
     format = Documenter.HTMLWriter.HTML(size_threshold = 1_000_000),
+    build = joinpath(@__DIR__, "build"),
+    source = joinpath(@__DIR__, "src"),
     pages = [
         "Home" => "index.md",
+        "Getting Started" => "getting-started.md",
+        "Concepts" => "concepts.md",
         "Tutorials" => tutorial_pages,
+        "API Reference" => [
+            "Workflows" => [
+                "Assembly Suite" => "api/workflows/assembly-suite.md",
+                "Data Acquisition" => "api/workflows/data-acquisition.md",
+                "Quality Control" => "api/workflows/quality-control.md",
+                "Sequence Analysis" => "api/workflows/sequence-analysis.md"
+            ],
+            "Quick Reference" => [
+                "Function Index" => "api/quick-reference/function-index.md",
+                "Parameter Guide" => "api/quick-reference/parameter-guide.md"
+            ],
+            "Examples" => [
+                "Basic Workflows" => "api/examples/basic-workflows.md"
+            ],
+            "API Documentation" => "api.md"
+        ],
+        "Visualization Gallery" => "visualization-gallery.md"
     ]
 )
 

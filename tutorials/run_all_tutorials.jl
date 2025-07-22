@@ -55,7 +55,7 @@ function run_all_tutorials()
             start_time = time()
             
             try
-                # Execute tutorial
+                ## Execute tutorial
                 include(tutorial)
                 
                 elapsed = time() - start_time
@@ -78,7 +78,7 @@ function run_all_tutorials()
     
     total_elapsed = time() - total_start
     
-    # Print summary
+    ## Print summary
     println("=== Tutorial Execution Summary ===")
     println("Total time: $(round(total_elapsed, digits=2))s")
     println()
@@ -110,7 +110,7 @@ Convert all tutorials to Jupyter notebooks using Literate.jl.
 function convert_all_to_notebooks()
     println("=== Converting Tutorials to Notebooks ===")
     
-    # Create notebooks directory if it doesn't exist
+    ## Create notebooks directory if it doesn't exist
     notebooks_dir = "notebooks"
     if !isdir(notebooks_dir)
         mkdir(notebooks_dir)
@@ -121,7 +121,7 @@ function convert_all_to_notebooks()
             println("Converting $tutorial to notebook...")
             
             try
-                # Convert to notebook
+                ## Convert to notebook
                 Literate.notebook(tutorial, notebooks_dir, execute=false)
                 println("✓ Converted $tutorial")
                 
@@ -170,15 +170,15 @@ end
 
 # Main execution
 if abspath(PROGRAM_FILE) == @__FILE__
-    # Only run if this script is executed directly
+    ## Only run if this script is executed directly
     if length(ARGS) == 0
-        # Run all tutorials
+        ## Run all tutorials
         results = run_all_tutorials()
     elseif ARGS[1] == "convert"
-        # Convert to notebooks
+        ## Convert to notebooks
         convert_all_to_notebooks()
     else
-        # Run specific tutorial
+        ## Run specific tutorial
         tutorial_name = ARGS[1]
         run_tutorial(tutorial_name)
     end

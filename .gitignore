@@ -6,7 +6,7 @@ docs/build/
 *.ipynb_checkpoints*
 *.md_checkpoints
 *.ipynb.md
-docs/src
+docs/src/generated
 data
 .snakemake
 notebooks/scripts/kmer-saturation*

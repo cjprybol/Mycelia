@@ -22,7 +22,6 @@ import Test
 import Mycelia
 import FASTX
 import Statistics
-import Plots
 import Random
 
 Random.seed!(42)
@@ -56,14 +55,14 @@ println("Q40: 0.01% error rate (excellent quality)")
 # Generate test sequences with different quality characteristics
 sequences = [
     ("High Quality", Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=1000)),
-    ("AT-Rich", Mycelia.random_fasta_record(moltype=:DNA, seed=2, L=1000)),  # TODO: Add AT bias
-    ("GC-Rich", Mycelia.random_fasta_record(moltype=:DNA, seed=3, L=1000)),  # TODO: Add GC bias
+    ("AT-Rich", Mycelia.random_fasta_record(moltype=:DNA, seed=2, L=1000)),  ## TODO: Add AT bias
+    ("GC-Rich", Mycelia.random_fasta_record(moltype=:DNA, seed=3, L=1000)),  ## TODO: Add GC bias
 ]
 
 for (name, seq) in sequences
     seq_str = String(FASTX.sequence(seq))
     
-    # Calculate composition
+    ## Calculate composition
     a_count = count(c -> c == 'A', seq_str)
     t_count = count(c -> c == 'T', seq_str)
     g_count = count(c -> c == 'G', seq_str)

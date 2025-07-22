@@ -19,6 +19,83 @@ function _get_output_files(output_dir::AbstractString)
 end
 
 """
+    write_tsvgz(df::DataFrames.DataFrame, filename::String; buffer_in_memory::Bool=false, threaded::Bool=true, bufsize::Int=10*1024*1024, force::Bool=false)
+
+Write a DataFrame to a gzipped TSV file.
+
+# Arguments
+- `df`: The DataFrame to write
+- `filename`: Path to the output file (will add .tsv.gz extension as needed)
+- `buffer_in_memory`: If false, uses temporary files for large data (default: false)
+- `bufsize`: Buffer size in bytes for compression stream (default: 10MB)
+- `force`: If true, overwrite existing non-empty files (default: false)
+
+# Returns
+- `String`: The final filename with proper extension
+"""
+function write_tsvgz(;df::DataFrames.DataFrame, filename::String, buffer_in_memory::Bool=false, bufsize::Int=10*1024*1024, force::Bool=false)
+    # Handle extension logic for writing
+    if endswith(lowercase(filename), ".tsv.gz")
+        # Already has full extension
+        final_filename = filename
+    elseif endswith(lowercase(filename), ".tsv")
+        # Has .tsv but missing .gz
+        final_filename = filename * ".gz"
+    else
+        # Missing both extensions
+        final_filename = filename * ".tsv.gz"
+    end
+    
+    # Check if file exists and is non-empty, prevent overwriting unless forced
+    if isfile(final_filename) && filesize(final_filename) > 0 && !force
+        error("File already exists and is non-empty: $final_filename. Use force=true to overwrite.")
+    end
+    
+    # Write the DataFrame to a gzipped TSV file with proper stream handling
+    open(final_filename, "w") do file
+        stream = CodecZlib.GzipCompressorStream(file, bufsize=bufsize)
+        CSV.write(stream, df, delim='\t', buffer_in_memory=buffer_in_memory)
+        close(stream)
+    end
+    
+    return final_filename
+end
+
+"""
+    read_tsvgz(filename::String; buffer_in_memory::Bool=false, threaded::Bool=true, bufsize::Int=10*1024*1024) -> DataFrames.DataFrame
+
+Read a DataFrame from a gzipped TSV file.
+
+# Arguments
+- `filename`: Path to the gzipped TSV file (must have .tsv.gz extension)
+- `buffer_in_memory`: If false, uses temporary files for large data (default: false)
+- `bufsize`: Buffer size in bytes for decompression stream (default: 10MB)
+
+# Returns
+- The loaded DataFrame
+"""
+function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int=10*1024*1024)
+    # For reading, be strict about extension
+    if !endswith(lowercase(filename), ".tsv.gz")
+        error("File must have .tsv.gz extension, got: $filename")
+    end
+    
+    # Check if file exists
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Read the gzipped TSV file back into a DataFrame with proper stream handling
+    df = open(filename, "r") do file
+        stream = CodecZlib.GzipDecompressorStream(file, bufsize=bufsize)
+        CSV.read(stream, DataFrames.DataFrame, delim='\t', buffer_in_memory=buffer_in_memory)
+        close(stream)
+    end
+    
+    return df
+end
+
+"""
     dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame) -> DataFrames.DataFrame
 
 Return the DataFrame with all `nothing` values replaced by `missing`.
@@ -729,7 +806,7 @@ function upload_dataframe_to_bigquery(;
 end
 
 """
-    save_df_jld2(df::DataFrames.DataFrame, filename::String; key::String="dataframe")
+    save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
 
 Save a DataFrame to a JLD2 file.
 
@@ -737,13 +814,6 @@ Save a DataFrame to a JLD2 file.
 - `df`: The DataFrame to save
 - `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
 - `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
-
-# Examples
-```julia
-import DataFrames
-df = DataFrames.DataFrame(x = 1:3, y = ["a", "b", "c"])
-save_df_jld2(df, "mydata")
-```
 """
 function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
     # Ensure filename has .jld2 extension
@@ -760,6 +830,8 @@ function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
     load_df_jld2(filename::String; key::String="dataframe") -> DataFrames.DataFrame
 
 Load a DataFrame from a JLD2 file.
@@ -2006,4 +2078,102 @@ function cleanup_directory(directory::AbstractString; verbose::Bool=true, force:
         end
         return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
     end
+end
+
+# =============================================================================
+# Sequence Type Utilities
+# =============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Determine the BioSequence type from an alphabet symbol.
+
+Maps alphabet symbols to the corresponding BioSequences.jl type for 
+type-safe sequence operations throughout the codebase.
+
+# Arguments
+- `alphabet::Symbol`: The alphabet symbol (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns
+- `Type{<:BioSequences.BioSequence}`: The corresponding BioSequence type
+
+# Examples
+```julia
+alphabet_to_biosequence_type(:DNA)  # Returns BioSequences.LongDNA{4}
+alphabet_to_biosequence_type(:RNA)  # Returns BioSequences.LongRNA{4}
+alphabet_to_biosequence_type(:AA)   # Returns BioSequences.LongAA
+```
+"""
+function alphabet_to_biosequence_type(alphabet::Symbol)::Type
+    if alphabet == :DNA
+        return BioSequences.LongDNA{4}
+    elseif alphabet == :RNA
+        return BioSequences.LongRNA{4}
+    elseif alphabet == :AA
+        return BioSequences.LongAA
+    else
+        throw(ArgumentError("Unknown alphabet: $alphabet"))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract sequence from FASTX record using dynamically determined type.
+
+This function provides type-safe sequence extraction by using the appropriate
+BioSequence type, avoiding hardcoded sequence types and string conversions.
+
+# Arguments
+- `record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}`: Input sequence record
+- `sequence_type::Type{<:BioSequences.BioSequence}`: Target BioSequence type
+
+# Returns
+- `BioSequences.BioSequence`: Typed sequence from the record
+
+# Examples
+```julia
+record = FASTX.FASTQ.Record("read1", "ATCG", "IIII")
+seq_type = alphabet_to_biosequence_type(:DNA)
+sequence = extract_typed_sequence(record, seq_type)
+```
+"""
+function extract_typed_sequence(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}, 
+                               sequence_type::Type{<:BioSequences.BioSequence})
+    return FASTX.sequence(sequence_type, record)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect alphabet and extract typed sequence from FASTX record in one step.
+
+Convenience function that combines alphabet detection with type-safe sequence
+extraction, ideal for workflows that need to determine sequence type once
+at the beginning.
+
+# Arguments
+- `record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}`: Input sequence record
+
+# Returns
+- `Tuple{Symbol, BioSequences.BioSequence}`: (alphabet_symbol, typed_sequence)
+
+# Examples
+```julia
+record = FASTX.FASTQ.Record("read1", "ATCG", "IIII")
+alphabet, sequence = detect_and_extract_sequence(record)
+# alphabet = :DNA, sequence = LongDNA{4} object
+```
+"""
+function detect_and_extract_sequence(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record})
+    # First extract as string to detect alphabet
+    sequence_string = FASTX.sequence(String, record)
+    alphabet = detect_alphabet(sequence_string)
+    
+    # Then extract with proper type
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    typed_sequence = extract_typed_sequence(record, sequence_type)
+    
+    return (alphabet, typed_sequence)
 end

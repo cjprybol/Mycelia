@@ -1,23 +1,30 @@
 # Mycelia Documentation
 
-**A comprehensive Julia package for bioinformatics and computational biology**
+**An experimental Julia package for bioinformatics and computational biology**
 
-Mycelia provides a complete toolkit for genomic analysis, from sequence processing to comparative genomics. Built for researchers who need powerful, scalable tools for modern bioinformatics workflows.
+Mycelia is a research-oriented package exploring novel approaches to genomic analysis, with a focus on graph-based genome assembly and quality-aware sequence processing. Currently in early development, it provides both experimental algorithms and integrations with established bioinformatics tools.
 
 ## Quick Start
 
 New to Mycelia? Start with our [Getting Started Guide](getting-started.md) to install the package and complete your first genomic analysis in minutes.
 
-## Key Features
+## Key Features & Research Areas
 
-- **🧬 Sequence Processing**: FASTA/FASTQ handling, simulation, and quality control
-- **🔧 Genome Assembly**: HiFi assembly with hifiasm, polishing, and error correction  
-- **📊 K-mer Analysis**: Quality-aware k-mer counting and graph construction
-- **🌐 Pangenome Analysis**: Multi-genome comparative genomics
+### Currently Available
+- **🧬 Sequence Processing**: Basic FASTA/FASTQ I/O and read simulation
+- **📊 K-mer Analysis**: Canonical k-mer counting and distance metrics
+- **🔧 Tool Integration**: Wrappers for established assemblers (MEGAHIT, SPAdes, hifiasm)
+- **⚡ HPC Support**: SLURM job submission and rclone integration
+
+### In Active Development  
+- **🧪 Novel Assembly Algorithms**: Graph-based approaches with quality awareness
+- **🌐 Pangenome Analysis**: K-mer based comparative genomics
+- **📈 Quality Control**: Integration with QC tools (fastp, filtlong, trim_galore)
+
+### Planned Features
 - **🔍 Annotation**: Gene prediction and functional annotation
-- **🌳 Phylogenetics**: Tree construction and comparative analysis
-- **📈 Visualization**: Interactive plots and data exploration
-- **⚡ HPC Integration**: SLURM job submission and cloud storage
+- **🌳 Phylogenetics**: Tree construction from pangenome data
+- **📊 Visualization**: Interactive plots for genomic data
 
 ## Documentation Contents
 
