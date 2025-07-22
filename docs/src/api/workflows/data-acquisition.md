@@ -311,5 +311,5 @@ Mycelia.validate_simulation_parameters(
 
 ## See Also
 - [Tutorial 1: Data Acquisition](../../tutorials/01_data_acquisition.md)
-- [FASTA/FASTQ Data Types](../data-types/fasta-fastq.md)
+- FASTA/FASTQ Data Types *(planned)*
 - [Basic Workflows](../examples/basic-workflows.md)

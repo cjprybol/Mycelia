@@ -495,6 +495,8 @@ for file in cleanup_files
     end
 end
 
+## Note: No assembly output directory was created in this tutorial
+assembly_output = "assembly_output"  # Define for consistency, but directory doesn't exist
 if isdir(assembly_output)
     rm(assembly_output, recursive=true, force=true)
 end

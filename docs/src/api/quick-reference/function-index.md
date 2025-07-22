@@ -4,9 +4,9 @@ Alphabetical listing of all Mycelia functions with brief descriptions and links 
 
 ## A
 
-### [`add_sequencing_errors`](@ref)
+### `add_sequencing_errors` *(planned)*
 Add realistic sequencing errors to simulated reads.
-- **Module**: Data Simulation
+- **Module**: Data Simulation  
 - **Usage**: `add_sequencing_errors(reads, error_rate=0.01)`
 - **See**: [Data Acquisition](../workflows/data-acquisition.md#sequencing-read-simulation)
 
@@ -16,13 +16,13 @@ Comprehensive quality analysis of FASTQ files.
 - **Usage**: `analyze_fastq_quality("reads.fastq")`
 - **See**: [Quality Control](../workflows/quality-control.md#fastq-quality-analysis)
 
-### [`analyze_functional_annotations`](@ref)
+### `analyze_functional_annotations` *(planned)*
 Analyze functional annotation categories and distributions.
 - **Module**: Gene Annotation
 - **Usage**: `analyze_functional_annotations("annotations.gff3")`
 - **See**: [Gene Annotation](../workflows/gene-annotation.md#functional-annotation)
 
-### [`analyze_kmer_connectivity`](@ref)
+### `analyze_kmer_connectivity` *(planned)*
 Analyze connectivity patterns in k-mer graphs.
 - **Module**: Sequence Analysis
 - **Usage**: `analyze_kmer_connectivity(kmer_graph)`

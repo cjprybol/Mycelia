@@ -211,11 +211,8 @@ end
 
 <!-- filter_by_length, trim_to_length, remove_short_reads, normalize_read_lengths not yet implemented as individual functions -->
 
-```@docs
-Mycelia.qc_filter_short_reads_fastp
-Mycelia.qc_filter_long_reads_fastplong
-Mycelia.qc_filter_long_reads_filtlong
-```
+<!-- Note: Length-based filtering functions are not yet implemented as individual functions.
+     The fastp and filtlong functions above also perform length filtering as part of their quality control. -->
 
 #### Example: Length Filtering
 ```julia
@@ -461,9 +458,9 @@ contamination_report = Mycelia.generate_contamination_report(contamination_scree
 
 ### Next Steps
 - [Sequence Analysis](sequence-analysis.md) - K-mer analysis of quality-controlled reads
-- [Genome Assembly](genome-assembly.md) - Assembly with preprocessed reads
+- Genome Assembly *(planned)* - Assembly with preprocessed reads
 
 ## See Also
 - [Tutorial 2: Quality Control](../../tutorials/02_quality_control.md)
-- [FASTA/FASTQ Data Types](../data-types/fasta-fastq.md)
+- FASTA/FASTQ Data Types *(planned)*
 - [Performance Optimization Guide](../examples/advanced-usage.md)
