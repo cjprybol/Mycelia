@@ -1,16 +1,38 @@
 """
+    _get_output_files(output_dir::AbstractString) -> Vector{String}
+
+Get a list of all files in the output directory.
+"""
+function _get_output_files(output_dir::AbstractString)
+    if !Base.isdir(output_dir)
+        return String[]
+    end
+    
+    files = String[]
+    for (root, dirs, filenames) in Base.walkdir(output_dir)
+        for filename in filenames
+            push!(files, Base.joinpath(root, filename))
+        end
+    end
+    
+    return files
+end
+
+"""
     dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame) -> DataFrames.DataFrame
 
 Return the DataFrame with all `nothing` values replaced by `missing`.
 """
 function dataframe_replace_nothing_with_missing(df::DataFrames.DataFrame)
-    for (colname, col) in zip(names(df), DataFrames.eachcol(df))
-        if any(isnothing, col)
+    for (colname, col) in zip(DataFrames.names(df), DataFrames.eachcol(df))
+        # Only process columns that can contain Nothing values
+        if Nothing <: eltype(col) && any(isnothing, col)
             df[!, colname] = map(x -> isnothing(x) ? missing : x, col)
         end
     end
     return df
 end
+
 """
     check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
 

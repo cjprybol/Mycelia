@@ -1,3 +1,105 @@
+function _install_vibrant()
+    # install VIBRANT from Bioconda
+    # run(`conda install -y -c bioconda vibrant`)
+    Mycelia.add_bioconda_env("vibrant")
+    # download required HMM databases
+    # run(`bash -lc "download-db.sh"`)
+    # don't love the default location, but that's ok for now - no obvious way to set to a different location
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n vibrant download-db.sh`)
+    # Likely unused optional arguments
+    
+    # -d: specify the location of the databases/ directory if moved from its default location.
+    # -m: specify the location of the files/ directory if moved from its default location.
+    # For -d and -m please specify the full path to the new location of the files. For example, -d new_location/databases/.
+end
+
+"""
+    _setup_phageboost_environment(force_reinstall::Bool=false)
+
+Set up the PhageBoost conda environment if it doesn't exist or if force_reinstall is true.
+"""
+function _setup_phageboost_environment(force_reinstall::Bool=false)
+    env_name = "phageboost_env"
+    
+    if force_reinstall && _check_conda_env_exists(env_name)
+        println("Removing existing PhageBoost environment...")
+        try
+            Base.run(`$(Mycelia.CONDA_RUNNER) env remove -n $env_name -y`)
+        catch e
+            @warn "Failed to remove existing environment: $e"
+        end
+    end
+    
+    if !_check_conda_env_exists(env_name) || force_reinstall
+        println("Creating PhageBoost conda environment...")
+        try
+            Base.run(`$(Mycelia.CONDA_RUNNER) create -y -n $env_name python=3.7`)
+            println("Installing PhageBoost...")
+            # Base.run(`bash -lc "$(Mycelia.CONDA_RUNNER) activate $env_name && pip install PhageBoost"`)
+            Base.run(`$(Mycelia.CONDA_RUNNER)  run --live-stream -n $env_name pip install PhageBoost`)
+            println("PhageBoost environment setup completed")
+        catch e
+            throw(ErrorException("Failed to setup PhageBoost environment: $e"))
+        end
+    else
+        println("PhageBoost environment already exists")
+    end
+end
+
+# """
+#     _validate_phageboost_installation()
+
+# Validate that PhageBoost is properly installed and accessible.
+# """
+# function _validate_phageboost_installation()
+#     println("Validating PhageBoost installation...")
+#     try
+#         # Test if PhageBoost command is available and shows help
+#         result = Base.read(`bash -lc "conda activate phageboost_env && PhageBoost --help"`, String)
+#         if Base.occursin("PhageBoost", result)
+#             println("PhageBoost installation validated successfully")
+#         else
+#             throw(ErrorException("PhageBoost command available but output unexpected"))
+#         end
+#     catch e
+#         throw(ErrorException("PhageBoost validation failed. Please check installation: $e"))
+#     end
+# end
+
+# """
+#     cleanup_phageboost_environment()
+
+# Remove the PhageBoost conda environment.
+# """
+# function cleanup_phageboost_environment()
+#     env_name = "phageboost_env"
+#     if _check_conda_env_exists(env_name)
+#         println("Removing PhageBoost environment...")
+#         try
+#             Base.run(`conda env remove -n $env_name -y`)
+#             println("PhageBoost environment removed successfully")
+#         catch e
+#             @warn "Failed to remove PhageBoost environment: $e"
+#         end
+#     else
+#         println("PhageBoost environment does not exist")
+#     end
+# end
+
+"""
+    _check_conda_env_exists(env_name::AbstractString) -> Bool
+
+Check if a conda environment exists.
+"""
+function _check_conda_env_exists(env_name::AbstractString)
+    try
+        result = Base.read(`$(Mycelia.CONDA_RUNNER) env list`, String)
+        return Base.occursin(env_name, result)
+    catch
+        return false
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

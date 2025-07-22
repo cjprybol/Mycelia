@@ -1,4 +1,1141 @@
 """
+Run VirSorter2 viral sequence identification tool.
+
+VirSorter2 identifies viral sequences in genomic and metagenomic data using
+machine learning models and database comparisons.
+
+# Arguments
+- `input_fasta`: Path to input FASTA file
+- `output_directory`: Output directory path
+- `database_path`: Path to VirSorter2 database directory
+- `include_groups`: Comma-separated viral groups to include
+    - full set = `dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae`
+    - tools original default set = `dsDNAphage,ssDNA`
+    - Lavidaviridae = A family of small double‑stranded DNA "virophages" that parasitize the replication machinery of certain NCLDVs
+    - NCLDV = Nucleocytoplasmic Large DNA Viruses = An informal clade of large double‑stranded DNA viruses that replicate (at least in part) in the cytoplasm of eukaryotic cells.
+- `min_score`: Minimum score threshold for viral sequences
+- `min_length`: Minimum sequence length threshold
+- `threads`: Number of CPU threads to use
+- `provirus_off`: Disable provirus detection
+- `max_orf_per_seq`: Maximum ORFs per sequence
+- `prep_for_dramv`: Prepare output for DRAMv annotation
+- `label`: Label for output files
+- `forceall`: Force rerun all steps
+- `force`: Force rerun even if output files already exist
+
+# Returns
+NamedTuple containing paths to all generated output files and directories
+"""
+function run_virsorter2(;
+    input_fasta,
+    output_directory = input_fasta * "_virsorter2",
+    database_path = mkpath(joinpath(homedir(), "workspace", "virsorter2_db")),
+    include_groups = "dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae", # full set is dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae
+    min_score = 0.5,
+    min_length = 1500,
+    threads = Sys.CPU_THREADS,
+    provirus_off = false,
+    max_orf_per_seq = nothing,
+    prep_for_dramv = false,
+    label = nothing,
+    forceall = false,
+    force = false
+)
+    
+    # Define output file paths based on VirSorter2 structure
+    final_viral_combined = joinpath(output_directory, "final-viral-combined.fa")
+    final_viral_score = joinpath(output_directory, "final-viral-score.tsv")
+    final_viral_boundary = joinpath(output_directory, "final-viral-boundary.tsv")
+    
+    # Label-specific files if label was provided
+    if label !== nothing
+        labeled_viral_combined = joinpath(output_directory, "$(label)-final-viral-combined.fa")
+        labeled_viral_score = joinpath(output_directory, "$(label)-final-viral-score.tsv")
+        labeled_viral_boundary = joinpath(output_directory, "$(label)-final-viral-boundary.tsv")
+    else
+        labeled_viral_combined = nothing
+        labeled_viral_score = nothing
+        labeled_viral_boundary = nothing
+    end
+    
+    # DRAMv output files if prep_for_dramv was enabled
+    dramv_dir = joinpath(output_directory, "for-dramv")
+    dramv_viral_combined = prep_for_dramv ? joinpath(dramv_dir, "final-viral-combined-for-dramv.fa") : nothing
+    dramv_affi_contigs = prep_for_dramv ? joinpath(dramv_dir, "affi-contigs.tab") : nothing
+    
+    # Check if output files already exist (unless force is true)
+    if !force
+        # Build list of expected output files to check
+        expected_files = [final_viral_combined, final_viral_score, final_viral_boundary]
+        
+        # Add label-specific files if label was provided
+        if label !== nothing
+            push!(expected_files, labeled_viral_combined, labeled_viral_score, labeled_viral_boundary)
+        end
+        
+        # Add DRAMv files if prep_for_dramv is enabled
+        if prep_for_dramv
+            push!(expected_files, dramv_viral_combined, dramv_affi_contigs)
+        end
+        
+        # Filter out nothing values and check if all files exist
+        files_to_check = filter(x -> x !== nothing, expected_files)
+        all_files_exist = all(Base.Filesystem.isfile, files_to_check)
+        
+        if all_files_exist
+            @warn "All VirSorter2 output files already exist in $(output_directory). Skipping analysis."
+            @warn "Use `force=true` to rerun anyway."
+            
+            # Intermediate directories and files that might be useful
+            iter_dir = joinpath(output_directory, "iter-0")
+            checkpoints_dir = joinpath(output_directory, "checkpoints")
+            logs_dir = joinpath(output_directory, "logs")
+            
+            # Configuration and temporary files
+            config_yaml = joinpath(output_directory, "config.yaml")
+            
+            # Return comprehensive NamedTuple with all output paths (same as below)
+            return (
+                # Main output directory
+                output_directory = output_directory,
+                database_path = database_path,
+                
+                # Primary output files (most commonly used)
+                final_viral_combined = final_viral_combined,
+                final_viral_score = final_viral_score,
+                final_viral_boundary = final_viral_boundary,
+                
+                # Label-specific outputs (if label was provided)
+                labeled_viral_combined = labeled_viral_combined,
+                labeled_viral_score = labeled_viral_score,
+                labeled_viral_boundary = labeled_viral_boundary,
+                
+                # DRAMv compatibility outputs (if enabled)
+                dramv_directory = prep_for_dramv ? dramv_dir : nothing,
+                dramv_viral_combined = dramv_viral_combined,
+                dramv_affi_contigs = dramv_affi_contigs,
+                
+                # Intermediate directories
+                iter_directory = iter_dir,
+                checkpoints_directory = checkpoints_dir,
+                logs_directory = logs_dir,
+                
+                # Configuration
+                config_file = config_yaml,
+                
+                # Environment information
+                conda_environment = "vs2"
+            )
+        end
+    end
+    
+    # Install VirSorter2 environment with specific version convention
+    env_name = "vs2"
+    
+    # Check if environment exists, if not create it
+    env_exists = try
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) env list`, `grep -q "^$(env_name) "`))
+        true
+    catch
+        false
+    end
+    
+    if !env_exists
+        println("Creating VirSorter2 conda environment...")
+        run(`$(Mycelia.CONDA_RUNNER) create -n $(env_name) -c conda-forge -c bioconda virsorter=2 -y`)
+        println("Setting up VirSorter2 database (this may take a while)...")
+        
+        # Remove incomplete database directory if it exists
+        if Base.Filesystem.isdir(database_path)
+            Base.Filesystem.rm(database_path, recursive=true, force=true)
+        end
+        
+        # Setup database
+        setup_cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n $(env_name) virsorter setup -d $(database_path) -j $(threads)`
+        
+        # Run database setup
+        process = run(setup_cmd)
+        
+        if !success(process)
+            error("VirSorter2 database setup failed. You may need to download manually from https://osf.io/v46sc/download")
+        end
+    end
+    
+    # Setup database if it doesn't exist or is incomplete
+    if !Base.Filesystem.isdir(database_path) || isempty(Base.Filesystem.readdir(database_path))
+        @warn "VirSorter2 database not detected"
+        @warn "to install, delete any existing directory at the output location, and then run"
+        @warn "`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n $(env_name) virsorter setup -d $(database_path) -j $(threads)`"
+        # # Remove incomplete database directory if it exists
+        # if Base.Filesystem.isdir(database_path)
+        #     Base.Filesystem.rm(database_path, recursive=true, force=true)
+        # end
+        
+        # # Setup database
+        # setup_cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n $(env_name) virsorter setup -d $(database_path) -j $(threads)`
+        
+        # # Run database setup
+        # process = run(setup_cmd)
+        
+        # if !success(process)
+        #     error("VirSorter2 database setup failed. You may need to download manually from https://osf.io/v46sc/download")
+        # end
+    end
+    
+    # Build VirSorter2 command arguments
+    cmd_args = ["$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", env_name, "virsorter", "run"]
+    
+    # Add required arguments
+    push!(cmd_args, "-w", output_directory)
+    push!(cmd_args, "-i", input_fasta)
+    push!(cmd_args, "-j", string(threads))
+    
+    # Add optional arguments
+    push!(cmd_args, "--include-groups", include_groups)
+    push!(cmd_args, "--min-score", string(min_score))
+    push!(cmd_args, "--min-length", string(min_length))
+    
+    if provirus_off
+        push!(cmd_args, "--provirus-off")
+    end
+    
+    if max_orf_per_seq !== nothing
+        push!(cmd_args, "--max-orf-per-seq", string(max_orf_per_seq))
+    end
+    
+    if prep_for_dramv
+        push!(cmd_args, "--prep-for-dramv")
+    end
+    
+    if label !== nothing
+        push!(cmd_args, "--label", label)
+    end
+    
+    if forceall
+        push!(cmd_args, "--forceall")
+    end
+    
+    # Add positional argument (default is 'all')
+    push!(cmd_args, "all")
+    
+    # Run VirSorter2
+    println("Running VirSorter2...")
+    run(Cmd(cmd_args))
+    
+    # Intermediate directories and files that might be useful
+    iter_dir = joinpath(output_directory, "iter-0")
+    checkpoints_dir = joinpath(output_directory, "checkpoints")
+    logs_dir = joinpath(output_directory, "logs")
+    
+    # Configuration and temporary files
+    config_yaml = joinpath(output_directory, "config.yaml")
+    
+    # Return comprehensive NamedTuple with all output paths
+    return (
+        # Main output directory
+        output_directory = output_directory,
+        database_path = database_path,
+        
+        # Primary output files (most commonly used)
+        final_viral_combined = final_viral_combined,
+        final_viral_score = final_viral_score,
+        final_viral_boundary = final_viral_boundary,
+        
+        # Label-specific outputs (if label was provided)
+        labeled_viral_combined = labeled_viral_combined,
+        labeled_viral_score = labeled_viral_score,
+        labeled_viral_boundary = labeled_viral_boundary,
+        
+        # DRAMv compatibility outputs (if enabled)
+        dramv_directory = prep_for_dramv ? dramv_dir : nothing,
+        dramv_viral_combined = dramv_viral_combined,
+        dramv_affi_contigs = dramv_affi_contigs,
+        
+        # Intermediate directories
+        iter_directory = iter_dir,
+        checkpoints_directory = checkpoints_dir,
+        logs_directory = logs_dir,
+        
+        # Configuration
+        config_file = config_yaml,
+        
+        # Environment information
+        conda_environment = env_name
+    )
+end
+
+"""
+Run geNomad mobile genetic element identification tool.
+
+geNomad identifies viruses and plasmids in genomic and metagenomic data
+using machine learning and database comparisons.
+
+# Arguments
+- `input_fasta`: Path to input FASTA file
+- `output_directory`: Output directory path
+- `genomad_dbpath`: Path to geNomad database directory
+- `threads`: Number of CPU threads to use
+- `cleanup`: Remove intermediate files after completion
+- `splits`: Number of splits for memory management
+- `force`: Force rerun even if output files already exist
+
+# Returns
+NamedTuple containing paths to all generated output files and directories
+"""
+function run_genomad(;
+    input_fasta,
+    output_directory=input_fasta * "_genomad",
+    genomad_dbpath = mkpath(joinpath(homedir(), "workspace", "genomad")),
+    threads = Sys.CPU_THREADS,
+    cleanup = true,
+    splits = nothing,
+    force = false
+)
+    # Get the base name for output files (remove path and extensions)
+    input_basename = splitext(basename(input_fasta))[1]
+    if endswith(input_basename, ".fna") || endswith(input_basename, ".fa") || endswith(input_basename, ".fasta")
+        input_basename = splitext(input_basename)[1]
+    end
+    
+    # Define expected output paths
+    summary_dir = joinpath(output_directory, "$(input_basename)_summary")
+    
+    # Core output files
+    virus_summary = joinpath(summary_dir, "$(input_basename)_virus_summary.tsv")
+    plasmid_summary = joinpath(summary_dir, "$(input_basename)_plasmid_summary.tsv")
+    virus_fasta = joinpath(summary_dir, "$(input_basename)_virus.fna")
+    plasmid_fasta = joinpath(summary_dir, "$(input_basename)_plasmid.fna")
+    virus_proteins = joinpath(summary_dir, "$(input_basename)_virus_proteins.faa")
+    plasmid_proteins = joinpath(summary_dir, "$(input_basename)_plasmid_proteins.faa")
+    virus_genes = joinpath(summary_dir, "$(input_basename)_virus_genes.tsv")
+    plasmid_genes = joinpath(summary_dir, "$(input_basename)_plasmid_genes.tsv")
+    summary_json = joinpath(summary_dir, "$(input_basename)_summary.json")
+    
+    # Module directories
+    marker_classification_dir = joinpath(output_directory, "$(input_basename)_marker_classification")
+    nn_classification_dir = joinpath(output_directory, "$(input_basename)_nn_classification")
+    find_proviruses_dir = joinpath(output_directory, "$(input_basename)_find_proviruses")
+    annotate_dir = joinpath(output_directory, "$(input_basename)_annotate")
+    aggregated_classification_dir = joinpath(output_directory, "$(input_basename)_aggregated_classification")
+    
+    # Log files
+    marker_classification_log = joinpath(output_directory, "$(input_basename)_marker_classification.log")
+    nn_classification_log = joinpath(output_directory, "$(input_basename)_nn_classification.log")
+    find_proviruses_log = joinpath(output_directory, "$(input_basename)_find_proviruses.log")
+    annotate_log = joinpath(output_directory, "$(input_basename)_annotate.log")
+    aggregated_classification_log = joinpath(output_directory, "$(input_basename)_aggregated_classification.log")
+    summary_log = joinpath(output_directory, "$(input_basename)_summary.log")
+    
+    # Check if output files already exist (unless force is true)
+    if !force
+        # Build list of expected core output files to check
+        expected_files = [
+            virus_summary,
+            plasmid_summary,
+            virus_fasta,
+            plasmid_fasta,
+            virus_proteins,
+            plasmid_proteins,
+            virus_genes,
+            plasmid_genes,
+            summary_json
+        ]
+        
+        # Check if all core files exist
+        all_files_exist = all(Base.Filesystem.isfile, expected_files)
+        
+        if all_files_exist
+            @warn "All geNomad output files already exist in $(output_directory). Skipping analysis."
+            @warn "Use `force=true` to rerun anyway."
+            
+            # Return NamedTuple with all paths (same as below)
+            return (
+                # Main output directory
+                output_directory = output_directory,
+                summary_directory = summary_dir,
+                
+                # Summary files (most commonly used)
+                virus_summary = virus_summary,
+                plasmid_summary = plasmid_summary,
+                virus_fasta = virus_fasta,
+                plasmid_fasta = plasmid_fasta,
+                virus_proteins = virus_proteins,
+                plasmid_proteins = plasmid_proteins,
+                virus_genes = virus_genes,
+                plasmid_genes = plasmid_genes,
+                summary_json = summary_json,
+                
+                # Module directories
+                marker_classification_dir = marker_classification_dir,
+                nn_classification_dir = nn_classification_dir,
+                find_proviruses_dir = find_proviruses_dir,
+                annotate_dir = annotate_dir,
+                aggregated_classification_dir = aggregated_classification_dir,
+                
+                # Log files
+                marker_classification_log = marker_classification_log,
+                nn_classification_log = nn_classification_log,
+                find_proviruses_log = find_proviruses_log,
+                annotate_log = annotate_log,
+                aggregated_classification_log = aggregated_classification_log,
+                summary_log = summary_log
+            )
+        end
+    end
+    
+    # Add genomad environment
+    Mycelia.add_bioconda_env("genomad")
+    
+    # Download database if it doesn't exist or is empty
+    final_genomad_dbpath = joinpath(genomad_dbpath, "genomad_db")
+    if !Base.Filesystem.isdir(final_genomad_dbpath) || isempty(Base.Filesystem.readdir(final_genomad_dbpath))
+        run(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n genomad genomad download-database $(genomad_dbpath)`)
+    end
+    
+    # Build command arguments
+    cmd_args = ["$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "genomad", "genomad", "end-to-end"]
+    
+    if cleanup
+        push!(cmd_args, "--cleanup")
+    end
+    
+    push!(cmd_args, "--threads", string(threads))
+    
+    if splits !== nothing
+        push!(cmd_args, "--splits", string(splits))
+    end
+    
+    push!(cmd_args, input_fasta, output_directory, final_genomad_dbpath)
+    
+    # Run genomad
+    run(Cmd(cmd_args))
+    
+    # Return NamedTuple with all paths
+    return (
+        # Main output directory
+        output_directory = output_directory,
+        summary_directory = summary_dir,
+        
+        # Summary files (most commonly used)
+        virus_summary = virus_summary,
+        plasmid_summary = plasmid_summary,
+        virus_fasta = virus_fasta,
+        plasmid_fasta = plasmid_fasta,
+        virus_proteins = virus_proteins,
+        plasmid_proteins = plasmid_proteins,
+        virus_genes = virus_genes,
+        plasmid_genes = plasmid_genes,
+        summary_json = summary_json,
+        
+        # Module directories
+        marker_classification_dir = marker_classification_dir,
+        nn_classification_dir = nn_classification_dir,
+        find_proviruses_dir = find_proviruses_dir,
+        annotate_dir = annotate_dir,
+        aggregated_classification_dir = aggregated_classification_dir,
+        
+        # Log files
+        marker_classification_log = marker_classification_log,
+        nn_classification_log = nn_classification_log,
+        find_proviruses_log = find_proviruses_log,
+        annotate_log = annotate_log,
+        aggregated_classification_log = aggregated_classification_log,
+        summary_log = summary_log
+    )
+end
+
+"""
+    run_phispy(input_file::String; output_dir::String="", 
+           phage_genes::Int=2, color::Bool=false, prefix::String="",
+           phmms::String="", threads::Int=1, metrics::Vector{String}=String[],
+           expand_slope::Bool=false, window_size::Int=30, 
+           min_contig_size::Int=5000, skip_search::Bool=false,
+           output_choice::Int=3, training_set::String="", 
+           prokka_args::NamedTuple=NamedTuple(), force::Bool=false)
+
+Run PhiSpy to identify prophages in bacterial genomes.
+
+PhiSpy identifies prophage regions in bacterial (and archaeal) genomes using
+multiple approaches including gene composition, AT/GC skew, and optional HMM searches.
+
+# Arguments
+- `input_file::String`: Path to input file (FASTA or GenBank format)
+- `output_dir::String`: Output directory (default: input_file * "_phispy")  
+- `phage_genes::Int`: Minimum phage genes required per prophage region (default: 2, set to 0 for mobile elements)
+- `color::Bool`: Add color annotations for CDS based on function (default: false)
+- `prefix::String`: Prefix for output filenames (default: basename of input)
+- `phmms::String`: Path to HMM database for additional phage gene detection
+- `threads::Int`: Number of threads for HMM searches (default: 1)
+- `metrics::Vector{String}`: Metrics to use for prediction (default: all standard metrics)
+- `expand_slope::Bool`: Expand Shannon slope calculations (default: false)
+- `window_size::Int`: Window size for calculations (default: 30)
+- `min_contig_size::Int`: Minimum contig size to analyze (default: 5000)
+- `skip_search::Bool`: Skip HMM search if already done (default: false)
+- `output_choice::Int`: Bitmask for output files (default: 3 for coordinates + GenBank)
+- `training_set::String`: Path to custom training set
+- `prokka_args::NamedTuple`: Additional arguments to pass to Prokka if FASTA input is provided
+- `force::Bool`: Force rerun even if output files already exist (default: false)
+
+# Output Choice Codes (add values for multiple outputs)
+- 1: prophage_coordinates.tsv
+- 2: GenBank format output  
+- 4: prophage and bacterial sequences
+- 8: prophage_information.tsv
+- 16: prophage.tsv
+- 32: GFF3 format (prophages only)
+- 64: prophage.tbl
+- 128: test data used in random forest
+- 256: GFF3 format (full genome)
+- 512: all output files
+
+# Returns
+A NamedTuple with paths to generated output files (contents depend on output_choice):
+- `prophage_coordinates`: prophage_coordinates.tsv file path
+- `genbank_output`: Updated GenBank file with prophage annotations
+- `prophage_sequences`: Prophage and bacterial sequence files
+- `prophage_information`: prophage_information.tsv file path
+- `prophage_simple`: prophage.tsv file path
+- `gff3_prophages`: GFF3 file with prophage regions only
+- `prophage_table`: prophage.tbl file path
+- `test_data`: Random forest test data file path
+- `gff3_genome`: GFF3 file with full genome annotations
+- `output_dir`: Path to output directory
+- `input_genbank`: Path to GenBank file used (original or generated by Prokka)
+"""
+function run_phispy(input_file::String; 
+                output_dir::String="",
+                phage_genes::Int=2,
+                color::Bool=false,
+                prefix::String="",
+                phmms::String="",
+                threads::Int=1,
+                metrics::Vector{String}=String[],
+                expand_slope::Bool=false,
+                window_size::Int=30,
+                min_contig_size::Int=5000,
+                skip_search::Bool=false,
+                output_choice::Int=512,
+                training_set::String="",
+                prokka_args::NamedTuple=NamedTuple(),
+                force::Bool=false)
+    
+    # Validate input file exists
+    if !Base.Filesystem.isfile(input_file)
+        throw(ArgumentError("Input file does not exist: $input_file"))
+    end
+    
+    # Set default output directory
+    if Base.isempty(output_dir)
+        output_dir = input_file * "_phispy"
+    end
+    
+    # Set default prefix from input filename if not provided
+    if Base.isempty(prefix)
+        prefix = Base.Filesystem.splitext(Base.Filesystem.basename(input_file))[1]
+    end
+    
+    # Build expected output file paths based on output_choice
+    output_files = Dict{Symbol, String}()
+    
+    # Map output choice bits to file paths
+    output_mapping = [
+        (1, :prophage_coordinates, "prophage_coordinates.tsv"),
+        (2, :genbank_output, prefix * ".gbk"),
+        (4, :prophage_sequences, prefix * "_phage.fasta"), # Multiple files, returning one representative
+        (8, :prophage_information, "prophage_information.tsv"),
+        (16, :prophage_simple, "prophage.tsv"),
+        (32, :gff3_prophages, prefix * "_prophage.gff3"),
+        (64, :prophage_table, "prophage.tbl"),
+        (128, :test_data, "test_data.tsv"),
+        (256, :gff3_genome, prefix * ".gff3")
+    ]
+    
+    # Check which outputs were requested and add paths
+    expected_files = String[]
+    for (bit, key, filename) in output_mapping
+        if (output_choice & bit) != 0
+            file_path = Base.Filesystem.joinpath(output_dir, filename)
+            output_files[key] = file_path
+            Base.push!(expected_files, file_path)
+        end
+    end
+    
+    # Check if output files already exist (unless force is true)
+    if !force && Base.Filesystem.isdir(output_dir)
+        # Check if all expected files exist
+        # all_files_exist = Base.all(Base.Filesystem.isfile, expected_files)
+        
+        # if all_files_exist && !Base.isempty(expected_files)
+        if !isempty(readdir(output_dir))
+            @warn "PhiSpy output files already exist in $(output_dir). Skipping analysis."
+            @warn "Use `force=true` to rerun anyway."
+            
+            # Add standard output files
+            output_files[:output_dir] = Base.Filesystem.abspath(output_dir)
+            
+            # For existing runs, we need to determine the input genbank path
+            # Check if there's a Prokka temp directory
+            # prokka_temp_dir = output_dir * "_prokka_temp"
+            # if Base.Filesystem.isdir(prokka_temp_dir)
+            #     prokka_prefix = prefix * "_prokka"
+            #     potential_genbank = Base.Filesystem.joinpath(prokka_temp_dir, prokka_prefix * ".gbk")
+            #     if Base.Filesystem.isfile(potential_genbank)
+            #         output_files[:input_genbank] = Base.Filesystem.abspath(potential_genbank)
+            #     else
+            #         output_files[:input_genbank] = Base.Filesystem.abspath(input_file)
+            #     end
+            # else
+            #     output_files[:input_genbank] = Base.Filesystem.abspath(input_file)
+            # end
+            
+            return NamedTuple(output_files)
+        end
+    end
+    
+    # Determine input file type and prepare GenBank file
+    input_genbank = ""
+    file_extension = Base.lowercase(Base.Filesystem.splitext(input_file)[2])
+    
+    if file_extension in [".fasta", ".fa", ".fna", ".fas"]
+        # Input is FASTA - need to run Prokka first
+        @info "FASTA input detected. Running Prokka for annotation..."
+        
+        # Ensure bioconda environment is set up
+        Mycelia.add_bioconda_env("phispy")
+        
+        prokka_output_dir = output_dir * "_prokka_temp"
+        prokka_prefix = prefix * "_prokka"
+        
+        # Set up Prokka arguments
+        prokka_kwargs = Dict{Symbol, Any}(
+            :output_dir => prokka_output_dir,
+            :prefix => prokka_prefix
+        )
+        
+        # Add any additional Prokka arguments provided
+        for (key, value) in Base.pairs(prokka_args)
+            prokka_kwargs[key] = value
+        end
+        
+        # Run Prokka
+        prokka_results = Mycelia.run_prokka(input_file; prokka_kwargs...)
+        input_genbank = prokka_results.gbk
+        
+        @info "Prokka completed. Using generated GenBank file: $input_genbank"
+        
+    elseif file_extension in [".gb", ".gbk", ".genbank", ".gbf"] || 
+           (file_extension == ".gz" && Base.any(x -> Base.occursin(x, Base.lowercase(input_file)), [".gb", ".gbk", ".genbank", ".gbf"]))
+        # Input is already GenBank format
+        input_genbank = input_file
+        @info "GenBank input detected: $input_genbank"
+    else
+        throw(ArgumentError("Unsupported file format. Please provide FASTA (.fasta, .fa, .fna, .fas) or GenBank (.gb, .gbk, .genbank, .gbf) files."))
+    end
+    
+    # Ensure bioconda environment is set up
+    Mycelia.add_bioconda_env("phispy")
+    
+    # Create output directory if it doesn't exist
+    if !Base.Filesystem.isdir(output_dir)
+        Base.Filesystem.mkdir(output_dir)
+    end
+    
+    # Build PhiSpy command
+    cmd_args = String[
+        "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "phispy", "PhiSpy.py",
+        input_genbank,
+        "-o", output_dir
+    ]
+    
+    # Add optional arguments
+    if phage_genes != 2
+        Base.push!(cmd_args, "--phage_genes", Base.string(phage_genes))
+    end
+    
+    if color
+        Base.push!(cmd_args, "--color")
+    end
+    
+    # if !Base.isempty(prefix)
+    #     Base.push!(cmd_args, "--prefix", prefix)
+    # end
+    
+    if !Base.isempty(phmms)
+        Base.push!(cmd_args, "--phmms", phmms)
+    end
+    
+    if threads != 1
+        Base.push!(cmd_args, "--threads", Base.string(threads))
+    end
+    
+    if !Base.isempty(metrics)
+        Base.push!(cmd_args, "--metrics")
+        Base.append!(cmd_args, metrics)
+    end
+    
+    if expand_slope
+        Base.push!(cmd_args, "--expand_slope")
+    end
+    
+    if window_size != 30
+        Base.push!(cmd_args, "--window_size", Base.string(window_size))
+    end
+    
+    if min_contig_size != 5000
+        Base.push!(cmd_args, "--min_contig_size", Base.string(min_contig_size))
+    end
+    
+    if skip_search
+        Base.push!(cmd_args, "--skip_search")
+    end
+    
+    if output_choice != 3
+        Base.push!(cmd_args, "--output_choice", Base.string(output_choice))
+    end
+    
+    if !Base.isempty(training_set)
+        Base.push!(cmd_args, "-t", training_set)
+    end
+    
+    # Run PhiSpy
+    try
+        @info "Running PhiSpy with command: $(Base.join(cmd_args, " "))"
+        Base.run(Base.Cmd(cmd_args))
+    catch e
+        throw(ErrorException("PhiSpy failed to run: $e"))
+    end
+    
+    # Verify output directory exists
+    if !Base.Filesystem.isdir(output_dir)
+        throw(ErrorException("PhiSpy output directory was not created: $output_dir"))
+    end
+    
+    # Add standard output files
+    output_files[:output_dir] = Base.Filesystem.abspath(output_dir)
+    # output_files[:input_genbank] = Base.Filesystem.abspath(input_genbank)
+    
+    # # Check if key output files exist and warn if missing
+    # key_files = [
+    #     Base.get(output_files, :prophage_coordinates, ""),
+    #     Base.get(output_files, :genbank_output, ""),
+    #     Base.get(output_files, :prophage_information, "")
+    # ]
+    
+    # existing_files = Base.filter(f -> !Base.isempty(f) && Base.Filesystem.isfile(f), key_files)
+    # missing_files = Base.filter(f -> !Base.isempty(f) && !Base.Filesystem.isfile(f), key_files)
+    
+    # if !Base.isempty(missing_files)
+    #     @warn "Some expected output files were not created: $(Base.join(missing_files, ", "))"
+    # end
+    
+    # if Base.isempty(existing_files)
+    #     @warn "No standard PhiSpy output files were found. Check PhiSpy logs for errors."
+    # else
+    #     @info "PhiSpy completed successfully. Generated $(Base.length(existing_files)) output files."
+    # end
+
+    @assert isdir(output_files[:output_dir]) && !isempty(readdir(output_files[:output_dir]))
+    
+    return NamedTuple(output_files)
+end
+
+"""
+    run_prokka(input_fasta::String; output_dir::String="", prefix::String="", 
+           cpus::Int=0, kingdom::String="Bacteria", genus::String="", 
+           species::String="", strain::String="", force_overwrite::Bool=false,
+           addgenes::Bool=false, compliant::Bool=false, fast::Bool=false,
+           evalue::Float64=1e-06, mincontiglen::Int=1, force::Bool=false)
+
+Run Prokka for rapid prokaryotic genome annotation.
+
+Prokka annotates bacterial, archaeal and viral genomes quickly and produces 
+standards-compliant output files including GFF3, GenBank, and FASTA formats.
+
+# Arguments
+- `input_fasta::String`: Path to input FASTA file containing contigs
+- `output_dir::String`: Output directory (default: input_fasta * "_prokka")
+- `prefix::String`: Output file prefix (default: basename of input file)
+- `cpus::Int`: Number of CPUs to use, 0 for all available (default: 0)
+- `kingdom::String`: Annotation mode - "Bacteria", "Archaea", "Viruses", or "Mitochondria" (default: "Bacteria")
+- `genus::String`: Genus name for annotation
+- `species::String`: Species name for annotation  
+- `strain::String`: Strain name for annotation
+- `force_overwrite::Bool`: Force overwrite existing output directory (default: false)
+- `addgenes::Bool`: Add 'gene' features for each 'CDS' feature (default: false)
+- `compliant::Bool`: Force GenBank/ENA/DDJB compliance (default: false)
+- `fast::Bool`: Fast mode - skip CDS product searching (default: false)
+- `evalue::Float64`: Similarity e-value cut-off (default: 1e-06)
+- `mincontiglen::Int`: Minimum contig size (default: 1, NCBI needs 200)
+- `force::Bool`: Force rerun even if output files already exist (default: false)
+
+# Returns
+A NamedTuple with paths to all generated output files:
+- `gff`: Master annotation in GFF3 format
+- `gbk`: Standard GenBank file  
+- `fna`: Nucleotide FASTA of input contigs
+- `faa`: Protein FASTA of translated CDS sequences
+- `ffn`: Nucleotide FASTA of all transcripts
+- `sqn`: ASN1 Sequin file for GenBank submission
+- `fsa`: Nucleotide FASTA for tbl2asn
+- `tbl`: Feature table file
+- `err`: NCBI discrepancy report
+- `log`: Complete run log
+- `txt`: Annotation statistics
+- `tsv`: Tab-separated feature table
+- `output_dir`: Path to output directory
+"""
+function run_prokka(input_fasta::String; 
+                output_dir::String="",
+                prefix::String="",
+                cpus::Int=0,
+                kingdom::String="Bacteria",
+                genus::String="",
+                species::String="", 
+                strain::String="",
+                force_overwrite::Bool=false,
+                addgenes::Bool=false,
+                compliant::Bool=false,
+                fast::Bool=false,
+                evalue::Float64=1e-06,
+                mincontiglen::Int=1,
+                force::Bool=false)
+    
+    # Validate input file exists
+    if !Base.Filesystem.isfile(input_fasta)
+        Base.throw(ArgumentError("Input FASTA file does not exist: $input_fasta"))
+    end
+    
+    # Set default output directory
+    if Base.isempty(output_dir)
+        output_dir = input_fasta * "_prokka"
+    end
+    
+    # Set default prefix from input filename if not provided
+    if Base.isempty(prefix)
+        prefix = Base.Filesystem.splitext(Base.Filesystem.basename(input_fasta))[1]
+    end
+    
+    # Build output file paths
+    output_files = (
+        gff = Base.Filesystem.joinpath(output_dir, prefix * ".gff"),
+        gbk = Base.Filesystem.joinpath(output_dir, prefix * ".gbk"), 
+        fna = Base.Filesystem.joinpath(output_dir, prefix * ".fna"),
+        faa = Base.Filesystem.joinpath(output_dir, prefix * ".faa"),
+        ffn = Base.Filesystem.joinpath(output_dir, prefix * ".ffn"),
+        sqn = Base.Filesystem.joinpath(output_dir, prefix * ".sqn"),
+        fsa = Base.Filesystem.joinpath(output_dir, prefix * ".fsa"),
+        tbl = Base.Filesystem.joinpath(output_dir, prefix * ".tbl"),
+        err = Base.Filesystem.joinpath(output_dir, prefix * ".err"),
+        log = Base.Filesystem.joinpath(output_dir, prefix * ".log"), 
+        txt = Base.Filesystem.joinpath(output_dir, prefix * ".txt"),
+        tsv = Base.Filesystem.joinpath(output_dir, prefix * ".tsv"),
+        output_dir = Base.Filesystem.abspath(output_dir)
+    )
+    
+    # Check if output files already exist (unless force is true)
+    if !force
+        # Build list of expected core output files to check
+        expected_files = [
+            output_files.gff,
+            output_files.gbk,
+            output_files.fna,
+            output_files.faa,
+            output_files.ffn,
+            output_files.txt,
+            output_files.tsv
+        ]
+        
+        # Check if all core files exist
+        all_files_exist = Base.all(Base.Filesystem.isfile, expected_files)
+        
+        if all_files_exist
+            @warn "All Prokka output files already exist in $(output_dir). Skipping analysis."
+            @warn "Use `force=true` to rerun anyway."
+            
+            return output_files
+        end
+    end
+    
+    # Ensure bioconda environment is set up
+    Mycelia.add_bioconda_env("prokka")
+    
+    # Build prokka command
+    cmd_args = String[
+        "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "prokka", "prokka",
+        "--outdir", output_dir,
+        "--prefix", prefix,
+        "--kingdom", kingdom
+    ]
+    
+    # Add optional arguments
+    if cpus > 0
+        Base.push!(cmd_args, "--cpus", Base.string(cpus))
+    elseif cpus == 0
+        Base.push!(cmd_args, "--cpus", "0")  # Use all available CPUs
+    end
+    
+    if !Base.isempty(genus)
+        Base.push!(cmd_args, "--genus", genus)
+    end
+    
+    if !Base.isempty(species) 
+        Base.push!(cmd_args, "--species", species)
+    end
+    
+    if !Base.isempty(strain)
+        Base.push!(cmd_args, "--strain", strain)
+    end
+    
+    if force_overwrite
+        Base.push!(cmd_args, "--force")
+    end
+    
+    if addgenes
+        Base.push!(cmd_args, "--addgenes")  
+    end
+    
+    if compliant
+        Base.push!(cmd_args, "--compliant")
+    end
+    
+    if fast
+        Base.push!(cmd_args, "--fast")
+    end
+    
+    if evalue != 1e-06
+        Base.push!(cmd_args, "--evalue", Base.string(evalue))
+    end
+    
+    if mincontiglen != 1
+        Base.push!(cmd_args, "--mincontiglen", Base.string(mincontiglen))
+    end
+    
+    # Add input file
+    Base.push!(cmd_args, Base.Filesystem.abspath(input_fasta))
+    
+    # Run prokka
+    try
+        Base.run(Base.Cmd(cmd_args))
+    catch e
+        Base.throw(ErrorException("Prokka failed to run: $e"))
+    end
+    
+    # Verify output directory was created
+    if !Base.Filesystem.isdir(output_dir)
+        Base.throw(ErrorException("Prokka output directory was not created: $output_dir"))
+    end
+    
+    # Verify key output files exist
+    key_files = [output_files.gff, output_files.gbk, output_files.fna]
+    missing_files = Base.filter(f -> !Base.Filesystem.isfile(f), key_files)
+    
+    if !Base.isempty(missing_files)
+        @warn "Some expected output files were not created: $(Base.join(missing_files, ", "))"
+    end
+    
+    return output_files
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run AMRFinderPlus on FASTA input to identify antimicrobial resistance genes.
+
+# Arguments
+- `fasta::String`: Path to input FASTA file (must match Mycelia.FASTA_REGEX pattern)
+- `output_dir::String`: Output directory path (default: input filename + "_amrfinderplus")
+- `force::Bool`: Force rerun even if output files already exist (default: false)
+
+# Returns
+Path to the output directory containing AMRFinderPlus results
+
+# Details
+- For nucleotide FASTA files, automatically runs Mycelia.run_pyrodigal to generate protein sequences
+- For protein FASTA files, runs AMRFinderPlus directly  
+- Validates input file extension against Mycelia.FASTA_REGEX
+- Creates output directory if it doesn't exist
+- Skips processing if results already exist in output directory unless force=true
+- Uses --plus flag for enhanced detection capabilities
+
+# Files Generated
+- `<basename>.amrfinderplus.tsv`: AMRFinderPlus results table
+- For nucleotide inputs: intermediate pyrodigal outputs in subdirectory
+"""
+function run_amrfinderplus(;
+        fasta::String,
+        output_dir::String = fasta * "_amrfinderplus",
+        force::Bool = false
+    )
+    
+    # Validate input file extension
+    if !Base.occursin(Mycelia.FASTA_REGEX, fasta)
+        Base.error("Input file does not match FASTA format: $(fasta)")
+    end
+    
+    if !Base.Filesystem.isfile(fasta)
+        Base.error("Input FASTA file not found: $(fasta)")
+    end
+    
+    # Get base filename for outputs
+    base_name = Base.replace(Base.Filesystem.basename(fasta), Mycelia.FASTA_REGEX => "")
+    amrfinder_output = Base.Filesystem.joinpath(output_dir, "$(base_name).amrfinderplus.tsv")
+    
+    # Check if output files already exist (unless force is true)
+    if !force
+        if Base.Filesystem.isfile(amrfinder_output)
+            @warn "AMRFinderPlus output file already exists: $(amrfinder_output). Skipping analysis."
+            @warn "Use `force=true` to rerun anyway."
+                return (;output_dir, amrfinder_output)
+        end
+    end
+    
+    # Create output directory
+    if !Base.Filesystem.isdir(output_dir)
+        Base.Filesystem.mkpath(output_dir)
+    end
+    
+    # Determine sequence type by checking file extension first, then by detection
+    sequence_type = :unknown
+    
+    # Check common file extensions first for efficiency
+    fasta_lower = Base.lowercase(fasta)
+    if Base.endswith(fasta_lower, ".faa") || Base.endswith(fasta_lower, ".faa.gz")
+        sequence_type = :protein
+    elseif Base.endswith(fasta_lower, ".fna") || Base.endswith(fasta_lower, ".fna.gz")
+        sequence_type = :nucleotide
+    else
+        # For generic extensions (.fa, .fasta, etc.), detect from sequence content
+        @info "Generic FASTA extension detected, analyzing sequence content to determine type"
+        for (i, record) in Base.enumerate(Mycelia.open_fastx(fasta))
+            if i > 3 Base.break end  # Sample first 3 sequences
+            seq_ext = Mycelia.detect_sequence_extension(record)
+            if seq_ext == ".faa"
+                sequence_type = :protein
+                Base.break
+            elseif seq_ext == ".fna"
+                sequence_type = :nucleotide
+                Base.break
+            end
+        end
+        
+        if sequence_type == :unknown
+            Base.error("Could not determine sequence type for: $(fasta)")
+        end
+    end
+    
+    # Determine protein FASTA file to use based on sequence type
+    protein_fasta = ""
+    
+    if sequence_type == :protein
+        # Input is already protein - use directly
+        protein_fasta = fasta
+        @info "Using protein FASTA directly: $(fasta)"
+    elseif sequence_type == :nucleotide
+        # Input is nucleotide - need to run pyrodigal first
+        @info "Nucleotide FASTA detected, running pyrodigal to generate protein sequences"
+        pyrodigal_dir = Base.Filesystem.joinpath(output_dir, "pyrodigal")
+        pyrodigal_results = Mycelia.run_pyrodigal(fasta_file=fasta, out_dir=pyrodigal_dir)
+        protein_fasta = pyrodigal_results.faa
+    else
+        Base.error("Unsupported sequence type: $(sequence_type)")
+    end
+    
+    Base.@assert Base.Filesystem.isfile(protein_fasta) "Protein FASTA file not found: $(protein_fasta)"
+    
+    # Run AMRFinderPlus
+    @info "Running AMRFinderPlus on protein sequences: $(protein_fasta)"
+    
+    # Ensure AMRFinderPlus is available
+    Mycelia.add_bioconda_env("ncbi-amrfinderplus")
+    Base.run(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n ncbi-amrfinderplus amrfinder -u`)
+    
+    cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n ncbi-amrfinderplus amrfinder
+           -p $(protein_fasta)
+           --plus
+           --output $(amrfinder_output)`
+    
+    Base.run(cmd)
+    
+    Base.@assert Base.Filesystem.isfile(amrfinder_output) "AMRFinderPlus output not generated: $(amrfinder_output)"
+    @info "AMRFinderPlus completed successfully. Results: $(amrfinder_output)"
+    
+    return (;output_dir, amrfinder_output)
+end
+
+# VIBRANT
+function run_vibrant(;input_fasta, output_dir=input_fasta * "_vibrant", threads=Sys.CPU_THREADS)
+    Mycelia._install_vibrant()
+    # mkpath(output_dir)
+    # run(`bash -lc "VIBRANT_run.py -i $input_fasta -folder $output_dir"`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n vibrant VIBRANT_run.py -i $input_fasta -folder $output_dir -t $threads`)
+    # phages_circular.fna
+    # integrated_prophage_coordinates.tsv
+    # figure_PCA.pdf
+    # figure_PCA.tsv
+    # summary_normalized.tsv
+    # for more information
+    # https://github.com/AnantharamanLab/VIBRANT?tab=readme-ov-file#output-explanations--
+    return output_dir
+end
+
+
+"""
+    run_phageboost(input_fasta::AbstractString, output_dir::AbstractString; force_reinstall::Bool=false)
+
+Run PhageBoost on the provided FASTA file, automatically handling conda environment setup.
+
+This function will:
+1. Check if the phageboost_env conda environment exists
+2. Create and set up the environment if it doesn't exist
+3. Validate that PhageBoost is properly installed
+4. Run PhageBoost on the input FASTA file
+5. Return the output directory path and list of generated files
+
+# Arguments
+- `input_fasta::AbstractString`: Path to the input FASTA file
+- `output_dir::AbstractString`: Directory where PhageBoost outputs will be saved
+- `force_reinstall::Bool=false`: If true, recreate the environment even if it exists
+
+# Returns
+- `NamedTuple` with fields:
+  - `output_dir::String`: Path to the output directory
+  - `files::Vector{String}`: List of files generated in the output directory
+"""
+function run_phageboost(;input_fasta::AbstractString, output_dir::AbstractString=input_fasta * "_phageboost", force_reinstall::Bool=false)
+    # Check if input file exists
+    if !Base.isfile(input_fasta)
+        throw(ArgumentError("Input FASTA file does not exist: $input_fasta"))
+    end
+    
+    # Setup environment if needed
+    _setup_phageboost_environment(force_reinstall)
+    
+    # # Validate PhageBoost installation
+    # _validate_phageboost_installation()
+    
+    # Ensure output directory exists
+    Base.mkpath(output_dir)
+    
+    # Run PhageBoost
+    println("Running PhageBoost on $input_fasta...")
+    try
+        # Base.run(`bash -lc "conda activate phageboost_env && PhageBoost -f $input_fasta -o $output_dir"`)
+        cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n phageboost_env PhageBoost -f $input_fasta -o $output_dir`
+        display(cmd)
+        run(cmd)
+        println("PhageBoost completed successfully")
+    catch e
+        throw(ErrorException("PhageBoost execution failed: $e"))
+    end
+    
+    # Get list of output files
+    output_files = _get_output_files(output_dir)
+    
+    return (output_dir=output_dir, files=output_files)
+end
+
+
+"""
     parallel_pyrodigal(normalized_fastas::Vector{String})
 
 Runs Mycelia.run_pyrodigal on a list of FASTA files in parallel using Threads.
