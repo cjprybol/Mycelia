@@ -1,6 +1,279 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Perform DIAMOND BLASTP search between query and reference protein FASTA files.
+
+# Arguments
+- `query_fasta::String`: Path to query protein FASTA file
+- `reference_fasta::String`: Path to reference protein FASTA file
+- `output_dir::String`: Output directory (defaults to query filename + "_diamond")
+- `threads::Int`: Number of threads (defaults to system CPU count)
+- `evalue::Float64`: E-value threshold (default: 1e-3)
+- `block_size::Float64`: Block size in GB (default: auto-calculated from system memory)
+- `sensitivity::String`: Sensitivity mode (default: "--iterate")
+
+# Returns
+- `String`: Path to the DIAMOND results file (.tsv format)
+
+# Throws
+- `AssertionError`: If input files don't exist or are invalid
+- `SystemError`: If DIAMOND execution fails
+"""
+function run_diamond_search(;
+    query_fasta::String,
+    reference_fasta::String,
+    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond",
+    threads::Int = Sys.CPU_THREADS,
+    evalue::Float64 = 1e-3,
+    block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
+    sensitivity::String = "--iterate"
+)
+    # Input validation and assertions
+    @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
+    @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
+    @assert threads > 0 "Thread count must be positive: $(threads)"
+    @assert evalue > 0 "E-value must be positive: $(evalue)"
+    @assert block_size > 0 "Block size must be positive: $(block_size)"
+    
+    # Validate FASTA files have content
+    @assert filesize(query_fasta) > 0 "Query FASTA file is empty: $(query_fasta)"
+    @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
+    
+    # Setup output directory and files
+    mkpath(output_dir)
+    diamond_db = joinpath(output_dir, "diamond_db.dmnd")
+    results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_results.tsv")
+
+    if isfile(results_file) && (filesize(results_file) > 0)
+        return results_file
+    end
+    
+    # Ensure DIAMOND environment exists
+    Mycelia.add_bioconda_env("diamond")
+
+    # Map for column header expansion
+    # outfmt_fields = [
+    #     "qseqid", "qtitle", "qlen", "sseqid", "sallseqid", "stitle",
+    #     "salltitles", "slen", "qstart", "qend", "sstart", "send",
+    #     "evalue", "bitscore", "length", "pident", "nident", "mismatch", "gapopen"
+    # ]
+    outfmt_headers = [
+        "Query Seq - id", "Query title", "Query sequence length", "Subject Seq - id", "All subject Seq - id(s)",
+        "Subject Title", "All Subject Title(s)", "Subject sequence length", "Start of alignment in query",
+        "End of alignment in query", "Start of alignment in subject", "End of alignment in subject",
+        "Expect value", "Bit score", "Alignment length", "Percentage of identical matches",
+        "Number of identical matches", "Number of mismatches", "Number of gap openings"
+    ]
+
+    try
+        # Create DIAMOND database
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond makedb --in $(reference_fasta) --db $(diamond_db)`)
+        
+        @assert isfile(diamond_db) "DIAMOND database creation failed: $(diamond_db)"
+        
+        # Run DIAMOND search
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp --query $(query_fasta) --db $(diamond_db) --out $(results_file) --evalue $(evalue) --threads $(threads) --block-size $(block_size) $(sensitivity) --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch gapopen`)
+        
+        @assert isfile(results_file) "DIAMOND results file was not created: $(results_file)"
+        @assert filesize(results_file) > 0 "DIAMOND results file is empty"
+
+        # Insert the header row
+        results_tmp = results_file * ".tmp"
+        open(results_tmp, "w") do out_io
+            # Write header
+            println(out_io, join(outfmt_headers, '\t'))
+            # Write results
+            open(results_file, "r") do in_io
+                for line in eachline(in_io)
+                    println(out_io, line)
+                end
+            end
+        end
+        mv(results_tmp, results_file; force=true)
+        
+        return results_file
+        
+    catch e
+        @error "DIAMOND execution failed" exception=e
+        rethrow(e)
+    finally
+        # Cleanup database file
+        rm(diamond_db, force=true)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform BLASTP search between query and reference protein FASTA files.
+
+# Arguments
+- `query_fasta::String`: Path to query protein FASTA file
+- `reference_fasta::String`: Path to reference protein FASTA file
+- `output_dir::String`: Output directory (defaults to query filename + "_blastp")
+- `threads::Int`: Number of threads (defaults to system CPU count)
+- `evalue::Float64`: E-value threshold (default: 1e-3)
+- `max_target_seqs::Int`: Maximum target sequences (default: 500)
+
+# Returns
+- `String`: Path to the BLASTP results file (.tsv format)
+
+# Throws
+- `AssertionError`: If input files don't exist or are invalid
+- `SystemError`: If BLAST execution fails
+"""
+function run_blastp_search(;
+    query_fasta::String,
+    reference_fasta::String,
+    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_blastp",
+    threads::Int = Sys.CPU_THREADS,
+    evalue::Float64 = 1e-3,
+    max_target_seqs::Int = 500
+)
+    # Input validation and assertions
+    @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
+    @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
+    @assert threads > 0 "Thread count must be positive: $(threads)"
+    @assert evalue > 0 "E-value must be positive: $(evalue)"
+    @assert max_target_seqs > 0 "Max target sequences must be positive: $(max_target_seqs)"
+    
+    # Validate FASTA files have content
+    @assert filesize(query_fasta) > 0 "Query FASTA file is empty: $(query_fasta)"
+    @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
+    
+    # Setup output directory and files
+    mkpath(output_dir)
+    blast_db = joinpath(output_dir, "blast_db")
+    # results_file = joinpath(output_dir, "blastp_results.tsv")
+    results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_blastp_results.tsv")
+
+    if isfile(results_file) && (filesize(results_file) > 0)
+        return results_file
+    end
+    
+    # Ensure BLAST environment exists
+    Mycelia.add_bioconda_env("blast")
+    
+    try
+        # Create BLAST database
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(reference_fasta) -dbtype prot -out $(blast_db)`)
+        
+        # Verify database was created
+        @assert isfile("$(blast_db).phr") "BLAST database creation failed"
+        
+        # Run BLASTP search
+        outfmt = "7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid"
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastp -query $(query_fasta) -db $(blast_db) -out $(results_file) -evalue $(evalue) -max_target_seqs $(max_target_seqs) -num_threads $(threads) -outfmt "$(outfmt)"`)
+        
+        @assert isfile(results_file) "BLASTP results file was not created: $(results_file)"
+        
+        return results_file
+        
+    catch e
+        @error "BLASTP execution failed" exception=e
+        rethrow(e)
+    finally
+        # Cleanup database files
+        for ext in [".phr", ".pin", ".psq"]
+            rm("$(blast_db)$(ext)", force=true)
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform MMseqs2 easy-search between query and reference FASTA files.
+
+# Arguments
+- `query_fasta::String`: Path to query FASTA file
+- `reference_fasta::String`: Path to reference FASTA file  
+- `output_dir::String`: Output directory (defaults to query filename + "_mmseqs")
+- `threads::Int`: Number of threads (defaults to system CPU count)
+- `evalue::Float64`: E-value threshold (default: 1e-3)
+- `sensitivity::Float64`: Sensitivity parameter (default: 4.0)
+
+# Returns
+- `String`: Path to the MMseqs2 results file (.tsv format)
+
+# Throws
+- `AssertionError`: If input files don't exist or are invalid
+- `SystemError`: If MMseqs2 execution fails
+"""
+function run_mmseqs_search(;
+    query_fasta::String,
+    reference_fasta::String,
+    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs",
+    threads::Int = Sys.CPU_THREADS,
+    evalue::Float64 = 1e-3,
+    sensitivity::Float64 = 4.0
+)
+    # Input validation and assertions
+    @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
+    @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
+    @assert threads > 0 "Thread count must be positive: $(threads)"
+    @assert evalue > 0 "E-value must be positive: $(evalue)"
+    @assert sensitivity > 0 "Sensitivity must be positive: $(sensitivity)"
+    
+    # Validate FASTA files have content
+    @assert filesize(query_fasta) > 0 "Query FASTA file is empty: $(query_fasta)"
+    @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
+    
+    # Setup output directory and files
+    mkpath(output_dir)
+    query_db = joinpath(output_dir, "query_db")
+    ref_db = joinpath(output_dir, "ref_db") 
+    results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs-easy-search.tsv")
+    tmp_dir = joinpath(output_dir, "tmp")
+    mkpath(tmp_dir)
+
+    if isfile(results_file) && (filesize(results_file) > 0)
+        return results_file
+    end
+    
+    # Ensure MMseqs2 environment exists
+    Mycelia.add_bioconda_env("mmseqs2")
+
+    try
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search
+            $(query_fasta)
+            $(reference_fasta)
+            $(results_file) $(tempdir())
+            --format-mode 4
+            --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits
+            --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`)
+    
+        # # Create databases
+        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(query_fasta) $(query_db)`)
+        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(reference_fasta) $(ref_db)`)
+        
+        # # Run search
+        # search_db = joinpath(output_dir, "search_results")
+        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs search $(query_db) $(ref_db) $(search_db) $(tmp_dir) --threads $(threads) -e $(evalue) -s $(sensitivity)`)
+        
+        # # Convert to readable format
+        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs convertalis $(query_db) $(ref_db) $(search_db) $(results_file) --format-output "query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits"`)
+        
+        @assert isfile(results_file) "MMseqs2 results file was not created: $(results_file)"
+        @assert filesize(results_file) > 0 "MMseqs2 results file is empty"
+
+        # Cleanup temporary files
+        rm(tmp_dir, recursive=true, force=true)
+        
+        return results_file
+        
+    catch e
+        @error "MMseqs2 execution failed" exception=e
+        rethrow(e)
+    finally
+        # Cleanup temporary files
+        rm(tmp_dir, recursive=true, force=true)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Return proportion of matched bases in alignment to total matches + edits.
 
 Calculate the accuracy of a sequence alignment by computing the ratio of matched bases 
