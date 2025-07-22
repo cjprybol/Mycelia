@@ -19,11 +19,11 @@ Pages = [
     "api/workflows/data-acquisition.md",
     "api/workflows/quality-control.md", 
     "api/workflows/sequence-analysis.md",
-    "api/workflows/genome-assembly.md",
-    "api/workflows/assembly-validation.md",
-    "api/workflows/gene-annotation.md",
-    "api/workflows/comparative-genomics.md",
-    "api/workflows/visualization.md"
+    # "api/workflows/genome-assembly.md",
+    # "api/workflows/assembly-validation.md",
+    # "api/workflows/gene-annotation.md",
+    # "api/workflows/comparative-genomics.md",
+    # "api/workflows/visualization.md"
 ]
 Depth = 2
 ```
@@ -45,30 +45,30 @@ Analyze sequence composition, count k-mers, and extract genomic features.
 **Working Functions:** `count_canonical_kmers`, `jaccard_distance`, `kmer_counts_to_js_divergence`  
 **Planned:** `kmer_frequency_spectrum`, `estimate_genome_size`
 
-### 4. [Genome Assembly](api/workflows/genome-assembly.md)
+### 4. Genome Assembly *(planned)*
 Assemble genomes from sequencing reads using various approaches.
 
 **Working Functions:** `assemble_metagenome_megahit`, `assemble_metagenome_metaspades` (external tools)  
 **Experimental:** Graph-based assembly framework  
 **Planned:** `assemble_genome`, `polish_assembly`
 
-### 5. [Assembly Validation](api/workflows/assembly-validation.md)
+### 5. Assembly Validation *(planned)*
 Validate and assess the quality of genome assemblies.
 
 **Planned:** `evaluate_assembly`, `calculate_assembly_stats`, `busco_analysis`
 
-### 6. [Gene Annotation](api/workflows/gene-annotation.md)
+### 6. Gene Annotation *(planned)*
 Predict genes and assign functional annotations.
 
 **Planned:** `predict_genes`, `annotate_functions`, `analyze_go_terms`
 
-### 7. [Comparative Genomics](api/workflows/comparative-genomics.md)
+### 7. Comparative Genomics *(planned)*
 Compare genomes, build pangenomes, and construct phylogenetic trees.
 
 **Working Functions:** `analyze_pangenome_kmers`, `build_genome_distance_matrix`  
 **Planned:** `construct_phylogeny`, `calculate_synteny`
 
-### 8. [Visualization & Reporting](api/workflows/visualization.md)
+### 8. Visualization & Reporting *(planned)*
 Create plots, figures, and reports for analysis results.
 
 **Planned:** `plot_assembly_stats`, `plot_phylogenetic_tree`, `generate_report`
@@ -77,6 +77,7 @@ Create plots, figures, and reports for analysis results.
 
 Working with specific file formats and data structures:
 
+<!-- Data type documentation planned for future releases
 ```@contents
 Pages = [
     "api/data-types/fasta-fastq.md",
@@ -87,20 +88,21 @@ Pages = [
 ]
 Depth = 2
 ```
+-->
 
-### [FASTA/FASTQ Files](api/data-types/fasta-fastq.md)
+### FASTA/FASTQ Files *(planned)*
 Reading, writing, and manipulating sequence files.
 
-### [Assembly Files](api/data-types/assemblies.md)
+### Assembly Files *(planned)*
 Working with contigs, scaffolds, and assembly statistics.
 
-### [Annotation Files](api/data-types/annotations.md)
+### Annotation Files *(planned)*
 Handling GFF3, GenBank, and other annotation formats.
 
-### [Alignment Files](api/data-types/alignments.md)
+### Alignment Files *(planned)*
 Processing BAM/SAM files and alignment results.
 
-### [Phylogenetic Trees](api/data-types/trees.md)
+### Phylogenetic Trees *(planned)*
 Tree construction, manipulation, and visualization.
 
 ## 🎯 By Analysis Goal
@@ -132,15 +134,15 @@ Common parameters and their usage across functions.
 ## 🔍 Finding What You Need
 
 ### By Task
-- **"I want to assemble a genome"** → [Genome Assembly](api/workflows/genome-assembly.md)
-- **"I need to validate my assembly"** → [Assembly Validation](api/workflows/assembly-validation.md)
-- **"I want to compare genomes"** → [Comparative Genomics](api/workflows/comparative-genomics.md)
+- **"I want to assemble a genome"** → Genome Assembly *(planned)*
+- **"I need to validate my assembly"** → Assembly Validation *(planned)*
+- **"I want to compare genomes"** → Comparative Genomics *(planned)*
 - **"I need to check data quality"** → [Quality Control](api/workflows/quality-control.md)
 
 ### By Data Type
-- **"I have FASTQ files"** → [FASTA/FASTQ Files](api/data-types/fasta-fastq.md)
-- **"I have assembly contigs"** → [Assembly Files](api/data-types/assemblies.md)
-- **"I have gene annotations"** → [Annotation Files](api/data-types/annotations.md)
+- **"I have FASTQ files"** → FASTA/FASTQ Files *(planned)*
+- **"I have assembly contigs"** → Assembly Files *(planned)*
+- **"I have gene annotations"** → Annotation Files *(planned)*
 
 ### By Experience Level
 - **Beginner** → [Basic Workflows](api/examples/basic-workflows.md)

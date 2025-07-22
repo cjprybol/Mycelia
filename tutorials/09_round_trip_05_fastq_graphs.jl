@@ -18,6 +18,7 @@
 # Following CLAUDE.md standards: only import top-level packages, use full namespacing
 
 import Mycelia
+import FASTX
 import Test
 import Statistics
 

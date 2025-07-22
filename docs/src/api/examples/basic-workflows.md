@@ -450,7 +450,7 @@ After completing these basic workflows, you can:
 
 1. **Explore advanced techniques** in [Advanced Usage](advanced-usage.md)
 2. **Customize parameters** using the [Parameter Guide](../quick-reference/parameter-guide.md)
-3. **Integrate external tools** following [Tool Integration](../workflows/visualization.md)
+3. **Integrate external tools** following Tool Integration *(planned)*
 4. **Scale to HPC systems** with [Deployment Guide](../../../deployment-guide.md)
 
 ## See Also

@@ -424,10 +424,10 @@ println("Recommended k-mer size: $(optimal_k)")
 - [Quality Control](quality-control.md) - Preprocess reads before k-mer analysis
 
 ### Next Steps
-- [Genome Assembly](genome-assembly.md) - Use k-mer analysis for assembly
-- [Comparative Genomics](comparative-genomics.md) - Compare k-mer profiles
+- Genome Assembly *(planned)* - Use k-mer analysis for assembly
+- Comparative Genomics *(planned)* - Compare k-mer profiles
 
 ## See Also
 - [Tutorial 3: K-mer Analysis](../../tutorials/03_kmer_analysis.md)
-- [Assembly Workflows](genome-assembly.md)
+- Assembly Workflows *(planned)*
 - [Performance Optimization](../examples/advanced-usage.md)

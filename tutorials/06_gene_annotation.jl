@@ -94,7 +94,7 @@ predicted_genes = [
 
 println("Ab Initio Gene Prediction Results:")
 println("  Predicted genes: $(length(predicted_genes))")
-println("  Mean confidence: $(round(mean([g["confidence"] for g in predicted_genes]), digits=3))")
+println("  Mean confidence: $(round(Statistics.mean([g["confidence"] for g in predicted_genes]), digits=3))")
 println("  Coding density: $(round(sum([g["end"] - g["start"] + 1 for g in predicted_genes]) / genome_size * 100, digits=1))%")
 
 # ### Homology-Based Gene Prediction

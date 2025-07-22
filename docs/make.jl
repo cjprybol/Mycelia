@@ -125,7 +125,7 @@ makedocs(
                 "Sequence Analysis" => "api/workflows/sequence-analysis.md"
             ],
             "Quick Reference" => [
-                "Function Index" => "api/quick-reference/function-index.md",
+                # "Function Index" => "api/quick-reference/function-index.md",  # Temporarily disabled - needs function docstrings
                 "Parameter Guide" => "api/quick-reference/parameter-guide.md"
             ],
             "Examples" => [
