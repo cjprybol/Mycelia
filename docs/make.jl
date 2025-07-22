@@ -110,6 +110,8 @@ makedocs(
     authors = "Cameron Prybol <cameron.prybol@gmail.com> and contributors",
     repo = "https://github.com/cjprybol/Mycelia/blob/{commit}{path}#L{line}",
     format = Documenter.HTMLWriter.HTML(size_threshold = 1_000_000),
+    build = joinpath(@__DIR__, "build"),
+    source = joinpath(@__DIR__, "src"),
     pages = [
         "Home" => "index.md",
         "Getting Started" => "getting-started.md",

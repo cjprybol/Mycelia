@@ -27,7 +27,6 @@ import Test
 import Mycelia
 import FASTX
 import Random
-import Plots
 import Statistics
 
 Random.seed!(42)
@@ -85,7 +84,7 @@ println("\n=== Data Preparation ===")
 println("--- Generating Test Data ---")
 
 # Create a synthetic genome with known structure
-genome_size = 50000  # 50 kb for demonstration
+genome_size = 50000  ## 50 kb for demonstration
 reference_genome = Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=genome_size)
 
 println("Reference genome: $(genome_size) bp")

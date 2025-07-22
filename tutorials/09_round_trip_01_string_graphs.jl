@@ -33,7 +33,7 @@ clean_strings = [
     "The quick brown fox jumps over the lazy dog",
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    # "αβγδεζηθικλμνξοπρστυφχψω",  # Unicode testing - requires fix in string-graphs.jl
+    ## "αβγδεζηθικλμνξοπρστυφχψω",  ## Unicode testing - requires fix in string-graphs.jl
     "Pattern recognition and machine learning algorithms"
 ]
 
@@ -59,16 +59,16 @@ for n in [2, 3, 4, 5]
     total_vertices = 0
     
     for (i, text) in enumerate(clean_strings)
-        if length(text) >= n  # Only process if text is long enough
+        if length(text) >= n  ## Only process if text is long enough
             try
-                # Construct string graph
+                ## Construct string graph
                 graph = Mycelia.string_to_ngram_graph(s=text, n=n)
                 
-                # Extract graph statistics
+                ## Extract graph statistics
                 num_vertices = length(graph.vertex_labels)
                 vertex_labels = collect(values(graph.vertex_labels))
                 
-                total_ngrams += length(text) - n + 1  # Expected number of n-grams
+                total_ngrams += length(text) - n + 1  ## Expected number of n-grams
                 total_vertices += num_vertices
                 
                 println("  String $i: $(num_vertices) unique $(n)-grams")
@@ -76,7 +76,7 @@ for n in [2, 3, 4, 5]
                     println("    Examples: $(vertex_labels[1:min(3, num_vertices)])")
                 end
                 
-                # Store results for later analysis
+                ## Store results for later analysis
                 graph_results["$(i)_$(n)"] = (
                     graph = graph,
                     original_text = text,
@@ -113,14 +113,14 @@ for (key, result) in graph_results
     println("\nReconstructing: \"$(result.original_text)\" (n=$(result.n))")
     
     try
-        # Attempt to reconstruct strings from the graph
-        # Note: This uses the basic string assembly function
+        ## Attempt to reconstruct strings from the graph
+        ## Note: This uses the basic string assembly function
         reconstructed_strings = Mycelia.assemble_strings(result.graph)
         
         num_reconstructed = length(reconstructed_strings)
         println("  Reconstructed $num_reconstructed string(s)")
         
-        # Store reconstruction results
+        ## Store reconstruction results
         reconstruction_results[key] = (
             original = result.original_text,
             reconstructed = reconstructed_strings,
@@ -128,7 +128,7 @@ for (key, result) in graph_results
             success = !isempty(reconstructed_strings)
         )
         
-        # Show first few reconstructed strings
+        ## Show first few reconstructed strings
         for (i, reconstructed) in enumerate(reconstructed_strings[1:min(3, num_reconstructed)])
             println("    Reconstruction $i: \"$reconstructed\"")
         end
@@ -153,15 +153,15 @@ println("-"^50)
 
 function calculate_string_similarity(original::String, reconstructed::String)
     """Calculate similarity between original and reconstructed strings."""
-    # Simple character-level accuracy
+    ## Simple character-level accuracy
     min_len = min(length(original), length(reconstructed))
     max_len = max(length(original), length(reconstructed))
     
     if max_len == 0
-        return 1.0  # Both strings are empty
+        return 1.0  ## Both strings are empty
     end
     
-    # Count matching characters at corresponding positions
+    ## Count matching characters at corresponding positions
     matches = 0
     for i in 1:min_len
         if original[i] == reconstructed[i]
@@ -169,7 +169,7 @@ function calculate_string_similarity(original::String, reconstructed::String)
         end
     end
     
-    # Penalize length differences
+    ## Penalize length differences
     similarity = matches / max_len
     return similarity
 end
@@ -192,7 +192,7 @@ function assess_reconstruction_quality(results_dict)
             continue
         end
         
-        # Find best reconstruction (highest similarity)
+        ## Find best reconstruction (highest similarity)
         best_similarity = 0.0
         best_reconstruction = ""
         
@@ -205,14 +205,14 @@ function assess_reconstruction_quality(results_dict)
         end
         
         total_similarity += best_similarity
-        if best_similarity > 0.8  # Consider >80% similarity as successful
+        if best_similarity > 0.8  ## Consider >80% similarity as successful
             successful_reconstructions += 1
         end
         
         status = best_similarity > 0.8 ? "SUCCESS" : "PARTIAL"
         println("  $key: $status - Similarity: $(round(best_similarity, digits=3))")
         
-        # Show comparison for low similarity cases
+        ## Show comparison for low similarity cases
         if best_similarity < 0.8
             println("    Original:      \"$(original)\"")
             println("    Best match:    \"$(best_reconstruction)\"")
@@ -251,19 +251,19 @@ function analyze_performance_by_n()
     
     for n in 2:6
         if length(test_string) >= n
-            # Measure construction time
+            ## Measure construction time
             start_time = time()
             graph = Mycelia.string_to_ngram_graph(s=test_string, n=n)
             construction_time = time() - start_time
             
-            # Measure graph properties
+            ## Measure graph properties
             num_vertices = length(graph.vertex_labels)
             expected_ngrams = length(test_string) - n + 1
             compression_ratio = num_vertices / expected_ngrams
             
-            # Estimate memory usage (approximate)
+            ## Estimate memory usage (approximate)
             avg_vertex_size = sum(length(v) for v in values(graph.vertex_labels)) / num_vertices
-            estimated_memory_kb = (num_vertices * avg_vertex_size * 2) / 1024  # Rough estimate
+            estimated_memory_kb = (num_vertices * avg_vertex_size * 2) / 1024  ## Rough estimate
             
             println("  n=$n: $(num_vertices) vertices, $(round(construction_time*1000, digits=2))ms, $(round(compression_ratio, digits=3)) compression, ~$(round(estimated_memory_kb, digits=1))KB")
         end
@@ -295,7 +295,7 @@ for (i, seq) in enumerate(dna_sequences)
 end
 
 # Concatenate sequences for analysis
-combined_dna = join(dna_sequences, "N")  # Use 'N' as separator
+combined_dna = join(dna_sequences, "N")  ## Use 'N' as separator
 println("\\nCombined sequence: $combined_dna")
 
 # Build string graph
@@ -319,7 +319,7 @@ end
 sorted_patterns = sort(collect(dna_4gram_counts), by=x->x[2], rev=true)
 println("  Most frequent 4-grams:")
 for (pattern, count) in sorted_patterns[1:min(5, length(sorted_patterns))]
-    if pattern != "N"  # Skip separator
+    if pattern != "N"  ## Skip separator
         println("    $pattern: $count occurrences")
     end
 end
@@ -342,7 +342,7 @@ function analyze_graph_structure(graph, description)
         return
     end
     
-    # Basic statistics
+    ## Basic statistics
     vertex_lengths = [length(v) for v in vertices]
     avg_length = Statistics.mean(vertex_lengths)
     
@@ -350,7 +350,7 @@ function analyze_graph_structure(graph, description)
     println("    Vertices: $num_vertices")
     println("    Average vertex length: $(round(avg_length, digits=2))")
     
-    # Character distribution analysis
+    ## Character distribution analysis
     all_chars = join(vertices)
     char_counts = Dict{Char, Int}()
     for char in all_chars

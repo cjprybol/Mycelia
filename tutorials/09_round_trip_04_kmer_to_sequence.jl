@@ -123,12 +123,12 @@ protein_records = []
 
 println("Biological sequence datasets:")
 for (i, dataset) in enumerate(biological_datasets)
-    # Create FASTA record
+    ## Create FASTA record
     record_id = "$(lowercase(dataset.type))_$(i)_$(replace(dataset.name, " " => "_"))"
     record = FASTX.FASTA.Record(record_id, dataset.sequence)
     push!(all_bio_records, (record=record, dataset=dataset))
     
-    # Sort by type
+    ## Sort by type
     if dataset.type == "DNA"
         push!(dna_records, record)
     elseif dataset.type == "RNA"
@@ -170,26 +170,26 @@ for config in kmer_configs
             println("\n  k-mer size: $k")
             
             try
-                # Build k-mer graph using appropriate sequence type
+                ## Build k-mer graph using appropriate sequence type
                 if config.type == "DNA"
                     kmer_graph = Mycelia.build_kmer_graph(config.records, k=k, sequence_type=BioSequences.LongDNA{4})
                 elseif config.type == "RNA"
                     kmer_graph = Mycelia.build_kmer_graph(config.records, k=k, sequence_type=BioSequences.LongRNA{4})
-                else # PROTEIN
+                else ## PROTEIN
                     kmer_graph = Mycelia.build_kmer_graph(config.records, k=k, sequence_type=BioSequences.LongAA)
                 end
                 
-                # Extract graph statistics
+                ## Extract graph statistics
                 vertices = collect(values(kmer_graph.vertex_labels))
                 num_vertices = length(vertices)
                 
                 if num_vertices > 0
-                    # Analyze k-mer properties
+                    ## Analyze k-mer properties
                     kmer_lengths = [length(kmer) for kmer in vertices]
                     total_kmers = sum(max(0, length(FASTX.FASTA.sequence(record)) - k + 1) for record in config.records)
                     compression_ratio = num_vertices / max(1, total_kmers)
                     
-                    # Get k-mer type for verification
+                    ## Get k-mer type for verification
                     first_kmer = first(vertices)
                     kmer_type = typeof(first_kmer)
                     
@@ -200,7 +200,7 @@ for config in kmer_configs
                     println("      Total possible k-mers: $total_kmers")
                     println("      Compression ratio: $(round(compression_ratio, digits=3))")
                     
-                    # Show example k-mers
+                    ## Show example k-mers
                     example_count = min(3, num_vertices)
                     println("      Example k-mers:")
                     for i in 1:example_count
@@ -208,7 +208,7 @@ for config in kmer_configs
                         println("        K-mer $i: $(string(kmer))")
                     end
                     
-                    # Store results
+                    ## Store results
                     key = "$(config.type)_k$(k)"
                     kmer_results[key] = (
                         graph = kmer_graph,
@@ -253,9 +253,9 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
     
     println("  $description:")
     
-    # Sequence composition analysis based on type
+    ## Sequence composition analysis based on type
     if sequence_type == "DNA"
-        # DNA-specific k-mer analysis
+        ## DNA-specific k-mer analysis
         all_kmers_str = [string(kmer) for kmer in vertices]
         all_nucleotides = join(all_kmers_str)
         
@@ -276,7 +276,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
             println("    Base composition: A=$(base_counts['A']), T=$(base_counts['T']), G=$(base_counts['G']), C=$(base_counts['C'])")
         end
         
-        # Palindrome detection
+        ## Palindrome detection
         palindromes = 0
         for kmer_str in all_kmers_str
             if length(kmer_str) > 1
@@ -289,7 +289,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
         println("    Palindromic k-mers: $palindromes/$(length(all_kmers_str)) ($(round(palindromes/length(all_kmers_str)*100, digits=1))%)")
         
     elseif sequence_type == "RNA"
-        # RNA-specific k-mer analysis
+        ## RNA-specific k-mer analysis
         all_kmers_str = [string(kmer) for kmer in vertices]
         all_nucleotides = join(all_kmers_str)
         
@@ -311,11 +311,11 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
         end
         
     elseif sequence_type == "PROTEIN"
-        # Protein-specific k-mer analysis
+        ## Protein-specific k-mer analysis
         all_kmers_str = [string(kmer) for kmer in vertices]
         all_amino_acids = join(all_kmers_str)
         
-        # Classify amino acids
+        ## Classify amino acids
         hydrophobic = ['A', 'V', 'L', 'I', 'M', 'F', 'W', 'Y']
         charged = ['R', 'K', 'D', 'E', 'H']
         polar = ['S', 'T', 'N', 'Q', 'C']
@@ -335,7 +335,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
         end
     end
     
-    # Graph connectivity properties
+    ## Graph connectivity properties
     println("    K-mer vertices: $num_vertices")
     println("    K-mer size: $k")
     println("    Average k-mer frequency: $(round(num_vertices > 0 ? total_bases/num_vertices : 0, digits=1))")
@@ -372,22 +372,22 @@ function convert_kmer_to_sequence_graph(kmer_graph, k, sequence_type_name)
     """Convert k-mer graph to variable-length sequence graph."""
     
     try
-        # Use existing sequence graph construction function
+        ## Use existing sequence graph construction function
         sequence_graph = Mycelia.build_biosequence_graph_from_kmers(kmer_graph, k=k)
         
-        # Extract sequence vertices
+        ## Extract sequence vertices
         sequence_vertices = collect(values(sequence_graph.vertex_labels))
         num_sequences = length(sequence_vertices)
         
         if num_sequences > 0
-            # Analyze sequence properties
+            ## Analyze sequence properties
             sequence_lengths = [length(seq) for seq in sequence_vertices]
             total_sequence_length = sum(sequence_lengths)
             avg_length = Statistics.mean(sequence_lengths)
             max_length = maximum(sequence_lengths)
             min_length = minimum(sequence_lengths)
             
-            # Get sequence type
+            ## Get sequence type
             first_seq = first(sequence_vertices)
             seq_type = typeof(first_seq)
             
@@ -432,7 +432,7 @@ for (key, kmer_result) in kmer_results
     sequence_conversion_results[key] = conversion
     
     if conversion.success
-        # Calculate conversion statistics
+        ## Calculate conversion statistics
         original_kmers = kmer_result.num_vertices
         final_sequences = conversion.num_sequences
         conversion_ratio = final_sequences / max(1, original_kmers)
@@ -444,7 +444,7 @@ for (key, kmer_result) in kmer_results
         println("    Sequence type: $(conversion.sequence_type)")
         println("    Length range: $(conversion.min_length) - $(conversion.max_length) (avg: $(round(conversion.avg_length, digits=1)))")
         
-        # Show example sequences
+        ## Show example sequences
         example_count = min(2, conversion.num_sequences)
         println("    Example sequences:")
         for i in 1:example_count
@@ -469,19 +469,19 @@ println("-"^50)
 function perform_kmer_to_sequence_roundtrip(original_records, kmer_result, sequence_result, sequence_type_name)
     """Perform complete round-trip reconstruction from both graph types."""
     
-    # Extract original sequences for comparison
+    ## Extract original sequences for comparison
     original_sequences = [string(FASTX.FASTA.sequence(record)) for record in original_records]
     
     reconstruction_results = Dict()
     
-    # Method 1: Direct k-mer assembly
+    ## Method 1: Direct k-mer assembly
     println("  K-mer graph reconstruction:")
     try
         kmer_assemblies = Mycelia.assemble_sequences_from_kmers(kmer_result.graph, k=kmer_result.k)
         kmer_success = !isempty(kmer_assemblies)
         
         if kmer_success
-            # Find best k-mer reconstruction
+            ## Find best k-mer reconstruction
             best_kmer_score = 0.0
             best_kmer_reconstruction = ""
             
@@ -526,18 +526,18 @@ function perform_kmer_to_sequence_roundtrip(original_records, kmer_result, seque
         )
     end
     
-    # Method 2: Sequence graph reconstruction
+    ## Method 2: Sequence graph reconstruction
     println("  Sequence graph reconstruction:")
     if sequence_result.success
         try
-            # Direct sequence assembly from sequence graph
+            ## Direct sequence assembly from sequence graph
             sequence_assemblies = [string(seq) for seq in sequence_result.vertices]
             
-            # Find best sequence reconstruction
+            ## Find best sequence reconstruction
             best_seq_score = 0.0
             best_seq_reconstruction = ""
             
-            # Try different combination strategies
+            ## Try different combination strategies
             for assembly_str in sequence_assemblies
                 max_similarity = 0.0
                 
@@ -552,7 +552,7 @@ function perform_kmer_to_sequence_roundtrip(original_records, kmer_result, seque
                 end
             end
             
-            # Also try concatenation
+            ## Also try concatenation
             concatenated = join(sequence_assemblies, "")
             for original in original_sequences
                 concat_similarity = calculate_biological_similarity(original, concatenated)
@@ -603,7 +603,7 @@ function calculate_biological_similarity(seq1::String, seq2::String)
         return 1.0
     end
     
-    # Simple alignment-based similarity
+    ## Simple alignment-based similarity
     matches = 0
     for i in 1:min_len
         if seq1[i] == seq2[i]
@@ -611,7 +611,7 @@ function calculate_biological_similarity(seq1::String, seq2::String)
         end
     end
     
-    # Penalize length differences
+    ## Penalize length differences
     similarity = matches / max_len
     return similarity
 end
@@ -634,7 +634,7 @@ for (key, kmer_result) in kmer_results
         
         roundtrip_results[key] = reconstruction
         
-        # Show comparison summary
+        ## Show comparison summary
         kmer_sim = reconstruction["kmer"].similarity
         seq_sim = reconstruction["sequence"].similarity
         
@@ -671,7 +671,7 @@ function comprehensive_kmer_quality_assessment(roundtrip_results)
         kmer_result = result["kmer"]
         sequence_result = result["sequence"]
         
-        # Count successes (>50% similarity)
+        ## Count successes (>50% similarity)
         if kmer_result.success && kmer_result.similarity > 0.5
             kmer_successes += 1
         end
@@ -685,7 +685,7 @@ function comprehensive_kmer_quality_assessment(roundtrip_results)
         push!(quality_by_method["kmer"], kmer_result.similarity)
         push!(quality_by_method["sequence"], sequence_result.similarity)
         
-        # Extract sequence type for analysis
+        ## Extract sequence type for analysis
         seq_type = split(key, "_")[1]
         if !haskey(quality_by_type, seq_type)
             quality_by_type[seq_type] = Dict("kmer" => [], "sequence" => [])
@@ -693,7 +693,7 @@ function comprehensive_kmer_quality_assessment(roundtrip_results)
         push!(quality_by_type[seq_type]["kmer"], kmer_result.similarity)
         push!(quality_by_type[seq_type]["sequence"], sequence_result.similarity)
         
-        # Show detailed comparison
+        ## Show detailed comparison
         kmer_status = kmer_result.similarity > 0.7 ? "EXCELLENT" : kmer_result.similarity > 0.5 ? "GOOD" : "NEEDS_IMPROVEMENT"
         seq_status = sequence_result.similarity > 0.7 ? "EXCELLENT" : sequence_result.similarity > 0.5 ? "GOOD" : "NEEDS_IMPROVEMENT"
         
@@ -702,7 +702,7 @@ function comprehensive_kmer_quality_assessment(roundtrip_results)
         println("    Sequence: $seq_status ($(round(sequence_result.similarity, digits=3)))")
     end
     
-    # Calculate averages
+    ## Calculate averages
     avg_kmer_quality = total_tests > 0 ? total_kmer_quality / total_tests : 0.0
     avg_sequence_quality = total_tests > 0 ? total_sequence_quality / total_tests : 0.0
     
@@ -752,7 +752,7 @@ println("-"^50)
 function analyze_kmer_sequence_performance()
     """Analyze performance characteristics of k-mer vs sequence graph workflows."""
     
-    # Test performance with sequences of increasing length
+    ## Test performance with sequences of increasing length
     test_lengths = [50, 100, 200, 500]
     performance_results = Dict()
     
@@ -762,17 +762,17 @@ function analyze_kmer_sequence_performance()
     for length in test_lengths
         println("\n  Sequence length: $length nucleotides")
         
-        # Generate test DNA sequence
+        ## Generate test DNA sequence
         bases = ['A', 'T', 'G', 'C']
         test_sequence = join([rand(bases) for _ in 1:length])
         test_record = FASTX.FASTA.Record("perf_test_$length", test_sequence)
         
         performance_results[length] = Dict()
         
-        # Test different k values
+        ## Test different k values
         for k in [3, 5, 7]
             if length >= k
-                # Measure k-mer graph construction time
+                ## Measure k-mer graph construction time
                 start_time = time()
                 try
                     kmer_graph = Mycelia.build_kmer_graph([test_record], k=k, sequence_type=BioSequences.LongDNA{4})
@@ -780,7 +780,7 @@ function analyze_kmer_sequence_performance()
                     
                     kmer_vertices = length(kmer_graph.vertex_labels)
                     
-                    # Measure sequence graph conversion time
+                    ## Measure sequence graph conversion time
                     start_time = time()
                     sequence_result = convert_kmer_to_sequence_graph(kmer_graph, k, "DNA")
                     sequence_time = time() - start_time
@@ -812,7 +812,7 @@ function analyze_kmer_sequence_performance()
         end
     end
     
-    # Memory efficiency analysis
+    ## Memory efficiency analysis
     println("\nMemory efficiency characteristics:")
     println("  K-mer graphs:")
     println("    • Memory scales with number of unique k-mers")
@@ -858,7 +858,7 @@ println("  Genome length: $(length(reference_genome)) bp")
 println("  Simulating $(read_length)bp reads with $(overlap_length)bp overlap")
 println("  Target coverage depth: $(coverage_depth)x")
 
-# Generate overlapping reads with coverage
+## Generate overlapping reads with coverage
 simulated_reads = []
 step_size = read_length - overlap_length
 
@@ -873,7 +873,7 @@ end
 
 println("  Generated $(length(simulated_reads)) overlapping reads with $(coverage_depth)x coverage")
 
-# Show sample reads
+## Show sample reads
 println("  Sample reads:")
 for (i, record) in enumerate(simulated_reads[1:min(5, length(simulated_reads))])
     println("    $(FASTX.FASTA.identifier(record)): $(FASTX.FASTA.sequence(record))")
@@ -882,19 +882,19 @@ if length(simulated_reads) > 5
     println("    ... ($(length(simulated_reads) - 5) more reads)")
 end
 
-# Perform hierarchical assembly
+## Perform hierarchical assembly
 println("\nHierarchical assembly workflow:")
 
-# Step 1: Build k-mer graph from reads
+## Step 1: Build k-mer graph from reads
 println("  Step 1: K-mer graph construction")
-optimal_k = 15  # Choose k for good overlap resolution
+optimal_k = 15  ## Choose k for good overlap resolution
 try
     assembly_kmer_graph = Mycelia.build_kmer_graph(simulated_reads, k=optimal_k, sequence_type=BioSequences.LongDNA{4})
     kmer_vertices = length(assembly_kmer_graph.vertex_labels)
     
     println("    K-mer graph: $kmer_vertices unique $(optimal_k)-mers")
     
-    # Step 2: Convert to sequence graph
+    ## Step 2: Convert to sequence graph
     println("  Step 2: Sequence graph conversion")
     assembly_sequence_result = convert_kmer_to_sequence_graph(assembly_kmer_graph, optimal_k, "DNA")
     
@@ -902,10 +902,10 @@ try
         println("    Sequence graph: $(assembly_sequence_result.num_sequences) sequences")
         println("    Total assembled length: $(assembly_sequence_result.total_length) bp")
         
-        # Step 3: Assembly reconstruction
+        ## Step 3: Assembly reconstruction
         println("  Step 3: Assembly reconstruction")
         
-        # Find longest sequence (likely the main assembly)
+        ## Find longest sequence (likely the main assembly)
         longest_sequence = ""
         max_length = 0
         
@@ -917,7 +917,7 @@ try
             end
         end
         
-        # Compare to reference
+        ## Compare to reference
         assembly_accuracy = calculate_biological_similarity(reference_genome, longest_sequence)
         length_accuracy = min(length(longest_sequence), length(reference_genome)) / max(length(longest_sequence), length(reference_genome))
         
@@ -935,7 +935,7 @@ try
             println("    ⚠️ Assembly needs optimization")
         end
         
-        # Show assembly comparison
+        ## Show assembly comparison
         println("\n  Sequence comparison:")
         ref_preview = reference_genome[1:min(60, length(reference_genome))]
         asm_preview = longest_sequence[1:min(60, length(longest_sequence))]

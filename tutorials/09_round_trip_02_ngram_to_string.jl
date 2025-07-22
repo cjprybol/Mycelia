@@ -97,18 +97,18 @@ for n in [3, 4, 5]
     for (i, dataset) in enumerate(test_datasets)
         if length(dataset.text) >= n
             try
-                # Build N-gram graph
+                ## Build N-gram graph
                 graph = Mycelia.string_to_ngram_graph(s=dataset.text, n=n)
                 
-                # Extract statistics
+                ## Extract statistics
                 vertices = collect(values(graph.vertex_labels))
                 num_vertices = length(vertices)
                 expected_ngrams = length(dataset.text) - n + 1
                 
-                # Calculate graph properties
+                ## Calculate graph properties
                 compression_ratio = num_vertices / expected_ngrams
                 
-                # Store results
+                ## Store results
                 key = "$(dataset.name)_$(n)"
                 ngram_results[key] = (
                     dataset = dataset,
@@ -122,7 +122,7 @@ for n in [3, 4, 5]
                 
                 println("  $(dataset.name): $(num_vertices)/$(expected_ngrams) vertices ($(round(compression_ratio, digits=3)) compression)")
                 
-                # Show example n-grams
+                ## Show example n-grams
                 if num_vertices > 0
                     example_count = min(3, num_vertices)
                     println("    Examples: $(vertices[1:example_count])")
@@ -154,10 +154,10 @@ function analyze_ngram_graph_structure(graph, description)
         return (vertices=0, linear_paths=0, branch_points=0, complexity="empty")
     end
     
-    # Basic connectivity analysis
-    # Note: This is a simplified analysis - full graph traversal would require edge information
+    ## Basic connectivity analysis
+    ## Note: This is a simplified analysis - full graph traversal would require edge information
     
-    # Analyze overlap patterns
+    ## Analyze overlap patterns
     overlap_count = 0
     potential_linear = 0
     
@@ -165,7 +165,7 @@ function analyze_ngram_graph_structure(graph, description)
         for j in (i+1):length(vertices)
             v1, v2 = vertices[i], vertices[j]
             if length(v1) > 1 && length(v2) > 1
-                # Check for potential overlap (simplified heuristic)
+                ## Check for potential overlap (simplified heuristic)
                 if v1[2:end] == v2[1:end-1] || v2[2:end] == v1[1:end-1]
                     overlap_count += 1
                 end
@@ -173,7 +173,7 @@ function analyze_ngram_graph_structure(graph, description)
         end
     end
     
-    # Estimate complexity
+    ## Estimate complexity
     complexity = if overlap_count == 0
         "isolated"
     elseif overlap_count <= num_vertices
@@ -194,10 +194,10 @@ function analyze_ngram_graph_structure(graph, description)
     )
 end
 
-# Analyze representative graphs
+## Analyze representative graphs
 println("Analyzing N-gram graph structures:")
 for n in [3, 4]
-    for dataset in test_datasets[1:3]  # Analyze first 3 datasets
+    for dataset in test_datasets[1:3]  ## Analyze first 3 datasets
         key = "$(dataset.name)_$(n)"
         if haskey(ngram_results, key)
             result = ngram_results[key]
@@ -221,22 +221,22 @@ function simulate_string_graph_conversion(ngram_result)
     n = ngram_result.n
     original_text = ngram_result.dataset.text
     
-    # Simplified simulation of path collapse
-    # In a full implementation, this would involve:
-    # 1. Finding linear paths through the graph
-    # 2. Collapsing unbranching paths into single vertices
-    # 3. Preserving branching structure
+    ## Simplified simulation of path collapse
+    ## In a full implementation, this would involve:
+    ## 1. Finding linear paths through the graph
+    ## 2. Collapsing unbranching paths into single vertices
+    ## 3. Preserving branching structure
     
-    # For simulation, we'll estimate the result
+    ## For simulation, we'll estimate the result
     estimated_strings = []
     
-    if ngram_result.compression_ratio < 0.5  # High compression suggests repetition
-        # High repetition might collapse to fewer, longer strings
+    if ngram_result.compression_ratio < 0.5  ## High compression suggests repetition
+        ## High repetition might collapse to fewer, longer strings
         estimated_count = max(1, ngram_result.num_vertices ÷ 3)
         estimated_avg_length = length(original_text) ÷ estimated_count
         
         for i in 1:estimated_count
-            # Create simulated string
+            ## Create simulated string
             start_pos = ((i-1) * estimated_avg_length) + 1
             end_pos = min(start_pos + estimated_avg_length - 1, length(original_text))
             if start_pos <= length(original_text)
@@ -245,9 +245,9 @@ function simulate_string_graph_conversion(ngram_result)
             end
         end
     else
-        # Low compression might result in strings similar to original n-grams
-        # but with some linear paths collapsed
-        for vertex in vertices[1:min(5, length(vertices))]  # Limit for simulation
+        ## Low compression might result in strings similar to original n-grams
+        ## but with some linear paths collapsed
+        for vertex in vertices[1:min(5, length(vertices))]  ## Limit for simulation
             push!(estimated_strings, vertex)
         end
     end
@@ -288,12 +288,12 @@ println("-"^50)
 function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
     """Validate the round-trip reconstruction quality."""
     
-    # Method 1: Direct N-gram assembly
+    ## Method 1: Direct N-gram assembly
     try
         ngram_assembly = Mycelia.assemble_strings(ngram_graph)
         ngram_success = !isempty(ngram_assembly)
         
-        # Find best N-gram reconstruction
+        ## Find best N-gram reconstruction
         best_ngram_similarity = 0.0
         best_ngram_reconstruction = ""
         
@@ -312,12 +312,12 @@ function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
         ngram_assembly = String[]
     end
     
-    # Method 2: String graph simulation
+    ## Method 2: String graph simulation
     string_success = !isempty(estimated_strings)
     
-    # For string graphs, we'll simulate a simple concatenation approach
+    ## For string graphs, we'll simulate a simple concatenation approach
     if string_success
-        # Try different string combinations
+        ## Try different string combinations
         string_reconstruction = join(estimated_strings, "")
         string_similarity = calculate_similarity(original_text, string_reconstruction)
     else
@@ -448,7 +448,7 @@ println("Multi-scale analysis of complex text:")
 println("Text: \"$(complex_text[1:60])...\"")
 println("Length: $(length(complex_text)) characters")
 
-# Build graphs at different scales
+## Build graphs at different scales
 scales = [
     (n=3, description="Fine-grained analysis"),
     (n=5, description="Medium-grained analysis"), 
@@ -466,8 +466,8 @@ for scale in scales
         println("    N-gram vertices: $ngram_vertices")
         println("    Compression ratio: $(round(compression, digits=3))")
         
-        # Simulate string graph conversion
-        estimated_string_count = max(1, ngram_vertices ÷ 4)  # Rough estimate
+        ## Simulate string graph conversion
+        estimated_string_count = max(1, ngram_vertices ÷ 4)  ## Rough estimate
         string_compression = estimated_string_count / (length(complex_text) - scale.n + 1)
         
         println("    Estimated string vertices: $estimated_string_count")
@@ -488,7 +488,7 @@ println("\n" * "="^80)
 println("TUTORIAL SUMMARY AND BEST PRACTICES")
 println("="^80)
 
-# Calculate overall statistics
+## Calculate overall statistics
 total_validations = length(validation_results)
 successful_ngram = sum(1 for v in values(validation_results) if v.ngram_success)
 successful_string = sum(1 for v in values(validation_results) if v.string_success)

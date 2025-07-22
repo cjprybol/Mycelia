@@ -23,7 +23,6 @@ import Test
 import Mycelia
 import FASTX
 import Random
-import Plots
 import Statistics
 
 Random.seed!(42)

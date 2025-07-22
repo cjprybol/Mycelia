@@ -23,7 +23,6 @@ import Test
 import Mycelia
 import FASTX
 import Random
-import Plots
 import Statistics
 
 Random.seed!(42)
@@ -102,18 +101,18 @@ println("\n--- Dense K-mer Counting ---")
 for k in [3, 5, 7, 9]
     println("Computing dense k-mer counts for k=$k...")
     
-    # Memory estimation
-    memory_mb = (4^k * 4) / (1024^2)  # Assuming 4 bytes per count
+    ## Memory estimation
+    memory_mb = (4^k * 4) / (1024^2)  ## Assuming 4 bytes per count
     println("  Estimated memory: $(round(memory_mb, digits=2)) MB")
     
-    if memory_mb < 100  # Only run if memory usage is reasonable
+    if memory_mb < 100  ## Only run if memory usage is reasonable
         dense_counts = Mycelia.fasta_list_to_dense_kmer_counts(
             fasta_list=temp_files, 
             alphabet=:DNA, 
             k=k
         )
         println("  ✓ Dense counting completed")
-        println("  Matrix size: $(size(dense_counts))")
+        println("  Matrix size: $(size(dense_counts.counts))")
     else
         println("  ⚠ Skipping due to high memory usage")
     end

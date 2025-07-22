@@ -29,26 +29,26 @@ import Statistics
 # ### Creating Diverse FASTQ Data
 
 function create_diverse_fastq_data()
-    # Simulated reads from a 60bp region with overlaps
+    ## Simulated reads from a 60bp region with overlaps
     true_sequence = "ATCGATCGATCGTAGCTAGCTAGCTTGCATGCATGCATGCATGCATGCATTAGCTAGC"
     
     reads = []
     
-    # High-quality overlapping reads (perfect assembly case)
+    ## High-quality overlapping reads (perfect assembly case)
     push!(reads, FASTX.FASTQ.Record("read1", true_sequence[1:25], "I"^25))
     push!(reads, FASTX.FASTQ.Record("read2", true_sequence[20:45], "I"^26))
     push!(reads, FASTX.FASTQ.Record("read3", true_sequence[40:60], "I"^21))
     
-    # Medium-quality reads with slight variations
+    ## Medium-quality reads with slight variations
     push!(reads, FASTX.FASTQ.Record("read4", true_sequence[10:35], "F"^26))
     push!(reads, FASTX.FASTQ.Record("read5", true_sequence[30:55], "F"^26))
     
-    # Low-quality read with potential error
+    ## Low-quality read with potential error
     error_seq = true_sequence[15:40]
-    error_seq = error_seq[1:10] * "T" * error_seq[12:end]  # Introduce error
+    error_seq = error_seq[1:10] * "T" * error_seq[12:end]  ## Introduce error
     push!(reads, FASTX.FASTQ.Record("read6", error_seq, "AAA###AAA" * "A"^17))
     
-    # Short high-quality reads
+    ## Short high-quality reads
     push!(reads, FASTX.FASTQ.Record("read7", true_sequence[5:20], "I"^16))
     push!(reads, FASTX.FASTQ.Record("read8", true_sequence[45:60], "I"^16))
     
@@ -75,14 +75,14 @@ end
 println("\n" * "="^60)
 println("Building quality-aware BioSequence graph directly from FASTQ...")
 
-# Use the direct build function
+## Use the direct build function
 fastq_graph = Mycelia.build_quality_biosequence_graph(fastq_reads)
 
 println("\nDirect FASTQ graph statistics:")
 println("  Number of vertices: ", Graphs.nv(fastq_graph))
 println("  Number of edges: ", Graphs.ne(fastq_graph))
 
-# Examine the vertices (these should be variable-length sequences)
+## Examine the vertices (these should be variable-length sequences)
 println("\nExamining quality-aware sequence vertices:")
 for v in Iterators.take(Graphs.vertices(fastq_graph), min(5, Graphs.nv(fastq_graph)))
     vertex_data = fastq_graph[v]
@@ -101,8 +101,8 @@ end
 println("\n" * "="^60)
 println("Comparing direct vs qualmer-mediated approaches...")
 
-# Build qualmer graph first, then convert to sequence graph
-k = 15  # Use larger k for better comparison
+## Build qualmer graph first, then convert to sequence graph
+k = 15  ## Use larger k for better comparison
 qualmer_graph = Mycelia.build_qualmer_graph(fastq_reads; k=k, graph_mode=Mycelia.SingleStrand)
 qualmer_to_fastq = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph, k)
 
@@ -124,7 +124,7 @@ println("    Final FASTQ edges: ", Graphs.ne(qualmer_to_fastq))
 println("\n" * "="^60)
 println("Analyzing assembly quality for both approaches...")
 
-# For direct approach - analyze sequence lengths and qualities
+## For direct approach - analyze sequence lengths and qualities
 direct_sequences = [fastq_graph[v].sequence for v in Graphs.vertices(fastq_graph)]
 direct_qualities = [fastq_graph[v].quality_scores for v in Graphs.vertices(fastq_graph)]
 
@@ -139,7 +139,7 @@ if !isempty(direct_sequences)
     println("  Mean quality across all sequences: ", round(Statistics.mean(vcat(direct_mean_quals...)), digits=1))
 end
 
-# For qualmer approach - use the package quality metrics
+## For qualmer approach - use the package quality metrics
 if Graphs.nv(qualmer_graph) > 0
     qualmer_metrics = Mycelia.calculate_assembly_quality_metrics(qualmer_graph)
     
@@ -157,9 +157,9 @@ end
 println("\n" * "="^60)
 println("Extracting contigs and performing reconstruction...")
 
-# Find the longest contigs from direct approach
+## Find the longest contigs from direct approach
 if !isempty(direct_sequences)
-    # Sort by length
+    ## Sort by length
     seq_length_pairs = [(i, length(seq)) for (i, seq) in enumerate(direct_sequences)]
     sort!(seq_length_pairs, by=x -> x[2], rev=true)
     
@@ -174,14 +174,14 @@ if !isempty(direct_sequences)
         println("    Mean quality: $mean_qual")
         println("    Sequence: ", vertex_data.sequence)
         
-        # Check if this contig matches part of the reference
+        ## Check if this contig matches part of the reference
         contig_seq = String(vertex_data.sequence)
         if occursin(contig_seq, reference_seq)
             println("    ✓ Perfect match in reference")
         elseif occursin(reference_seq, contig_seq)
             println("    ✓ Contains entire reference")
         else
-            # Check for partial matches
+            ## Check for partial matches
             best_match_len = 0
             for i in 1:(length(reference_seq) - length(contig_seq) + 1)
                 if reference_seq[i:(i + length(contig_seq) - 1)] == contig_seq
@@ -205,14 +205,14 @@ end
 println("\n" * "="^60)
 println("Performing round-trip validation...")
 
-# Convert graph back to FASTQ records
+## Convert graph back to FASTQ records
 reconstructed_fastq = Mycelia.quality_biosequence_graph_to_fastq(fastq_graph, "reconstructed")
 
 println("\nRound-trip validation:")
 println("  Original reads: ", length(fastq_reads))
 println("  Reconstructed reads: ", length(reconstructed_fastq))
 
-# Analyze quality preservation
+## Analyze quality preservation
 original_qualities = []
 reconstructed_qualities = []
 
@@ -232,7 +232,7 @@ if !isempty(original_qualities) && !isempty(reconstructed_qualities)
     println("  Reconstructed quality range: ", minimum(reconstructed_qualities), "-", maximum(reconstructed_qualities))
 end
 
-# Compare individual reads
+## Compare individual reads
 println("\nIndividual read comparison:")
 for i in 1:min(3, length(fastq_reads), length(reconstructed_fastq))
     orig = fastq_reads[i]
@@ -255,7 +255,7 @@ end
 println("\n" * "="^60)
 println("Quality-based error detection and assessment...")
 
-# Analyze quality distribution across contigs
+## Analyze quality distribution across contigs
 if !isempty(direct_qualities)
     all_quals = vcat(direct_qualities...)
     quality_stats = (
@@ -272,7 +272,7 @@ if !isempty(direct_qualities)
     println("  Std dev: ", round(quality_stats.std, digits=1))
     println("  Range: ", quality_stats.min, "-", quality_stats.max)
     
-    # Identify low-quality regions
+    ## Identify low-quality regions
     low_quality_threshold = 20.0
     low_qual_count = count(q -> q < low_quality_threshold, all_quals)
     low_qual_fraction = low_qual_count / length(all_quals)
@@ -332,19 +332,19 @@ println("\n" * "="^60)
 println("Complete assembly workflow example...")
 
 function create_realistic_reads()
-    # Simulate a 100bp region with realistic read coverage
+    ## Simulate a 100bp region with realistic read coverage
     true_seq = "ATCGATCGATCGTAGCTAGCTAGCTTGCATGCATGCATGCATGCATGCATTAGCTAGCATCGATCGTAGCTAGCTAGCTTGCATGCATGCAT"
     reads = []
     
-    # Simulate 10x coverage with 25bp reads
+    ## Simulate 10x coverage with 25bp reads
     read_length = 25
-    step_size = 10  # Overlap by 15bp
+    step_size = 10  ## Overlap by 15bp
     
     for start in 1:step_size:(length(true_seq) - read_length + 1)
         end_pos = min(start + read_length - 1, length(true_seq))
         read_seq = true_seq[start:end_pos]
         
-        # Vary quality based on position (simulate quality degradation)
+        ## Vary quality based on position (simulate quality degradation)
         base_quality = 35
         qual_scores = [max(20, base_quality - abs(i - read_length÷2)) for i in 1:length(read_seq)]
         qual_string = String([Char(33 + q) for q in qual_scores])
@@ -362,17 +362,17 @@ println("  True genome length: ", length(true_genome))
 println("  Number of reads: ", length(realistic_reads))
 println("  Expected coverage: ~10x")
 
-# Build graph and assemble
+## Build graph and assemble
 realistic_graph = Mycelia.build_quality_biosequence_graph(realistic_reads)
 println("  Graph vertices: ", Graphs.nv(realistic_graph))
 println("  Graph edges: ", Graphs.ne(realistic_graph))
 
-# Find best assembly
+## Find best assembly
 if Graphs.nv(realistic_graph) > 0
     sequences = [realistic_graph[v].sequence for v in Graphs.vertices(realistic_graph)]
     qualities = [realistic_graph[v].quality_scores for v in Graphs.vertices(realistic_graph)]
     
-    # Find longest sequence
+    ## Find longest sequence
     longest_idx = argmax(length.(sequences))
     best_assembly = String(sequences[longest_idx])
     best_quality = Statistics.mean(qualities[longest_idx])
@@ -382,7 +382,7 @@ if Graphs.nv(realistic_graph) > 0
     println("  True length: ", length(true_genome))
     println("  Mean quality: ", round(best_quality, digits=1))
     
-    # Check assembly accuracy
+    ## Check assembly accuracy
     if best_assembly == true_genome
         println("  ✓ Perfect assembly!")
     elseif occursin(best_assembly, true_genome)

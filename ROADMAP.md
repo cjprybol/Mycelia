@@ -16,11 +16,11 @@ Mycelia is a comprehensive Julia package for bioinformatics with **37,000+ lines
 - **Advanced assembly research**: Novel 6-graph hierarchy, RL optimization, quality preservation
 - **Production-ready QC**: FastQC integration, comprehensive FASTQ analysis
 - **Parallel processing**: Multi-threaded analysis with progress tracking
+- **Complete documentation system**: 17 interactive tutorials, automated CI/CD docs generation
 
 ### What Needs Work ⚠️ (REVISED)
 - Testing framework stability  
 - Function discoverability (export key functions)
-- Documentation cleanup to match reality
 - Native implementations of some external tool functions
 
 ## Assembly Innovation Summary 🧬
@@ -237,6 +237,35 @@ These research components are largely complete and tested. The roadmap below foc
 - [ ] Cross-validate with other tools
 - [ ] Document expected outcomes
 
+### 7.3 Read Simulation Libraries
+**Current**: Partial support for some simulators  
+**Target**: Comprehensive support for all major read simulators
+
+- [x] **Badread** - Partial support implemented
+  - [x] `simulate_pacbio_reads()` - PacBio HiFi with 2021 error model
+  - [x] `simulate_nanopore_reads()` - Oxford Nanopore with 2023 error model  
+  - [ ] `simulate_nearly_perfect_long_reads()` - Started but not completed
+  - [ ] Additional Badread features (chimeras, junk reads, custom error models)
+- [x] **ART** - Complete support
+  - [x] `simulate_illumina_paired_reads()` - Full Illumina simulation with all options
+  - [x] Error-free reads, SAM output, amplicon mode, custom coverage/count
+- [ ] **InSilicoSeq** - No support yet
+  - [ ] Illumina error models (HiSeq, NovaSeq, MiSeq)
+  - [ ] Abundance-based simulation from multiple genomes
+  - [ ] Custom abundance profiles
+- [ ] **MASON** - No support yet  
+  - [ ] Illumina and 454 simulation
+  - [ ] Structural variant simulation
+  - [ ] Methylation simulation
+- [ ] **NEAT** - No support yet
+  - [ ] Read simulation with complex variants
+  - [ ] Golden BAM generation
+  - [ ] Coverage bias modeling
+- [ ] **NanoSim** - No support yet (commented in bioconda.jl)
+  - [ ] Oxford Nanopore simulation with trained models
+  - [ ] Transcriptome simulation
+  - [ ] Custom error model training
+
 ## Priority 8: Package Polish 💎
 
 ### 8.1 User Experience
@@ -289,7 +318,7 @@ These research components are largely complete and tested. The roadmap below foc
 ### v1.0.0 - Production Release (Q2 2026)
 - [ ] Stable API
 - [ ] Performance benchmarks
-- [ ] Comprehensive docs
+- [x] Comprehensive docs
 - [ ] Active maintenance
 
 ## Success Metrics 📈

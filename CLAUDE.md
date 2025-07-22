@@ -102,6 +102,23 @@ The package includes utilities for memory estimation and checking (see `utility-
 - Documentation is built using Documenter.jl
 - Documentation source is in `docs/src/`
 
+### Tutorial Files and Literate.jl
+- Tutorial files in the `tutorials/` directory are processed by Literate.jl
+- **Important**: Literate.jl comment conventions:
+  - Single `#` at the start of a line becomes markdown text
+  - Double `##` at the start of a line remains as a code comment
+  - For inline code comments within code blocks, use `##` to prevent breaking the code block
+  - Example:
+    ```julia
+    # This becomes markdown text
+    
+    open("file.txt") do io
+        ## This remains a code comment
+        line = readline(io)
+        println(line)  ## This also remains a code comment
+    end
+    ```
+
 ## External Tool Integration
 
 The package integrates with various bioinformatics tools:

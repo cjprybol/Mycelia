@@ -30,19 +30,19 @@ import Statistics
 # ### Creating Sample FASTQ Data with Varying Quality
 
 function create_sample_fastq_data()
-    # High-quality read
+    ## High-quality read
     hq_seq = "ATCGATCGATCGATCGATCG"
-    hq_qual = "IIIIIIIIIIIIIIIIIIII"  # Phred 40 (99.99% accuracy)
+    hq_qual = "IIIIIIIIIIIIIIIIIIII"  ## Phred 40 (99.99% accuracy)
     
-    # Medium-quality read with overlap
+    ## Medium-quality read with overlap
     mq_seq = "GATCGATCGATCGATCGTAG"  
-    mq_qual = "FFFFFFFFFFFFFFFFFF@@"  # Phred 37 (99.98%) with lower end
+    mq_qual = "FFFFFFFFFFFFFFFFFF@@"  ## Phred 37 (99.98%) with lower end
     
-    # Low-quality read with errors
-    lq_seq = "GATCGATCGATCGATCGTAC"  # Error at end (C instead of G)
-    lq_qual = "555555555555555555##"  # Phred 20 (99%) with very low end
+    ## Low-quality read with errors
+    lq_seq = "GATCGATCGATCGATCGTAC"  ## Error at end (C instead of G)
+    lq_qual = "555555555555555555##"  ## Phred 20 (99%) with very low end
     
-    # Create FASTQ records
+    ## Create FASTQ records
     records = [
         FASTX.FASTQ.Record("read1", hq_seq, hq_qual),
         FASTX.FASTQ.Record("read2", mq_seq, mq_qual),
@@ -197,7 +197,7 @@ for (i, (orig, recon)) in enumerate(zip(fastq_records[1:min(3, length(reconstruc
     println("  Reconstructed: ", recon_seq)
     println("  Match: ", orig_seq == recon_seq ? "✓" : "✗")
     
-    # Compare quality scores
+    ## Compare quality scores
     orig_qual = FASTX.quality_scores(orig)
     recon_qual = FASTX.quality_scores(recon)
     println("  Original quality range: ", minimum(orig_qual), "-", maximum(orig_qual))
@@ -213,9 +213,9 @@ println("Demonstrating quality-aware error correction...")
 
 # Create reads with a known error
 error_reads = [
-    FASTX.FASTQ.Record("good1", "ATCGATCGATCG", "IIIIIIIIIIII"),  # High quality
-    FASTX.FASTQ.Record("good2", "TCGATCGATCGA", "IIIIIIIIIIII"),  # High quality
-    FASTX.FASTQ.Record("error", "TCGATCTATCGA", "IIIIII##IIII"),  # Error at low quality position
+    FASTX.FASTQ.Record("good1", "ATCGATCGATCG", "IIIIIIIIIIII"),  ## High quality
+    FASTX.FASTQ.Record("good2", "TCGATCGATCGA", "IIIIIIIIIIII"),  ## High quality
+    FASTX.FASTQ.Record("error", "TCGATCTATCGA", "IIIIII##IIII"),  ## Error at low quality position
 ]
 
 # Build qualmer graph
@@ -264,26 +264,26 @@ println("  Total unique k-mers: ", metrics.total_kmers)
 # Let's create a more realistic example with overlapping reads from a genome region.
 
 function create_genome_region_reads()
-    # Simulate a 50bp genome region
+    ## Simulate a 50bp genome region
     true_sequence = "ATCGATCGATCGTAGCTAGCTAGCTTGCATGCATGCATGCATGCATGCAT"
     
-    # Generate overlapping reads with varying quality
+    ## Generate overlapping reads with varying quality
     reads = []
     
-    # High quality reads
+    ## High quality reads
     push!(reads, FASTX.FASTQ.Record("hq1", true_sequence[1:25], "I"^25))
     push!(reads, FASTX.FASTQ.Record("hq2", true_sequence[15:40], "I"^26))
     push!(reads, FASTX.FASTQ.Record("hq3", true_sequence[30:50], "I"^21))
     
-    # Medium quality reads with some errors
+    ## Medium quality reads with some errors
     read_mq1 = true_sequence[5:30]
     qual_mq1 = "FFFFFFFFFFFFFFFFFFFFFFFFFF"
     push!(reads, FASTX.FASTQ.Record("mq1", read_mq1, qual_mq1))
     
-    # Low quality read with error
+    ## Low quality read with error
     read_lq1 = true_sequence[20:45]
-    read_lq1 = read_lq1[1:10] * "T" * read_lq1[12:end]  # Error at position 11
-    qual_lq1 = "AAAAAAAAAA#AAAAAAAAAAAAAA"  # Low quality at error
+    read_lq1 = read_lq1[1:10] * "T" * read_lq1[12:end]  ## Error at position 11
+    qual_lq1 = "AAAAAAAAAA#AAAAAAAAAAAAAA"  ## Low quality at error
     push!(reads, FASTX.FASTQ.Record("lq1", read_lq1, qual_lq1))
     
     return reads, true_sequence
@@ -308,7 +308,7 @@ println("  Sequence graph: ", Graphs.nv(seq_graph), " vertices, ", Graphs.ne(seq
 
 # Use package function to find quality-weighted path
 if Graphs.nv(genome_graph) > 0
-    # Start from highest confidence vertex
+    ## Start from highest confidence vertex
     confidence_sorted = sort(collect(Graphs.vertices(genome_graph)), 
         by=v -> genome_graph[v].joint_probability, rev=true)
     best_path = Mycelia.find_quality_weighted_path(genome_graph, confidence_sorted[1])
@@ -316,16 +316,16 @@ if Graphs.nv(genome_graph) > 0
     println("\nBest quality-weighted path:")
     println("  Path length: ", length(best_path), " k-mers")
     
-    # Reconstruct sequence from path
+    ## Reconstruct sequence from path
     if length(best_path) > 1
         path_kmers = [String(genome_graph[v].kmer) for v in best_path]
-        # Simple reconstruction: first k-mer + last base of each subsequent k-mer
+        ## Simple reconstruction: first k-mer + last base of each subsequent k-mer
         reconstructed = path_kmers[1] * join([kmer[end] for kmer in path_kmers[2:end]])
         
         println("  Reconstructed length: ", length(reconstructed))
         println("  Reconstructed: ", reconstructed)
         
-        # Check accuracy
+        ## Check accuracy
         if reconstructed == true_seq
             println("  ✓ Perfect reconstruction!")
         elseif occursin(reconstructed, true_seq)
@@ -342,7 +342,7 @@ end
 
 # Find longest path (contig) from sequence graph
 if Graphs.nv(seq_graph) > 0
-    # Get vertex with longest sequence
+    ## Get vertex with longest sequence
     longest_v = argmax(v -> length(seq_graph[v].sequence), Graphs.vertices(seq_graph))
     longest_seq = seq_graph[longest_v].sequence
     longest_qual = seq_graph[longest_v].quality_scores
@@ -352,11 +352,11 @@ if Graphs.nv(seq_graph) > 0
     println("  Sequence: ", longest_seq)
     println("  Mean quality: ", round(Statistics.mean(longest_qual), digits=1))
     
-    # Check accuracy
+    ## Check accuracy
     if String(longest_seq) == true_seq
         println("  ✓ Perfect reconstruction!")
     else
-        # Find best alignment
+        ## Find best alignment
         true_str = true_seq
         assembled_str = String(longest_seq)
         if occursin(assembled_str, true_str)

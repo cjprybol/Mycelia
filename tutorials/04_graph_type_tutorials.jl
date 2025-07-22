@@ -106,7 +106,7 @@ println("-"^50)
 
 # Example: High-quality sequencing data
 high_quality_seq = "ATCGATCGATCGATCGTAGCTAGCT"
-high_quality_scores = "HHHHHHHHHHHHHHHHHHHHHHHHH"  # PHRED 39
+high_quality_scores = "HHHHHHHHHHHHHHHHHHHHHHHHH"  ## PHRED 39
 println("High-quality sequence: $high_quality_seq")
 
 # Create FASTQ record
@@ -125,7 +125,7 @@ println("$(first_hq_kmer): joint prob = $(round(hq_vertex_data.joint_probability
 
 # Example: Medium-quality sequencing data
 medium_quality_seq = "ATCGATCGATCGATCGTAGCTAGCT"
-medium_quality_scores = "?????????????????????????"  # PHRED 30
+medium_quality_scores = "?????????????????????????"  ## PHRED 30
 println("\\nMedium-quality sequence: $medium_quality_seq")
 
 mq_record = FASTX.FASTQ.Record("medium_quality", medium_quality_seq, medium_quality_scores)
@@ -221,7 +221,7 @@ println("-"^50)
 
 # Example: Quality-aware BioSequence graph
 fastq_sequence = "ATCGATCGATCGATCGTAGCTAGCTAGCTGCGCGCGC"
-fastq_quality = repeat("H", length(fastq_sequence))  # High quality
+fastq_quality = repeat("H", length(fastq_sequence))  ## High quality
 println("FASTQ sequence: $fastq_sequence")
 println("Quality string: $fastq_quality")
 

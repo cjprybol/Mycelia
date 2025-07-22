@@ -26,6 +26,7 @@ import Test
 import Mycelia
 import FASTX
 import Random
+import Dates
 
 # Set random seed for reproducibility
 Random.seed!(42)
@@ -85,7 +86,7 @@ println("File size: $(filesize(genome_file)) bytes")
 # For more comprehensive analysis, download the complete assembly package
 # which includes multiple file types (genome, proteins, annotations, etc.).
 
-assembly_accession = "GCF_000819615.1"  # Assembly accession for phiX174
+assembly_accession = "GCF_000819615.1"  ## Assembly accession for phiX174
 println("\nDownloading complete assembly: $assembly_accession")
 
 assembly_result = Mycelia.ncbi_genome_download_accession(accession=assembly_accession)
@@ -111,11 +112,11 @@ open(assembly_result.genome) do io
     header = readline(io)
     println("FASTA header: $header")
     
-    # Read first 100 characters of sequence
+    ## Read first 100 characters of sequence
     sequence_start = read(io, String)[1:min(100, end)]
     println("Sequence start: $sequence_start...")
     
-    # Verify it's a valid FASTA format
+    ## Verify it's a valid FASTA format
     Test.@test startswith(header, '>')
     Test.@test all(c -> c in "ATCGN\n", sequence_start)
 end
@@ -188,16 +189,15 @@ println("\n=== Data Quality Validation ===")
 println("Validating downloaded phiX174 genome...")
 
 # Read and validate the genome sequence
-genome_seq = ""
-open(assembly_result.genome) do io
+genome_seq = open(assembly_result.genome) do io
     header = readline(io)
-    genome_seq = replace(read(io, String), '\n' => "")
+    replace(read(io, String), '\n' => "")
 end
 
 # Basic validation checks
 Test.@test length(genome_seq) > 0
 Test.@test all(c -> c in "ATCGN", genome_seq)
-Test.@test count(c -> c == 'N', genome_seq) / length(genome_seq) < 0.01  # < 1% N's
+Test.@test count(c -> c == 'N', genome_seq) / length(genome_seq) < 0.01  ## < 1% N's
 
 println("✓ Genome length: $(length(genome_seq)) bp")
 println("✓ Valid DNA alphabet")
@@ -217,12 +217,12 @@ println("GC content: $(round(gc_content*100, digits=1))%")
 println("\nValidating synthetic sequences...")
 
 for (i, filename) in enumerate(synthetic_files)
-    seq_record = first(Mycelia.read_fasta(filename))
+    seq_record = first(Mycelia.open_fastx(filename))
     seq_str = String(FASTX.sequence(seq_record))
     
-    # Validate sequence properties
+    ## Validate sequence properties
     Test.@test length(seq_str) > 0
-    Test.@test all(c -> c in "ATCG", seq_str)  # No N's in synthetic data
+    Test.@test all(c -> c in "ATCG", seq_str)  ## No N's in synthetic data
     
     println("✓ Synthetic sequence $i: $(length(seq_str)) bp, valid DNA")
 end
@@ -267,7 +267,7 @@ println("  - Synthetic data: $synthetic_dir")
 manifest_file = joinpath(data_dir, "data_manifest.txt")
 open(manifest_file, "w") do io
     println(io, "# Data Manifest - Tutorial 1: Data Acquisition")
-    println(io, "# Generated: $(now())")
+    println(io, "# Generated: $(Dates.now())")
     println(io, "")
     println(io, "## Reference Data")
     println(io, "phiX174_genome.fasta - Downloaded from NCBI accession $phix_accession")
@@ -374,4 +374,4 @@ println("Ready for downstream analysis!")
 # 5. **Synthetic Data**: Valuable for testing and algorithm development
 # 6. **File Formats**: Understand the purpose of different bioinformatics file types
 
-nothing  # Suppress output in notebook
+nothing  ## Suppress output in notebook

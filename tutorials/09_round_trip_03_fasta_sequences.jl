@@ -168,21 +168,21 @@ for group in sequence_groups
         println("  Input records: $(length(group.records))")
         
         try
-            # Build BioSequence graph
+            ## Build BioSequence graph
             bio_graph = Mycelia.build_biosequence_graph(group.records)
             
-            # Extract graph properties
+            ## Extract graph properties
             vertices = collect(values(bio_graph.vertex_labels))
             num_vertices = length(vertices)
             
-            # Analyze sequence properties
+            ## Analyze sequence properties
             if num_vertices > 0
                 sequence_lengths = [length(seq) for seq in vertices]
                 avg_length = Statistics.mean(sequence_lengths)
                 max_length = maximum(sequence_lengths)
                 min_length = minimum(sequence_lengths)
                 
-                # Get first sequence type for verification
+                ## Get first sequence type for verification
                 first_seq = first(vertices)
                 sequence_type = typeof(first_seq)
                 
@@ -191,7 +191,7 @@ for group in sequence_groups
                 println("    Sequence type: $sequence_type")
                 println("    Length range: $min_length - $max_length (avg: $(round(avg_length, digits=1)))")
                 
-                # Show examples
+                ## Show examples
                 example_count = min(2, num_vertices)
                 println("    Examples:")
                 for i in 1:example_count
@@ -199,7 +199,7 @@ for group in sequence_groups
                     println("      Seq $i: $(string(seq)[1:min(30, length(seq))])$(length(seq) > 30 ? "..." : "") ($(length(seq)) bp/aa)")
                 end
                 
-                # Store results
+                ## Store results
                 biosequence_results[group.name] = (
                     graph = bio_graph,
                     vertices = vertices,
@@ -239,9 +239,9 @@ function analyze_biosequence_graph(graph, vertices, sequence_type, description)
     
     println("  $description:")
     
-    # Sequence composition analysis
+    ## Sequence composition analysis
     if sequence_type <: BioSequences.LongDNA
-        # DNA-specific analysis
+        ## DNA-specific analysis
         total_length = sum(length(seq) for seq in vertices)
         all_bases = join([string(seq) for seq in vertices])
         
@@ -260,7 +260,7 @@ function analyze_biosequence_graph(graph, vertices, sequence_type, description)
         end
         
     elseif sequence_type <: BioSequences.LongRNA
-        # RNA-specific analysis
+        ## RNA-specific analysis
         total_length = sum(length(seq) for seq in vertices)
         all_bases = join([string(seq) for seq in vertices])
         
@@ -279,10 +279,10 @@ function analyze_biosequence_graph(graph, vertices, sequence_type, description)
         end
         
     elseif sequence_type <: BioSequences.LongAA
-        # Protein-specific analysis
+        ## Protein-specific analysis
         all_aas = join([string(seq) for seq in vertices])
         
-        # Count hydrophobic residues
+        ## Count hydrophobic residues
         hydrophobic = ['A', 'V', 'L', 'I', 'M', 'F', 'W', 'Y']
         charged = ['R', 'K', 'D', 'E', 'H']
         polar = ['S', 'T', 'N', 'Q', 'C']
@@ -299,7 +299,7 @@ function analyze_biosequence_graph(graph, vertices, sequence_type, description)
         end
     end
     
-    # Graph connectivity analysis
+    ## Graph connectivity analysis
     println("    Vertices: $num_vertices")
     println("    Total sequence length: $(sum(length(seq) for seq in vertices))")
     
@@ -345,10 +345,10 @@ function reconstruct_from_biosequence_graph(graph, original_records, seq_type_na
         )
     end
     
-    # Method 1: Direct vertex sequences (for single sequences)
+    ## Method 1: Direct vertex sequences (for single sequences)
     direct_sequences = [string(seq) for seq in vertices]
     
-    # Method 2: Concatenate sequences (for multiple fragments)
+    ## Method 2: Concatenate sequences (for multiple fragments)
     if length(vertices) > 1
         concatenated = join([string(seq) for seq in vertices], "")
         combined_sequences = [concatenated]
@@ -356,11 +356,11 @@ function reconstruct_from_biosequence_graph(graph, original_records, seq_type_na
         combined_sequences = direct_sequences
     end
     
-    # Compare against original sequences
+    ## Compare against original sequences
     original_sequences = [FASTX.FASTA.sequence(record) for record in original_records]
     original_strings = [string(seq) for seq in original_sequences]
     
-    # Find best reconstruction method
+    ## Find best reconstruction method
     best_score = 0.0
     best_method = "none"
     best_reconstructions = []
@@ -387,7 +387,7 @@ function reconstruct_from_biosequence_graph(graph, original_records, seq_type_na
     end
     
     return (
-        success = best_score > 0.5,  # Consider >50% similarity as success
+        success = best_score > 0.5,  ## Consider >50% similarity as success
         reconstructed_sequences = best_reconstructions,
         reconstruction_method = best_method,
         quality_score = best_score
@@ -403,7 +403,7 @@ function calculate_sequence_similarity(seq1::String, seq2::String)
         return 1.0
     end
     
-    # Count matching positions
+    ## Count matching positions
     matches = 0
     for i in 1:min_len
         if seq1[i] == seq2[i]
@@ -411,7 +411,7 @@ function calculate_sequence_similarity(seq1::String, seq2::String)
         end
     end
     
-    # Penalize length differences
+    ## Penalize length differences
     similarity = matches / max_len
     return similarity
 end
@@ -436,7 +436,7 @@ for (seq_type, result) in biosequence_results
     println("  Quality score: $(round(reconstruction.quality_score, digits=3))")
     println("  Reconstructed sequences: $(length(reconstruction.reconstructed_sequences))")
     
-    # Show comparisons
+    ## Show comparisons
     original_sequences = [string(FASTX.FASTA.sequence(record)) for record in result.records]
     
     println("  Comparison details:")
@@ -444,7 +444,7 @@ for (seq_type, result) in biosequence_results
         println("    Original $i: $(original[1:min(40, length(original))])$(length(original) > 40 ? "..." : "")")
         
         if !isempty(reconstruction.reconstructed_sequences)
-            # Find best matching reconstruction
+            ## Find best matching reconstruction
             best_match = ""
             best_similarity = 0.0
             
@@ -541,25 +541,25 @@ println("-"^50)
 function analyze_biosequence_performance()
     """Analyze performance characteristics of BioSequence graphs."""
     
-    # Test with increasing sequence lengths
+    ## Test with increasing sequence lengths
     test_lengths = [50, 100, 200, 500]
     
     println("Performance scaling analysis:")
     println("Testing graph construction time vs sequence length:")
     
     for length in test_lengths
-        # Generate test DNA sequence
+        ## Generate test DNA sequence
         bases = ['A', 'T', 'G', 'C']
         test_sequence = join([rand(bases) for _ in 1:length])
         test_record = FASTX.FASTA.Record("perf_test_$length", test_sequence)
         
-        # Measure construction time
+        ## Measure construction time
         start_time = time()
         try
             graph = Mycelia.build_biosequence_graph([test_record])
             construction_time = time() - start_time
             
-            # Graph properties
+            ## Graph properties
             num_vertices = length(graph.vertex_labels)
             
             println("  Length $length: $(round(construction_time*1000, digits=2))ms, $num_vertices vertices")
@@ -569,7 +569,7 @@ function analyze_biosequence_performance()
         end
     end
     
-    # Memory efficiency analysis
+    ## Memory efficiency analysis
     println("\\nMemory efficiency characteristics:")
     println("  BioSequence graphs store variable-length biological sequences")
     println("  Memory scales with total sequence content, not k-mer count")
@@ -589,7 +589,7 @@ println("-"^50)
 # Simulate realistic genomic scenario: overlapping sequencing reads
 println("Simulating realistic genomic assembly scenario:")
 
-# Create overlapping reads from a longer sequence
+## Create overlapping reads from a longer sequence
 reference_genome = "ATGAAACGCATTAGCACCACCATTACCACCACCATCACCATTACCACAGGTAACGGTGCGGGCTGAGATCTATATAATCTGCGCGCGCATATGGCATCGATCGATCGAAA"
 read_length = 30
 overlap_length = 10
@@ -598,7 +598,7 @@ println("  Reference genome: $(reference_genome)")
 println("  Length: $(length(reference_genome)) bp")
 println("  Simulating $(read_length)bp reads with $(overlap_length)bp overlap")
 
-# Generate overlapping reads
+## Generate overlapping reads
 simulated_reads = []
 for i in 1:(read_length - overlap_length):(length(reference_genome) - read_length + 1)
     read_seq = reference_genome[i:i+read_length-1]
@@ -609,7 +609,7 @@ end
 
 println("  Generated $(length(simulated_reads)) overlapping reads:")
 for (i, record) in enumerate(simulated_reads)
-    if i <= 5  # Show first 5 reads
+    if i <= 5  ## Show first 5 reads
         println("    $(FASTX.FASTA.identifier(record)): $(FASTX.FASTA.sequence(record))")
     elseif i == 6
         println("    ... ($(length(simulated_reads) - 5) more reads)")
@@ -627,13 +627,13 @@ try
     println("    Vertices: $(length(assembly_vertices))")
     
     if !isempty(assembly_vertices)
-        # Attempt to reconstruct original sequence
+        ## Attempt to reconstruct original sequence
         total_assembled_length = sum(length(seq) for seq in assembly_vertices)
         
-        # Simple concatenation approach
+        ## Simple concatenation approach
         assembled_sequence = join([string(seq) for seq in assembly_vertices], "")
         
-        # Compare to reference
+        ## Compare to reference
         similarity = calculate_sequence_similarity(reference_genome, assembled_sequence)
         
         println("    Total assembled length: $total_assembled_length bp")
@@ -646,7 +646,7 @@ try
             println("    ⚠️  Assembly needs improvement")
         end
         
-        # Show assembly comparison
+        ## Show assembly comparison
         println("\\n  Sequence comparison:")
         println("    Reference: $(reference_genome[1:min(50, length(reference_genome))])...")
         println("    Assembled: $(assembled_sequence[1:min(50, length(assembled_sequence))])...")
