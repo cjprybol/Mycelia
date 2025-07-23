@@ -1,3 +1,231 @@
+"""
+Generate a taxonomic rank consensus visualization from sampled data.
+
+Returns a CairoMakie Figure object showing consensus agreement across taxonomic ranks.
+Samples data before aggregation for improved performance on large datasets.
+"""
+function create_rank_consensus_plot(
+    df::DataFrames.DataFrame;
+    taxonomic_ranks::Vector{String} = [
+        "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
+    ],
+    figure_size::Tuple{Int,Int} = (1200, 700),
+    max_samples::Int = 10_000,
+    perfect_threshold::Float64 = 0.999,
+    title::String = "Mapping Alignment Consensus Agreement Across Taxonomic Ranks",
+    sample_id::Union{String, Nothing} = nothing,
+    title_fontsize::Int = 16,
+    label_fontsize::Int = 16,
+    tick_fontsize::Int = 16,
+    legend_fontsize::Int = 16,
+    include_n_observations::Bool = true
+)
+    
+    function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{String})
+        results = DataFrames.DataFrame()
+        for (i, rank) in enumerate(ranks)
+            rank_taxid = string(rank, "_taxid")
+            if rank_taxid in names(df)
+                # Drop rows where rank_taxid is missing
+                subdf = DataFrames.filter(row -> !ismissing(row[rank_taxid]), df)
+                if DataFrames.nrow(subdf) > 0
+                    grouped = DataFrames.groupby(subdf, ["template", rank_taxid])
+                    agg = DataFrames.combine(grouped,
+                        :relative_alignment_proportion => sum => :total_relative_alignment_proportion,
+                        :percent_identity => maximum => :max_percent_identity,
+                        :mappingquality => maximum => :max_mappingquality,
+                    )
+                    DataFrames.rename!(agg, Dict(rank_taxid => :rank_taxid))
+                    agg[!, :rank] .= "$(i)_$(rank)"
+                    results = DataFrames.vcat(results, agg)
+                end
+            end
+        end
+        return results
+    end
+
+    function monotonicize_agreement(ys::Vector{<:Union{Missing, Float64}})
+        n = length(ys)
+        # Work from the end backwards
+        for i in (n-1):-1:1
+            if !ismissing(ys[i+1])
+                if ismissing(ys[i])
+                    ys[i] = ys[i+1]
+                else
+                    ys[i] = max(ys[i], ys[i+1])
+                end
+            end
+        end
+        return ys
+    end
+
+    function has_any_non_missing(ys::Vector{<:Union{Missing, Float64}})
+        return any(!ismissing(y) for y in ys)
+    end
+
+    # SAMPLE FIRST: Get unique templates and sample from them
+    unique_templates = unique(df.template)
+    n_total_observations = length(unique_templates)
+    
+    # Sample templates before processing
+    n_samples_to_take = min(n_total_observations, max_samples)
+    sampled_templates = Set(StatsBase.sample(unique_templates, n_samples_to_take, replace=false))
+    
+    # Filter dataframe to only include sampled templates
+    sampled_df = DataFrames.filter(row -> row.template in sampled_templates, df)
+    
+    # NOW aggregate only the sampled data
+    aggregated = aggregate_by_rank_nonmissing(sampled_df, taxonomic_ranks)
+    
+    # Group by template (this will be much smaller now)
+    template_grouped_aggregated = DataFrames.groupby(aggregated, "template")
+    
+    numbered_ranks = ["$(i)_$(rank)" for (i, rank) in enumerate(taxonomic_ranks)]
+    all_ys = []
+    n_unmapped = 0
+    
+    # Process all groups (since we already sampled at the template level)
+    for this_group in template_grouped_aggregated
+        this_sorted_group = sort(this_group, :rank)
+        template_values_dict = Dict(row.rank => row.total_relative_alignment_proportion for row in DataFrames.eachrow(this_sorted_group))
+        ys = [get(template_values_dict, this_rank, missing) for this_rank in numbered_ranks]
+        # Make ys monotonically non-increasing
+        ys = monotonicize_agreement(ys)
+        
+        # Only include reads that have at least one non-missing value
+        if has_any_non_missing(ys)
+            push!(all_ys, ys)
+        else
+            n_unmapped += 1
+        end
+    end
+
+    # Compute aggregate consensus proportions
+    n_ranks = length(numbered_ranks)
+    perfect_consensus_props = Float64[]
+    for rank_idx in 1:n_ranks
+        # Get all non-missing consensus values for this rank
+        rank_ys = [ys[rank_idx] for ys in all_ys if !ismissing(ys[rank_idx])]
+        n_perfect = count(y -> y >= perfect_threshold, rank_ys)
+        n_total = length(rank_ys)
+        prop = n_total > 0 ? n_perfect / n_total : 0.0
+        push!(perfect_consensus_props, prop)
+    end
+
+    # Build the title
+    full_title = title
+    if include_n_observations
+        full_title = "$(full_title) (n=$(length(all_ys))/$(n_total_observations))"
+    end
+    if sample_id !== nothing
+        full_title = "$(full_title)\n$(sample_id)"
+    end
+
+    # Create the figure
+    fig = CairoMakie.Figure(size=figure_size)
+
+    # Title across the top
+    fig[1, 1:2] = CairoMakie.Label(fig, full_title;
+        fontsize=title_fontsize, font="bold", halign=:center)
+
+    # Main plot
+    ax = CairoMakie.Axis(
+        fig[2, 1];
+        xlabel="Taxonomic Rank (High to Low)",
+        ylabel="Cumulative Relative Alignment Proportion",
+        xticks=(1:length(taxonomic_ranks), taxonomic_ranks),
+        yticks=0:0.1:1.0,
+        limits=(0.2, length(taxonomic_ranks)+0.8, -0.01, 1.01),
+        xlabelsize=label_fontsize,
+        ylabelsize=label_fontsize,
+        xticklabelsize=tick_fontsize,
+        yticklabelsize=tick_fontsize,
+        xticklabelrotation=π/4,
+        xgridcolor=(:gray, 0.3),
+        ygridcolor=(:gray, 0.3),
+        xgridwidth=1.2,
+        ygridwidth=1.2
+    )
+
+    # Barplot for perfect consensus
+    CairoMakie.barplot!(
+        ax,
+        1:n_ranks,
+        perfect_consensus_props;
+        color=(:gray, 0.4),
+        width=0.7,
+        strokewidth=0,
+        label="Perfect consensus"
+    )
+
+    # Individual read traces - plot first one with label for legend
+    if !isempty(all_ys)
+        CairoMakie.lines!(ax, all_ys[1]; color=:blue, linewidth=0.4, alpha=0.22, label="Individual reads")
+        for ys in all_ys[2:end]
+            CairoMakie.lines!(ax, ys; color=:blue, linewidth=0.4, alpha=0.22)
+        end
+    end
+
+    # Only compute and plot summary statistics if we have data
+    if !isempty(all_ys)
+        median_ys = [Statistics.median([ys[i] for ys in all_ys if !ismissing(ys[i])]) for i in 1:n_ranks]
+        CairoMakie.lines!(ax, median_ys; color=:orange, linewidth=3, label="Median trajectory")
+
+        mean_ys = [Statistics.mean([ys[i] for ys in all_ys if !ismissing(ys[i])]) for i in 1:n_ranks]
+        CairoMakie.lines!(ax, mean_ys; color=:green, linewidth=3, linestyle=:dash, label="Mean trajectory")
+    end
+
+    # Legend that automatically sizes itself
+    fig[2, 2] = CairoMakie.Legend(
+        fig, ax;
+        tellwidth=true,  # Let it tell the layout how much width it needs
+        tellheight=false,
+        valign=:center,
+        framevisible=true,
+        labelsize=legend_fontsize
+    )
+
+    CairoMakie.resize!(fig.scene, figure_size...)
+    
+    return fig
+end
+
+"""
+Generate and save taxonomic rank consensus visualizations from an Arrow file.
+
+Loads data from the specified Arrow file, creates the visualization, and saves it as PNG and SVG files.
+Output files are named based on the input file path with "_rank-level-confidences" suffix by default.
+"""
+function generate_rank_consensus_plots(
+    arrow_file_path::String;
+    png_output_path::Union{String, Nothing} = nothing,
+    svg_output_path::Union{String, Nothing} = nothing,
+    kwargs...  # Pass through any arguments to create_rank_consensus_plot
+)
+    fig = nothing
+    # Determine output paths
+    base_path = splitext(arrow_file_path)[1]  # Remove .arrow extension
+    png_path = png_output_path !== nothing ? png_output_path : "$(base_path)_rank-level-confidences.png"
+    svg_path = svg_output_path !== nothing ? svg_output_path : "$(base_path)_rank-level-confidences.svg"
+
+    if !isfile(png_path) && !isfile(svg_path)
+        # Load the data
+        df = DataFrames.DataFrame(Arrow.Table(arrow_file_path))
+        
+        # Create the figure
+        fig = create_rank_consensus_plot(df; sample_id=basename(arrow_file_path), kwargs...)
+        
+        # Save the figures
+        CairoMakie.save(png_path, fig)
+        CairoMakie.save(svg_path, fig)
+    
+        println("Saved PNG: $(png_path)")
+        println("Saved SVG: $(svg_path)")
+    end
+    
+    return (;fig, png_path, svg_path)
+end
+
 function visualize_many_timeseries(time_series_data::Vector{Vector{Float64}};
                                   title::String="High-Density Time Series Visualization")
     # Create x-axis values (assuming equal length for all series)
