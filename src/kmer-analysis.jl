@@ -2260,6 +2260,158 @@ function estimate_genome_size_from_kmers(records::AbstractVector{T}, k::Integer)
     )
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform simultaneous multi-scale k-mer analysis with prime k-mer sizes.
+
+# Arguments
+- `sequences::Vector{BioSequences.LongDNA{4}}`: Vector of DNA sequences to analyze
+- `prime_ks::Vector{Int}`: Prime k-mer sizes to analyze simultaneously (default: [3, 5, 7, 11, 13, 17, 19])
+- `window_size::Int`: Sliding window size for quality averaging (default: 50)
+- `step_size::Int`: Step size for sliding window (default: 10)
+
+# Returns
+Named tuple containing:
+- `multi_k_counts::Dict{Int, Dict}`: K-mer counts for each k value
+- `quality_profiles::Dict{Int, Vector{Float64}}`: Quality profiles for each k
+- `consensus_kmers::Dict{Int, Vector}`: Consensus k-mers with highest confidence
+- `coverage_estimates::Dict{Int, Float64}`: Coverage estimates for each k
+
+# Details
+- Implements universal biological polymer assembly algorithm design
+- Uses simultaneous analysis of multiple prime k-mer lengths
+- Incorporates sliding window instantaneous quality averaging
+- Supports adaptive k-mer selection based on coverage patterns
+"""
+function multi_scale_kmer_analysis(sequences::Vector{BioSequences.LongDNA{4}}; prime_ks::Vector{Int}=[3, 5, 7, 11, 13, 17, 19], window_size::Int=50, step_size::Int=10)
+    multi_k_counts = Dict{Int, Dict}()
+    quality_profiles = Dict{Int, Vector{Float64}}()
+    consensus_kmers = Dict{Int, Vector}()
+    coverage_estimates = Dict{Int, Float64}()
+    
+    for k in prime_ks
+        @info "Analyzing k-mer size: $k"
+        
+        # Count k-mers for this k value
+        kmer_counts = Dict{BioSequences.LongDNA{4}, Int}()
+        total_kmers = 0
+        
+        for seq in sequences
+            if length(seq) >= k
+                # Extract k-mers with sliding window
+                for i in 1:(length(seq) - k + 1)
+                    kmer = seq[i:(i + k - 1)]
+                    kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
+                    total_kmers += 1
+                end
+            end
+        end
+        
+        multi_k_counts[k] = kmer_counts
+        
+        # Calculate quality profile using sliding window
+        quality_profile = Float64[]
+        for seq in sequences
+            if length(seq) >= window_size
+                for start in 1:step_size:(length(seq) - window_size + 1)
+                    window_end = min(start + window_size - 1, length(seq))
+                    window_seq = seq[start:window_end]
+                    
+                    # Calculate quality score for this window (simplified)
+                    window_quality = calculate_window_quality(window_seq, k)
+                    push!(quality_profile, window_quality)
+                end
+            end
+        end
+        
+        quality_profiles[k] = quality_profile
+        
+        # Select consensus k-mers (high-frequency, high-quality)
+        sorted_kmers = sort(collect(kmer_counts), by=x->x[2], rev=true)
+        consensus_threshold = max(3, Int(ceil(0.1 * length(sorted_kmers))))
+        consensus_kmers[k] = [kmer for (kmer, count) in sorted_kmers[1:consensus_threshold]]
+        
+        # Estimate coverage
+        if !isempty(kmer_counts)
+            coverage_estimates[k] = Statistics.mean(values(kmer_counts))
+        else
+            coverage_estimates[k] = 0.0
+        end
+    end
+    
+    return (;multi_k_counts, quality_profiles, consensus_kmers, coverage_estimates)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate quality score for a sequence window.
+
+# Arguments
+- `window_seq::BioSequences.LongDNA{4}`: Sequence window to analyze
+- `k::Int`: K-mer size for analysis
+
+# Returns
+Float64 quality score for the window
+"""
+function calculate_window_quality(window_seq::BioSequences.LongDNA{4}, k::Int)
+    if length(window_seq) < k
+        return 0.0
+    end
+    
+    # Count unique k-mers in window
+    unique_kmers = Set{BioSequences.LongDNA{4}}()
+    for i in 1:(length(window_seq) - k + 1)
+        kmer = window_seq[i:(i + k - 1)]
+        push!(unique_kmers, kmer)
+    end
+    
+    # Quality score based on k-mer diversity and GC content
+    diversity_score = length(unique_kmers) / max(1, length(window_seq) - k + 1)
+    gc_content = BioSequences.gc_content(window_seq)
+    gc_balance = 1.0 - abs(gc_content - 0.5) * 2  # Penalize extreme GC content
+    
+    return diversity_score * gc_balance
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform adaptive k-mer selection based on coverage patterns.
+
+# Arguments
+- `multi_k_results`: Results from multi_scale_kmer_analysis
+- `target_coverage::Float64`: Target coverage threshold (default: 10.0)
+
+# Returns
+Vector{Int} of optimal k-mer sizes for the given data
+"""
+function adaptive_kmer_selection(multi_k_results; target_coverage::Float64=10.0)
+    coverage_estimates = multi_k_results.coverage_estimates
+    
+    # Select k values with coverage closest to target
+    optimal_ks = Int[]
+    
+    for (k, coverage) in sort(collect(coverage_estimates), by=x->abs(x[2] - target_coverage))
+        if coverage >= target_coverage * 0.5  # At least 50% of target coverage
+            push!(optimal_ks, k)
+        end
+        
+        # Limit to top 3 k values
+        if length(optimal_ks) >= 3
+            break
+        end
+    end
+    
+    # Ensure we have at least one k value
+    if isempty(optimal_ks) && !isempty(coverage_estimates)
+        optimal_ks = [argmax(coverage_estimates)]
+    end
+    
+    return sort(optimal_ks)
+end
+
 # function observed_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
 #     kmer_count_dict = BioSequences.kmercounts(seq, k)
 #     total_kmers = sum(values(kmer_count_dict))

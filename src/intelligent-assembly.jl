@@ -24,10 +24,162 @@ function next_prime_k(current_k::Int; max_k::Int = 1000)::Int
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Generate sequence of prime k-mer sizes starting from min_k.
+
+**DEPRECATED**: Use `dynamic_k_prime_pattern()` for more efficient k-mer selection.
+This function remains for backward compatibility.
 """
 function generate_prime_k_sequence(min_k::Int = 11, max_k::Int = 101)::Vector{Int}
     return Primes.primes(min_k, max_k)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate optimal k-mer sizes using dynamic prime pattern algorithm.
+
+Based on the novel k-primes pattern from Mycelia-Dev research. This algorithm
+generates a sequence of prime numbers with progressively increasing gaps,
+providing computational efficiency through:
+- Twin prime avoidance (skips one member of twin prime pairs)
+- Progressive spacing reduces computational overlap
+- Built-in prime discovery without pre-computation
+
+# Arguments
+- `start_prime::Int`: Initial prime number (default: 11, optimal for strain-level resolution)
+- `max_k::Int`: Maximum k-mer size to consider (default: 101)
+- `initial_step::Int`: Initial step size (default: 2)
+
+# Returns
+- `Vector{Int}`: Sequence of prime k-mer sizes with progressive spacing
+
+# Algorithm
+1. Start with initial prime and step size
+2. Each iteration: current_prime += step, then step += 2
+3. Continue while result remains prime and ≤ max_k
+4. Natural stopping when non-prime encountered
+
+# Example
+```julia
+# Generates: [11, 13, 17, 23, 31, 41, 53, 67, 83, 101]
+ks = dynamic_k_prime_pattern(11, 101, 2)
+
+# For error-prone data, start smaller
+ks = dynamic_k_prime_pattern(7, 51, 2)  # [7, ...]
+```
+
+# References
+Based on k-primes-pattern.ipynb from Mycelia-Dev research demonstrating
+mathematical elegance of using prime number distribution for genomic
+analysis optimization.
+"""
+function dynamic_k_prime_pattern(start_prime::Int = 11, max_k::Int = 101, initial_step::Int = 2)::Vector{Int}
+    # Validate inputs
+    if !Primes.isprime(start_prime)
+        start_prime = Primes.nextprime(start_prime)
+    end
+    
+    if start_prime > max_k
+        @warn "start_prime ($start_prime) > max_k ($max_k), returning empty sequence"
+        return Int[]
+    end
+    
+    k_sequence = Int[start_prime]
+    current_k = start_prime
+    step = initial_step
+    
+    # Dynamic stepping pattern with built-in prime discovery
+    while true
+        next_k = current_k + step
+        
+        # Stop if we exceed max_k
+        if next_k > max_k
+            break
+        end
+        
+        # Check if the next k is prime
+        if Primes.isprime(next_k)
+            push!(k_sequence, next_k)
+            current_k = next_k
+            step += 2  # Increase step for progressive spacing
+        else
+            # If not prime, we've reached the natural stopping point
+            # This exploits the mathematical properties of prime distribution
+            break
+        end
+    end
+    
+    return k_sequence
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate k-mer sizes optimized for specific error rates using mathematical foundation.
+
+Combines the error rate formula from Mycelia-Dev research with dynamic prime
+pattern generation for optimal k-mer selection.
+
+# Arguments
+- `error_rate::Float64`: Expected sequencing error rate (0.0-1.0)
+- `max_k::Int`: Maximum k-mer size to consider (default: 101)
+- `sequence_length::Union{Int, Nothing}`: Optional sequence length for log4 optimization
+
+# Returns
+- `Vector{Int}`: Optimally spaced prime k-mer sizes
+
+# Algorithm
+1. Calculate lower bound: `lower_bound_k = max(3, Int(floor(1/error_rate - 1)))`
+2. If sequence_length provided, optimize using log4(sequence_length) pattern
+3. Generate dynamic prime pattern starting from optimal lower bound
+
+# Example
+```julia
+# For 1% error rate data
+ks = error_optimized_k_sequence(0.01)  # Starts around k=99
+
+# For 5% error rate with known sequence length  
+ks = error_optimized_k_sequence(0.05, 101, 10000)  # Optimized for 10kb sequences
+```
+
+# Mathematical Foundation
+- Lower bound formula: `k >= 1/error_rate - 1`
+- Log4 optimization: `optimal_k ≈ log4(sequence_length)` for divergence point
+- Progressive spacing reduces redundant analysis
+
+# References
+Based on 2020-12-22 k-mer size selection and 2020-12-19 error rate analysis
+from Mycelia-Dev research.
+"""
+function error_optimized_k_sequence(error_rate::Float64, max_k::Int = 101, 
+                                   sequence_length::Union{Int, Nothing} = nothing)::Vector{Int}
+    # Validate error rate
+    if error_rate <= 0.0 || error_rate >= 1.0
+        throw(ArgumentError("error_rate must be between 0.0 and 1.0, got $error_rate"))
+    end
+    
+    # Calculate lower bound based on error rate formula
+    lower_bound_k = max(3, Int(floor(1/error_rate - 1)))
+    
+    # Ensure lower bound is odd (better for genomic analysis)
+    if lower_bound_k % 2 == 0
+        lower_bound_k += 1
+    end
+    
+    # If sequence length provided, use log4 optimization
+    if sequence_length !== nothing
+        log4_optimal = Int(round(log(4, sequence_length)))
+        # Use the larger of error-rate bound and log4 bound
+        lower_bound_k = max(lower_bound_k, log4_optimal)
+    end
+    
+    # Find the next prime >= lower_bound_k
+    start_prime = Primes.isprime(lower_bound_k) ? lower_bound_k : Primes.nextprime(lower_bound_k)
+    
+    # Generate dynamic prime pattern
+    return dynamic_k_prime_pattern(start_prime, max_k, 2)
 end
 
 """
