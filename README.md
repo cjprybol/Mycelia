@@ -51,7 +51,7 @@ assembly = Mycelia.assemble_genome(reads_file)
 ### Bioinformatics Workflows
 - **🧬 Data Acquisition**: NCBI downloads, read simulation (Illumina, PacBio, Nanopore via ART, Badread)
 - **🔍 Quality Control**: FastQC integration, native FASTQ analysis, filtering (fastp, filtlong, trim_galore)
-- **🧩 Assembly**: MEGAHIT, metaSPAdes, Flye, Canu, and 25+ more assemblers with unified interface
+- **🧩 Assembly**: External assemblers (MEGAHIT, metaSPAdes, SKESA, Flye, Canu, Hifiasm, Unicycler) plus novel Rhizomorph assembly framework
 - **🏷️ Annotation**: Gene prediction (Pyrodigal), homology search (BLAST+, MMSeqs2), specialized tools (tRNAscan-SE, TransTerm)
 - **🧮 Alignment & Mapping**: Minimap2, Clustal Omega, BAM processing, variant calling
 - **📊 Comparative Genomics**: Pangenome analysis, FastANI integration, k-mer based comparisons
@@ -83,7 +83,7 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 - ✅ **File Format Support**: FASTA/FASTQ/GenBank/GFF/VCF/SAM/BAM processing with compression support
 - ✅ **Data Acquisition**: NCBI genome download, reference database access, read simulation (PacBio, Nanopore, Illumina)
 - ✅ **Quality Control**: FastQC integration, comprehensive FASTQ analysis, filtering tools (fastp, filtlong, trim_galore)
-- ✅ **Assembly Integration**: MEGAHIT, metaSPAdes, Flye, Canu wrappers with 30+ assembler support
+- ✅ **Rhizomorph Assembly Suite**: External assemblers (MEGAHIT, metaSPAdes, SKESA, Flye, Canu, Hifiasm, Unicycler) plus novel quality-aware graph algorithms
 - ✅ **Annotation Pipeline**: Pyrodigal, BLAST+, MMSeqs2, TransTerm, tRNAscan-SE, MLST integration
 - ✅ **Alignment Tools**: Minimap2, Clustal Omega integration with variant calling support
 - ✅ **Sequence Analysis**: K-mer counting, canonical k-mer analysis, sequence complexity assessment

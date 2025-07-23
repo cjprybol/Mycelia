@@ -270,11 +270,52 @@ struct AssemblyResult
     contig_names::Vector{String}        # Contig identifiers
     graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Final assembly graph (optional)
     assembly_stats::Dict{String, Any}   # Assembly statistics and metrics
+    fastq_contigs::Vector{FASTX.FASTQ.Record}  # Quality-aware contigs (FASTQ format)
     
     function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String}; 
-                          graph=nothing, assembly_stats=Dict{String, Any}())
-        new(contigs, contig_names, graph, assembly_stats)
+                          graph=nothing, assembly_stats=Dict{String, Any}(),
+                          fastq_contigs=FASTX.FASTQ.Record[])
+        new(contigs, contig_names, graph, assembly_stats, fastq_contigs)
     end
+end
+
+"""
+    get_fastq_contigs(result::AssemblyResult) -> Vector{FASTX.FASTQ.Record}
+
+Extract quality-aware FASTQ contigs from assembly result if available.
+Returns empty vector if no quality information was preserved during assembly.
+"""
+function get_fastq_contigs(result::AssemblyResult)
+    return result.fastq_contigs
+end
+
+"""
+    has_quality_information(result::AssemblyResult) -> Bool
+
+Check if the assembly result preserves quality information from the original reads.
+"""
+function has_quality_information(result::AssemblyResult)
+    return !isempty(result.fastq_contigs) && get(result.assembly_stats, "quality_preserved", false)
+end
+
+"""
+    write_fastq_contigs(result::AssemblyResult, output_file::String)
+
+Write quality-aware contigs to a FASTQ file if quality information is available.
+"""
+function write_fastq_contigs(result::AssemblyResult, output_file::String)
+    if !has_quality_information(result)
+        error("Assembly result does not contain quality information")
+    end
+    
+    FASTX.FASTQ.Writer(open(output_file, "w")) do writer
+        for record in result.fastq_contigs
+            write(writer, record)
+        end
+    end
+    
+    @info "Quality-aware contigs written to $(output_file)"
+    return output_file
 end
 
 """
@@ -517,7 +558,7 @@ function _assemble_string_graph(observations, config)
         "source_graph" => "ngram_graph_simplification",
         "k" => config.k,
         "num_input_sequences" => length(observations),
-        "assembly_date" => string(now())
+        "assembly_date" => string(Dates.now())
     )
     
     return AssemblyResult(contigs, contig_names; graph=string_graph, assembly_stats=stats)
@@ -576,7 +617,7 @@ function _assemble_kmer_graph(observations, config)
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
         "num_input_sequences" => length(observations),
-        "assembly_date" => string(now())
+        "assembly_date" => string(Dates.now())
     )
     
     return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
@@ -608,24 +649,28 @@ function _assemble_qualmer_graph(observations, config)
     # Find contigs using quality-aware path finding
     paths = _find_qualmer_paths(graph, config)
     
-    # Convert paths to sequences
-    contigs = String[]
-    for path in paths
+    # Convert paths to FASTQ records with quality propagation
+    contig_records = FASTX.FASTQ.Record[]
+    for (i, path) in enumerate(paths)
         if !isempty(path)
-            sequence = _qualmer_path_to_sequence(path, graph)
-            if length(sequence) > config.k  # Only keep substantial contigs
-                push!(contigs, sequence)
+            contig_name = "qualmer_contig_$i"
+            # Use consensus quality calculation for better accuracy
+            fastq_record = _qualmer_path_to_consensus_fastq(path, graph, contig_name)
+            if length(FASTX.sequence(fastq_record)) > config.k  # Only keep substantial contigs
+                push!(contig_records, fastq_record)
             end
         end
     end
     
     # If no paths found, use probabilistic walks on qualmer graph
-    if isempty(contigs)
+    if isempty(contig_records)
         @info "No quality-aware paths found, using probabilistic walks"
-        contigs = _generate_contigs_from_qualmer_graph(graph, config)
+        contig_records = _generate_fastq_contigs_from_qualmer_graph(graph, config)
     end
     
-    contig_names = ["qualmer_contig_$i" for i in 1:length(contigs)]
+    # Convert FASTQ records to strings for backward compatibility with existing code
+    contigs = [String(FASTX.sequence(record)) for record in contig_records]
+    contig_names = [String(FASTX.identifier(record)) for record in contig_records]
     
     # Assembly statistics
     stats = Dict{String, Any}(
@@ -635,9 +680,11 @@ function _assemble_qualmer_graph(observations, config)
         "k" => config.k,
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
+        "quality_preserved" => true,  # Mark that quality information is preserved
+        "num_fastq_contigs" => length(contig_records),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
         "num_input_sequences" => length(observations),
-        "assembly_date" => string(now())
+        "assembly_date" => string(Dates.now())
     )
     
     # Add quality-specific statistics
@@ -646,7 +693,222 @@ function _assemble_qualmer_graph(observations, config)
         merge!(stats, qualmer_stats)
     end
     
-    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
+    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats, fastq_contigs=contig_records)
+end
+
+"""
+Find quality-weighted paths through a qualmer graph using iterative algorithms.
+Implements heaviest path (highest confidence), iterative Viterbi, and probabilistic walks.
+"""
+function _find_qualmer_paths(graph, config)
+    paths = Vector{Vector}()
+    
+    # Get all vertices sorted by joint probability (highest confidence first)
+    vertices = collect(MetaGraphsNext.labels(graph))
+    if isempty(vertices)
+        return paths
+    end
+    
+    # Sort vertices by confidence (joint probability)
+    sorted_vertices = sort(vertices, by=v -> graph[v].joint_probability, rev=true)
+    
+    visited = Set()
+    
+    # Method 1: Heaviest Path Algorithm (Highest Confidence Eulerian Paths)
+    @info "Searching for high-confidence Eulerian paths"
+    for start_vertex in sorted_vertices
+        if start_vertex ∈ visited
+            continue
+        end
+        
+        # Try to find Eulerian path starting from high-confidence vertex
+        path = _find_heaviest_eulerian_path(graph, start_vertex, visited)
+        if length(path) > 1
+            union!(visited, path)
+            push!(paths, path)
+        end
+    end
+    
+    # Method 2: Iterative Viterbi Algorithm for remaining vertices
+    if length(paths) < 3  # If we haven't found many paths, try iterative Viterbi
+        @info "Applying iterative Viterbi algorithm"
+        remaining_vertices = filter(v -> v ∉ visited, vertices)
+        if !isempty(remaining_vertices)
+            viterbi_paths = _iterative_viterbi_paths(graph, remaining_vertices, config)
+            for path in viterbi_paths
+                if length(path) > 1
+                    union!(visited, path)
+                    push!(paths, path)
+                end
+            end
+        end
+    end
+    
+    # Method 3: Probabilistic Walks for any remaining high-quality vertices
+    remaining_vertices = filter(v -> v ∉ visited && graph[v].joint_probability > 0.5, vertices)
+    if !isempty(remaining_vertices) && length(paths) < 5
+        @info "Using probabilistic walks for remaining high-quality vertices"
+        for start_vertex in remaining_vertices[1:min(3, end)]  # Limit to avoid too many small contigs
+            if start_vertex ∉ visited
+                path = _quality_weighted_walk(graph, start_vertex, config.k * 5)
+                if length(path) > 1
+                    union!(visited, path)
+                    push!(paths, path)
+                end
+            end
+        end
+    end
+    
+    return paths
+end
+
+"""
+Find the heaviest (highest confidence) Eulerian path starting from a given vertex.
+"""
+function _find_heaviest_eulerian_path(graph, start_vertex, visited::Set)
+    path = [start_vertex]
+    current = start_vertex
+    
+    max_steps = 1000  # Prevent infinite loops
+    steps = 0
+    
+    while steps < max_steps
+        # Get unvisited neighbors
+        neighbors = collect(Graphs.outneighbors(graph, current))
+        unvisited_neighbors = filter(n -> n ∉ visited, neighbors)
+        
+        if isempty(unvisited_neighbors)
+            break
+        end
+        
+        # Choose neighbor with highest combined score (vertex quality × edge quality)
+        best_neighbor = nothing
+        best_score = -1.0
+        
+        for neighbor in unvisited_neighbors
+            # Vertex quality score
+            vertex_score = graph[neighbor].joint_probability
+            
+            # Edge quality score
+            edge_score = 1.0
+            if MetaGraphsNext.has_edge(graph, current, neighbor)
+                edge_data = graph[current, neighbor]
+                edge_score = edge_data.quality_weight
+            end
+            
+            # Combined score
+            total_score = vertex_score * edge_score
+            
+            if total_score > best_score
+                best_score = total_score
+                best_neighbor = neighbor
+            end
+        end
+        
+        if best_neighbor === nothing || best_score < 0.1  # Quality threshold
+            break
+        end
+        
+        push!(path, best_neighbor)
+        current = best_neighbor
+        steps += 1
+    end
+    
+    return path
+end
+
+"""
+Iterative Viterbi algorithm for finding optimal paths through qualmer graph.
+Uses dynamic programming with quality scores as emission/transition probabilities.
+"""
+function _iterative_viterbi_paths(graph, candidate_vertices, config)
+    paths = Vector{Vector}()
+    
+    # Group vertices into potential start points (high in-degree or isolated)
+    start_candidates = Vector()
+    for vertex in candidate_vertices
+        in_degree = length(collect(Graphs.inneighbors(graph, vertex)))
+        out_degree = length(collect(Graphs.outneighbors(graph, vertex)))
+        
+        # Prefer vertices that could be sequence starts
+        if in_degree <= out_degree || graph[vertex].joint_probability > 0.8
+            push!(start_candidates, vertex)
+        end
+    end
+    
+    # If no clear starts, use highest quality vertices
+    if isempty(start_candidates)
+        start_candidates = candidate_vertices[1:min(3, end)]
+    end
+    
+    visited = Set()
+    for start_vertex in start_candidates
+        if start_vertex ∈ visited
+            continue
+        end
+        
+        # Apply Viterbi-like algorithm
+        path = _viterbi_optimal_path(graph, start_vertex, visited, 500)  # Reasonable max length
+        if length(path) > 1
+            union!(visited, path)
+            push!(paths, path)
+        end
+    end
+    
+    return paths
+end
+
+"""
+Find optimal path using Viterbi-like dynamic programming on quality scores.
+"""
+function _viterbi_optimal_path(graph, start_vertex, visited::Set, max_length::Int)
+    # Initialize with start vertex
+    path = [start_vertex]
+    current = start_vertex
+    local_visited = Set([start_vertex])
+    
+    for step in 1:max_length
+        neighbors = collect(Graphs.outneighbors(graph, current))
+        unvisited_neighbors = filter(n -> n ∉ visited && n ∉ local_visited, neighbors)
+        
+        if isempty(unvisited_neighbors)
+            break
+        end
+        
+        # Calculate Viterbi scores for each neighbor
+        best_neighbor = nothing
+        best_viterbi_score = -Inf
+        
+        for neighbor in unvisited_neighbors
+            # Emission probability (vertex quality)
+            emission_prob = log(max(1e-10, graph[neighbor].joint_probability))
+            
+            # Transition probability (edge quality)
+            transition_prob = 0.0
+            if MetaGraphsNext.has_edge(graph, current, neighbor)
+                edge_data = graph[current, neighbor]
+                transition_prob = log(max(1e-10, edge_data.quality_weight))
+            end
+            
+            # Viterbi score
+            viterbi_score = emission_prob + transition_prob
+            
+            if viterbi_score > best_viterbi_score
+                best_viterbi_score = viterbi_score
+                best_neighbor = neighbor
+            end
+        end
+        
+        if best_neighbor === nothing || best_viterbi_score < -10.0  # Quality threshold in log space
+            break
+        end
+        
+        push!(path, best_neighbor)
+        push!(local_visited, best_neighbor)
+        current = best_neighbor
+    end
+    
+    return path
 end
 
 """
@@ -825,6 +1087,7 @@ function _prepare_fastq_observations(observations)
     fastq_records = FASTX.FASTQ.Record[]
     
     for (i, obs) in enumerate(observations)
+        # Handle different observation formats
         if obs isa FASTX.FASTQ.Record
             push!(fastq_records, obs)
         elseif obs isa FASTX.FASTA.Record
@@ -833,6 +1096,20 @@ function _prepare_fastq_observations(observations)
             qual = repeat('I', length(seq))  # Quality score 40 (high quality)
             record = FASTX.FASTQ.Record(FASTX.FASTA.identifier(obs), seq, qual)
             push!(fastq_records, record)
+        elseif obs isa Tuple && length(obs) >= 1
+            # Handle tuple format like (record, index) or (record, other_data)
+            record = obs[1]
+            if record isa FASTX.FASTQ.Record
+                push!(fastq_records, record)
+            elseif record isa FASTX.FASTA.Record
+                # Convert FASTA to FASTQ with default quality
+                seq = FASTX.FASTA.sequence(record)
+                qual = repeat('I', length(seq))  # Quality score 40 (high quality)
+                fastq_record = FASTX.FASTQ.Record(FASTX.FASTA.identifier(record), seq, qual)
+                push!(fastq_records, fastq_record)
+            else
+                @warn "Unsupported record type in tuple: $(typeof(record))"
+            end
         else
             @warn "Unsupported observation type: $(typeof(obs))"
         end
@@ -918,6 +1195,252 @@ function _qualmer_path_to_sequence(path, graph)
 end
 
 """
+Enhanced qualmer path to FASTQ record conversion with quality propagation.
+This is the core function that enables quality-aware assembly output.
+"""
+function _qualmer_path_to_fastq_record(path, graph, contig_name::String)
+    if isempty(path)
+        return FASTX.FASTQ.Record("", "", "")
+    end
+    
+    # Initialize sequence and quality arrays
+    sequence_chars = Char[]
+    quality_scores = UInt8[]
+    
+    # Process first qualmer vertex completely
+    first_vertex_data = graph[path[1]]
+    first_qualmer = first_vertex_data.canonical_qualmer
+    
+    # Add entire first k-mer sequence and qualities
+    for i in 1:length(first_qualmer.kmer)
+        push!(sequence_chars, first_qualmer.kmer[i])
+        push!(quality_scores, first_qualmer.qualities[i])
+    end
+    
+    # For subsequent vertices, add only the extending nucleotide with its quality
+    for vertex_idx in 2:length(path)
+        vertex_data = graph[path[vertex_idx]]
+        qualmer = vertex_data.canonical_qualmer
+        
+        # Add the last nucleotide and its quality (k-mer overlap extension)
+        if length(qualmer.kmer) > 0
+            push!(sequence_chars, qualmer.kmer[end])
+            push!(quality_scores, qualmer.qualities[end])
+        end
+    end
+    
+    # Convert to strings
+    sequence_str = String(sequence_chars)
+    quality_str = String(Char.(quality_scores .+ UInt8(33)))  # Convert to ASCII quality scores
+    
+    # Create FASTQ record with quality-aware contig
+    return FASTX.FASTQ.Record(contig_name, sequence_str, quality_str)
+end
+
+"""
+Enhanced qualmer path to sequence with consensus quality calculation.
+Uses joint probability from multiple observations to compute consensus quality.
+"""
+function _qualmer_path_to_consensus_fastq(path, graph, contig_name::String)
+    if isempty(path)
+        return FASTX.FASTQ.Record("", "", "")
+    end
+    
+    sequence_chars = Char[]
+    consensus_qualities = UInt8[]
+    
+    # Process first vertex completely
+    first_vertex_data = graph[path[1]]
+    first_qualmer = first_vertex_data.canonical_qualmer
+    
+    # For first k-mer, use consensus quality from all observations
+    for i in 1:length(first_qualmer.kmer)
+        push!(sequence_chars, first_qualmer.kmer[i])
+        # Calculate consensus quality from joint probability
+        consensus_qual = _calculate_consensus_quality_from_observations(first_vertex_data.observations, i)
+        push!(consensus_qualities, consensus_qual)
+    end
+    
+    # For subsequent vertices, add extending nucleotide with consensus quality
+    for vertex_idx in 2:length(path)
+        vertex_data = graph[path[vertex_idx]]
+        qualmer = vertex_data.canonical_qualmer
+        
+        if length(qualmer.kmer) > 0
+            push!(sequence_chars, qualmer.kmer[end])
+            # Calculate consensus quality for the extending position
+            extending_pos = length(qualmer.kmer)
+            consensus_qual = _calculate_consensus_quality_from_observations(vertex_data.observations, extending_pos)
+            push!(consensus_qualities, consensus_qual)
+        end
+    end
+    
+    # Convert to strings
+    sequence_str = String(sequence_chars)
+    quality_str = String(Char.(consensus_qualities .+ UInt8(33)))
+    
+    return FASTX.FASTQ.Record(contig_name, sequence_str, quality_str)
+end
+
+"""
+Calculate consensus quality from multiple observations at a specific position.
+Uses the joint probability and multiple observations to compute a consensus quality score.
+"""
+function _calculate_consensus_quality_from_observations(observations::Vector{<:QualmerObservation}, position::Int)
+    if isempty(observations)
+        return UInt8(2)  # Very low quality if no observations
+    end
+    
+    # Extract quality scores at the given position from all observations
+    position_qualities = UInt8[]
+    for obs in observations
+        if position <= length(obs.qualmer.qualities)
+            push!(position_qualities, obs.qualmer.qualities[position])
+        end
+    end
+    
+    if isempty(position_qualities)
+        return UInt8(2)
+    end
+    
+    # Calculate consensus using weighted average based on error probabilities
+    total_weight = 0.0
+    weighted_sum = 0.0
+    
+    for qual in position_qualities
+        # Convert quality to probability of correctness
+        prob_correct = 1.0 - 10.0^(-qual / 10.0)
+        weight = prob_correct
+        
+        total_weight += weight
+        weighted_sum += weight * qual
+    end
+    
+    if total_weight == 0.0
+        return UInt8(2)
+    end
+    
+    # Calculate weighted average quality
+    consensus_qual = weighted_sum / total_weight
+    
+    # Apply confidence boost for multiple supporting observations
+    num_obs = length(position_qualities)
+    if num_obs > 1
+        # Boost quality based on number of supporting observations
+        confidence_boost = min(10.0, log10(num_obs) * 3.0)  # Max boost of 10
+        consensus_qual = min(40.0, consensus_qual + confidence_boost)  # Cap at Q40
+    end
+    
+    return UInt8(round(consensus_qual))
+end
+
+"""
+Generate FASTQ contigs from qualmer graph using probabilistic walks when no paths are found.
+"""
+function _generate_fastq_contigs_from_qualmer_graph(graph, config)
+    contig_records = FASTX.FASTQ.Record[]
+    vertices = collect(MetaGraphsNext.labels(graph))
+    
+    if isempty(vertices)
+        return contig_records
+    end
+    
+    # Track visited vertices to avoid duplicates
+    visited = Set()
+    
+    # Start probabilistic walks from high-confidence vertices
+    confidence_threshold = 0.7
+    start_vertices = filter(v -> graph[v].joint_probability > confidence_threshold, vertices)
+    
+    # If no high-confidence vertices, use all vertices
+    if isempty(start_vertices)
+        start_vertices = vertices
+    end
+    
+    contig_id = 1
+    for start_vertex in start_vertices
+        if start_vertex ∈ visited
+            continue
+        end
+        
+        # Perform quality-weighted walk from this vertex
+        path = _quality_weighted_walk(graph, start_vertex, config.k * 10)  # Reasonable max length
+        
+        if length(path) > 1  # Need at least 2 vertices to form a meaningful contig
+            # Mark all vertices in path as visited
+            union!(visited, path)
+            
+            # Convert path to FASTQ record
+            contig_name = "qualmer_probabilistic_contig_$(contig_id)"
+            fastq_record = _qualmer_path_to_consensus_fastq(path, graph, contig_name)
+            
+            # Only keep contigs longer than k
+            if length(FASTX.sequence(fastq_record)) > config.k
+                push!(contig_records, fastq_record)
+                contig_id += 1
+            end
+        end
+    end
+    
+    return contig_records
+end
+
+"""
+Perform quality-weighted walk through qualmer graph.
+"""
+function _quality_weighted_walk(graph, start_vertex, max_length::Int=1000)
+    path = [start_vertex]
+    current = start_vertex
+    visited = Set([current])
+    
+    while length(path) < max_length
+        # Get outgoing neighbors
+        neighbors = collect(Graphs.outneighbors(graph, current))
+        
+        # Filter out visited vertices
+        unvisited = filter(n -> n ∉ visited, neighbors)
+        
+        if isempty(unvisited)
+            break
+        end
+        
+        # Choose next vertex based on joint probability and edge quality
+        best_neighbor = nothing
+        best_score = -1.0
+        
+        for neighbor in unvisited
+            # Calculate score based on vertex quality and edge weight
+            vertex_quality = graph[neighbor].joint_probability
+            
+            # Check if edge exists and get its quality weight
+            edge_quality = 1.0
+            if MetaGraphsNext.has_edge(graph, current, neighbor)
+                edge_data = graph[current, neighbor]
+                edge_quality = edge_data.quality_weight
+            end
+            
+            # Combined score (vertex quality * edge quality)
+            score = vertex_quality * edge_quality
+            
+            if score > best_score
+                best_score = score
+                best_neighbor = neighbor
+            end
+        end
+        
+        if best_neighbor === nothing
+            break
+        end
+        
+        push!(path, best_neighbor)
+        push!(visited, best_neighbor)
+        current = best_neighbor
+    end
+    
+    return path
+end
+
+"""
 Generate contigs from qualmer graph using probabilistic walks.
 """
 function _generate_contigs_from_qualmer_graph(graph, config)
@@ -998,7 +1521,7 @@ function _assemble_ngram_graph(observations, config)
         "vertex_type" => "unicode_character_vectors",
         "k" => config.k,
         "num_input_sequences" => length(observations),
-        "assembly_date" => string(now())
+        "assembly_date" => string(Dates.now())
     )
     
     return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
@@ -1038,7 +1561,7 @@ function _assemble_biosequence_graph(observations, config)
         "num_vertices" => length(MetaGraphsNext.labels(biosequence_graph)),
         "num_edges" => length(MetaGraphsNext.edge_labels(biosequence_graph)),
         "num_input_sequences" => length(observations),
-        "assembly_date" => string(now())
+        "assembly_date" => string(Dates.now())
     )
     
     return AssemblyResult(contigs, contig_names; graph=biosequence_graph, assembly_stats=stats)
@@ -1080,7 +1603,7 @@ function _assemble_quality_biosequence_graph(observations, config)
         "num_vertices" => length(MetaGraphsNext.labels(quality_biosequence_graph)),
         "num_edges" => length(MetaGraphsNext.edge_labels(quality_biosequence_graph)),
         "num_input_sequences" => length(observations),
-        "assembly_date" => string(now())
+        "assembly_date" => string(Dates.now())
     )
     
     return AssemblyResult(contigs, contig_names; graph=quality_biosequence_graph, assembly_stats=stats)

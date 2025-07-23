@@ -90,10 +90,10 @@ These research components are largely complete and tested. The roadmap below foc
 ```julia
 # Status: Major tools implemented, some still planned
 - [x] QUAST integration - `run_quast()` for comprehensive assembly assessment  
+- [x] BUSCO integration - `run_busco()` for gene completeness assessment
+- [x] MUMmer integration - `run_mummer()` for genome comparison and alignment
 - [x] CheckM2 integration - `run_checkm2()` for genome completeness (already existed)
 - [ ] Mauve integration - `run_mauve()` for genome comparison
-- [ ] MUMmer integration - `run_mummer()` for assembly comparison
-- [ ] BUSCO integration - for gene completeness assessment
 ```
 
 #### **3.2 Quality Control Enhancements** 📊 **MEDIUM PRIORITY GAPS**
@@ -135,7 +135,7 @@ Based on gap analysis, implemented the following critical functions:
 - [x] QUAST integration # run_quast() for comprehensive assembly evaluation
 - [x] L50/L90 statistics # Added to validate_assembly() and assess_assembly_quality()
 - [x] Enhanced assembly stats # N50, L50, contiguity metrics now available
-- [ ] evaluate_assembly_completeness() # BUSCO-style analysis (still needed)
+- [x] BUSCO integration # run_busco() for assembly completeness assessment
 - [ ] detect_assembly_errors() # Misassembly detection (still needed)
 ```
 

@@ -811,4 +811,328 @@ function run_quast(assembly_file::String; kwargs...)
     return run_quast([assembly_file]; kwargs...)
 end
 
+"""
+    run_busco(assembly_files::Vector{String}; outdir::String="busco_results", lineage::String="auto", mode::String="genome", threads::Int=Sys.CPU_THREADS, force::Bool=false)
+
+Run BUSCO (Benchmarking Universal Single-Copy Orthologs) to assess genome assembly completeness.
+
+# Arguments
+- `assembly_files::Vector{String}`: Vector of paths to assembly FASTA files to evaluate
+- `outdir::String="busco_results"`: Output directory for BUSCO results
+- `lineage::String="auto"`: BUSCO lineage dataset to use (e.g., "bacteria_odb10", "eukaryota_odb10", "auto")
+- `mode::String="genome"`: BUSCO mode ("genome", "transcriptome", "proteins")
+- `threads::Int=Sys.CPU_THREADS`: Number of threads to use
+- `force::Bool=false`: Force overwrite existing results
+
+# Returns
+- `String`: Path to the output directory containing BUSCO results
+
+# Output Files
+- `short_summary.specific.lineage.txt`: Summary statistics
+- `full_table.tsv`: Complete BUSCO results table
+- `missing_busco_list.tsv`: List of missing BUSCOs
+- `run_lineage/`: Detailed results directory
+
+# Examples
+```julia
+# Basic completeness assessment
+assemblies = ["assembly1.fasta", "assembly2.fasta"]
+busco_dir = Mycelia.run_busco(assemblies)
+
+# Specific lineage
+busco_dir = Mycelia.run_busco(assemblies, lineage="bacteria_odb10")
+
+# Custom parameters
+busco_dir = Mycelia.run_busco(assemblies,
+                             outdir="my_busco_results",
+                             lineage="enterobacterales_odb10",
+                             threads=8)
+```
+
+# Notes
+- Requires BUSCO to be installed via Bioconda
+- Auto lineage detection requires internet connection for first run
+- Available lineages: bacteria_odb10, archaea_odb10, eukaryota_odb10, fungi_odb10, etc.
+- Results provide Complete, Fragmented, and Missing BUSCO counts
+"""
+function run_busco(assembly_files::Vector{String}; 
+                   outdir::String="busco_results",
+                   lineage::String="auto",
+                   mode::String="genome",
+                   threads::Int=Sys.CPU_THREADS,
+                   force::Bool=false)
+    
+    # Install BUSCO via Bioconda if needed
+    add_bioconda_env("busco")
+    
+    # Validate input files
+    for assembly_file in assembly_files
+        if !isfile(assembly_file)
+            error("Assembly file does not exist: $(assembly_file)")
+        end
+    end
+    
+    # Validate mode
+    valid_modes = ["genome", "transcriptome", "proteins"]
+    if !(mode in valid_modes)
+        error("Invalid mode: $(mode). Must be one of: $(join(valid_modes, ", "))")
+    end
+    
+    # Create output directory
+    mkpath(outdir)
+    
+    # Process each assembly file
+    results_dirs = String[]
+    
+    for (i, assembly_file) in enumerate(assembly_files)
+        assembly_name = splitext(basename(assembly_file))[1]
+        assembly_outdir = joinpath(outdir, assembly_name)
+        
+        # Build BUSCO command
+        cmd_parts = [
+            "busco",
+            "--input", assembly_file,
+            "--output", assembly_name,
+            "--out_path", outdir,
+            "--mode", mode,
+            "--lineage_dataset", lineage,
+            "--cpu", string(threads)
+        ]
+        
+        # Add force flag if requested
+        if force
+            push!(cmd_parts, "--force")
+        end
+        
+        # Add quiet flag to reduce output
+        push!(cmd_parts, "--quiet")
+        
+        try
+            println("Running BUSCO on $(assembly_file)...")
+            println("Lineage: $(lineage), Mode: $(mode)")
+            
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n busco $cmd_parts`)
+            
+            # Verify output files were created
+            summary_pattern = joinpath(assembly_outdir, "short_summary.specific.*.$(assembly_name).txt")
+            summary_files = Glob.glob(summary_pattern)
+            
+            if isempty(summary_files)
+                error("BUSCO failed to generate summary file for $(assembly_file)")
+            end
+            
+            println("BUSCO analysis completed for $(assembly_file)")
+            println("Results saved in: $(assembly_outdir)")
+            
+            push!(results_dirs, assembly_outdir)
+            
+        catch e
+            error("BUSCO execution failed for $(assembly_file): $(e)")
+        end
+    end
+    
+    # Print summary information
+    println("\nBUSCO analysis completed for all assemblies")
+    println("Results directories:")
+    for dir in results_dirs
+        println("  - $(dir)")
+    end
+    
+    return outdir
+end
+
+"""
+    run_busco(assembly_file::String; kwargs...)
+
+Run BUSCO on a single assembly file. See `run_busco(::Vector{String})` for details.
+"""
+function run_busco(assembly_file::String; kwargs...)
+    return run_busco([assembly_file]; kwargs...)
+end
+
+"""
+    run_mummer(reference::String, query::String; outdir::String="mummer_results", prefix::String="out", mincluster::Int=65, minmatch::Int=20, threads::Int=1)
+
+Run MUMmer for genome comparison and alignment between reference and query sequences.
+
+# Arguments
+- `reference::String`: Path to reference genome FASTA file
+- `query::String`: Path to query genome FASTA file  
+- `outdir::String="mummer_results"`: Output directory for MUMmer results
+- `prefix::String="out"`: Prefix for output files
+- `mincluster::Int=65`: Minimum cluster length for nucmer
+- `minmatch::Int=20`: Minimum match length for nucmer
+- `threads::Int=1`: Number of threads (note: MUMmer has limited multithreading)
+
+# Returns
+- `String`: Path to the output directory containing MUMmer results
+
+# Output Files
+- `prefix.delta`: Delta alignment file (main output)
+- `prefix.coords`: Human-readable coordinates file
+- `prefix.snps`: SNP/indel report (if show-snps is run)
+- `prefix.plot.png`: Dot plot visualization (if mummerplot is run)
+
+# Examples
+```julia
+# Basic genome comparison
+ref_genome = "reference.fasta"
+query_genome = "assembly.fasta"
+mummer_dir = Mycelia.run_mummer(ref_genome, query_genome)
+
+# Custom parameters
+mummer_dir = Mycelia.run_mummer(ref_genome, query_genome,
+                               outdir="comparison_results",
+                               prefix="comparison",
+                               mincluster=100,
+                               minmatch=30)
+```
+
+# Notes
+- Requires MUMmer to be installed via Bioconda
+- nucmer is used for DNA sequence alignment
+- show-coords generates human-readable coordinate output
+- Results include alignment coordinates, percent identity, and coverage
+- For visualization, use mummerplot (requires gnuplot)
+"""
+function run_mummer(reference::String, query::String; 
+                    outdir::String="mummer_results",
+                    prefix::String="out",
+                    mincluster::Int=65,
+                    minmatch::Int=20,
+                    threads::Int=1)
+    
+    # Install MUMmer via Bioconda if needed
+    add_bioconda_env("mummer")
+    
+    # Validate input files
+    if !isfile(reference)
+        error("Reference file does not exist: $(reference)")
+    end
+    
+    if !isfile(query)
+        error("Query file does not exist: $(query)")
+    end
+    
+    # Create output directory
+    mkpath(outdir)
+    
+    # Define output files
+    delta_file = joinpath(outdir, "$(prefix).delta")
+    coords_file = joinpath(outdir, "$(prefix).coords")
+    
+    try
+        println("Running MUMmer comparison...")
+        println("Reference: $(reference)")
+        println("Query: $(query)")
+        
+        # Run nucmer for alignment
+        nucmer_cmd = [
+            "nucmer",
+            "--prefix", joinpath(outdir, prefix),
+            "--mincluster", string(mincluster),
+            "--minmatch", string(minmatch),
+            reference,
+            query
+        ]
+        
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mummer $nucmer_cmd`)
+        
+        # Generate coordinate output
+        coords_cmd = [
+            "show-coords",
+            "-r", "-c", "-l",  # -r: sort by reference, -c: show percent coverage, -l: show length
+            delta_file
+        ]
+        
+        coords_output = read(`$(Mycelia.CONDA_RUNNER) run -n mummer $coords_cmd`, String)
+        
+        # Write coordinates to file
+        open(coords_file, "w") do io
+            write(io, coords_output)
+        end
+        
+        # Verify output files were created
+        if !isfile(delta_file)
+            error("MUMmer failed to generate delta file")
+        end
+        
+        if !isfile(coords_file)
+            error("Failed to generate coordinates file")
+        end
+        
+        println("MUMmer analysis completed successfully")
+        println("Results saved in: $(outdir)")
+        println("Delta file: $(delta_file)")
+        println("Coordinates file: $(coords_file)")
+        
+        return outdir
+        
+    catch e
+        error("MUMmer execution failed: $(e)")
+    end
+end
+
+"""
+    run_mummer_plot(delta_file::String; outdir::String="", prefix::String="plot", plot_type::String="png")
+
+Generate dot plot visualization from MUMmer delta file using mummerplot.
+
+# Arguments
+- `delta_file::String`: Path to MUMmer delta file
+- `outdir::String=""`: Output directory (defaults to same as delta file)
+- `prefix::String="plot"`: Prefix for plot files
+- `plot_type::String="png"`: Plot format ("png", "ps", "x11")
+
+# Returns
+- `String`: Path to the generated plot file
+
+# Notes
+- Requires gnuplot to be installed
+- Useful for visualizing genome alignments and rearrangements
+"""
+function run_mummer_plot(delta_file::String; 
+                         outdir::String="",
+                         prefix::String="plot",
+                         plot_type::String="png")
+    
+    # Install MUMmer via Bioconda if needed
+    add_bioconda_env("mummer")
+    
+    if !isfile(delta_file)
+        error("Delta file does not exist: $(delta_file)")
+    end
+    
+    # Set output directory
+    if outdir == ""
+        outdir = dirname(delta_file)
+    else
+        mkpath(outdir)
+    end
+    
+    plot_file = joinpath(outdir, "$(prefix).$(plot_type)")
+    
+    try
+        # Run mummerplot
+        plot_cmd = [
+            "mummerplot",
+            "--$(plot_type)",
+            "--prefix", joinpath(outdir, prefix),
+            delta_file
+        ]
+        
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mummer $plot_cmd`)
+        
+        if !isfile(plot_file)
+            error("Failed to generate plot file")
+        end
+        
+        println("MUMmer plot generated: $(plot_file)")
+        return plot_file
+        
+    catch e
+        error("MUMmer plot generation failed: $(e)")
+    end
+end
+
 #

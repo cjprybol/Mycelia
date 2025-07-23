@@ -43,7 +43,7 @@ Assign functional annotations to predicted genes.
 ### [`assemble_genome`](@ref)
 Main genome assembly function supporting multiple assemblers.
 - **Module**: Genome Assembly
-- **Usage**: `assemble_genome("reads.fastq", assembler="hifiasm")`
+- **Usage**: `Mycelia.assemble_genome("reads.fastq", assembler="hifiasm")`
 - **See**: [Genome Assembly](../workflows/genome-assembly.md#assembly-execution)
 
 ### [`assess_assembly_readiness`](@ref)
@@ -145,7 +145,7 @@ Screen for host organism contamination in sequencing data.
 ### [`download_genome_by_accession`](@ref)
 Download genome sequences from NCBI by accession number.
 - **Module**: Data Acquisition
-- **Usage**: `download_genome_by_accession("NC_001422.1")`
+- **Usage**: `Mycelia.download_genome_by_accession("NC_001422.1")`
 - **See**: [Data Acquisition](../workflows/data-acquisition.md#ncbi-genome-downloads)
 
 ## E

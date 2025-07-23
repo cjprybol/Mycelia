@@ -55,8 +55,8 @@ Assemble genomes from sequencing reads using various approaches.
 ### 5. Assembly Validation
 Validate and assess the quality of genome assemblies.
 
-**Working Functions:** `assess_assembly_quality`, `validate_assembly`, CheckM/CheckM2 integration  
-**Planned:** QUAST, BUSCO, MUMmer integration
+**Working Functions:** `assess_assembly_quality`, `validate_assembly`, `run_quast`, `run_busco`, `run_mummer`, CheckM/CheckM2 integration  
+**Planned:** Mauve integration
 
 ### 6. Gene Annotation
 Predict genes and assign functional annotations.

@@ -62,7 +62,7 @@ At each stage, you face key decisions:
 
 ```julia
 # Download reference genomes
-download_genome_by_accession(accession="NC_001422.1")
+Mycelia.download_genome_by_accession(accession="NC_001422.1")
 
 # Download complete assemblies
 ncbi_genome_download_accession(accession="GCF_000819615.1")
@@ -264,7 +264,7 @@ kmer_frequency_spectrum(kmer_counts)
 
 ```julia
 # Run assembly
-assemble_genome("reads.fastq", output_dir="assembly")
+Mycelia.assemble_genome("reads.fastq", output_dir="assembly")
 
 # Evaluate assembly quality
 evaluate_assembly(assembly_fasta)
