@@ -2150,6 +2150,116 @@ function k_ladder(; max_k::Int           = 10_000,
     return return_unique ? unique(ks) : ks
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Estimate genome size from k-mer analysis using total k-mer count.
+
+This function estimates genome size using the basic relationship: 
+genome_size ≈ total_kmers - k + 1, where total_kmers is the sum of all k-mer 
+counts. This is a simple estimation method; more sophisticated approaches 
+accounting for sequencing depth, repeats, and errors may be more accurate.
+
+# Arguments
+- `sequence::Union{BioSequences.LongSequence, AbstractString}`: Input sequence or string
+- `k::Integer`: K-mer size for analysis
+
+# Returns
+- `Dict{String, Any}`: Dictionary containing:
+  - "unique_kmers": Number of unique k-mers observed
+  - "total_kmers": Total k-mer count (sum of all frequencies)
+  - "estimated_genome_size": Estimated genome size
+  - "actual_size": Length of input sequence (if provided)
+
+# Examples
+```julia
+# Estimate genome size from a sequence
+sequence = "ATCGATCGATCGATCG"
+result = estimate_genome_size_from_kmers(sequence, 5)
+```
+"""
+function estimate_genome_size_from_kmers(sequence::Union{BioSequences.LongSequence, AbstractString}, k::Integer)
+    # Convert string to BioSequence if needed
+    if isa(sequence, AbstractString)
+        bio_sequence = BioSequences.LongDNA{4}(sequence)
+    else
+        bio_sequence = sequence
+    end
+    
+    # Count k-mers using existing infrastructure
+    if BioSequences.alphabet(bio_sequence) isa BioSequences.DNAAlphabet
+        kmer_counts = count_kmers(Kmers.DNAKmer{k}, bio_sequence)
+    elseif BioSequences.alphabet(bio_sequence) isa BioSequences.RNAAlphabet  
+        kmer_counts = count_kmers(Kmers.RNAKmer{k}, bio_sequence)
+    elseif BioSequences.alphabet(bio_sequence) isa BioSequences.AminoAcidAlphabet
+        kmer_counts = count_kmers(Kmers.AAKmer{k}, bio_sequence)
+    else
+        error("Unsupported sequence alphabet: $(BioSequences.alphabet(bio_sequence))")
+    end
+    
+    unique_kmers = length(kmer_counts)
+    total_kmers = sum(values(kmer_counts))
+    
+    # Basic genome size estimation: total_kmers - k + 1 ≈ genome_size
+    estimated_size = total_kmers - k + 1
+    
+    return Dict(
+        "unique_kmers" => unique_kmers,
+        "total_kmers" => total_kmers,
+        "estimated_genome_size" => estimated_size,
+        "actual_size" => length(bio_sequence)
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Estimate genome size from FASTQ/FASTA records using k-mer analysis.
+
+Overload for processing FASTQ or FASTA records directly.
+
+# Arguments  
+- `records::AbstractVector{T}` where T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}`: Input records
+- `k::Integer`: K-mer size for analysis
+
+# Returns
+- `Dict{String, Any}`: Dictionary with k-mer statistics and genome size estimate
+"""
+function estimate_genome_size_from_kmers(records::AbstractVector{T}, k::Integer) where {T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    # Determine sequence type from first record
+    first_seq = FASTX.sequence(records[1])
+    
+    if BioSequences.alphabet(first_seq) isa BioSequences.DNAAlphabet
+        kmer_type = Kmers.DNAKmer{k}
+    elseif BioSequences.alphabet(first_seq) isa BioSequences.RNAAlphabet
+        kmer_type = Kmers.RNAKmer{k}  
+    elseif BioSequences.alphabet(first_seq) isa BioSequences.AminoAcidAlphabet
+        kmer_type = Kmers.AAKmer{k}
+    else
+        error("Unsupported sequence alphabet")
+    end
+    
+    # Count k-mers across all records
+    kmer_counts = count_kmers(kmer_type, records)
+    
+    unique_kmers = length(kmer_counts)
+    total_kmers = sum(values(kmer_counts))
+    
+    # Calculate total sequence length
+    total_length = sum(length(FASTX.sequence(record)) for record in records)
+    
+    # Basic genome size estimation
+    estimated_size = total_kmers - k + 1
+    
+    return Dict(
+        "unique_kmers" => unique_kmers,
+        "total_kmers" => total_kmers,
+        "estimated_genome_size" => estimated_size,
+        "actual_size" => total_length,
+        "num_records" => length(records)
+    )
+end
+
 # function observed_kmer_frequencies(seq::BioSequences.BioSequence{A}, k::Int) where A<:BioSequences.Alphabet
 #     kmer_count_dict = BioSequences.kmercounts(seq, k)
 #     total_kmers = sum(values(kmer_count_dict))

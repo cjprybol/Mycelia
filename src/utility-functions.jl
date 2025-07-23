@@ -2177,3 +2177,148 @@ function detect_and_extract_sequence(record::Union{FASTX.FASTA.Record, FASTX.FAS
     
     return (alphabet, typed_sequence)
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate GC content (percentage of G and C bases) from a BioSequence.
+
+This function calculates the percentage of guanine (G) and cytosine (C) bases
+in a nucleotide sequence. Works with both DNA and RNA sequences.
+
+# Arguments
+- `sequence::BioSequences.LongSequence`: Input DNA or RNA sequence
+
+# Returns
+- `Float64`: GC content as a percentage (0.0-100.0)
+
+# Examples
+```julia
+# Calculate GC content for DNA
+dna_seq = BioSequences.LongDNA{4}("ATCGATCGATCG")
+gc_percent = calculate_gc_content(dna_seq)
+
+# Calculate GC content for RNA
+rna_seq = BioSequences.LongRNA{4}("AUCGAUCGAUCG") 
+gc_percent = calculate_gc_content(rna_seq)
+```
+"""
+function calculate_gc_content(sequence::BioSequences.LongSequence)
+    if length(sequence) == 0
+        return 0.0
+    end
+    
+    gc_count = 0
+    total_bases = 0
+    
+    for base in sequence
+        total_bases += 1
+        if BioSequences.alphabet(sequence) isa BioSequences.DNAAlphabet
+            if base == BioSequences.DNA_G || base == BioSequences.DNA_C
+                gc_count += 1
+            end
+        elseif BioSequences.alphabet(sequence) isa BioSequences.RNAAlphabet
+            if base == BioSequences.RNA_G || base == BioSequences.RNA_C
+                gc_count += 1
+            end
+        else
+            error("GC content calculation only supported for DNA and RNA sequences, got $(BioSequences.alphabet(sequence))")
+        end
+    end
+    
+    return (gc_count / total_bases) * 100.0
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate GC content from a string sequence.
+
+Convenience function that accepts string input and converts to appropriate BioSequence.
+Automatically detects DNA/RNA based on presence of T/U.
+
+# Arguments
+- `sequence::AbstractString`: Input DNA or RNA sequence as string
+
+# Returns  
+- `Float64`: GC content as a percentage (0.0-100.0)
+
+# Examples
+```julia
+# Calculate GC content from string
+gc_percent = calculate_gc_content("ATCGATCGATCG")
+```
+"""
+function calculate_gc_content(sequence::AbstractString)
+    if length(sequence) == 0
+        return 0.0
+    end
+    
+    # Detect if DNA (contains T) or RNA (contains U)
+    sequence_upper = uppercase(sequence)
+    if occursin('T', sequence_upper)
+        bio_sequence = BioSequences.LongDNA{4}(sequence_upper)
+    elseif occursin('U', sequence_upper)
+        bio_sequence = BioSequences.LongRNA{4}(sequence_upper)  
+    else
+        # Default to DNA if ambiguous
+        bio_sequence = BioSequences.LongDNA{4}(sequence_upper)
+    end
+    
+    return calculate_gc_content(bio_sequence)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate GC content from FASTA/FASTQ records.
+
+Processes multiple records and calculates overall GC content across all sequences.
+
+# Arguments
+- `records::AbstractVector{T}` where T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}`: Input records
+
+# Returns
+- `Float64`: Overall GC content as a percentage (0.0-100.0)
+
+# Examples
+```julia
+# Calculate GC content from FASTA records
+records = collect(FASTX.FASTA.Reader(open("sequences.fasta")))
+gc_percent = calculate_gc_content(records)
+```
+"""
+function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+    if length(records) == 0
+        return 0.0
+    end
+    
+    total_gc = 0
+    total_bases = 0
+    
+    for record in records
+        sequence = FASTX.sequence(record)
+        gc_count = 0
+        
+        for base in sequence
+            total_bases += 1
+            if BioSequences.alphabet(sequence) isa BioSequences.DNAAlphabet
+                if base == BioSequences.DNA_G || base == BioSequences.DNA_C
+                    gc_count += 1
+                end
+            elseif BioSequences.alphabet(sequence) isa BioSequences.RNAAlphabet
+                if base == BioSequences.RNA_G || base == BioSequences.RNA_C
+                    gc_count += 1
+                end
+            end
+        end
+        
+        total_gc += gc_count
+    end
+    
+    if total_bases == 0
+        return 0.0
+    end
+    
+    return (total_gc / total_bases) * 100.0
+end

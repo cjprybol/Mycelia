@@ -198,15 +198,16 @@ and N50 statistic for assembly evaluation.
 - `contigs_file`: Path to FASTA file containing assembly contigs
 
 # Returns
-- Tuple of (n_contigs, total_length, n50)
+- Tuple of (n_contigs, total_length, n50, l50)
   - `n_contigs`: Number of contigs in the assembly
   - `total_length`: Total length of all contigs in base pairs
   - `n50`: N50 statistic (length of shortest contig in the set covering 50% of assembly)
+  - `l50`: L50 statistic (number of contigs needed to reach 50% of assembly length)
 
 # Example
 ```julia
-n_contigs, total_length, n50 = assess_assembly_quality("assembly.fasta")
-println("Assembly has \$n_contigs contigs, \$total_length bp total, N50=\$n50")
+n_contigs, total_length, n50, l50 = assess_assembly_quality("assembly.fasta")
+println("Assembly has \$n_contigs contigs, \$total_length bp total, N50=\$n50, L50=\$l50")
 ```
 
 # See Also
@@ -224,14 +225,15 @@ function assess_assembly_quality(contigs_file)
     n_contigs = length(contigs)
     total_length = sum(contigs)
     
-    # Calculate N50
+    # Calculate N50 and L50
     sorted_lengths = sort(contigs, rev=true)
     cumsum_lengths = cumsum(sorted_lengths)
     target_length = total_length / 2
     n50_idx = findfirst(x -> x >= target_length, cumsum_lengths)
     n50 = n50_idx !== nothing ? sorted_lengths[n50_idx] : 0
+    l50 = n50_idx !== nothing ? n50_idx : length(contigs)
     
-    return n_contigs, total_length, n50
+    return n_contigs, total_length, n50, l50
 end
 
 # ---------- CheckM, CheckM2, CheckV Functions ----------
@@ -678,6 +680,135 @@ function analyze_fastq_quality(fastq_file::String)
         gc_content,
         quality_dist
     )
+end
+
+"""
+    run_quast(assembly_files::Vector{String}; outdir::String="quast_results", reference::Union{String,Nothing}=nothing, threads::Int=Sys.CPU_THREADS, min_contig::Int=500, gene_finding::Bool=false)
+
+Run QUAST (Quality Assessment Tool for Genome Assemblies) to evaluate assembly quality.
+
+# Arguments
+- `assembly_files::Vector{String}`: Vector of paths to assembly FASTA files to evaluate
+- `outdir::String="quast_results"`: Output directory for QUAST results
+- `reference::Union{String,Nothing}=nothing`: Optional reference genome for reference-based metrics
+- `threads::Int=Sys.CPU_THREADS`: Number of threads to use
+- `min_contig::Int=500`: Minimum contig length to consider
+- `gene_finding::Bool=false`: Whether to run gene finding (requires GeneMark-ES/ET)
+
+# Returns
+- `String`: Path to the output directory containing QUAST results
+
+# Output Files
+- `report.html`: Interactive HTML report
+- `report.txt`: Text summary report
+- `report.tsv`: Tab-separated values report for programmatic access
+- `transposed_report.tsv`: Transposed TSV format
+- `icarus.html`: Icarus contig browser (if reference provided)
+
+# Examples
+```julia
+# Basic assembly evaluation
+assemblies = ["assembly1.fasta", "assembly2.fasta"]
+quast_dir = Mycelia.run_quast(assemblies)
+
+# With reference genome
+ref_genome = "reference.fasta"
+quast_dir = Mycelia.run_quast(assemblies, reference=ref_genome)
+
+# Custom parameters
+quast_dir = Mycelia.run_quast(assemblies, 
+                             outdir="my_quast_results",
+                             min_contig=1000,
+                             threads=8)
+```
+
+# Notes
+- Requires QUAST to be installed via Bioconda
+- Without reference: provides basic metrics (N50, total length, # contigs, etc.)
+- With reference: adds reference-based metrics (genome fraction, misassemblies, etc.)
+- Gene finding requires additional dependencies and is disabled by default
+"""
+function run_quast(assembly_files::Vector{String}; 
+                   outdir::String="quast_results", 
+                   reference::Union{String,Nothing}=nothing,
+                   threads::Int=Sys.CPU_THREADS,
+                   min_contig::Int=500,
+                   gene_finding::Bool=false)
+    
+    # Install QUAST via Bioconda if needed
+    add_bioconda_env("quast")
+    
+    # Validate input files
+    for assembly_file in assembly_files
+        if !isfile(assembly_file)
+            error("Assembly file does not exist: $(assembly_file)")
+        end
+    end
+    
+    # Validate reference if provided
+    if reference !== nothing && !isfile(reference)
+        error("Reference file does not exist: $(reference)")
+    end
+    
+    # Create output directory
+    mkpath(outdir)
+    
+    # Build QUAST command
+    cmd_parts = [
+        "quast.py",
+        "--output-dir", outdir,
+        "--threads", string(threads),
+        "--min-contig", string(min_contig)
+    ]
+    
+    # Add reference if provided
+    if reference !== nothing
+        push!(cmd_parts, "--reference", reference)
+    end
+    
+    # Add gene finding if requested
+    if gene_finding
+        push!(cmd_parts, "--gene-finding")
+    end
+    
+    # Add assembly files
+    append!(cmd_parts, assembly_files)
+    
+    # Run QUAST
+    try
+        println("Running QUAST on $(length(assembly_files)) assemblies...")
+        if reference !== nothing
+            println("Using reference: $(reference)")
+        end
+        
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quast $cmd_parts`)
+        
+        # Verify output files were created
+        report_txt = joinpath(outdir, "report.txt")
+        report_tsv = joinpath(outdir, "report.tsv")
+        
+        if !isfile(report_txt) || !isfile(report_tsv)
+            error("QUAST failed to generate expected output files")
+        end
+        
+        println("QUAST analysis completed successfully")
+        println("Results saved in: $(outdir)")
+        println("View HTML report: $(joinpath(outdir, "report.html"))")
+        
+        return outdir
+        
+    catch e
+        error("QUAST execution failed: $(e)")
+    end
+end
+
+"""
+    run_quast(assembly_file::String; kwargs...)
+
+Run QUAST on a single assembly file. See `run_quast(::Vector{String})` for details.
+"""
+function run_quast(assembly_file::String; kwargs...)
+    return run_quast([assembly_file]; kwargs...)
 end
 
 #

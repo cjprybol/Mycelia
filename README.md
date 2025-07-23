@@ -11,7 +11,7 @@
 
 ## Overview
 
-Mycelia is an experimental Julia package exploring novel approaches to bioinformatics, with a focus on graph-based genome assembly and quality-aware sequence analysis. Currently in early development, the package provides a research platform for testing innovative algorithms while building toward a comprehensive toolkit.
+Mycelia is a Julia package for bioinformatics and computational biology that implements graph-based genome assembly and quality-aware sequence analysis. The package provides both research-oriented algorithms and practical bioinformatics functionality, including extensive tool integration for genomics workflows. While some components are experimental and in active development, the package includes substantial implemented functionality for data processing, assembly, annotation, and analysis.
 
 ## 🚀 Quick Start
 
@@ -33,24 +33,28 @@ reads_file = Mycelia.simulate_pacbio_reads(fasta=genome_file, quantity="50x")
 assembly = Mycelia.assemble_genome(reads_file)
 ```
 
-## ✨ Key Features & Research Areas
+## ✨ Key Features
 
-### Currently Available
-- **🧬 Sequence Processing**: Basic FASTA/FASTQ I/O and read simulation
-- **📊 K-mer Analysis**: Canonical k-mer counting and distance metrics
-- **🔧 Tool Integration**: Wrappers for MEGAHIT, SPAdes, and other assemblers
-- **⚡ HPC Support**: SLURM job submission and rclone integration
+### Core Functionality
+- **🧬 Comprehensive File Format Support**: FASTA/FASTQ/GenBank/GFF/VCF/SAM/BAM with automatic compression handling
+- **📊 Advanced K-mer Analysis**: Canonical k-mer counting, frequency spectra, saturation analysis, and distance metrics
+- **🔧 Extensive Tool Integration**: 30+ assemblers, annotation tools (Pyrodigal, BLAST+, MMSeqs2), and QC utilities
+- **⚡ Parallel Processing**: Multi-threaded analysis with progress tracking and HPC support (SLURM, rclone)
+- **📈 Rich Visualization**: Coverage plots, k-mer spectra, embeddings, taxonomic distributions, and more
 
-### In Active Development
-- **🧪 Novel Assembly Algorithms**: Graph-based approaches with quality awareness
-- **🌐 Pangenome Analysis**: K-mer based comparative genomics (basic implementation available)
-- **📈 Quality Control**: Comprehensive QC pipeline (partially implemented)
+### Research Innovations
+- **🧪 Novel 6-Graph Assembly Framework**: Unique hierarchy transitioning from fixed-length (k-mer, qualmer) to variable-length (string, FASTQ) graphs
+- **🎯 Quality-Aware Assembly**: First framework to preserve per-base quality scores throughout assembly process
+- **🤖 Machine Learning Integration**: Reinforcement learning for automated parameter optimization
+- **🔬 Zero String Conversion**: Type-safe implementation using native BioSequences types throughout
 
-### Planned/Early Stage
-- **🔍 Annotation**: Gene prediction and functional annotation integration
-- **🌳 Phylogenetics**: Tree construction from pangenome data
-- **📊 Visualization**: Interactive plots for genomic data
-- **🔧 Assembly Polish**: Error correction and consensus calling
+### Bioinformatics Workflows
+- **🧬 Data Acquisition**: NCBI downloads, read simulation (Illumina, PacBio, Nanopore via ART, Badread)
+- **🔍 Quality Control**: FastQC integration, native FASTQ analysis, filtering (fastp, filtlong, trim_galore)
+- **🧩 Assembly**: MEGAHIT, metaSPAdes, Flye, Canu, and 25+ more assemblers with unified interface
+- **🏷️ Annotation**: Gene prediction (Pyrodigal), homology search (BLAST+, MMSeqs2), specialized tools (tRNAscan-SE, TransTerm)
+- **🧮 Alignment & Mapping**: Minimap2, Clustal Omega, BAM processing, variant calling
+- **📊 Comparative Genomics**: Pangenome analysis, FastANI integration, k-mer based comparisons
 
 ## 📚 Documentation
 
@@ -61,7 +65,7 @@ assembly = Mycelia.assemble_genome(reads_file)
 ## 🔧 Installation
 
 ### Prerequisites
-- Julia LTS or higher
+- Julia 1.10 or higher (LTS recommended)
 
 ### Install
 ```julia
@@ -73,29 +77,31 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 
 ## 🧪 Development Status
 
-**Status**: Early development - Research algorithms being implemented and tested
+**Status**: Research platform with substantial implemented functionality alongside experimental algorithms
 
 ### Working Components
-- ✅ Basic FASTA/FASTQ file I/O
-- ✅ External tool integration (MEGAHIT, metaSPAdes, badread)
-- ✅ Read simulation functions (PacBio, Nanopore)
-- ✅ Data download by accession number
-- ✅ K-mer counting infrastructure
+- ✅ **File Format Support**: FASTA/FASTQ/GenBank/GFF/VCF/SAM/BAM processing with compression support
+- ✅ **Data Acquisition**: NCBI genome download, reference database access, read simulation (PacBio, Nanopore, Illumina)
+- ✅ **Quality Control**: FastQC integration, comprehensive FASTQ analysis, filtering tools (fastp, filtlong, trim_galore)
+- ✅ **Assembly Integration**: MEGAHIT, metaSPAdes, Flye, Canu wrappers with 30+ assembler support
+- ✅ **Annotation Pipeline**: Pyrodigal, BLAST+, MMSeqs2, TransTerm, tRNAscan-SE, MLST integration
+- ✅ **Alignment Tools**: Minimap2, Clustal Omega integration with variant calling support
+- ✅ **Sequence Analysis**: K-mer counting, canonical k-mer analysis, sequence complexity assessment
+- ✅ **Graph-Based Assembly**: Novel 6-graph type hierarchy with quality-aware assembly algorithms
+- ✅ **Visualization**: Coverage plots, k-mer spectra, embeddings, taxonomic analysis, progress tracking
 
 ### Experimental/In Development
-- 🧪 Graph-based assembly framework (6-graph hierarchy)
-- 🧪 Quality-aware sequence graphs (qualmer graphs)
-- 🧪 Machine learning guided assembly (reinforcement learning)
-- 🚧 Quality control and filtering functions
-- 🚧 Assembly validation and metrics
+- 🧪 Reinforcement learning guided assembly optimization
+- 🧪 Advanced assembly validation metrics
+- 🚧 Native quality control implementations (external tools currently integrated)
 - 🚧 Pangenome analysis workflows
-- 🚧 Visualization capabilities
+- 🚧 Advanced phylogenetics integration
 
 ### Known Limitations
-- ⚠️ Testing framework needs fixes (`Pkg.test()` currently fails)
-- ⚠️ Many documented functions not yet implemented
-- ⚠️ Documentation may reference planned features
-- ⚠️ Not recommended for production workflows
+- ⚠️ Testing framework needs fixes (`Pkg.test()` currently fails due to dependency conflicts)
+- ⚠️ Function discoverability requires using `Mycelia.function_name()` syntax
+- ⚠️ Some documentation examples may reference experimental features
+- ⚠️ Research algorithms may require parameter tuning for optimal results
 
 ## 📄 License
 

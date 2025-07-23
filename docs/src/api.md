@@ -1,6 +1,6 @@
 # API Documentation
 
-Welcome to the Mycelia API documentation! This guide organizes both **implemented functions** and **planned features** by biological workflows. Note that Mycelia is in early development - many documented functions represent the intended API design but are not yet implemented.
+Welcome to the Mycelia API documentation! This guide organizes both **implemented functions** and **planned features** by biological workflows. Mycelia provides substantial functionality for bioinformatics analysis with extensive tool integration, while continuing to expand with experimental algorithms and additional features.
 
 ## 🧬 Quick Start
 
@@ -36,8 +36,8 @@ Download genomic data from public databases and simulate synthetic datasets for 
 ### 2. [Quality Control & Preprocessing](api/workflows/quality-control.md)  
 Assess and improve sequencing data quality before analysis.
 
-**Working Functions:** `qc_filter_short_reads_fastp`, `qc_filter_long_reads_filtlong`, `trim_galore_paired`  
-**Planned:** `analyze_fastq_quality`, `filter_by_quality`
+**Working Functions:** `analyze_fastq_quality`, `calculate_gc_content`, `assess_duplication_rates`, `qc_filter_short_reads_fastp`, `qc_filter_long_reads_filtlong`, `trim_galore_paired`  
+**Planned:** `filter_by_quality`, per-base quality visualization
 
 ### 3. [Sequence Analysis & K-mers](api/workflows/sequence-analysis.md)
 Analyze sequence composition, count k-mers, and extract genomic features.
@@ -52,15 +52,17 @@ Assemble genomes from sequencing reads using various approaches.
 **Experimental:** Graph-based assembly framework  
 **Planned:** `assemble_genome`, `polish_assembly`
 
-### 5. Assembly Validation *(planned)*
+### 5. Assembly Validation
 Validate and assess the quality of genome assemblies.
 
-**Planned:** `evaluate_assembly`, `calculate_assembly_stats`, `busco_analysis`
+**Working Functions:** `assess_assembly_quality`, `validate_assembly`, CheckM/CheckM2 integration  
+**Planned:** QUAST, BUSCO, MUMmer integration
 
-### 6. Gene Annotation *(planned)*
+### 6. Gene Annotation
 Predict genes and assign functional annotations.
 
-**Planned:** `predict_genes`, `annotate_functions`, `analyze_go_terms`
+**Working Functions:** Pyrodigal, BLAST+, MMSeqs2, TransTerm, tRNAscan-SE, MLST integrations  
+**Planned:** GO term analysis, Reactome pathway analysis, PDB integration via UniRef annotations
 
 ### 7. Comparative Genomics *(planned)*
 Compare genomes, build pangenomes, and construct phylogenetic trees.
@@ -68,10 +70,11 @@ Compare genomes, build pangenomes, and construct phylogenetic trees.
 **Working Functions:** `analyze_pangenome_kmers`, `build_genome_distance_matrix`  
 **Planned:** `construct_phylogeny`, `calculate_synteny`
 
-### 8. Visualization & Reporting *(planned)*
+### 8. Visualization & Reporting
 Create plots, figures, and reports for analysis results.
 
-**Planned:** `plot_assembly_stats`, `plot_phylogenetic_tree`, `generate_report`
+**Working Functions:** `plot_kmer_frequency_spectra`, `visualize_genome_coverage`, `plot_embeddings`, `plot_taxa_abundances`, coverage plots, taxonomic visualizations  
+**Planned:** Per-base quality plots, assembly statistics visualization, phylogenetic tree plotting
 
 ## 📁 By Data Type
 

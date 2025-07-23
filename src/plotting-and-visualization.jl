@@ -1533,3 +1533,163 @@ function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
     )
     return p
 end
+
+"""
+    plot_per_base_quality(fastq_file::String; max_position::Union{Int,Nothing}=nothing, sample_size::Union{Int,Nothing}=nothing)
+
+Create per-base quality boxplots for FASTQ data, similar to FastQC output.
+
+# Arguments
+- `fastq_file::String`: Path to FASTQ file to analyze
+- `max_position::Union{Int,Nothing}=nothing`: Maximum read position to plot (default: auto-detect from data)
+- `sample_size::Union{Int,Nothing}=nothing`: Number of reads to sample for analysis (default: use all reads)
+
+# Returns
+- `Plots.Plot`: Boxplot showing quality distribution at each base position
+
+# Examples
+```julia
+# Basic per-base quality plot
+p = Mycelia.plot_per_base_quality("reads.fastq")
+
+# Plot first 100 positions only, sampling 10000 reads
+p = Mycelia.plot_per_base_quality("reads.fastq", max_position=100, sample_size=10000)
+```
+
+# Notes
+- Quality scores are displayed in Phred scale
+- Green zone: Q>=30 (high quality)
+- Yellow zone: Q20-29 (medium quality)  
+- Red zone: Q<20 (low quality)
+- For large files, consider using sample_size to improve performance
+"""
+function plot_per_base_quality(fastq_file::String; 
+                              max_position::Union{Int,Nothing}=nothing, 
+                              sample_size::Union{Int,Nothing}=nothing)
+    
+    if !isfile(fastq_file)
+        error("FASTQ file does not exist: $(fastq_file)")
+    end
+
+    # Collect quality scores by position
+    position_qualities = Dict{Int, Vector{Int}}()
+    read_count = 0
+    max_read_length = 0
+
+    reader = FASTX.FASTQ.Reader(open(fastq_file, "r"))
+    
+    try
+        for record in reader
+            read_count += 1
+            
+            # Sample reads if requested
+            if sample_size !== nothing && read_count > sample_size
+                break
+            end
+            
+            quality_scores = FASTX.quality_scores(record)
+            read_length = length(quality_scores)
+            max_read_length = max(max_read_length, read_length)
+            
+            # Apply position limit if specified
+            end_pos = max_position !== nothing ? min(max_position, read_length) : read_length
+            
+            for (pos, qual) in enumerate(quality_scores[1:end_pos])
+                if !haskey(position_qualities, pos)
+                    position_qualities[pos] = Int[]
+                end
+                push!(position_qualities[pos], qual)
+            end
+        end
+    finally
+        close(reader)
+    end
+    
+    if read_count == 0
+        error("No reads found in FASTQ file: $(fastq_file)")
+    end
+    
+    # Determine plotting range
+    max_pos_to_plot = max_position !== nothing ? max_position : max_read_length
+    positions = 1:max_pos_to_plot
+    
+    # Prepare data for boxplot
+    plot_data = []
+    plot_positions = []
+    
+    for pos in positions
+        if haskey(position_qualities, pos) && !isempty(position_qualities[pos])
+            quals = position_qualities[pos]
+            append!(plot_data, quals)
+            append!(plot_positions, fill(pos, length(quals)))
+        end
+    end
+    
+    if isempty(plot_data)
+        error("No quality data found for specified position range")
+    end
+    
+    # Create the boxplot
+    p = StatsPlots.boxplot(
+        plot_positions,
+        plot_data,
+        xlabel="Position in Read",
+        ylabel="Quality Score (Phred)",
+        title="Per-Base Sequence Quality",
+        legend=false,
+        fillalpha=0.7,
+        linewidth=1.5,
+        outliers=false  # Don't show outliers to reduce clutter
+    )
+    
+    # Add quality zone background colors
+    max_qual = maximum(plot_data)
+    min_qual = minimum(plot_data)
+    y_range = max_qual - min_qual
+    
+    # High quality zone (Q>=30) - green background
+    if max_qual >= 30
+        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [30, 30], 
+                        fillrange=[max_qual+1, max_qual+1], 
+                        fillalpha=0.1, fillcolor=:green, 
+                        linealpha=0, label=nothing)
+    end
+    
+    # Medium quality zone (Q20-29) - yellow background  
+    if max_qual >= 20
+        y_top = min(29, max_qual)
+        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [20, 20], 
+                        fillrange=[y_top, y_top], 
+                        fillalpha=0.1, fillcolor=:yellow, 
+                        linealpha=0, label=nothing)
+    end
+    
+    # Low quality zone (Q<20) - red background
+    if min_qual < 20
+        y_top = min(19, max_qual)
+        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [min_qual-1, min_qual-1], 
+                        fillrange=[y_top, y_top], 
+                        fillalpha=0.1, fillcolor=:red, 
+                        linealpha=0, label=nothing)
+    end
+    
+    # Add quality threshold lines
+    StatsPlots.hline!(p, [20], linestyle=:dash, color=:orange, linewidth=1, alpha=0.7, label=nothing)
+    StatsPlots.hline!(p, [30], linestyle=:dash, color=:green, linewidth=1, alpha=0.7, label=nothing)
+    
+    # Set reasonable axis limits
+    StatsPlots.plot!(p, 
+                    xlims=(0.5, max_pos_to_plot + 0.5),
+                    ylims=(max(0, min_qual - 2), max_qual + 2))
+    
+    # Add summary information
+    avg_qual_per_pos = [Statistics.mean(position_qualities[pos]) for pos in positions if haskey(position_qualities, pos)]
+    overall_avg_qual = Statistics.mean(avg_qual_per_pos)
+    
+    StatsPlots.annotate!(p, max_pos_to_plot * 0.7, max_qual * 0.95, 
+                        Plots.text("Avg Quality: $(round(overall_avg_qual, digits=1))", 10, :black))
+    StatsPlots.annotate!(p, max_pos_to_plot * 0.7, max_qual * 0.90, 
+                        Plots.text("Reads: $(read_count)", 10, :black))
+    
+    return p
+end

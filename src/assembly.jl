@@ -432,6 +432,8 @@ function validate_assembly(assembly::AssemblyResult; reference=nothing)
     # N-statistics
     metrics["N50"] = _calculate_n_statistic(contig_lengths, 0.5)
     metrics["N90"] = _calculate_n_statistic(contig_lengths, 0.9)
+    metrics["L50"] = _calculate_l_statistic(contig_lengths, 0.5)
+    metrics["L90"] = _calculate_l_statistic(contig_lengths, 0.9)
     
     # Reference-based validation (if provided)
     if !isnothing(reference)
@@ -758,6 +760,37 @@ function _calculate_n_statistic(sorted_lengths, threshold)
     end
     
     return 0
+end
+
+"""
+    _calculate_l_statistic(sorted_lengths, threshold)
+
+Calculate L-statistic (number of contigs needed to reach a given percentage of total assembly length).
+For example, L50 is the number of contigs needed to reach 50% of the total assembly length.
+
+# Arguments
+- `sorted_lengths`: Vector of contig lengths sorted in descending order
+- `threshold`: Fraction of total length (e.g., 0.5 for L50, 0.9 for L90)
+
+# Returns
+- `Int`: Number of contigs needed to reach the threshold
+"""
+function _calculate_l_statistic(sorted_lengths, threshold)
+    total_length = sum(sorted_lengths)
+    target_length = total_length * threshold
+    
+    cumulative_length = 0
+    contig_count = 0
+    
+    for length in sorted_lengths
+        cumulative_length += length
+        contig_count += 1
+        if cumulative_length >= target_length
+            return contig_count
+        end
+    end
+    
+    return length(sorted_lengths)  # Return total number of contigs if threshold not reached
 end
 
 """
