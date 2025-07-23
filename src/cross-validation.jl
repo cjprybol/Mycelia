@@ -637,3 +637,274 @@ function test_cross_validation()
         return Dict(:status => :error, :error => string(e))
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform bootstrap validation for assembly parameter optimization.
+
+# Arguments
+- `fastq_file::String`: Path to input FASTQ file
+- `n_bootstrap::Int`: Number of bootstrap samples (default: 100)
+- `sample_ratio::Float64`: Fraction of reads to sample in each bootstrap (default: 0.8)
+- `k_values::Vector{Int}`: K-mer sizes to test (default: [21, 31, 41, 51])
+- `output_dir::String`: Output directory for results
+
+# Returns
+Named tuple containing:
+- `optimal_k::Int`: Optimal k-mer size based on bootstrap validation
+- `confidence_intervals::Dict`: Confidence intervals for assembly metrics
+- `bootstrap_results::Vector{Dict}`: Results from each bootstrap sample
+
+# Details
+- Implements bootstrap resampling for robust parameter validation
+- Evaluates assembly quality across multiple parameter combinations
+- Calculates confidence intervals for assembly statistics
+- Supports parameter optimization with uncertainty quantification
+"""
+function bootstrap_assembly_validation(fastq_file::String; 
+                                     n_bootstrap::Int=100, 
+                                     sample_ratio::Float64=0.8,
+                                     k_values::Vector{Int}=[21, 31, 41, 51],
+                                     output_dir::String="bootstrap_validation")
+    
+    mkpath(output_dir)
+    @info "Starting bootstrap validation with $n_bootstrap samples"
+    
+    # Read all records from FASTQ file
+    all_records = Vector{FASTX.FASTQ.Record}()
+    FASTX.FASTQ.Reader(open(fastq_file, "r")) do reader
+        for record in reader
+            push!(all_records, record)
+        end
+    end
+    
+    total_reads = length(all_records)
+    sample_size = Int(round(total_reads * sample_ratio))
+    
+    bootstrap_results = Vector{Dict}()
+    
+    for bootstrap_idx in 1:n_bootstrap
+        @info "Processing bootstrap sample $bootstrap_idx/$n_bootstrap"
+        
+        # Bootstrap sampling with replacement
+        Random.seed!(bootstrap_idx)  # For reproducibility
+        sampled_indices = rand(1:total_reads, sample_size)
+        sampled_records = all_records[sampled_indices]
+        
+        # Write bootstrap sample to temporary file
+        bootstrap_fastq = joinpath(output_dir, "bootstrap_$(bootstrap_idx).fastq")
+        write_fastq(records=sampled_records, filename=bootstrap_fastq)
+        
+        bootstrap_result = Dict{String, Any}()
+        bootstrap_result["sample_id"] = bootstrap_idx
+        bootstrap_result["k_results"] = Dict{Int, Dict}()
+        
+        # Test each k-mer size
+        for k in k_values
+            @info "Testing k=$k for bootstrap $bootstrap_idx"
+            
+            try
+                # Perform assembly with this k value
+                assembly_result = test_assembly_with_k(bootstrap_fastq, k, output_dir, bootstrap_idx)
+                bootstrap_result["k_results"][k] = assembly_result
+                
+            catch e
+                @warn "Failed assembly for k=$k in bootstrap $bootstrap_idx: $e"
+                bootstrap_result["k_results"][k] = Dict("error" => string(e))
+            end
+        end
+        
+        push!(bootstrap_results, bootstrap_result)
+        
+        # Cleanup temporary FASTQ
+        rm(bootstrap_fastq, force=true)
+    end
+    
+    # Analyze bootstrap results
+    confidence_intervals = calculate_bootstrap_confidence_intervals(bootstrap_results, k_values)
+    optimal_k = select_optimal_k_bootstrap(bootstrap_results, k_values)
+    
+    # Save results
+    results_file = joinpath(output_dir, "bootstrap_results.json")
+    open(results_file, "w") do io
+        JSON3.write(io, Dict(
+            "optimal_k" => optimal_k,
+            "confidence_intervals" => confidence_intervals,
+            "bootstrap_results" => bootstrap_results,
+            "parameters" => Dict(
+                "n_bootstrap" => n_bootstrap,
+                "sample_ratio" => sample_ratio,
+                "k_values" => k_values
+            )
+        ))
+    end
+    
+    return (;optimal_k, confidence_intervals, bootstrap_results)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Test assembly with a specific k-mer size for bootstrap validation.
+"""
+function test_assembly_with_k(fastq_file::String, k::Int, output_dir::String, bootstrap_idx::Int)
+    assembly_dir = joinpath(output_dir, "assembly_k$(k)_b$(bootstrap_idx)")
+    mkpath(assembly_dir)
+    
+    try
+        # Use megahit for consistent assembly testing
+        assembly_result = run_megahit(
+            fastq1=fastq_file,
+            outdir=assembly_dir,
+            k_list=string(k),
+            min_contig_len=200
+        )
+        
+        # Calculate assembly statistics
+        contigs_file = assembly_result.contigs
+        if isfile(contigs_file)
+            stats = calculate_basic_assembly_stats(contigs_file)
+            stats["assembly_success"] = true
+            return stats
+        else
+            return Dict("assembly_success" => false, "error" => "No contigs file produced")
+        end
+        
+    catch e
+        return Dict("assembly_success" => false, "error" => string(e))
+    finally
+        # Cleanup assembly directory to save space
+        rm(assembly_dir, recursive=true, force=true)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate basic assembly statistics for bootstrap validation.
+"""
+function calculate_basic_assembly_stats(contigs_file::String)
+    stats = Dict{String, Any}()
+    
+    sequences = Vector{BioSequences.LongDNA{4}}()
+    FASTX.FASTA.Reader(open(contigs_file, "r")) do reader
+        for record in reader
+            seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
+            push!(sequences, seq)
+        end
+    end
+    
+    if isempty(sequences)
+        return Dict("num_contigs" => 0, "total_length" => 0, "n50" => 0)
+    end
+    
+    lengths = [length(seq) for seq in sequences]
+    total_length = sum(lengths)
+    
+    # Calculate N50
+    sorted_lengths = sort(lengths, rev=true)
+    cumulative_length = 0
+    n50 = 0
+    
+    for length in sorted_lengths
+        cumulative_length += length
+        if cumulative_length >= total_length / 2
+            n50 = length
+            break
+        end
+    end
+    
+    stats["num_contigs"] = length(sequences)
+    stats["total_length"] = total_length
+    stats["n50"] = n50
+    stats["min_length"] = minimum(lengths)
+    stats["max_length"] = maximum(lengths)
+    stats["mean_length"] = Statistics.mean(lengths)
+    
+    return stats
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate confidence intervals from bootstrap results.
+"""
+function calculate_bootstrap_confidence_intervals(bootstrap_results::Vector{Dict}, k_values::Vector{Int})
+    confidence_intervals = Dict{Int, Dict}()
+    
+    for k in k_values
+        # Collect all successful results for this k
+        k_stats = []
+        for result in bootstrap_results
+            k_result = get(result["k_results"], k, nothing)
+            if k_result !== nothing && get(k_result, "assembly_success", false)
+                push!(k_stats, k_result)
+            end
+        end
+        
+        if isempty(k_stats)
+            confidence_intervals[k] = Dict("error" => "No successful assemblies")
+            continue
+        end
+        
+        # Calculate confidence intervals for key metrics
+        ci_dict = Dict{String, Dict}()
+        
+        for metric in ["n50", "total_length", "num_contigs", "mean_length"]
+            values = [get(stat, metric, 0) for stat in k_stats if haskey(stat, metric)]
+            
+            if !isempty(values)
+                sorted_values = sort(values)
+                n = length(sorted_values)
+                
+                # 95% confidence interval
+                lower_idx = max(1, Int(ceil(0.025 * n)))
+                upper_idx = min(n, Int(floor(0.975 * n)))
+                
+                ci_dict[metric] = Dict(
+                    "mean" => Statistics.mean(values),
+                    "lower_95" => sorted_values[lower_idx],
+                    "upper_95" => sorted_values[upper_idx],
+                    "median" => Statistics.median(values)
+                )
+            end
+        end
+        
+        confidence_intervals[k] = ci_dict
+    end
+    
+    return confidence_intervals
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Select optimal k-mer size based on bootstrap validation results.
+"""
+function select_optimal_k_bootstrap(bootstrap_results::Vector{Dict}, k_values::Vector{Int})
+    k_scores = Dict{Int, Float64}()
+    
+    for k in k_values
+        scores = Float64[]
+        
+        for result in bootstrap_results
+            k_result = get(result["k_results"], k, nothing)
+            if k_result !== nothing && get(k_result, "assembly_success", false)
+                # Simple scoring based on N50 and total length
+                n50 = get(k_result, "n50", 0)
+                total_length = get(k_result, "total_length", 0)
+                num_contigs = get(k_result, "num_contigs", 1)
+                
+                # Score favors higher N50, reasonable total length, fewer contigs
+                score = n50 * log(total_length + 1) / sqrt(num_contigs + 1)
+                push!(scores, score)
+            end
+        end
+        
+        k_scores[k] = isempty(scores) ? 0.0 : Statistics.mean(scores)
+    end
+    
+    # Return k with highest average score
+    return argmax(k_scores)
+end

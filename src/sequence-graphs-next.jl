@@ -2389,4 +2389,226 @@ function _reconstruct_shortest_path(predecessors, distances, start_state, end_st
     return GraphPath(steps)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform probabilistic assembly with confidence intervals for each base.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Assembly graph with k-mer vertices
+- `start_vertices::Vector{String}`: Starting vertices for assembly paths
+- `confidence_threshold::Float64`: Minimum confidence threshold for base calls (default: 0.95)
+- `max_paths::Int`: Maximum number of paths to consider (default: 1000)
+
+# Returns
+Named tuple containing:
+- `assembly_sequences::Vector{BioSequences.LongDNA{4}}`: Assembled sequences
+- `confidence_intervals::Vector{Vector{Float64}}`: Per-base confidence scores
+- `alternative_bases::Vector{Dict{Int, Vector{BioSequences.DNA}}}`: Alternative bases at low-confidence positions
+
+# Details
+- Implements maximum likelihood path selection through assembly graphs
+- Calculates per-base confidence intervals based on path probabilities
+- Identifies ambiguous regions where multiple paths have similar likelihoods
+- Supports probabilistic variant calling from graph ambiguities
+"""
+function probabilistic_assembly_with_confidence(graph::MetaGraphsNext.MetaGraph, 
+                                               start_vertices::Vector{String}; 
+                                               confidence_threshold::Float64=0.95, 
+                                               max_paths::Int=1000)
+    
+    assembly_sequences = Vector{BioSequences.LongDNA{4}}()
+    confidence_intervals = Vector{Vector{Float64}}()
+    alternative_bases = Vector{Dict{Int, Vector{BioSequences.DNA}}}()
+    
+    for start_vertex in start_vertices
+        @info "Processing assembly from vertex: $start_vertex"
+        
+        # Generate multiple probabilistic paths
+        paths = Vector{GraphPath}()
+        path_probabilities = Vector{Float64}()
+        
+        for i in 1:max_paths
+            try
+                path = probabilistic_walk_next(graph, start_vertex, 10000; seed=i)
+                path_prob = path.steps[end].cumulative_probability
+                
+                if path_prob > 1e-10  # Filter out very low probability paths
+                    push!(paths, path)
+                    push!(path_probabilities, path_prob)
+                end
+            catch e
+                # Handle dead ends or other path generation issues
+                break
+            end
+        end
+        
+        if isempty(paths)
+            @warn "No valid paths found from vertex $start_vertex"
+            continue
+        end
+        
+        # Normalize path probabilities
+        path_probabilities = path_probabilities ./ sum(path_probabilities)
+        
+        # Convert paths to sequences and calculate confidence
+        path_sequences = Vector{BioSequences.LongDNA{4}}()
+        for path in paths
+            seq = path_to_sequence(path, graph)
+            push!(path_sequences, seq)
+        end
+        
+        if isempty(path_sequences)
+            continue
+        end
+        
+        # Find consensus sequence and confidence intervals
+        consensus_seq, confidence_scores, alt_bases = calculate_consensus_with_confidence(
+            path_sequences, path_probabilities, confidence_threshold
+        )
+        
+        push!(assembly_sequences, consensus_seq)
+        push!(confidence_intervals, confidence_scores)
+        push!(alternative_bases, alt_bases)
+    end
+    
+    return (;assembly_sequences, confidence_intervals, alternative_bases)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate consensus sequence with per-base confidence intervals.
+
+# Arguments
+- `sequences::Vector{BioSequences.LongDNA{4}}`: Input sequences from different paths
+- `weights::Vector{Float64}`: Probability weights for each sequence
+- `confidence_threshold::Float64`: Minimum confidence threshold
+
+# Returns
+Tuple containing consensus sequence, confidence scores, and alternative bases
+"""
+function calculate_consensus_with_confidence(sequences::Vector{BioSequences.LongDNA{4}}, 
+                                           weights::Vector{Float64}, 
+                                           confidence_threshold::Float64)
+    
+    if isempty(sequences)
+        return BioSequences.LongDNA{4}(), Float64[], Dict{Int, Vector{BioSequences.DNA}}()
+    end
+    
+    # Find maximum sequence length
+    max_length = maximum(length.(sequences))
+    
+    # Initialize base count matrices
+    base_counts = Dict{BioSequences.DNA, Vector{Float64}}()
+    for base in [BioSequences.DNA_A, BioSequences.DNA_C, BioSequences.DNA_G, BioSequences.DNA_T]
+        base_counts[base] = zeros(Float64, max_length)
+    end
+    
+    # Count weighted bases at each position
+    for (seq_idx, seq) in enumerate(sequences)
+        weight = weights[seq_idx]
+        for (pos, base) in enumerate(seq)
+            if base in keys(base_counts) && pos <= max_length
+                base_counts[base][pos] += weight
+            end
+        end
+    end
+    
+    # Build consensus sequence and calculate confidence
+    consensus_bases = Vector{BioSequences.DNA}()
+    confidence_scores = Vector{Float64}()
+    alternative_bases = Dict{Int, Vector{BioSequences.DNA}}()
+    
+    for pos in 1:max_length
+        # Find most frequent base at this position
+        position_counts = Dict(base => counts[pos] for (base, counts) in base_counts)
+        
+        # Filter out zero counts
+        position_counts = filter(x -> x.second > 0, position_counts)
+        
+        if isempty(position_counts)
+            # No coverage at this position
+            push!(consensus_bases, BioSequences.DNA_N)
+            push!(confidence_scores, 0.0)
+            continue
+        end
+        
+        # Sort bases by frequency
+        sorted_bases = sort(collect(position_counts), by=x->x[2], rev=true)
+        consensus_base = sorted_bases[1][1]
+        consensus_count = sorted_bases[1][2]
+        
+        # Calculate confidence as proportion of consensus base
+        total_count = sum(values(position_counts))
+        confidence = consensus_count / total_count
+        
+        push!(consensus_bases, consensus_base)
+        push!(confidence_scores, confidence)
+        
+        # Record alternative bases for low-confidence positions
+        if confidence < confidence_threshold && length(sorted_bases) > 1
+            alt_bases = [base for (base, count) in sorted_bases[2:end] if count / total_count > 0.1]
+            if !isempty(alt_bases)
+                alternative_bases[pos] = alt_bases
+            end
+        end
+    end
+    
+    consensus_sequence = BioSequences.LongDNA{4}(consensus_bases)
+    return consensus_sequence, confidence_scores, alternative_bases
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a graph path to a DNA sequence.
+
+# Arguments
+- `path::GraphPath`: Path through the assembly graph
+- `graph::MetaGraphsNext.MetaGraph`: Assembly graph
+
+# Returns
+BioSequences.LongDNA{4} sequence corresponding to the path
+"""
+function path_to_sequence(path::GraphPath, graph::MetaGraphsNext.MetaGraph)
+    if isempty(path.steps)
+        return BioSequences.LongDNA{4}()
+    end
+    
+    # Extract k-mers from path vertices
+    sequence_parts = Vector{BioSequences.LongDNA{4}}()
+    
+    for (i, step) in enumerate(path.steps)
+        vertex_data = graph[step.vertex]
+        kmer = vertex_data.canonical_kmer
+        
+        # For string graph vertices, extract the sequence
+        if hasfield(typeof(vertex_data), :sequence)
+            push!(sequence_parts, vertex_data.sequence)
+        else
+            # For k-mer graphs, overlap consecutive k-mers
+            if i == 1
+                push!(sequence_parts, kmer)
+            else
+                # Add only the last base of the k-mer to avoid overlap
+                last_base = kmer[end:end]
+                push!(sequence_parts, last_base)
+            end
+        end
+    end
+    
+    # Concatenate all parts
+    if isempty(sequence_parts)
+        return BioSequences.LongDNA{4}()
+    end
+    
+    full_sequence = sequence_parts[1]
+    for part in sequence_parts[2:end]
+        full_sequence = full_sequence * part
+    end
+    
+    return full_sequence
+end
+
 # Note: We don't export specific types/functions - use fully qualified names like Mycelia.probabilistic_walk_next

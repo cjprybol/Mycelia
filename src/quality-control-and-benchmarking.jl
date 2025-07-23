@@ -1135,4 +1135,286 @@ function run_mummer_plot(delta_file::String;
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Assess assembly quality using k-mer based metrics including QV scores.
+
+This function provides a comprehensive quality assessment of genome assemblies by
+comparing k-mer distributions between the assembly and source sequencing data.
+It calculates multiple quality metrics across different k-mer sizes, with the 
+QV (Quality Value) score being the primary measure of assembly accuracy.
+
+# Arguments
+- `assembly`: Path to assembly file (FASTA format) or assembly sequences
+- `observations`: Path to sequencing data file(s) (FASTQ format) or sequence observations
+- `ks::Vector{Int}`: K-mer sizes to analyze (default: 11,13,17,19,23,31,53 for comprehensive evaluation)
+
+# Returns
+DataFrame containing quality metrics for each k-mer size:
+- `k::Int`: K-mer length used
+- `cosine_distance::Float64`: Cosine similarity between k-mer distributions  
+- `js_divergence::Float64`: Jensen-Shannon divergence between distributions
+- `qv::Float64`: Merqury-style Quality Value score (primary assembly accuracy metric)
+
+# QV Score Interpretation
+- **QV ≥ 40**: High quality assembly (>99.99% base accuracy)
+- **QV 30-40**: Good quality assembly (99.9-99.99% base accuracy) 
+- **QV 20-30**: Moderate quality assembly (99-99.9% base accuracy)
+- **QV < 20**: Lower quality assembly (<99% base accuracy)
+
+# Implementation Details
+The QV score follows the Merqury methodology:
+1. Count k-mers in both assembly and sequencing data
+2. Calculate shared k-mers between datasets
+3. Estimate base-level accuracy: P = (Kshared/Ktotal)^(1/k)
+4. Convert to Phred scale: QV = -10log₁₀(1-P)
+
+# Performance Notes
+- Uses multiple k-mer sizes for robust quality assessment
+- Larger k-mer sizes provide more discriminative power
+- Parallel k-mer counting for computational efficiency
+- Progress tracking for long-running analyses
+
+# References
+Rhie, A. et al. "Merqury: reference-free quality, completeness, and phasing 
+assessment for genome assemblies." Genome Biology 21, 245 (2020).
+"""
+function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> x in [11,13,17,19,23,31,53], Mycelia.ks()))
+    return assess_assembly_kmer_quality(assembly=assembly, observations=observations, ks=ks)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate QV score heatmap visualization for comparing assembler performance.
+
+Creates a heatmap showing QV scores across different k-mer sizes and assemblers,
+enabling easy comparison of assembly quality across multiple tools and parameters.
+
+# Arguments
+- `qv_results`: DataFrame containing QV results (from assess_assembly_quality)
+- `assembler_column::String`: Column name identifying different assemblers (default: "assembler")
+- `k_column::String`: Column name with k-mer sizes (default: "k") 
+- `qv_column::String`: Column name with QV scores (default: "qv")
+- `title::String`: Plot title (default: "Assembly Quality (QV Scores)")
+- `clims::Tuple`: Color scale limits (default: (0, 60))
+
+# Returns
+Plots.jl heatmap object showing QV scores by assembler and k-mer size
+
+# Visualization Features
+- Color-coded heatmap with QV scores as values
+- K-mer sizes on y-axis, assemblers on x-axis
+- Color scale optimized for typical QV ranges
+- Missing data handled gracefully
+- Customizable styling and limits
+
+# Usage Examples
+```julia
+# Basic heatmap
+results = assess_assembly_quality(assembly="contigs.fa", observations=["reads.fq"])
+plot = generate_qv_heatmap(results)
+
+# Custom styling
+plot = generate_qv_heatmap(results, 
+                          title="HiFi Assembly Comparison",
+                          clims=(20, 50))
+```
+"""
+function generate_qv_heatmap(qv_results::DataFrames.DataFrame; 
+                            assembler_column::String="assembler",
+                            k_column::String="k", 
+                            qv_column::String="qv",
+                            title::String="Assembly Quality (QV Scores)",
+                            clims::Tuple=(0, 60))
+    
+    # Get unique assemblers and k-values
+    assemblers = sort(unique(qv_results[!, assembler_column]))
+    ks = sort(unique(qv_results[!, k_column]))
+    
+    # Create QV matrix
+    qv_matrix = zeros(length(ks), length(assemblers))
+    
+    for (i, k) in enumerate(ks)
+        for (j, assembler) in enumerate(assemblers)
+            matching_rows = (qv_results[!, k_column] .== k) .& (qv_results[!, assembler_column] .== assembler)
+            if any(matching_rows)
+                qv_matrix[i, j] = first(qv_results[matching_rows, qv_column])
+            else
+                qv_matrix[i, j] = NaN  # Missing data
+            end
+        end
+    end
+    
+    # Create heatmap
+    heatmap_plot = Plots.heatmap(
+        qv_matrix,
+        xlabel = "Assembler",
+        ylabel = "K-mer Size", 
+        title = title,
+        xticks = (1:length(assemblers), assemblers),
+        yticks = (1:length(ks), ks),
+        colorbar_title = "QV Score",
+        clims = clims,
+        size = (600, 400),
+        margin = 5Plots.PlotMeasures.mm
+    )
+    
+    return heatmap_plot
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run ALE (Assembly Likelihood Evaluation) for reference-free quality assessment.
+
+# Arguments
+- `assembly_file::String`: Path to assembly FASTA file
+- `reads_file::String`: Path to reads FASTQ file (can be comma-separated for paired reads)
+- `outdir::String`: Output directory path (default: "\${assembly_file}_ale")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `ale_score::String`: Path to ALE score file
+- `ale_plot::String`: Path to ALE plot file
+
+# Details
+- Uses ALE's per-base likelihood scoring for reference-free quality assessment
+- Evaluates assembly quality based on read mapping consistency
+- Identifies potential misassemblies and low-quality regions
+- Automatically creates and uses a conda environment with ale
+- Skips analysis if output files already exist
+"""
+function run_ale(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_ale")
+    Mycelia.add_bioconda_env("ale")
+    mkpath(outdir)
+    
+    basename_assembly = basename(assembly_file, ".fasta")
+    ale_score_file = joinpath(outdir, basename_assembly * ".ale")
+    ale_plot_file = joinpath(outdir, basename_assembly * "_ALE_plot.png")
+    
+    if !isfile(ale_score_file)
+        # Map reads to assembly first
+        sam_file = joinpath(outdir, basename_assembly * ".sam")
+        if !isfile(sam_file)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa index $(assembly_file)`)
+            if occursin(",", reads_file)
+                # Paired-end reads
+                reads = split(reads_file, ",")
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads[1]) $(reads[2]) -o $(sam_file)`)
+            else
+                # Single-end reads
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads_file) -o $(sam_file)`)
+            end
+        end
+        
+        # Run ALE evaluation
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale ALE $(sam_file) $(assembly_file) $(ale_score_file)`)
+        
+        # Generate plot if available
+        if isfile(ale_score_file)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale ALEplot $(ale_score_file) $(assembly_file) $(ale_plot_file)`)
+        end
+    end
+    
+    return (;outdir, ale_score=ale_score_file, ale_plot=ale_plot_file)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run FRCbam for reference-free misassembly detection using Feature Response Curves.
+
+# Arguments
+- `assembly_file::String`: Path to assembly FASTA file
+- `reads_file::String`: Path to reads FASTQ file (can be comma-separated for paired reads)
+- `outdir::String`: Output directory path (default: "\${assembly_file}_frcbam")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `frc_txt::String`: Path to FRC results text file
+- `frc_plot::String`: Path to FRC plot file
+
+# Details
+- Uses Feature Response Curves for reference-free misassembly detection
+- Evaluates paired-end consistency and insert size distributions
+- Identifies structural variations and assembly errors
+- Automatically creates and uses a conda environment with frcbam
+- Skips analysis if output files already exist
+"""
+function run_frcbam(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_frcbam")
+    Mycelia.add_bioconda_env("frcbam")
+    mkpath(outdir)
+    
+    basename_assembly = basename(assembly_file, ".fasta")
+    frc_txt_file = joinpath(outdir, basename_assembly * "_FRC.txt")
+    frc_plot_file = joinpath(outdir, basename_assembly * "_FRC.png")
+    
+    if !isfile(frc_txt_file)
+        # Map reads to assembly first
+        bam_file = joinpath(outdir, basename_assembly * ".bam")
+        if !isfile(bam_file)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa index $(assembly_file)`)
+            if occursin(",", reads_file)
+                # Paired-end reads
+                reads = split(reads_file, ",")
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads[1]) $(reads[2]) | samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`)
+            else
+                # Single-end reads (FRCbam works best with paired-end)
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads_file) | samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`)
+            end
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam samtools index $(bam_file)`)
+        end
+        
+        # Run FRCbam analysis
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam FRC --pe-bam $(bam_file) --output $(frc_txt_file)`)
+        
+        # Generate plot if available
+        if isfile(frc_txt_file)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam FRCplot --FRC-file $(frc_txt_file) --output $(frc_plot_file)`)
+        end
+    end
+    
+    return (;outdir, frc_txt=frc_txt_file, frc_plot=frc_plot_file)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run 4CAC for contig classification (virus/plasmid/prokaryote/eukaryote).
+
+# Arguments
+- `assembly_file::String`: Path to assembly FASTA file
+- `outdir::String`: Output directory path (default: "\${assembly_file}_4cac")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `predictions::String`: Path to classification predictions file
+
+# Details
+- Uses machine learning to classify contigs into virus/plasmid/prokaryote/eukaryote
+- Based on tetranucleotide frequency and other sequence features
+- Useful for binning and filtering metagenomic assemblies
+- Automatically creates and uses a conda environment with 4cac
+- Skips analysis if output files already exist
+"""
+function run_4cac(assembly_file::String; outdir::String=assembly_file * "_4cac")
+    Mycelia.add_bioconda_env("4cac")
+    mkpath(outdir)
+    
+    basename_assembly = basename(assembly_file, ".fasta")
+    predictions_file = joinpath(outdir, basename_assembly * "_predictions.txt")
+    
+    if !isfile(predictions_file)
+        # Run 4CAC classification
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n 4cac 4CAC -i $(assembly_file) -o $(predictions_file)`)
+    end
+    
+    return (;outdir, predictions=predictions_file)
+end
+
 #

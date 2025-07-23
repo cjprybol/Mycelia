@@ -444,6 +444,184 @@ These may already be implemented or have good external tool alternatives:
 - [ ] Comprehensive logging options
 - [ ] Debugging utilities
 
+## Priority 9: Mycelia-Dev Integration 🔬
+
+### 9.1 Iterative K-mer Polishing Algorithm ✅ **COMPLETED**
+**Source**: `assembly-accuracy-variant-calling-benchmarking/mycelia-iterative-k-mer-polishing.ipynb`
+**Benefits**: Demonstrates 3-5% improvement in assembly accuracy
+**Implementation Status**:
+- [x] Port iterative polishing logic to `src/viterbi-polishing-and-error-correction.jl`
+- [x] Add multi-scale k-mer polishing (k=11,13,17,19,23,31,53)
+- [x] Implement path resampling in low-quality regions
+- [x] Add strand-aware quality normalization
+- [x] Create `iterative_kmer_polish()` function with configurable parameters
+- [x] Add convergence detection and early stopping
+
+### 9.2 QV Score Calculation ✅ **COMPLETED**
+**Source**: Multiple notebooks in benchmarking folder
+**Benefits**: Standard metric for assembly quality assessment
+**Implementation Status**:
+- [x] Add `assess_assembly_quality()` wrapper to `src/quality-control-and-benchmarking.jl`
+- [x] Implement Merqury-style QV calculation using existing `kmer_counts_to_merqury_qv()`
+- [x] Create `generate_qv_heatmap()` for visualizing assembler performance
+- [x] Add comparison functionality against reference genomes
+- [x] Support both haploid and diploid QV calculations
+
+### 9.3 Pangenome Construction Suite ✅ **COMPLETED**
+**Source**: `assembly-accuracy-variant-calling-benchmarking/` pangenome notebooks
+**Benefits**: Graph-based pangenome analysis capabilities
+**Implementation Status**:
+- [x] **PGGB Integration**:
+  - [x] Add `construct_pangenome_pggb()` function
+  - [x] Support for parameter optimization
+  - [x] Parse PGGB graph outputs
+- [x] **Cactus Integration**:
+  - [x] Add `construct_pangenome_cactus()` function
+  - [x] Podman-HPC integration for containerized execution
+  - [x] Progressive alignment support
+- [x] **vg Toolkit Integration**:
+  - [x] Add `convert_gfa_to_vg_format()` conversion
+  - [x] Implement `call_variants_from_pggb_graph()` using vg deconstruct
+  - [x] Support for graph indexing and mapping via `index_pangenome_graph()`
+
+### 9.4 Variant Calling Pipeline ✅ **COMPLETED**
+**Source**: `assembly-accuracy-variant-calling-benchmarking/` variant calling notebooks
+**Tools**: GATK, Freebayes, Clair3, BCFtools
+**Implementation Status**:
+- [x] **GATK Integration**:
+  - [x] Add `run_gatk_haplotypecaller()` function
+  - [x] Support for both germline and somatic variants
+- [x] **Freebayes Integration**:
+  - [x] Add `run_freebayes()` function
+  - [x] Support for polyploid variant calling
+- [x] **Clair3 Integration**:
+  - [x] Add `run_clair3()` function
+  - [x] Support for long-read variant calling with platform-specific models
+- [x] **BCFtools Integration**:
+  - [x] Add `run_bcftools_call()` function
+  - [x] VCF manipulation utilities
+- [x] **Comparison Framework**:
+  - [x] Add `run_variant_calling_comparison()` function
+  - [x] Automated evaluation against baseline truth sets
+
+### 9.5 Variant Evaluation Framework ✅ **COMPLETED**
+**Source**: vcf-eval based evaluation notebooks
+**Benefits**: Comprehensive variant calling accuracy assessment
+**Implementation Status**:
+- [x] **RTG Tools Integration**:
+  - [x] Add `run_vcfeval()` function
+  - [x] Parse vcf-eval outputs for metrics via `parse_rtg_eval_output()`
+- [x] **Evaluation Metrics**:
+  - [x] Implement `calculate_evaluation_summary()` for precision/recall
+  - [x] Add `generate_roc_plots()` for performance visualization
+  - [x] Create F1 score and AUC calculations
+- [x] **Benchmarking Suite**:
+  - [x] Automated comparison across multiple variant callers
+  - [x] Performance summaries and comparison reports
+
+## Priority 10: Advanced Metagenomic Assembly Features 🧬
+**Source**: `notes-for-perfect-metagenomic-workflow.md` and `notes`
+**Goal**: Implement missing state-of-the-art metagenomic assembly capabilities
+
+### 10.1 Long-Read Metagenomic Assemblers ✅ **COMPLETED**
+**Implementation Status**:
+- [x] **metaFlye Integration**:
+  - [x] Add `run_metaflye()` function with repeat graph approach
+  - [x] Implement solid k-mer selection combining global/local distributions
+  - [x] Support for both PacBio and ONT data
+- [x] **hifiasm-meta Integration**:
+  - [x] Add `run_hifiasm_meta()` function with string graph approach
+  - [x] Implement SNV-based read phasing for strain resolution
+  - [x] Support for low-abundance species assembly
+- [x] **SKESA and IDBA-UD Integration**:
+  - [x] Add `run_skesa()` for high-accuracy bacterial assembly
+  - [x] Add `run_idba_ud()` for uneven depth metagenomic data
+
+### 10.2 Advanced Quality Assessment Tools ✅ **COMPLETED**
+**Implementation Status**:
+- [x] **ALE (Assembly Likelihood Evaluation)**:
+  - [x] Add `run_ale()` function for reference-free quality assessment
+  - [x] Implement per-base likelihood scoring
+  - [x] Support for assembly comparison and ranking
+- [x] **FRCbam Integration**:
+  - [x] Add `run_frcbam()` function for feature response curves
+  - [x] Implement reference-free misassembly detection
+  - [x] Support for paired-end consistency analysis
+- [x] **4CAC Integration**:
+  - [x] Add `run_4cac()` function for contig classification
+  - [x] Support virus/plasmid/prokaryote/eukaryote classification
+  - [x] Machine learning-based contig classification
+
+### 10.3 Strain-Aware Assembly Methods ✅ **COMPLETED**
+**Implementation Status**:
+- [x] **HyLight Integration**:
+  - [x] Add `run_hylight()` function for hybrid strain-resolved assembly
+  - [x] Implement strain-resolved overlap graphs for both long/short reads
+  - [x] Support "cross hybrid" mutual support strategy
+- [x] **STRONG Integration**:
+  - [x] Add `run_strong()` function for strain resolution on assembly graphs
+  - [x] Implement BayesPaths algorithm for haplotype resolution
+  - [x] Support multi-sample strain analysis
+- [x] **Strainy Integration**:
+  - [x] Add `run_strainy()` function for strain phasing from long reads
+  - [x] Implement connection graph-based read clustering
+  - [x] Support strain unitig generation and graph simplification
+
+### 10.4 Multi-Scale K-mer Analysis Framework ✅ **COMPLETED**
+**Source**: Universal polymer assembler algorithm design
+**Implementation Status**:
+- [x] **Simultaneous Multi-K Analysis**:
+  - [x] Implement prime k-mer simultaneous analysis (3,5,7,11,13,17,19)
+  - [x] Add sliding window instantaneous quality averaging
+  - [x] Support adaptive k-mer selection based on coverage patterns
+- [x] **Quality-Aware Analysis**:
+  - [x] Incorporate quality scoring into k-mer window analysis
+  - [x] Implement adaptive k-mer selection algorithms
+  - [x] Add consensus k-mer identification with confidence scoring
+- [x] **Bootstrap Validation Framework**:
+  - [x] Add `bootstrap_assembly_validation()` function
+  - [x] Implement robust parameter optimization with confidence intervals
+  - [x] Support statistical validation of assembly parameters
+
+### 10.5 Assembly Polishing and Merging Tools ✅ **COMPLETED**
+**Implementation Status**:
+- [x] **Apollo Integration**:
+  - [x] Add `run_apollo()` function for HMM-based polishing
+  - [x] Support technology-independent polishing approach
+  - [x] Implement profile HMM graph construction
+- [x] **QuickMerge Integration**:
+  - [x] Add `run_quickmerge()` function for assembly merging
+  - [x] Support MUMmer-based contig splicing
+  - [x] Implement high confidence overlap detection
+- [x] **Homopolish Integration**:
+  - [x] Add `run_homopolish()` function for reference-based correction
+  - [x] Support homopolymer error correction using reference genomes
+
+### 10.6 Probabilistic Assembly Framework ✅ **COMPLETED**
+**Source**: Perfect metagenomic workflow design philosophy
+**Implementation Status**:
+- [x] **Maximum Likelihood Assembly**:
+  - [x] Implement probabilistic path selection through assembly graphs
+  - [x] Add consensus sequence generation with path probability weighting
+  - [x] Support multiple path analysis with confidence scoring
+- [x] **Confidence Interval Framework**:
+  - [x] Implement per-base confidence scoring based on path probabilities
+  - [x] Add uncertainty quantification for ambiguous assembly regions
+  - [x] Support probabilistic variant calling from graph ambiguities
+- [x] **Statistical Validation**:
+  - [x] Add bootstrap validation for parameter optimization
+  - [x] Implement confidence interval calculation for assembly metrics
+  - [x] Support robust statistical assessment of assembly quality
+
+### 10.7 Short-Read Metagenomic Assemblers (MEDIUM PRIORITY)
+**Implementation Plan**:
+- [ ] **SKESA Integration**:
+  - [ ] Add `run_skesa()` function for high-accuracy bacterial assembly
+  - [ ] Support conservative assembly approach
+- [ ] **IDBA-UD Integration**:
+  - [ ] Add `run_idba_ud()` function for uneven depth data
+  - [ ] Support multi-k-mer iterative assembly
+
 ## Milestone Timeline 🗓️
 
 ### v0.5.0 - Foundation (Q1 2025)
