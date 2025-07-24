@@ -1,3 +1,28 @@
+function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{String}=[
+        "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
+    ])
+    results = DataFrames.DataFrame()
+    for (i, rank) in enumerate(ranks)
+        rank_taxid = string(rank, "_taxid")
+        if rank_taxid in names(df)
+            # Drop rows where rank_taxid is missing
+            subdf = DataFrames.filter(row -> !ismissing(row[rank_taxid]), df)
+            if DataFrames.nrow(subdf) > 0
+                grouped = DataFrames.groupby(subdf, ["template", rank_taxid])
+                agg = DataFrames.combine(grouped,
+                    :relative_alignment_proportion => sum => :total_relative_alignment_proportion,
+                    :percent_identity => maximum => :max_percent_identity,
+                    :mappingquality => maximum => :max_mappingquality,
+                )
+                DataFrames.rename!(agg, Dict(rank_taxid => :rank_taxid))
+                agg[!, :rank] .= "$(i)_$(rank)"
+                results = DataFrames.vcat(results, agg)
+            end
+        end
+    end
+    return results
+end
+
 # function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * "." * Mycelia.normalized_current_date() * ".accession_to_taxid.arrow")
 function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * ".accession_to_taxid.arrow")
     if !isfile(outfile)

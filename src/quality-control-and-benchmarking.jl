@@ -1361,10 +1361,20 @@ function run_frcbam(assembly_file::String, reads_file::String; outdir::String=as
             if occursin(",", reads_file)
                 # Paired-end reads
                 reads = split(reads_file, ",")
-                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads[1]) $(reads[2]) | samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`)
+                run(
+                    pipeline(
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads[1]) $(reads[2])`,
+                        `samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`
+                    )
+                )
             else
                 # Single-end reads (FRCbam works best with paired-end)
-                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads_file) | samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`)
+                run(
+                    pipeline(
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads_file)`, 
+                        `samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`
+                    )
+                )
             end
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam samtools index $(bam_file)`)
         end

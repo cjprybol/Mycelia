@@ -1866,7 +1866,9 @@ function run_apollo(assembly_file::String, reads_file::String; outdir::String=as
         # Map reads to assembly first
         bam_file = joinpath(outdir, basename_assembly * ".bam")
         if !isfile(bam_file)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n apollo minimap2 -ax map-pb $(assembly_file) $(reads_file) | samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`)
+            minimap_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n apollo minimap2 -ax map-pb $(assembly_file) $(reads_file)`
+            samtools_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n apollo samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`
+            run(pipeline(minimap_cmd, samtools_cmd))
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n apollo samtools index $(bam_file)`)
         end
         
@@ -2007,29 +2009,6 @@ function run_strong(assembly_graph::String, reads_file::String; outdir::String="
     return (;outdir, strain_unitigs)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Run Strainy for strain phasing from long reads.
-
-# Arguments
-- `assembly_file::String`: Path to assembly FASTA file
-- `long_reads::String`: Path to long read FASTQ file
-- `outdir::String`: Output directory path (default: "strainy_output")
-- `mode::String`: Analysis mode ("transform" or "phase", default: "phase")
-
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `strain_assemblies::String`: Path to strain-phased assemblies
-
-# Details
-- Uses connection graph-based read clustering for strain separation
-- Implements long-read phasing to resolve strain-level variants
-- Generates strain unitigs and simplified assembly graphs
-- Automatically creates and uses a conda environment with strainy
-- Skips analysis if output files already exist
-"""
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2358,6 +2337,29 @@ function run_metamdbg(fastq_file::String; outdir::String="metamdbg_output", abun
     return (;outdir, contigs=contigs_file, graph=graph_file)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Strainy for strain phasing from long reads.
+
+# Arguments
+- `assembly_file::String`: Path to assembly FASTA file
+- `long_reads::String`: Path to long read FASTQ file
+- `outdir::String`: Output directory path (default: "strainy_output")
+- `mode::String`: Analysis mode ("transform" or "phase", default: "phase")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `strain_assemblies::String`: Path to strain-phased assemblies
+
+# Details
+- Uses connection graph-based read clustering for strain separation
+- Implements long-read phasing to resolve strain-level variants
+- Generates strain unitigs and simplified assembly graphs
+- Automatically creates and uses a conda environment with strainy
+- Skips analysis if output files already exist
+"""
 function run_strainy(assembly_file::String, long_reads::String; outdir::String="strainy_output", mode::String="phase")
     Mycelia.add_bioconda_env("strainy")
     mkpath(outdir)
@@ -2368,7 +2370,7 @@ function run_strainy(assembly_file::String, long_reads::String; outdir::String="
         # First map reads to assembly
         bam_file = joinpath(outdir, "mapped_reads.bam")
         if !isfile(bam_file)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads) | samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`)
+            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`, `samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`))
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`)
         end
         

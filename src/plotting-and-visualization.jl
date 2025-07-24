@@ -20,29 +20,6 @@ function create_rank_consensus_plot(
     legend_fontsize::Int = 16,
     include_n_observations::Bool = true
 )
-    
-    function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{String})
-        results = DataFrames.DataFrame()
-        for (i, rank) in enumerate(ranks)
-            rank_taxid = string(rank, "_taxid")
-            if rank_taxid in names(df)
-                # Drop rows where rank_taxid is missing
-                subdf = DataFrames.filter(row -> !ismissing(row[rank_taxid]), df)
-                if DataFrames.nrow(subdf) > 0
-                    grouped = DataFrames.groupby(subdf, ["template", rank_taxid])
-                    agg = DataFrames.combine(grouped,
-                        :relative_alignment_proportion => sum => :total_relative_alignment_proportion,
-                        :percent_identity => maximum => :max_percent_identity,
-                        :mappingquality => maximum => :max_mappingquality,
-                    )
-                    DataFrames.rename!(agg, Dict(rank_taxid => :rank_taxid))
-                    agg[!, :rank] .= "$(i)_$(rank)"
-                    results = DataFrames.vcat(results, agg)
-                end
-            end
-        end
-        return results
-    end
 
     function monotonicize_agreement(ys::Vector{<:Union{Missing, Float64}})
         n = length(ys)
@@ -63,22 +40,54 @@ function create_rank_consensus_plot(
         return any(!ismissing(y) for y in ys)
     end
 
-    # SAMPLE FIRST: Get unique templates and sample from them
+    # Add diagnostics at the beginning
+    # println("Input DataFrame: $(DataFrames.nrow(df)) total rows")
+    
     unique_templates = unique(df.template)
     n_total_observations = length(unique_templates)
+    println("Unique templates in input: $(n_total_observations)")
+
+    unique_read_mapping_results = unique(df[!, ["template", "ismapped"]])
+    total_reads_mapped = count(unique_read_mapping_results.ismapped)
+    println("total_reads_mapped = $(total_reads_mapped)")
+    println("total_reads = $(n_total_observations)")
+    percent_reads_mapped = round(total_reads_mapped / n_total_observations * 100, digits=3)
+    println("percentage_of_reads_mapped = $(percent_reads_mapped)")
+
+    mapped_df = df[df.ismapped, :]
+    unique_mapped_templates = unique(mapped_df.template)
+
+    # println(count(df.ismapped) / DataFrames.nrow(df)
     
-    # Sample templates before processing
-    n_samples_to_take = min(n_total_observations, max_samples)
-    sampled_templates = Set(StatsBase.sample(unique_templates, n_samples_to_take, replace=false))
+    # After sampling
+    n_samples_to_take = min(length(unique_mapped_templates), max_samples)
+    sampled_templates = Set(StatsBase.sample(unique_mapped_templates, n_samples_to_take, replace=false))
+    println("Templates sampled: $(length(sampled_templates))")
+    
+    # sampled_df = DataFrames.filter(row -> row.template in sampled_templates, df)
+    # println("Rows after template sampling: $(DataFrames.nrow(sampled_df))")
     
     # Filter dataframe to only include sampled templates
-    sampled_df = DataFrames.filter(row -> row.template in sampled_templates, df)
+    sampled_df = DataFrames.filter(row -> row.template in sampled_templates, mapped_df)
     
     # NOW aggregate only the sampled data
     aggregated = aggregate_by_rank_nonmissing(sampled_df, taxonomic_ranks)
     
+    # APPLY THE FIX: Get the maximum alignment proportion for each template-rank combination
+    max_aggregated = DataFrames.combine(
+        DataFrames.first,
+        DataFrames.groupby(
+            DataFrames.sort(
+                aggregated,
+                [:template, :rank, DataFrames.order(:total_relative_alignment_proportion, rev=true)]
+            ),
+            [:template, :rank]
+        )
+    )
+    println("Rows after taking max per template-rank: $(DataFrames.nrow(max_aggregated))")
+    
     # Group by template (this will be much smaller now)
-    template_grouped_aggregated = DataFrames.groupby(aggregated, "template")
+    template_grouped_aggregated = DataFrames.groupby(max_aggregated, "template")
     
     numbered_ranks = ["$(i)_$(rank)" for (i, rank) in enumerate(taxonomic_ranks)]
     all_ys = []
@@ -86,7 +95,8 @@ function create_rank_consensus_plot(
     
     # Process all groups (since we already sampled at the template level)
     for this_group in template_grouped_aggregated
-        this_sorted_group = sort(this_group, :rank)
+        this_sorted_group = DataFrames.sort(this_group, :rank)
+        # Now this dictionary creation is safe - each rank appears only once per template
         template_values_dict = Dict(row.rank => row.total_relative_alignment_proportion for row in DataFrames.eachrow(this_sorted_group))
         ys = [get(template_values_dict, this_rank, missing) for this_rank in numbered_ranks]
         # Make ys monotonically non-increasing
@@ -99,6 +109,9 @@ function create_rank_consensus_plot(
             n_unmapped += 1
         end
     end
+
+    # println("Final reads included: $(length(all_ys))")
+    # println("Reads with no taxonomic data: $(n_unmapped)")
 
     # Compute aggregate consensus proportions
     n_ranks = length(numbered_ranks)
@@ -115,7 +128,7 @@ function create_rank_consensus_plot(
     # Build the title
     full_title = title
     if include_n_observations
-        full_title = "$(full_title) (n=$(length(all_ys))/$(n_total_observations))"
+        full_title = "$(full_title) (n=$(length(all_ys))/$(total_reads_mapped) mapped) [mapped = $(percent_reads_mapped)%]"
     end
     if sample_id !== nothing
         full_title = "$(full_title)\n$(sample_id)"
@@ -200,6 +213,7 @@ function generate_rank_consensus_plots(
     arrow_file_path::String;
     png_output_path::Union{String, Nothing} = nothing,
     svg_output_path::Union{String, Nothing} = nothing,
+    force=false,
     kwargs...  # Pass through any arguments to create_rank_consensus_plot
 )
     fig = nothing
@@ -208,7 +222,7 @@ function generate_rank_consensus_plots(
     png_path = png_output_path !== nothing ? png_output_path : "$(base_path)_rank-level-confidences.png"
     svg_path = svg_output_path !== nothing ? svg_output_path : "$(base_path)_rank-level-confidences.svg"
 
-    if !isfile(png_path) && !isfile(svg_path)
+    if (!isfile(png_path) && !isfile(svg_path)) || force
         # Load the data
         df = DataFrames.DataFrame(Arrow.Table(arrow_file_path))
         
