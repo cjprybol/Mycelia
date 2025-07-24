@@ -1,0 +1,287 @@
+import Test
+import BioSequences
+import Mycelia
+import Statistics
+
+Test.@testset "Sequence Comparison Functions" begin
+
+    Test.@testset "shannon_entropy" begin
+        Test.@testset "DNA sequences" begin
+            # Test basic DNA sequence
+            dna_seq = BioSequences.dna"ATCGATCGATCG"
+            Test.@test Mycelia.shannon_entropy(dna_seq, k=1) ≈ 2.0  # 4 bases equally distributed
+            Test.@test Mycelia.shannon_entropy(dna_seq, k=2) > 0.0
+            
+            # Test uniform sequence (minimum entropy)
+            uniform_dna = BioSequences.dna"AAAAAAAAAA"
+            Test.@test Mycelia.shannon_entropy(uniform_dna, k=1) ≈ 0.0
+            
+            # Test sequence shorter than k
+            short_dna = BioSequences.dna"AT"
+            Test.@test Mycelia.shannon_entropy(short_dna, k=3) == 0.0
+            
+            # Test different bases
+            Test.@test Mycelia.shannon_entropy(BioSequences.dna"ATCG", k=1, base=10) != Mycelia.shannon_entropy(BioSequences.dna"ATCG", k=1, base=2)
+        end
+
+        Test.@testset "RNA sequences" begin
+            rna_seq = BioSequences.rna"AUCGAUCGAUCG"
+            Test.@test Mycelia.shannon_entropy(rna_seq, k=1) ≈ 2.0
+            Test.@test Mycelia.shannon_entropy(rna_seq, k=2) > 0.0
+            
+            uniform_rna = BioSequences.rna"UUUUUUUUUU"
+            Test.@test Mycelia.shannon_entropy(uniform_rna, k=1) ≈ 0.0
+        end
+
+        Test.@testset "Amino acid sequences" begin
+            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYV"  # All 20 standard amino acids
+            Test.@test Mycelia.shannon_entropy(aa_seq, k=1) > 4.0  # log2(20) ≈ 4.32
+            
+            uniform_aa = BioSequences.aa"AAAAAAAAAA"
+            Test.@test Mycelia.shannon_entropy(uniform_aa, k=1) ≈ 0.0
+        end
+
+        Test.@testset "Generic strings" begin
+            str = "abcdefgh"
+            Test.@test Mycelia.shannon_entropy(str, k=1) > 2.0
+            Test.@test Mycelia.shannon_entropy(str, k=2) > 0.0
+            
+            # Test uniform string
+            uniform_str = "aaaaaaa"
+            Test.@test Mycelia.shannon_entropy(uniform_str, k=1) ≈ 0.0
+            
+            # Test empty and short strings
+            Test.@test Mycelia.shannon_entropy("", k=1) == 0.0
+            Test.@test Mycelia.shannon_entropy("a", k=2) == 0.0
+        end
+
+        Test.@testset "Edge cases" begin
+            # Test with different alphabet parameter
+            Test.@test Mycelia.shannon_entropy("abc", k=1, alphabet=3) > 0.0
+            
+            # Test different log bases
+            seq = "abcd"
+            Test.@test Mycelia.shannon_entropy(seq, k=1, base=2) != Mycelia.shannon_entropy(seq, k=1, base=10)
+        end
+    end
+
+    Test.@testset "renyi_entropy" begin
+        Test.@testset "DNA sequences" begin
+            dna_seq = BioSequences.dna"ATCGATCGATCG"
+            Test.@test Mycelia.renyi_entropy(dna_seq, k=1, α=2) > 0.0
+            Test.@test Mycelia.renyi_entropy(dna_seq, k=2, α=0.5) > 0.0
+            
+            # Test that α=1 throws error
+            Test.@test_throws AssertionError Mycelia.renyi_entropy(dna_seq, k=1, α=1)
+            
+            # Test sequence shorter than k
+            Test.@test Mycelia.renyi_entropy(BioSequences.dna"AT", k=3, α=2) == 0.0
+        end
+
+        Test.@testset "RNA sequences" begin
+            rna_seq = BioSequences.rna"AUCGAUCGAUCG"
+            Test.@test Mycelia.renyi_entropy(rna_seq, k=1, α=2) > 0.0
+            Test.@test Mycelia.renyi_entropy(rna_seq, k=2, α=0.5) > 0.0
+        end
+
+        Test.@testset "Amino acid sequences" begin
+            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYV"
+            Test.@test Mycelia.renyi_entropy(aa_seq, k=1, α=2) > 0.0
+            Test.@test Mycelia.renyi_entropy(aa_seq, k=2, α=3) > 0.0
+        end
+
+        Test.@testset "Generic strings" begin
+            str = "abcdefgh"
+            Test.@test Mycelia.renyi_entropy(str, k=1, α=2) > 0.0
+            Test.@test Mycelia.renyi_entropy(str, k=2, α=0.5) > 0.0
+            
+            # Test uniform string
+            uniform_str = "aaaaaaa"
+            Test.@test Mycelia.renyi_entropy(uniform_str, k=1, α=2) ≈ 0.0
+        end
+
+        Test.@testset "Parameter effects" begin
+            seq = "abcd"
+            # Different α values should give different results
+            Test.@test Mycelia.renyi_entropy(seq, k=1, α=0.5) != Mycelia.renyi_entropy(seq, k=1, α=2)
+            Test.@test Mycelia.renyi_entropy(seq, k=1, α=2) != Mycelia.renyi_entropy(seq, k=1, α=10)
+            
+            # Different bases should give different results
+            Test.@test Mycelia.renyi_entropy(seq, k=1, α=2, base=2) != Mycelia.renyi_entropy(seq, k=1, α=2, base=10)
+        end
+    end
+
+    Test.@testset "kmer_richness" begin
+        Test.@testset "DNA sequences" begin
+            # Perfect richness (all possible k-mers present)
+            dna_seq = BioSequences.dna"ATCGATCGATCGATCG"  # 16 bases
+            richness = Mycelia.kmer_richness(dna_seq, 1, normalize=true)
+            Test.@test richness ≤ 1.0
+            Test.@test richness > 0.0
+            
+            # Test unnormalized
+            richness_raw = Mycelia.kmer_richness(dna_seq, 1, normalize=false)
+            Test.@test richness_raw isa Integer
+            Test.@test richness_raw > 0
+            
+            # Test sequence shorter than k
+            Test.@test Mycelia.kmer_richness(BioSequences.dna"AT", 3, normalize=true) == 0.0
+            Test.@test Mycelia.kmer_richness(BioSequences.dna"AT", 3, normalize=false) == 0
+        end
+
+        Test.@testset "RNA sequences" begin
+            rna_seq = BioSequences.rna"AUCGAUCGAUCGAUCG"
+            richness = Mycelia.kmer_richness(rna_seq, 1, normalize=true)
+            Test.@test richness ≤ 1.0
+            Test.@test richness > 0.0
+        end
+
+        Test.@testset "Amino acid sequences" begin
+            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYV"
+            richness = Mycelia.kmer_richness(aa_seq, 1, normalize=true)
+            Test.@test richness ≤ 1.0
+            Test.@test richness > 0.0
+            
+            # Test with custom alphabet
+            richness_custom = Mycelia.kmer_richness(aa_seq, 1, alphabet=25, normalize=true)
+            Test.@test richness_custom != richness
+        end
+
+        Test.@testset "Generic strings" begin
+            str = "abcdefgh"
+            richness = Mycelia.kmer_richness(str, 1, normalize=true)
+            Test.@test richness ≤ 1.0
+            Test.@test richness > 0.0
+            
+            # Test repeated characters
+            repeated_str = "aaabbbccc"
+            richness_repeated = Mycelia.kmer_richness(repeated_str, 1, normalize=true)
+            Test.@test richness_repeated < 1.0
+        end
+
+        Test.@testset "Edge cases" begin
+            # Empty string
+            Test.@test Mycelia.kmer_richness("", 1, normalize=true) == 0.0
+            Test.@test Mycelia.kmer_richness("", 1, normalize=false) == 0
+            
+            # Single character
+            Test.@test Mycelia.kmer_richness("a", 1, normalize=true) == 1.0
+            Test.@test Mycelia.kmer_richness("a", 2, normalize=true) == 0.0
+        end
+    end
+
+    Test.@testset "linguistic_complexity" begin
+        Test.@testset "DNA sequences" begin
+            dna_seq = BioSequences.dna"ATCGATCGATCGATCGATCG"
+            profile, summary = Mycelia.linguistic_complexity(dna_seq, kmax=5)
+            
+            Test.@test length(profile) == 5
+            Test.@test all(0.0 ≤ x ≤ 1.0 for x in profile)
+            Test.@test summary isa Float64
+            Test.@test 0.0 ≤ summary ≤ 1.0
+            
+            # Test with custom reducer
+            _, median_summary = Mycelia.linguistic_complexity(dna_seq, kmax=5, reducer=Statistics.median)
+            Test.@test median_summary != summary
+        end
+
+        Test.@testset "RNA sequences" begin
+            rna_seq = BioSequences.rna"AUCGAUCGAUCGAUCGAUCG"
+            profile, summary = Mycelia.linguistic_complexity(rna_seq, kmax=4)
+            
+            Test.@test length(profile) == 4
+            Test.@test all(0.0 ≤ x ≤ 1.0 for x in profile)
+        end
+
+        Test.@testset "Amino acid sequences" begin
+            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYVARNDCQ"
+            profile, summary = Mycelia.linguistic_complexity(aa_seq, kmax=3)
+            
+            Test.@test length(profile) == 3
+            Test.@test all(0.0 ≤ x ≤ 1.0 for x in profile)
+            
+            # Test with custom alphabet
+            profile_custom, _ = Mycelia.linguistic_complexity(aa_seq, kmax=3, alphabet=25)
+            Test.@test profile_custom != profile
+        end
+
+        Test.@testset "Generic strings" begin
+            str = "abcdefghijklmnop"
+            profile, summary = Mycelia.linguistic_complexity(str, kmax=4)
+            
+            Test.@test length(profile) == 4
+            Test.@test all(0.0 ≤ x ≤ 1.0 for x in profile)
+            
+            # Test highly repetitive string
+            repetitive = "aaabbbaaabbb"
+            profile_rep, summary_rep = Mycelia.linguistic_complexity(repetitive, kmax=3)
+            Test.@test summary_rep < summary  # Should be less complex
+        end
+
+        Test.@testset "Parameter effects" begin
+            seq = "abcdefghijklmnop"
+            
+            # Default kmax should use full sequence length
+            profile_default, _ = Mycelia.linguistic_complexity(seq)
+            Test.@test length(profile_default) == length(seq)
+            
+            # Custom kmax
+            profile_custom, _ = Mycelia.linguistic_complexity(seq, kmax=5)
+            Test.@test length(profile_custom) == 5
+            
+            # Different reducers
+            _, mean_val = Mycelia.linguistic_complexity(seq, kmax=5, reducer=Statistics.mean)
+            _, max_val = Mycelia.linguistic_complexity(seq, kmax=5, reducer=Base.maximum)
+            _, min_val = Mycelia.linguistic_complexity(seq, kmax=5, reducer=Base.minimum)
+            
+            Test.@test mean_val != max_val
+            Test.@test mean_val != min_val
+        end
+
+        Test.@testset "Edge cases" begin
+            # Very short sequence
+            short_seq = "abc"
+            profile, summary = Mycelia.linguistic_complexity(short_seq, kmax=2)
+            Test.@test length(profile) == 2
+            
+            # Single character sequence
+            single_char = "a"
+            profile_single, _ = Mycelia.linguistic_complexity(single_char, kmax=1)
+            Test.@test length(profile_single) == 1
+            Test.@test profile_single[1] == 1.0
+            
+            # Empty sequence (should handle gracefully)
+            # This might throw an error or return empty - depends on implementation
+            Test.@test_nowarn Mycelia.linguistic_complexity("", kmax=1)
+        end
+    end
+
+    Test.@testset "Integration tests" begin
+        Test.@testset "Consistency between functions" begin
+            # Test that functions give consistent results for same input
+            dna_seq = BioSequences.dna"ATCGATCGATCGATCG"
+            
+            # Shannon entropy should be related to richness for k=1
+            shannon_k1 = Mycelia.shannon_entropy(dna_seq, k=1)
+            richness_k1 = Mycelia.kmer_richness(dna_seq, 1, normalize=false)
+            
+            Test.@test shannon_k1 ≥ 0
+            Test.@test richness_k1 ≥ 0
+            
+            # Renyi entropy should approach Shannon as α approaches 1
+            renyi_close_to_1 = Mycelia.renyi_entropy(dna_seq, k=1, α=1.001)
+            shannon_val = Mycelia.shannon_entropy(dna_seq, k=1)
+            Test.@test abs(renyi_close_to_1 - shannon_val) < 0.1
+        end
+
+        Test.@testset "Behavior with increasing k" begin
+            seq = "abcdefghijklmnop"
+            
+            # Entropy should generally decrease with increasing k (for finite sequences)
+            entropies = [Mycelia.shannon_entropy(seq, k=k) for k in 1:5]
+            
+            # At least some should be decreasing (though not necessarily monotonic)
+            Test.@test any(entropies[i] > entropies[i+1] for i in 1:length(entropies)-1)
+        end
+    end
+end

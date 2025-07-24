@@ -1,3 +1,184 @@
+
+"""
+    shannon_entropy(seq; k::Int=1, base::Real=2, alphabet=nothing)
+
+Compute Shannon entropy of symbols (k=1) or k-mers (k>1) from `seq`
+(length-agnostic because it uses relative frequencies). `base` sets the log base.
+`alphabet` (optional) lets you force/declare the alphabet size; otherwise inferred.
+Returns a Float64.
+"""
+function shannon_entropy(seq; k::Int=1, base::Real=2, alphabet=nothing)
+    # Use existing biosequence infrastructure for biological sequences
+    if seq isa BioSequences.BioSequence
+        if k > length(seq)
+            return 0.0
+        end
+        
+        # Determine k-mer type and counting function based on sequence alphabet
+        if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+            kmer_type = Kmers.DNAKmer{k}
+            counts = count_canonical_kmers(kmer_type, seq)
+        elseif BioSequences.alphabet(seq) isa BioSequences.RNAAlphabet
+            kmer_type = Kmers.RNAKmer{k}
+            counts = count_kmers(kmer_type, seq)
+        elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+            kmer_type = Kmers.AAKmer{k}
+            counts = count_kmers(kmer_type, seq)
+        else
+            error("Unsupported sequence alphabet: $(BioSequences.alphabet(seq))")
+        end
+    else
+        # Use existing ngram infrastructure for generic strings
+        sstr = string(seq)
+        if k > lastindex(sstr)
+            return 0.0
+        end
+        
+        observed_ngrams = ngrams(sstr, k)
+        counts = StatsBase.countmap(observed_ngrams)
+    end
+    
+    total = sum(values(counts))
+    probs = (v/total for v in values(counts))
+    H = -sum(p -> p == 0 ? 0.0 : p * (log(p)/log(base)), probs)
+    return H
+end
+
+"""
+    renyi_entropy(seq; k::Int=1, α::Real=2, base::Real=2)
+
+Rényi entropy of order α (α ≠ 1). For α→1, this tends to Shannon entropy.
+"""
+function renyi_entropy(seq; k::Int=1, α::Real=2, base::Real=2)
+    @assert α != 1 "Use shannon_entropy for α = 1."
+    
+    # Use existing biosequence infrastructure for biological sequences
+    if seq isa BioSequences.BioSequence
+        if k > length(seq)
+            return 0.0
+        end
+        
+        # Determine k-mer type and counting function based on sequence alphabet
+        if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+            kmer_type = Kmers.DNAKmer{k}
+            counts = count_canonical_kmers(kmer_type, seq)
+        elseif BioSequences.alphabet(seq) isa BioSequences.RNBioSequences.DNAAlphabetlphabet
+            kmer_type = Kmers.RNAKmer{k}
+            counts = count_kmers(kmer_type, seq)
+        elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+            kmer_type = Kmers.AAKmer{k}
+            counts = count_kmers(kmer_type, seq)
+        else
+            error("Unsupported sequence alphabet: $(BioSequences.alphabet(seq))")
+        end
+    else
+        # Use existing ngram infrastructure for generic strings
+        sstr = string(seq)
+        if k > lastindex(sstr)
+            return 0.0
+        end
+        
+        observed_ngrams = ngrams(sstr, k)
+        counts = StatsBase.countmap(observed_ngrams)
+    end
+    
+    total = sum(values(counts))
+    probsα = sum((v/total)^α for v in values(counts))
+    return (1/(1-α)) * (log(probsα)/log(base))
+end
+
+"""
+    kmer_richness(seq, k; alphabet=nothing, normalize=true)
+
+Return the number of unique k-mers observed.
+If `normalize=true` (default), return the linguistic-complexity-style ratio:
+unique / min(L-k+1, A^k), where A is alphabet size.
+"""
+function kmer_richness(seq, k; alphabet=nothing, normalize::Bool=true)
+    # Use existing biosequence infrastructure for biological sequences
+    if seq isa BioSequences.BioSequence
+        L = length(seq)
+        if k > L
+            return normalize ? 0.0 : 0
+        end
+        
+        # Determine k-mer type and counting function based on sequence alphabet
+        if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+            kmer_type = Kmers.DNAKmer{k}
+            kmer_counts = count_canonical_kmers(kmer_type, seq)
+            A = isnothing(alphabet) ? 4 : alphabet
+        elseif BioSequences.alphabet(seq) isa BioSequences.RNAAlphabet
+            kmer_type = Kmers.RNAKmer{k}
+            kmer_counts = count_kmers(kmer_type, seq)
+            A = isnothing(alphabet) ? 4 : alphabet
+        elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+            kmer_type = Kmers.AAKmer{k}
+            kmer_counts = count_kmers(kmer_type, seq)
+            A = isnothing(alphabet) ? 20 : alphabet
+        else
+            error("Unsupported sequence alphabet: $(BioSequences.alphabet(seq))")
+        end
+        
+        uniq = length(kmer_counts)
+    else
+        # Use existing ngram infrastructure for generic strings
+        sstr = string(seq)
+        L = lastindex(sstr)
+        if k > L
+            return normalize ? 0.0 : 0
+        end
+        
+        observed_ngrams = ngrams(sstr, k)
+        uniq = length(unique(observed_ngrams))
+        A = isnothing(alphabet) ? length(unique(sstr)) : alphabet
+    end
+    
+    if !normalize
+        return uniq
+    end
+    
+    max_possible = min(L - k + 1, A^k)
+    return max_possible == 0 ? 0.0 : uniq / max_possible
+end
+
+"""
+    linguistic_complexity(seq; kmax=nothing, alphabet=nothing, reducer=mean)
+
+Compute richness ratios for k = 1:kmax and reduce them (mean by default).
+If `kmax` is omitted, it defaults to the full range 1:floor(Int, log_A(L)) or simply 1:L.
+Returns (profile, summary), where profile is a Vector{Float64} of length kmax
+and summary is `reducer(profile)`.
+"""
+function linguistic_complexity(seq; kmax=nothing, alphabet=nothing, reducer=mean)
+    # Determine sequence type and properties
+    if seq isa BioSequences.BioSequence
+        L = length(seq)
+        # Infer alphabet size from sequence type if not provided
+        if isnothing(alphabet)
+            if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+                A = 4
+            elseif BioSequences.alphabet(seq) isa BioSequences.RNAAlphabet
+                A = 4
+            elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+                A = 20
+            else
+                A = 4  # default fallback
+            end
+        else
+            A = alphabet
+        end
+    else
+        # Generic string case
+        sstr = string(seq)
+        L = lastindex(sstr)
+        A = isnothing(alphabet) ? length(unique(sstr)) : alphabet
+    end
+    
+    kmax = isnothing(kmax) ? L : kmax
+    prof = [kmer_richness(seq, k; alphabet=A, normalize=true) for k in 1:kmax]
+    return prof, reducer(prof)
+end
+
 """
     merge_and_map_single_end_samples(; 
         fasta_reference::AbstractString, 

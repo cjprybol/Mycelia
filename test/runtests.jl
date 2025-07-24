@@ -12,8 +12,6 @@ else
     # this should be set via the `--project=` flag
 end
 
-# using Revise
-# using Test
 # import Mycelia
 # import FASTX
 # import DocStringExtensions
