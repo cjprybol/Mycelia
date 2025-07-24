@@ -1795,9 +1795,6 @@ function _simplify_ngram_to_string_graph(ngram_graph)
 end
 
 """
-Determine appropriate k-mer type from observations.
-"""
-"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run QuickMerge for assembly merging and scaffolding.
@@ -2382,6 +2379,9 @@ function run_strainy(assembly_file::String, long_reads::String; outdir::String="
     return (;outdir, strain_assemblies)
 end
 
+"""
+Determine appropriate k-mer type from observations.
+"""
 function _determine_kmer_type(observations, k)
     # Examine first observation to determine sequence type
     if !isempty(observations)
