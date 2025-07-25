@@ -13,6 +13,10 @@ Each test follows the pattern:
 - Input data -> Graph construction -> Assembly -> Validation
 """
 
+if isinteractive()
+    Pkg.activate("..")
+end
+
 import Test
 import Mycelia
 import FASTX

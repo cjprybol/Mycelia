@@ -1285,59 +1285,7 @@ function _prepare_fastq_observations(observations)
     return fastq_records
 end
 
-"""
-Find quality-aware paths in a qualmer graph.
-"""
-function _find_qualmer_paths(graph, config)
-    paths = []
-    
-    # Basic implementation: find simple paths
-    # Future implementation would use more sophisticated algorithms
-    vertices = collect(MetaGraphsNext.labels(graph))
-    
-    for start_vertex in vertices
-        # Simple path following highest quality edges
-        path = [start_vertex]
-        current = start_vertex
-        
-        while true
-            # Find outgoing edges
-            outgoing = []
-            for edge in MetaGraphsNext.edge_labels(graph)
-                src, dst = edge
-                if src == current
-                    push!(outgoing, (dst, graph[src, dst]))
-                end
-            end
-            
-            if isempty(outgoing)
-                break
-            end
-            
-            # Choose edge with highest quality weight
-            best_dst, best_edge = outgoing[1]
-            for (dst, edge_data) in outgoing[2:end]
-                if edge_data.quality_weight > best_edge.quality_weight
-                    best_dst, best_edge = dst, edge_data
-                end
-            end
-            
-            # Avoid cycles
-            if best_dst in path
-                break
-            end
-            
-            push!(path, best_dst)
-            current = best_dst
-        end
-        
-        if length(path) > 1
-            push!(paths, path)
-        end
-    end
-    
-    return paths
-end
+# Duplicate _find_qualmer_paths function removed - keeping the more complete implementation at line 870
 
 """
 Convert qualmer path to DNA sequence.

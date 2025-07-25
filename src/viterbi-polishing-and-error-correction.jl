@@ -788,28 +788,7 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
     return corrected_observations
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Create a FASTQ record from identifier, sequence, and quality scores.
-
-# Arguments
-- `identifier::String`: The sequence identifier
-- `sequence::String`: The DNA sequence 
-- `quality_scores::Vector{Int8}`: Quality scores (0-93 range)
-
-# Returns
-FASTX.FASTQRecord with the provided data
-
-# Notes
-Quality scores are clamped to maximum value of 93 to ensure valid FASTQ format.
-"""
-function fastq_record(;identifier, sequence, quality_scores)
-    # Fastx wont parse anything higher than 93
-    quality_scores = min.(quality_scores, 93)
-    record_string = join(["@" * identifier, sequence, "+", join([Char(x+33) for x in quality_scores])], "\n")
-    return FASTX.parse(FASTX.FASTQRecord, record_string)
-end
+# fastq_record function moved to fastx.jl to avoid duplication
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

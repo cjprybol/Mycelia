@@ -5,7 +5,8 @@ RUN apt-get update && \
     apt-get install -y wget ca-certificates curl
 
 # Install juliaup and use it to install Julia LTS
-RUN curl -fsSL https://install.julialang.org | bash -s -- --yes && \
+# RUN curl -fsSL https://install.julialang.org | bash -s -- --yes && \
+RUN curl -fsSL https://install.julialang.org | sh -s -- --default-channel lts --yes && \
     # /root/.juliaup/bin/juliaup add lts && \
     ln -s /root/.juliaup/bin/julia /usr/local/bin/julia
 

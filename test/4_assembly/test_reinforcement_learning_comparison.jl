@@ -2,6 +2,10 @@
 Test suite for comparing reinforcement learning approaches
 """
 
+if isinteractive()
+    Pkg.activate("..")
+end
+
 # Example: Using the three RL approaches
 
 println("Loading reinforcement learning modules...")

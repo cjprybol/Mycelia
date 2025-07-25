@@ -9,6 +9,10 @@ This module tests the intelligent self-optimizing assembler that implements:
 - Iterative progression algorithms
 """
 
+if isinteractive()
+    Pkg.activate("..")
+end
+
 import Test
 import Mycelia
 import BioSequences

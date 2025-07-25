@@ -91,25 +91,55 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function run_fastqc(;fastq, outdir = replace(fastq, Mycelia.FASTQ_REGEX => "_fastqc"))
-    Mycelia.add_bioconda_env("fastqc")
-    if !isdir(outdir)
-        mkpath(outdir)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastqc fastqc --outdir $(outdir) $(fastq)`)
-    else
-        @warn "$outdir already exists"
-    end
-end
 
+Run FastQC on FASTQ files. Supports both single-end and paired-end reads.
+
+# Arguments
+- `fastq::String`: Path to single-end FASTQ file (optional if forward/reverse provided)
+- `forward::String`: Path to forward reads FASTQ file (optional if fastq provided)
+- `reverse::String`: Path to reverse reads FASTQ file (optional if fastq provided)
+- `outdir::String`: Output directory (auto-generated if not provided)
+
+# Examples
+```julia
+# Single-end reads
+run_fastqc(fastq="reads.fastq")
+
+# Paired-end reads
+run_fastqc(forward="reads_R1.fastq", reverse="reads_R2.fastq")
+```
 """
-$(DocStringExtensions.TYPEDSIGNATURES)
-"""
-function run_fastqc(;forward, reverse, outdir = Mycelia.find_matching_prefix(forward, reverse) * "_fastqc")
+function run_fastqc(; fastq::Union{String,Nothing}=nothing, 
+                      forward::Union{String,Nothing}=nothing, 
+                      reverse::Union{String,Nothing}=nothing,
+                      outdir::Union{String,Nothing}=nothing)
+    
     Mycelia.add_bioconda_env("fastqc")
+    
+    # Determine input files and output directory
+    if fastq !== nothing
+        # Single-end mode
+        if forward !== nothing || reverse !== nothing
+            error("Cannot specify both 'fastq' and 'forward'/'reverse' arguments")
+        end
+        input_files = [fastq]
+        if outdir === nothing
+            outdir = replace(fastq, Mycelia.FASTQ_REGEX => "_fastqc")
+        end
+    elseif forward !== nothing && reverse !== nothing
+        # Paired-end mode
+        input_files = [forward, reverse]
+        if outdir === nothing
+            outdir = Mycelia.find_matching_prefix(forward, reverse) * "_fastqc"
+        end
+    else
+        error("Must specify either 'fastq' for single-end or both 'forward' and 'reverse' for paired-end")
+    end
+    
+    # Create output directory and run FastQC
     if !isdir(outdir)
         mkpath(outdir)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastqc fastqc --outdir $(outdir) $(forward) $(reverse)`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastqc fastqc --outdir $(outdir) $(input_files...)`)
     else
         @warn "$outdir already exists"
     end

@@ -4,6 +4,10 @@ Basic Graph Type Tests
 Simple tests to verify each graph type can be constructed and accessed.
 """
 
+if isinteractive()
+    Pkg.activate("..")
+end
+
 import Test
 import Mycelia
 import FASTX

@@ -5,7 +5,9 @@ println("Testing Reinforcement Learning Framework...")
 
 # Load the Mycelia module
 import Pkg
-Pkg.activate(".")
+if isinteractive()
+    Pkg.activate("..")
+end
 import Mycelia
 import Test
 import BioSequences

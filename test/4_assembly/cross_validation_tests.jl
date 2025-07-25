@@ -9,6 +9,10 @@ This module tests the cross-validation system that implements:
 - Statistical performance analysis
 """
 
+if isinteractive()
+    Pkg.activate("..")
+end
+
 import Test
 import Mycelia
 import BioSequences

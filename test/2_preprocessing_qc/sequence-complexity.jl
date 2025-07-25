@@ -1,3 +1,6 @@
+if isinteractive()
+    Pkg.activate("..")
+end
 import Test
 import BioSequences
 import Mycelia

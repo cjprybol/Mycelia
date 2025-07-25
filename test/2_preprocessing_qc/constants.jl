@@ -1,5 +1,7 @@
 import Pkg
-Pkg.activate("..")
+if isinteractive()
+    Pkg.activate("..")
+end
 import Test
 import Mycelia
 

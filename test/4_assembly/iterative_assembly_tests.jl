@@ -9,6 +9,10 @@ This module tests the iterative assembly system that implements:
 - Memory-efficient read set processing
 """
 
+if isinteractive()
+    Pkg.activate("..")
+end
+
 import Test
 import Mycelia
 import BioSequences
