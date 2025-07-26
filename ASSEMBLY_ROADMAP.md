@@ -367,19 +367,28 @@ Successfully implemented all 6 graph types following the specification with comp
 - **Learnable Parameters**: Train on diverse simulated datasets to generalize to real data
 - **Sparsity-Based Optimization**: Use sparsity detection to find optimal starting k-mer sizes
 
-#### Architecture: Hierarchical Reinforcement Learning
+#### Architecture: Hierarchical Reinforcement Learning with Multiple Approaches
 
-**High-Level Policy (Meta-Controller)**:
+**1. High-Level Policy (Meta-Controller)**:
 - **Algorithm**: Deep Q-Network (DQN) with experience replay
 - **State**: Overall assembly quality, current k-mer size, memory usage, correction rate
 - **Actions**: Continue with current k, move to next prime k, or terminate
 - **Termination**: Based on correction rate, memory limits (32GB), or max k (~101)
 
-**Low-Level Policy (Error Correction Controller)**:
+**2. Low-Level Policy (Error Correction Controller)**:
 - **Algorithm**: Policy Gradient (PPO) for continuous parameter spaces
 - **State**: Local graph topology, quality scores, coverage patterns
 - **Actions**: Viterbi parameters, path selection strategies, confidence thresholds
 - **Integration**: Uses existing Viterbi + probabilistic path algorithms
+
+**3. Monte Carlo Tree Search (Game-Based Assembly)** 🆕:
+- **Algorithm**: UCB1-based tree search with simulated rollouts
+- **Game Formulation**: Assembly as sequential decision game with known target (training)
+- **State**: Current partial assembly, available reads, quality metrics
+- **Actions**: Read selection, overlap decisions, path extensions
+- **Reward**: Accuracy vs. known reference (weighted 1000x) + efficiency metrics
+- **Rollout Policy**: Fast heuristic assembly for leaf node evaluation
+- **Selection**: UCB1 balancing exploration vs exploitation
 
 #### Implementation Phases:
 
@@ -1003,18 +1012,20 @@ end
 - ✅ **Comprehensive Testing** - Extended test suite with path reconstruction validation, edge case handling, and realistic performance tests
 - ✅ **Architectural Improvements** - Updated CLAUDE.md with sequence type guidelines and best practices
 
-### 3. **Reinforcement Learning Framework** 🤖 ✅ **COMPLETED WITH THREE IMPLEMENTATIONS**  
+### 3. **Reinforcement Learning Framework** 🤖 ✅ **COMPLETED WITH FOUR IMPLEMENTATIONS**  
 **Files**: 
 - `src/reinforcement-learning.jl` (custom implementation - 1400+ lines)
 - `src/reinforcement-learning-rl-jl.jl` (ReinforcementLearning.jl wrapper)
 - `src/reinforcement-learning-pomdp.jl` (POMDPs.jl wrapper)
+- `src/reinforcement-learning-mcts.jl` (Monte Carlo Tree Search - game-based approach) 🆕
 - `src/reinforcement-learning-comparison.jl` (unified comparison framework)
-**Status**: ✅ **COMPLETED** - Three parallel RL implementations available (July 20, 2025)
+**Status**: ✅ **COMPLETED** - Four parallel RL implementations available (July 26, 2025)
 **Achievements**:
 - ✅ **Custom Implementation**: Complete hierarchical RL with placeholder policies
 - ✅ **ReinforcementLearning.jl**: Access to DQN, PPO, A2C with neural networks
 - ✅ **POMDPs.jl**: Formal MDP/POMDP specification with exact/approximate solvers
-- ✅ **Comparison Framework**: Unified interface to evaluate all three approaches
+- ✅ **Monte Carlo Tree Search**: Assembly as a game with simulated rollouts and UCB1 selection 🆕
+- ✅ **Comparison Framework**: Unified interface to evaluate all four approaches
 - ✅ **Test Suite**: Comprehensive testing and usage examples
 
 ### 4. **Tutorial Documentation & Workflow Integration** 📚 **MEDIUM PRIORITY**
@@ -1099,19 +1110,20 @@ end
 - ✅ **Secondary Metrics**: Traditional contiguity metrics (N50, etc.) as supplementary information
 - ✅ **Performance Tracking**: Runtime, memory usage, and throughput benchmarking with regression detection
 
-#### **2. Reinforcement Learning Framework (Phase 5.2e)** 🤖 ✅ **COMPLETED WITH THREE IMPLEMENTATIONS**
+#### **2. Reinforcement Learning Framework (Phase 5.2e)** 🤖 ✅ **COMPLETED WITH FOUR IMPLEMENTATIONS**
 **Goal**: Self-optimizing parameter selection for dynamic k-mer progression
-**Status**: ✅ **COMPLETED** - Three parallel RL implementations available (July 20, 2025)
+**Status**: ✅ **COMPLETED** - Four parallel RL implementations available (July 26, 2025)
 **Achievements**:
 - ✅ **Hierarchical RL Architecture**: DQN meta-controller + PPO low-level policy for assembly decisions
 - ✅ **Complete RL Environment**: State representation, action space, reward functions, and environment management
 - ✅ **Training Infrastructure**: Episode management, experience replay, curriculum learning framework
 - ✅ **Simulation Framework**: Diverse dataset generation with configurable error rates, coverage, and genome complexity
-- ✅ **Three Implementation Approaches**:
+- ✅ **Four Implementation Approaches**:
   - **Custom**: Complete infrastructure with placeholder policies (ready for production)
   - **ReinforcementLearning.jl**: Neural network support with well-tested algorithms
   - **POMDPs.jl**: Formal MDP specification with exact and approximate solvers
-- ✅ **Unified Comparison Framework**: Compare all three approaches with standardized metrics
+  - **Monte Carlo Tree Search**: Game-based assembly with UCB1 selection and simulated rollouts 🆕
+- ✅ **Unified Comparison Framework**: Compare all four approaches with standardized metrics
 - ✅ **Curriculum Learning**: Progressive difficulty training from simple to complex assembly scenarios
 - ✅ **Integration**: Seamless integration with existing intelligent and iterative assembly algorithms
 - ✅ **Testing**: Comprehensive test suite with comparison examples and usage patterns
@@ -1156,12 +1168,13 @@ end
 
 ### **🎯 MAJOR ACHIEVEMENT: Reinforcement Learning Framework Implementation Complete**
 
-**What was accomplished in this session:**
+**What was accomplished:**
 1. ✅ **Complete RL Framework** - Implemented hierarchical reinforcement learning system (`/src/reinforcement-learning.jl`)
 2. ✅ **Comprehensive Testing** - Created full test suite with 79 tests (68 passing) demonstrating core functionality
 3. ✅ **Module Integration** - Properly integrated RL framework into main Mycelia module with dependency ordering
 4. ✅ **Curriculum Learning** - Implemented progressive difficulty training framework
 5. ✅ **Policy Architecture** - DQN meta-controller and PPO low-level policy foundations ready for ML integration
+6. ✅ **Monte Carlo Tree Search** - Added game-based assembly approach with UCB1 selection (July 26, 2025) 🆕
 
 **Key Technical Implementation:**
 - **Core Architecture**: Hierarchical RL with state space (assembly quality, k-mer size, memory usage, correction rate)

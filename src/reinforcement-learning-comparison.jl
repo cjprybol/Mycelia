@@ -1,10 +1,11 @@
 """
     Reinforcement Learning Comparison Framework
 
-This module provides a unified interface to compare three RL implementations:
+This module provides a unified interface to compare four RL implementations:
 1. Custom implementation (rule-based placeholder)
 2. ReinforcementLearning.jl implementation
 3. POMDPs.jl implementation
+4. Monte Carlo Tree Search (MCTS) implementation
 
 Enables systematic evaluation of different RL approaches for assembly optimization.
 """
@@ -34,13 +35,14 @@ struct RLComparison
     custom_results::UnifiedAssemblyHistory
     rljl_results::Union{UnifiedAssemblyHistory, Nothing}
     pomdp_results::Union{UnifiedAssemblyHistory, Nothing}
+    mcts_results::Union{UnifiedAssemblyHistory, Nothing}
     comparison_metrics::Dict{String, Any}
 end
 
 """
     compare_rl_approaches(
         reads::Vector{String};
-        approaches::Vector{Symbol}=[:custom, :rljl, :pomdp],
+        approaches::Vector{Symbol}=[:custom, :rljl, :pomdp, :mcts],
         kwargs...
     )
 
@@ -48,11 +50,12 @@ Compare different RL approaches on the same dataset.
 """
 function compare_rl_approaches(
     reads::Vector{String};
-    approaches::Vector{Symbol}=[:custom, :rljl, :pomdp],
+    approaches::Vector{Symbol}=[:custom, :rljl, :pomdp, :mcts],
     dataset_name::String="assembly_comparison",
     training_episodes::Int=100,
     rljl_algorithm::Symbol=:dqn,
     pomdp_solver::Symbol=:value_iteration,
+    mcts_n_simulations::Int=1000,
     verbose::Bool=true,
     save_results::Bool=true,
     output_dir::String="rl_comparison_results"
@@ -97,6 +100,16 @@ function compare_rl_approaches(
                 verbose=verbose
             )
             results[:pomdp] = history
+            
+        elseif approach == :mcts
+            # Use Monte Carlo Tree Search implementation
+            history = run_mcts_rl(
+                reads;
+                n_simulations=mcts_n_simulations,
+                training_episodes=training_episodes,
+                verbose=verbose
+            )
+            results[:mcts] = history
         end
         
         elapsed = Dates.now() - start_time
@@ -114,6 +127,7 @@ function compare_rl_approaches(
         get(results, :custom, nothing),
         get(results, :rljl, nothing),
         get(results, :pomdp, nothing),
+        get(results, :mcts, nothing),
         comparison_metrics
     )
     
@@ -350,6 +364,97 @@ function run_pomdp_rl(reads::Vector{String};
     
     return UnifiedAssemblyHistory(
         "POMDPs.jl ($solver)",
+        k_values,
+        quality_scores,
+        correction_rates,
+        memory_usage,
+        actions_taken,
+        rewards,
+        time_per_step,
+        total_time,
+        length(quality_scores) > 0 ? quality_scores[end] : 0.0,
+        0  # Placeholder
+    )
+end
+
+"""
+    run_mcts_rl(reads::Vector{String}; kwargs...)
+
+Run the MCTS implementation and return unified history.
+"""
+function run_mcts_rl(reads::Vector{String}; 
+    n_simulations::Int=1000,
+    exploration_constant::Float64=sqrt(2),
+    training_episodes::Int=100,
+    verbose::Bool=false
+)
+    start_time = Dates.now()
+    time_per_step = Float64[]
+    
+    # Train MCTS agent if requested
+    if training_episodes > 0
+        # Generate training data
+        training_data = generate_diverse_training_data(5, 1000)
+        
+        # Train agent
+        agent, _ = train_mcts_agent(
+            training_data;
+            n_episodes=training_episodes,
+            n_simulations=n_simulations,
+            exploration_constant=exploration_constant
+        )
+    else
+        # Use untrained agent
+        agent = MCTSAgent(
+            n_simulations=n_simulations,
+            exploration_constant=exploration_constant
+        )
+    end
+    
+    # Run assembly with MCTS
+    env = AssemblyEnvironment(reads)
+    state = get_state(env)
+    
+    k_values = [state.current_k]
+    quality_scores = [state.assembly_quality]
+    correction_rates = [state.correction_rate]
+    memory_usage = [state.memory_usage]
+    actions_taken = Symbol[]
+    rewards = Float64[]
+    
+    while !is_done(env)
+        step_start = Dates.now()
+        
+        # Select action using MCTS
+        action = select_action_mcts(agent, state)
+        push!(actions_taken, action.decision)
+        
+        # Take action
+        new_state, reward, done, _ = step!(env, action)
+        
+        # Record metrics
+        push!(k_values, new_state.current_k)
+        push!(quality_scores, new_state.assembly_quality)
+        push!(correction_rates, new_state.correction_rate)
+        push!(memory_usage, new_state.memory_usage)
+        push!(rewards, reward)
+        
+        step_time = Dates.value(Dates.now() - step_start) / 1000.0
+        push!(time_per_step, step_time)
+        
+        state = new_state
+        
+        if verbose && length(k_values) % 10 == 0
+            println("Step $(length(k_values)): K=$(state.current_k), " *
+                   "Quality=$(round(state.assembly_quality, digits=3)), " *
+                   "Simulations=$n_simulations")
+        end
+    end
+    
+    total_time = Dates.value(Dates.now() - start_time) / 1000.0
+    
+    return UnifiedAssemblyHistory(
+        "MCTS (n_sim=$n_simulations)",
         k_values,
         quality_scores,
         correction_rates,

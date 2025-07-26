@@ -126,6 +126,10 @@ include("cross-validation.jl")
 
 # Reinforcement learning framework (depends on intelligent-assembly.jl and iterative-assembly.jl)
 include("reinforcement-learning.jl")
+include("reinforcement-learning-rl-jl.jl")
+include("reinforcement-learning-pomdp.jl")
+include("reinforcement-learning-mcts.jl")
+include("reinforcement-learning-comparison.jl")
 
 # Advanced algorithms (depend on core graph types)
 include("viterbi-next.jl")

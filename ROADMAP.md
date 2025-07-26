@@ -35,7 +35,7 @@ Mycelia includes cutting-edge assembly algorithms that represent significant res
 ### Three Assembly Strategies  
 - **Intelligent Assembly**: Prime k-mer progression with sparsity detection
 - **Iterative Maximum Likelihood**: Statistical path resampling with Viterbi
-- **Reinforcement Learning**: Self-optimizing parameter selection (3 implementations)
+- **Reinforcement Learning**: Self-optimizing parameter selection (4 implementations including MCTS)
 
 ### Key Scientific Advances
 - First framework to preserve quality scores throughout assembly

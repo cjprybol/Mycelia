@@ -150,7 +150,7 @@ results = Mycelia.mycelia_iterative_assemble(fastq_file;
 
 ### 5. Reinforcement Learning Guided Assembly 🧪 **Experimental**
 
-For machine learning optimization (three experimental implementations available):
+For machine learning optimization (four experimental implementations available):
 
 #### Custom RL Framework 🧪 **Experimental - Under Development**
 ```julia
@@ -189,16 +189,29 @@ assembly, history = Mycelia.intelligent_assembly_pomdp(
 )
 ```
 
+#### Monte Carlo Tree Search (MCTS) 🧪 **Experimental - Game-Based Approach**
+```julia
+import Mycelia
+
+# Assembly as a sequential decision game
+assembly, trajectory = Mycelia.intelligent_assembly_mcts(
+    reads;
+    n_simulations=1000,
+    exploration_constant=sqrt(2)
+)
+```
+
 #### Comparison Framework 🧪 **Experimental - Proof of Concept**
 ```julia
 import Mycelia
 
-# Compare all three RL approaches
+# Compare all four RL approaches
 comparison = Mycelia.compare_rl_approaches(
     reads;
-    approaches=[:custom, :rljl, :pomdp],
+    approaches=[:custom, :rljl, :pomdp, :mcts],
     rljl_algorithm=:dqn,
-    pomdp_solver=:mcts
+    pomdp_solver=:value_iteration,
+    mcts_n_simulations=1000
 )
 ```
 
