@@ -45,7 +45,7 @@ assembly = Mycelia.assemble_genome(reads_file)
 ### Research Innovations
 - **🧪 Novel 6-Graph Assembly Framework**: Unique hierarchy transitioning from fixed-length (k-mer, qualmer) to variable-length (string, FASTQ) graphs
 - **🎯 Quality-Aware Assembly**: First framework to preserve per-base quality scores throughout assembly process
-- **🤖 Machine Learning Integration**: Reinforcement learning for automated parameter optimization
+- **🤖 Machine Learning Integration**: Four reinforcement learning approaches (DQN, PPO, POMDPs, MCTS) for automated parameter optimization
 - **🔬 Zero String Conversion**: Type-safe implementation using native BioSequences types throughout
 
 ### Bioinformatics Workflows
@@ -91,7 +91,7 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 - ✅ **Visualization**: Coverage plots, k-mer spectra, embeddings, taxonomic analysis, progress tracking
 
 ### Experimental/In Development
-- 🧪 Reinforcement learning guided assembly optimization
+- 🧪 Reinforcement learning guided assembly optimization (Custom RL, ReinforcementLearning.jl, POMDPs.jl, Monte Carlo Tree Search)
 - 🧪 Advanced assembly validation metrics
 - 🚧 Native quality control implementations (external tools currently integrated)
 - 🚧 Pangenome analysis workflows
