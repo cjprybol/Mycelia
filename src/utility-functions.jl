@@ -1,3 +1,27 @@
+# """
+#     @recordtest call_expr
+
+# Evaluate the function call `call_expr`, print a test statement in the form `@test call_expr == result` using the actual result, and return the result.
+
+# # Example
+
+# The printed `@test` statement can be copy-pasted into a test file to verify that the function with the given arguments returns the same result in the future.
+
+# !!! note
+# Arguments should be literals or global variables for the printed test to be self-contained and copy-pasteable.
+# """
+# macro recordtest(call_expr)
+#     # Evaluate the function call and capture the result
+#     result = eval(call_expr)
+#     # Get the source code for the call expression
+#     call_str = string(call_expr)
+#     # Generate the test statement as a string
+#     test_str = "Test.@test $call_str == $(repr(result))"
+#     # Print it out (or you could `return test_str` to use elsewhere)
+#     println(test_str)
+#     return result  # Optionally return the result for interactive feedback
+# end
+
 """
     _get_output_files(output_dir::AbstractString) -> Vector{String}
 

@@ -1,7 +1,7 @@
 module Mycelia
 
 # Enable precompilation for faster loading
-# __precompile__(false)  # Disabled for testing framework fix
+__precompile__(false)  # Disabled for testing framework fix
 
 import AlgebraOfGraphics
 import Arrow

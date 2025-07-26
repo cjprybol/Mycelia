@@ -24,7 +24,7 @@ function string_to_ngram_graph(; s, n)
         label_type=String,
         vertex_data_type=Int,
         edge_data_type=Int,
-        weight_function=x->x,
+        weight_function=identity,
         default_weight=0
     )
 
