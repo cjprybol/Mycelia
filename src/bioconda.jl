@@ -1,7 +1,40 @@
+"""
+    _install_vibrant()
+
+Install VIBRANT (Virus Identification By iteRative ANnoTation) from Bioconda and download its required databases.
+
+# Details
+This function performs two main tasks:
+1. Creates a new conda environment named 'vibrant' and installs the VIBRANT package
+2. Downloads the required HMM databases using VIBRANT's download-db.sh script
+
+# ⚠️ Warning
+**Database Re-downloading Issue**: Currently, this function will re-download the VIBRANT databases
+on every run because it does not check if the databases already exist. This wastes bandwidth and time.
+The databases are stored in VIBRANT's default location within the conda environment.
+
+# TODO
+- Add logic to check if databases already exist before downloading
+- Allow configuration of custom database location using -d and -m flags
+- Store databases in a persistent location outside the conda environment
+
+# Implementation Notes
+- The database location is fixed to VIBRANT's default location
+- Uses CONDA_RUNNER to execute commands within the vibrant environment
+
+# Internal Use
+This function is called internally by `run_vibrant` to ensure VIBRANT is properly installed
+before attempting to run analyses.
+"""
 function _install_vibrant()
     # install VIBRANT from Bioconda
     # run(`conda install -y -c bioconda vibrant`)
     Mycelia.add_bioconda_env("vibrant")
+    
+    # ⚠️ WARNING: This will re-download databases every time it's called
+    # TODO: Check if databases exist before downloading
+    @warn "VIBRANT databases will be re-downloaded. This needs to be fixed to check for existing databases first."
+    
     # download required HMM databases
     # run(`bash -lc "download-db.sh"`)
     # don't love the default location, but that's ok for now - no obvious way to set to a different location

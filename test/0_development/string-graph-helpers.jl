@@ -1,12 +1,24 @@
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# 
+# ```bash
+# julia --project=. -e 'include("test/0_development/unicode-graph-assembly.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/0_development/string-graph-helpers.jl", "test/0_development", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
 import Test
 import Mycelia
 import Graphs
 import MetaGraphsNext
 
+# Test string graph helpers
 Test.@testset "ngrams" begin
     s = "banana"
     n = 2
@@ -14,6 +26,7 @@ Test.@testset "ngrams" begin
     Test.@test Mycelia.ngrams(s, n) == expected
 end
 
+# Test n-gram graph construction
 Test.@testset "string_to_ngram_graph" begin
     s = "banana"
     n = 2
@@ -21,13 +34,14 @@ Test.@testset "string_to_ngram_graph" begin
     Test.@test collect(Graphs.weights(g)) == [0 0 2; 1 0 0; 1 0 0]
     Test.@test collect(MetaGraphsNext.labels(g)) == ["an", "ba", "na"]
     Test.@test collect(MetaGraphsNext.edge_labels(g)) == [("an", "na"), ("ba", "an"), ("na", "an")]
-    comps = Mycelia.find_connected_components(g)
+    comps = Graphs.connected_components(g)
     Test.@test length(comps) == 1 && sort(comps[1]) == [1, 2, 3]
 end
 
+# Test n-gram graph assembly
 Test.@testset "collapse and assemble" begin
     g = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
+        Graphs.SimpleDiGraph(),
         label_type=String,
         vertex_data_type=Dict{Symbol,Any},
         edge_data_type=Int,

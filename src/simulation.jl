@@ -7,8 +7,42 @@ const PRINTABLE_LATIN1_ALPHABET = filter(isprint, [Char(c) for c in 0x00:0xFF])
 const PRINTABLE_UNICODE_ALPHABET = [Char(c) for c in 0x0000:0x10FFFF if ((c <= 0xD7FF) || (0xE000 <= c <= 0x10FFFF)) && Base.isprint(Char(c))]
 const PRINTABLE_BMP_ALPHABET  = [Char(c) for c in 0x0020:0xFFFD if (c < 0xD800 || c > 0xDFFF) && Base.isprint(Char(c))]
 
-# Mutate a string given an alphabet, error rate, and allowed mutation types.
-# If `alphabet` is not provided, use the unique set of observed characters in the input string.
+"""
+    mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=nothing, error_rate::Float64=0.01)
+
+Introduce random mutations (substitutions, insertions, deletions) into a string.
+
+# Arguments
+- `s::String`: The input string to mutate
+
+# Keywords
+- `alphabet::Union{Nothing,AbstractVector{Char}}=nothing`: Characters to use for mutations. 
+  If `nothing`, uses the unique characters found in the input string.
+- `error_rate::Float64=0.01`: Probability of mutation at each position (default: 1%)
+
+# Returns
+- `String`: Mutated version of the input string
+
+# Mutation Types
+- **Substitution**: Replace character with a different one from the alphabet
+- **Insertion**: Insert a random character from the alphabet
+- **Deletion**: Remove the character (if string length > 1)
+
+Each mutation type has equal probability when a mutation occurs.
+
+# Example
+```julia
+# Mutate a DNA sequence with 2% error rate
+mutated = mutate_string("ACGTACGT", error_rate=0.02)
+
+# Mutate with custom alphabet
+mutated = mutate_string("HELLO", alphabet=['H','E','L','O','W','R','D'], error_rate=0.1)
+```
+
+# Usage Context
+Used in assembly testing to simulate sequencing errors and evaluate assembly algorithms'
+robustness to different error rates and types.
+"""
 function mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=nothing, error_rate::Float64=0.01)
     chars = collect(s)
     if alphabet === nothing

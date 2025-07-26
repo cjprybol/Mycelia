@@ -15,6 +15,45 @@ function rclone_list_directories(path)
     return directories
 end
 
+"""
+    rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
+
+Copy a specific list of files from source to destination using rclone.
+
+# Keywords
+- `source::String`: Source location (can be remote like "gdrive:folder" or local path)
+- `destination::String`: Destination location (can be remote or local path)
+- `relative_paths::Vector{String}`: List of relative file paths to copy from source
+
+# Returns
+- `Bool`: `true` if transfer succeeded, `false` if an error occurred
+
+# Details
+This function creates a temporary file containing the list of paths and uses rclone's
+`--files-from` option to copy only the specified files. This is more efficient than
+copying files one by one when dealing with many files.
+
+# Example
+```julia
+# Copy specific files from Google Drive to local directory
+success = rclone_copy_list(
+    source="gdrive:data",
+    destination="/local/data",
+    relative_paths=["file1.txt", "subdir/file2.csv", "images/photo.jpg"]
+)
+```
+
+# Implementation Notes
+- Creates destination directory if it's a local path and doesn't exist
+- Uses verbose output to show transfer progress
+- Automatically cleans up the temporary file list after completion
+- Currently not called anywhere in the codebase (appears to be unused utility function)
+
+# TODO
+- Add support for additional rclone flags (bandwidth limits, chunk sizes, etc.)
+- Add option to preserve directory structure or flatten it
+- Add dry-run option for testing
+"""
 function rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
     # Create a temporary file for storing file paths
     temp_file = joinpath(tempdir(), "rclone_sources_$(Random.randstring(8)).txt")
