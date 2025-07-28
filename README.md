@@ -91,7 +91,7 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 - ✅ **Visualization**: Coverage plots, k-mer spectra, embeddings, taxonomic analysis, progress tracking
 
 ### Experimental/In Development
-- 🧪 Reinforcement learning guided assembly optimization (Custom RL, ReinforcementLearning.jl, POMDPs.jl, Monte Carlo Tree Search)
+- 🧪 Reinforcement learning guided assembly optimization
 - 🧪 Advanced assembly validation metrics
 - 🚧 Native quality control implementations (external tools currently integrated)
 - 🚧 Pangenome analysis workflows

@@ -1,9 +1,9 @@
 # FASTQ simulation tests
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# import Pkg
+# if isinteractive()
+#     Pkg.activate("..")
+# end
 import Test
 import Mycelia
 import FASTX

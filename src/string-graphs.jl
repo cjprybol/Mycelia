@@ -1,3 +1,6 @@
+# Look back at this for additional inspiration
+# https://github.com/fargolo/TextGraphs.jl
+
 function ngrams(s::AbstractString, n::Int)
     len = lastindex(s)
     count = max(len - n + 1, 0)

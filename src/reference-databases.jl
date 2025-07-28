@@ -1149,19 +1149,7 @@ function download_genome_by_accession(;accession, outdir=pwd(), compressed = tru
     end
     if !isfile(outfile)
         try
-            # pull the entire record so that if the download fails we don't leave an empty file
-            fasta_records = collect(Mycelia.get_sequence(db = "nuccore", accession = accession))
-            open(temp_fasta, "w") do io
-                fastx_io = FASTX.FASTA.Writer(io)
-                for fasta_record in fasta_records
-                    write(fastx_io, fasta_record)
-                end
-                close(fastx_io)
-                if compressed
-                    run(`gzip $(temp_fasta)`)
-                end
-                @assert isfile(outfile)
-            end
+            Mycelia.write_fasta(outfile = outfile, records = Mycelia.get_sequence(db = "nuccore", accession = accession))
         catch e
             println("An error occurred: ", e)
         end
@@ -2081,21 +2069,32 @@ Retrieve FASTA format sequences from NCBI databases or direct FTP URLs.
 # Returns
 - `FASTX.FASTA.Reader`: Reader object containing the requested sequence(s)
 """
-function get_sequence(;db=""::String, accession=""::String, ftp=""::String)
+function get_sequence(; db::String = "", accession::String = "", ftp::String = "")
     if !isempty(db) && !isempty(accession)
-        # API will block if we request more than 3 times per second, so set a 1/3 second sleep to set max of 3 requests per second when looping
         sleep(0.34)
         url = "https://www.ncbi.nlm.nih.gov/sviewer/viewer.cgi?db=$(db)&report=fasta&id=$(accession)"
-        body = HTTP.get(url).body
+        resp = HTTP.get(url)
+        if resp.status != 200
+            throw(error("HTTP request failed (status $(resp.status)) for URL: $url"))
+        end
         try
-            return FASTX.FASTA.Reader(IOBuffer(body))
+            return collect(FASTX.FASTA.Reader(IOBuffer(resp.body)))
         catch e
-            @error e body
+            response_string = read(IOBuffer(resp.body), String)
+            throw(error("Failed to parse FASTA from NCBI: $(e)\n$(response_string)"))
         end
     elseif !isempty(ftp)
-        return FASTX.FASTA.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(HTTP.get(ftp).body)))
+        resp = HTTP.get(ftp)
+        if resp.status != 200
+            throw(error("HTTP request failed (status $(resp.status)) for FTP URL: $ftp"))
+        end
+        try
+            return collect(FASTX.FASTA.Reader(CodecZlib.GzipDecompressorStream(IOBuffer(resp.body))))
+        catch e
+            throw(error("Failed to decompress or parse FASTA from FTP: $(e)"))
+        end
     else
-        @error "invalid call"
+        throw(ArgumentError("Must provide either both `db` and `accession`, or `ftp`"))
     end
 end
 

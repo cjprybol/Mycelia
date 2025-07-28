@@ -11,6 +11,8 @@ import BioSequences
 import FASTX
 import DocStringExtensions
 
+# TODO: https://juliagraphs.org/Graphs.jl/stable/algorithms/traversals/#Graphs.eulerian
+
 # Type-stable metadata structures for vertices and edges
 
 """

@@ -1,13 +1,28 @@
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# 
+# ```bash
+# julia --project=. --color=yes -e 'include("test/1_data_acquisition/ncbi_download.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/1_data_acquisition/ncbi_download.jl", "test/1_data_acquisition", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
+import CSV
+import CodecZlib
+import DataFrames
 
 Test.@testset "download_genome_by_accession" begin
-    # const phiX174_accession_id = "NC_001422.1"
-    result = Mycelia.download_genome_by_accession(accession="NC_001422.1")
+    ## const phiX174_accession_id = "NC_001422.1"
+    result = Mycelia.download_genome_by_accession(accession="NC_001422")
     Test.@test isfile(result)
     Test.@test endswith(result, ".fna.gz")
     @assert isfile(result)
@@ -15,7 +30,8 @@ Test.@testset "download_genome_by_accession" begin
 end
 
 Test.@testset "ncbi_genome_download_accession" begin
-    # const phiX174_assembly_id = "GCF_000819615.1"
+    ## const phiX174_assembly_id = "GCF_000819615.1"
+    ## need to use the versioned identifier - unversioned will add it in breaking the search path
     accession = "GCF_000819615.1"
     result = Mycelia.ncbi_genome_download_accession(accession=accession)
     Test.@test isdir(result.directory)
@@ -24,11 +40,11 @@ Test.@testset "ncbi_genome_download_accession" begin
     Test.@test isfile(result.cds) && filesize(result.cds) > 0
     Test.@test isfile(result.gff3) && filesize(result.gff3) > 0
     Test.@test isfile(result.seqreport) && filesize(result.seqreport) > 0
-    # Check file format (FASTA: first char is '>')
+    ## Check file format (FASTA: first char is '>')
     open(result.genome) do io
         Test.@test readline(io)[1] == '>'
     end
-    # Clean up
+    ## Clean up
     @assert isdir(accession)
     rm(accession, recursive=true, force=true)
 end
@@ -57,7 +73,8 @@ Test.@testset "download_genome_by_accession_idempotency" begin
 end
 
 Test.@testset "SRA prefetch and fasterq_dump stepwise" begin
-    sra_public_fastq_metadata = CSV.read(CodecZlib.GzipDecompressorStream(open("metadata/20250702.sra-public-fastqs.csv.gz")), DataFrames.DataFrame)
+    sra_public_fastq_metadata_file = joinpath(@__DIR__, "..", "metadata", "20250702.sra-public-fastqs.csv.gz")
+    sra_public_fastq_metadata = CSV.read(CodecZlib.GzipDecompressorStream(open(sra_public_fastq_metadata_file)), DataFrames.DataFrame)
     SRR_identifier = sort!(sra_public_fastq_metadata, "Bytes")[1, "Run"]
     prefetch_result = Mycelia.prefetch(SRR=SRR_identifier)
     Test.@test basename(prefetch_result.directory) == SRR_identifier
@@ -73,7 +90,8 @@ Test.@testset "SRA prefetch and fasterq_dump stepwise" begin
 end
 
 Test.@testset "SRA fasterq_dump standalone" begin
-    sra_public_fastq_metadata = CSV.read(CodecZlib.GzipDecompressorStream(open("metadata/20250702.sra-public-fastqs.csv.gz")), DataFrames.DataFrame)
+    sra_public_fastq_metadata_file = joinpath(@__DIR__, "..", "metadata", "20250702.sra-public-fastqs.csv.gz")
+    sra_public_fastq_metadata = CSV.read(CodecZlib.GzipDecompressorStream(open(sra_public_fastq_metadata_file)), DataFrames.DataFrame)
     SRR_identifier = sort!(sra_public_fastq_metadata, "Bytes")[1, "Run"]
     fasterq_result = Mycelia.fasterq_dump(srr_identifier=SRR_identifier)
     Test.@test ismissing(fasterq_result.forward_reads)

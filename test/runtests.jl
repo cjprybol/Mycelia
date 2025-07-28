@@ -38,8 +38,8 @@ function include_all_tests(dir)
 end
 
 # Include in logical order
-include_all_tests(joinpath(@__DIR__, "0_development"))
-# include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
+# include_all_tests(joinpath(@__DIR__, "0_development"))
+include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 # include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 # include_all_tests(joinpath(@__DIR__, "4_assembly"))

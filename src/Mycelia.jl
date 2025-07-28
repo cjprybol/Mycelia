@@ -121,18 +121,19 @@ include("intelligent-assembly.jl")
 # Iterative assembly algorithms (depends on intelligent-assembly.jl)
 include("iterative-assembly.jl")
 
+# Advanced algorithms (depend on core graph types)
+include("viterbi-next.jl")
+
 # Cross-validation pipeline (depends on both intelligent and iterative assembly)
 include("cross-validation.jl")
 
+# to be added back as we finish their implementations
 # Reinforcement learning framework (depends on intelligent-assembly.jl and iterative-assembly.jl)
-include("reinforcement-learning.jl")
-include("reinforcement-learning-rl-jl.jl")
-include("reinforcement-learning-pomdp.jl")
-include("reinforcement-learning-mcts.jl")
-include("reinforcement-learning-comparison.jl")
-
-# Advanced algorithms (depend on core graph types)
-include("viterbi-next.jl")
+# include("reinforcement-learning.jl")
+# include("reinforcement-learning-rl-jl.jl")
+# include("reinforcement-learning-pomdp.jl")
+# include("reinforcement-learning-mcts.jl")
+# include("reinforcement-learning-comparison.jl")
 
 # Load remaining files in alphabetical order (no critical dependencies)
 remaining_files = [
