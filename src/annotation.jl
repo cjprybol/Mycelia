@@ -1,3 +1,84 @@
+function run_pgap(;
+        fasta::AbstractString,
+        organism::AbstractString,
+        pgap_dir = joinpath(homedir(), "workspace", "pgap"),
+        outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
+        as_string = false,
+        force = false,
+        threads = Sys.CPU_THREADS,
+        prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => "")
+        # --memory
+    )
+    pgap_py_script = joinpath(pgap_dir, "pgap.py")
+    if !isfile(pgap_py_script)
+        mkpath(dirname(pgap_py_script))
+        run(`wget -O $(pgap_py_script) https://github.com/ncbi/pgap/raw/prod/scripts/pgap.py`)
+        # run(`chmod +x $(pgap_py_script)`)
+        @assert isfile(pgap_py_script)
+    end
+    if isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
+        @time run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+    end 
+    if force && isdir(outdir)
+        rm(outdir, recursive=true)
+    elseif !force && isdir(outdir)
+        @warn "$outdir already exists, use `force=true` to overwrite existing results"
+        return outdir
+    end    
+    @assert !isdir(outdir)
+    if as_string
+        # Generate the fully expanded bash command
+        # --report-usage-false
+        bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta --report-usage-true --taxcheck --auto-correct-tax --organism $organism --cpu $(threads) --prefix $(prefix)"
+        # Print it so you can copy and paste
+        return bash_command
+    else
+        @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism $(organism) --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+        return outdir
+    end
+end
+
+function run_bakta(;
+        fasta::AbstractString,
+        outdir = replace(fasta, Mycelia.FASTA_REGEX => "_bakta"),
+        baktadb_dir=joinpath(homedir(), "workspace", "bakta"),
+        mode="full",
+        threads=Sys.CPU_THREADS,
+        as_string = false,
+        force = false
+    )
+    @assert mode in ["full", "light"]
+    @assert isfile(fasta)
+    Mycelia.add_bioconda_env("bakta")
+    bakta_db_path = joinpath(baktadb_dir, mode)
+    current_db_path_contents = filter(x -> !occursin(r"^\.", x), readdir(bakta_db_path))
+    if !isdir(bakta_db_path) || isempty(current_db_path_contents)
+        @info "downloading bakta db"
+        mkpath(bakta_db_path)
+        @time run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bakta bakta_db download --output $(bakta_db_path) --type $(mode)`)
+        @info "bakta db downloaded!"
+    end
+    bakta_db_path = joinpath(bakta_db_path, "db")
+    @assert isdir(bakta_db_path)
+    # --prefix ecoli123
+    # --locus-tag eco634
+    # --prodigal-tf eco.tf
+    # --replicons replicon.tsv
+    if !isdir(outdir) || isempty(filter(x -> !occursin(r"^\.", x), readdir(outdir))) || force
+        if as_string
+            bash_command = "$(Mycelia.CONDA_RUNNER) run --live-stream -n bakta bakta --verbose --db $(bakta_db_path) --output $(outdir) --threads $(threads) $(fasta) --force"
+            return bash_command
+        else
+            @info "running bakta"
+            @time run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bakta bakta --verbose --db $(bakta_db_path) --output $(outdir) --threads $(threads) $(fasta) --force`)
+            return outdir
+        end
+    else
+        @warn "$(outdir) exists and is non-empty - manually remove the directory before running or use `force=true` to overwrite existing outputs"
+        return outdir
+    end
+end
+
 """
 Run VirSorter2 viral sequence identification tool.
 

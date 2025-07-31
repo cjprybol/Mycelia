@@ -210,7 +210,7 @@ Loads data from the specified Arrow file, creates the visualization, and saves i
 Output files are named based on the input file path with "_rank-level-confidences" suffix by default.
 """
 function generate_rank_consensus_plots(
-    arrow_file_path::String;
+    inputfile_path::String;
     png_output_path::Union{String, Nothing} = nothing,
     svg_output_path::Union{String, Nothing} = nothing,
     force=false,
@@ -218,16 +218,23 @@ function generate_rank_consensus_plots(
 )
     fig = nothing
     # Determine output paths
-    base_path = splitext(arrow_file_path)[1]  # Remove .arrow extension
+    base_path = splitext(inputfile_path)[1]  # Remove extension
     png_path = png_output_path !== nothing ? png_output_path : "$(base_path)_rank-level-confidences.png"
     svg_path = svg_output_path !== nothing ? svg_output_path : "$(base_path)_rank-level-confidences.svg"
 
     if (!isfile(png_path) && !isfile(svg_path)) || force
         # Load the data
-        df = DataFrames.DataFrame(Arrow.Table(arrow_file_path))
+        if occursin(r"\.arrow$", inputfile_path)
+            df = DataFrames.DataFrame(Arrow.Table(inputfile_path))
+        elseif occursin(r"\.tsv\.gz$", inputfile_path)
+            df = Mycelia.read_tsvgz(inputfile_path)
+        else
+            error()
+        end
+        display(size(df))
         
         # Create the figure
-        fig = create_rank_consensus_plot(df; sample_id=basename(arrow_file_path), kwargs...)
+        fig = create_rank_consensus_plot(df; sample_id=basename(inputfile_path), kwargs...)
         
         # Save the figures
         CairoMakie.save(png_path, fig)
@@ -1498,76 +1505,208 @@ function draw_radial_tree(
     Luxor.preview()
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Creates a visualization of chromosome coverage data with statistical thresholds.
+# Creates a visualization of chromosome coverage data with statistical thresholds.
 
-# Arguments
-- `cdf::DataFrame`: Coverage data frame containing columns:
-  - `index`: Chromosome position indices
-  - `depth`: Coverage depth values
-  - `chromosome`: Chromosome identifier
-  - `mean_coverage`: Mean coverage value
-  - `std_coverage`: Standard deviation of coverage
-  - `3σ`: Boolean vector indicating +3 sigma regions
-  - `-3σ`: Boolean vector indicating -3 sigma regions
+# # Arguments
+# - `cdf::DataFrame`: Coverage data frame containing columns:
+#   - `index`: Chromosome position indices
+#   - `depth`: Coverage depth values
+#   - `chromosome`: Chromosome identifier
+#   - `mean_coverage`: Mean coverage value
+#   - `std_coverage`: Standard deviation of coverage
+#   - `3σ`: Boolean vector indicating +3 sigma regions
+#   - `-3σ`: Boolean vector indicating -3 sigma regions
 
-# Returns
-- A StatsPlots plot object showing:
-  - Raw coverage data (black line)
-  - Mean coverage and ±1,2,3σ thresholds (rainbow colors)
-  - Highlighted regions exceeding ±3σ thresholds (red vertical lines)
-"""
-function chromosome_coverage_table_to_plot(cdf)
-    p = StatsPlots.plot(
-        xlims = extrema(cdf[!, "index"]),
-        ylims=(1, maximum(cdf[!, "depth"]) * 1.1),
-        title = cdf[1, "chromosome"],
-        xlabel = "chromosome index",
-        ylabel = "depth"
+# # Returns
+# - A StatsPlots plot object showing:
+#   - Raw coverage data (black line)
+#   - Mean coverage and ±1,2,3σ thresholds (rainbow colors)
+#   - Highlighted regions exceeding ±3σ thresholds (red vertical lines)
+# """
+# function chromosome_coverage_table_to_plot(cdf)
+
+#     # mean_coverage = first(unique(cdf[!, "mean_coverage"]))
+#     # stddev_coverage = first(unique(cdf[!, "std_coverage"]))
+
+#     mean_coverage = Statistics.mean(cdf[!, "depth"])
+#     median_coverage = Statistics.median(cdf[!, "depth"])
+#     stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#     p = StatsPlots.plot(
+#         xlims = extrema(cdf[!, "index"]),
+#         ylims=(0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#         title = cdf[1, "chromosome"],
+#         xlabel = "chromosome index",
+#         ylabel = "depth"
+#     )
+
+#     # cdf[!, "3σ"] = 
+#     # cdf[!, "-3σ"] = 
+
+#     # mean_coverage + 3 * stddev_coverage    
+
+#     is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#     for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#         range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
+#         StatsPlots.vline!(p,
+#             [r[1], r[2]],
+#             # [range_mean, range_mean],
+#             seriestype = :path,
+#             label="",
+#             c=:red,
+#             linewidth=3,
+#             alpha=0.1
+#         )
+#     end
+#     is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#     for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#         range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
+#         StatsPlots.vline!(p,
+#             [r[1], r[2]],
+#             # [range_mean, range_mean],
+#             seriestype = :path,
+#             label="",
+#             c=:red,
+#             linewidth=3,
+#             alpha=1/3
+#         )
+#     end
+
+#     color_vec = StatsPlots.cgrad(ColorSchemes.rainbow, 8, categorical = true)
+#     StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(cdf[!, "depth"], 10_000), label="coverage", c=:black)
+#     # StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(rolling_centered_avg(cdf[!, "depth"], window_size=1001), 10_000), label="101bp sliding window mean", c=:gray)
+
+#     StatsPlots.hline!(p, [mean_coverage + 3 * stddev_coverage], label="+3σ", c=color_vec[8])
+#     StatsPlots.hline!(p, [mean_coverage + 2 * stddev_coverage], label="+2σ", c=color_vec[7])
+#     StatsPlots.hline!(p, [mean_coverage + 1 * stddev_coverage], label="+σ", c=color_vec[6])
+#     StatsPlots.hline!(p, [mean_coverage], label="mean_coverage", c=color_vec[5])
+#     StatsPlots.hline!(p, [median_coverage], label="median", c=color_vec[4])
+#     StatsPlots.hline!(p, [mean_coverage + -1 * stddev_coverage], label="-σ", c=color_vec[3])
+#     StatsPlots.hline!(p, [mean_coverage + -2 * stddev_coverage], label="-2σ", c=color_vec[2])
+#     StatsPlots.hline!(p, [mean_coverage + -3 * stddev_coverage], label="-3σ", c=color_vec[1])
+#     return p
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a visualization of chromosome coverage data with statistical thresholds.
+
+# # Arguments
+# - `cdf::DataFrame`: Coverage data frame containing columns:
+#   - `index`: Chromosome position indices
+#   - `depth`: Coverage depth values
+#   - `chromosome`: Chromosome identifier
+#   - `mean_coverage`: Mean coverage value
+#   - `std_coverage`: Standard deviation of coverage
+#   - `3σ`: Boolean vector indicating +3 sigma regions
+#   - `-3σ`: Boolean vector indicating -3 sigma regions
+
+# # Returns
+# - A CairoMakie figure showing:
+#   - Raw coverage data (black line)
+#   - Mean coverage and ±1,2,3σ thresholds (rainbow colors)
+#   - Highlighted regions exceeding ±3σ thresholds (red vertical lines)
+# """
+# function chromosome_coverage_table_to_plot(cdf)
+#     mean_coverage = Statistics.mean(cdf[!, "depth"])
+#     median_coverage = Statistics.median(cdf[!, "depth"])
+#     stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#     # Create figure with proper spacing for labels and legend
+#     fig = CairoMakie.Figure(
+#         resolution = (1000, 600),
+#         fontsize = 14,
+#         figure_padding = (20, 80, 20, 20)  # left, right, bottom, top
+#     )
+    
+#     # Create axis with proper margins
+#     ax = CairoMakie.Axis(
+#         fig[1, 1],
+#         limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#         title = cdf[1, "chromosome"],
+#         xlabel = "chromosome index",
+#         ylabel = "depth",
+#         titlesize = 16,
+#         xlabelpadding = 10,
+#         ylabelpadding = 10,
+#         xgridvisible = true,
+#         ygridvisible = true,
+#         xgridcolor = (:gray, 0.3),
+#         ygridcolor = (:gray, 0.3),
+#         topspinevisible = false,
+#         rightspinevisible = false
+#     )
+
+#     # Add highlighted regions for 3σ outliers
+#     is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#     for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#         CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
+#     end
+    
+#     is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#     for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#         CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
+#     end
+
+#     # Create rainbow color scheme
+#     color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+    
+#     # Plot main coverage line
+#     CairoMakie.lines!(ax, 
+#         equally_spaced_samples(cdf[!, "index"], 10_000), 
+#         equally_spaced_samples(cdf[!, "depth"], 10_000), 
+#         color = :black,
+#         linewidth = 1.5,
+#         label = "coverage"
+#     )
+
+#     # Add horizontal threshold lines
+#     threshold_lines = [
+#         (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+#         (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+#         (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+#         (mean_coverage, "mean_coverage", color_vec[5]),
+#         (median_coverage, "median", color_vec[4]),
+#         (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+#         (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+#         (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+#     ]
+    
+#     for (y_val, label, color) in threshold_lines
+#         CairoMakie.hlines!(ax, y_val, 
+#             color = color, 
+#             linewidth = 2,
+#             linestyle = :dash,
+#             label = label
+#         )
+#     end
+
+#     # Create external legend
+#     CairoMakie.Legend(
+#         fig[1, 2], 
+#         ax, 
+#         framevisible = true,
+#         bgcolor = (:white, 0.9),
+#         labelsize = 12,
+#         rowgap = 5,
+#         margin = (10, 10, 10, 10)
+#     )
+
+#     # Adjust layout to prevent label cutoff
+#     CairoMakie.resize_to_layout!(fig)
+    
+#     return fig
+# end
+
+function visualize_genome_coverage(path_to_coverage_table::AbstractString; kwargs...)
+    return visualize_genome_coverage(
+        CSV.read(path_to_coverage_table, DataFrames.DataFrame, delim='\t', header=["chromosome", "index", "depth"]);
+        kwargs...
     )
-    for r in find_true_ranges(cdf[!, "3σ"]; min_length=1000)
-        range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
-        StatsPlots.vline!(p,
-            [r[1], r[2]],
-            # [range_mean, range_mean],
-            seriestype = :path,
-            label="",
-            c=:red,
-            linewidth=3,
-            alpha=0.1
-        )
-    end
-    for r in find_true_ranges(cdf[!, "-3σ"]; min_length=1000)
-        range_mean = Statistics.mean(cdf[r[1]:r[2], :depth])
-        StatsPlots.vline!(p,
-            [r[1], r[2]],
-            # [range_mean, range_mean],
-            seriestype = :path,
-            label="",
-            c=:red,
-            linewidth=3,
-            alpha=1/3
-        )
-    end
-
-    color_vec = StatsPlots.cgrad(ColorSchemes.rainbow, 7, categorical = true)
-    
-    
-    
-    StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(cdf[!, "depth"], 10_000), label="coverage", c=:black)
-    # StatsPlots.plot!(p, equally_spaced_samples(cdf[!, "index"], 10_000), equally_spaced_samples(rolling_centered_avg(cdf[!, "depth"], window_size=1001), 10_000), label="101bp sliding window mean", c=:gray)
-    mean_coverage = first(unique(cdf[!, "mean_coverage"]))
-    stddev_coverage = first(unique(cdf[!, "std_coverage"]))
-    StatsPlots.hline!(p, [mean_coverage + 3 * stddev_coverage], label="+3σ", c=color_vec[7])
-    StatsPlots.hline!(p, [mean_coverage + 2 * stddev_coverage], label="+2σ", c=color_vec[6])
-    StatsPlots.hline!(p, [mean_coverage + 1 * stddev_coverage], label="+σ", c=color_vec[5])
-    StatsPlots.hline!(p, unique(cdf[!, "mean_coverage"]), label="mean_coverage", c=color_vec[4])
-    StatsPlots.hline!(p, [mean_coverage + -1 * stddev_coverage], label="-σ", c=color_vec[3])
-    StatsPlots.hline!(p, [mean_coverage + -2 * stddev_coverage], label="-2σ", c=color_vec[2])
-    StatsPlots.hline!(p, [mean_coverage + -3 * stddev_coverage], label="-3σ", c=color_vec[1])
-    return p
 end
 
 """
@@ -1578,21 +1717,744 @@ Creates a multi-panel visualization of genome coverage across chromosomes.
 # Arguments
 - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
 
+# Keyword Arguments
+- `entity`: Optional string to specify the entity being analyzed. If provided, chromosome titles become "\$(entity): \$(chromosome)", otherwise just "\$(chromosome)"
+
 # Returns
-- `Plots.Figure`: A composite figure with coverage plots for each chromosome
+- `CairoMakie.Figure`: A composite figure with coverage plots for each chromosome
 
 # Details
 Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
 distribution across genomic positions for that chromosome.
 """
-function visualize_genome_coverage(coverage_table)
-    num_plots = length(unique(coverage_table[!, "chromosome"]))
-    meta_figure = StatsPlots.plot(
-        [chromosome_coverage_table_to_plot(cdf) for cdf in DataFrames.groupby(coverage_table, "chromosome")]...,
-        layout = (num_plots, 1),
-        size = (800, 600 * num_plots)) # Adjust size as needed
-    return meta_figure
+function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame; entity::Union{String, Nothing} = nothing)
+    chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
+    num_plots = length(chromosome_groups)
+    
+    # Create main figure with appropriate size and spacing
+    fig = CairoMakie.Figure(
+        size = (1400, 400 * num_plots),
+        fontsize = 12,
+        figure_padding = (20, 40, 20, 20)  # left, right, bottom, top
+    )
+    
+    for (i, cdf) in enumerate(chromosome_groups)
+        mean_coverage = Statistics.mean(cdf[!, "depth"])
+        median_coverage = Statistics.median(cdf[!, "depth"])
+        stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+        # Determine subplot title
+        chromosome = cdf[1, "chromosome"]
+        subplot_title = isnothing(entity) ? chromosome : "$(entity): $(chromosome)"
+
+        # Create axis for this chromosome
+        ax = CairoMakie.Axis(
+            fig[i, 1],
+            limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+            title = subplot_title,
+            xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
+            ylabel = "depth",
+            titlesize = 16,
+            xlabelsize = 14,
+            ylabelsize = 14,
+            xlabelpadding = 10,
+            ylabelpadding = 10,
+            xgridvisible = false,
+            ygridvisible = true,
+            # xgridcolor = (:gray, 0.3),
+            ygridcolor = (:gray, 0.3),
+            topspinevisible = false,
+            rightspinevisible = false
+        )
+
+        # Add highlighted regions for 3σ outliers
+        is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+        for r in find_true_ranges(is_3sigma_above; min_length=1000)
+            CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 01.0))
+            println("$(r[1]) - $(r[2]) > +3σ")
+        end
+        
+        is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+        for r in find_true_ranges(is_3sigma_below; min_length=1000)
+            CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 1.0))
+            println("$(r[1]) - $(r[2]) < -3σ")
+        end
+
+        # Create rainbow color scheme
+        color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+        
+        # Plot main coverage line
+        CairoMakie.lines!(ax, 
+            equally_spaced_samples(cdf[!, "index"], 10_000), 
+            equally_spaced_samples(cdf[!, "depth"], 10_000), 
+            color = :black,
+            linewidth = 1.5,
+            label = "coverage"
+        )
+
+        # Add horizontal threshold lines
+        threshold_lines = [
+            (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+            (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+            (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+            (mean_coverage, "mean_coverage", color_vec[5]),
+            (median_coverage, "median", color_vec[4]),
+            (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+            (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+            (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+        ]
+        
+        for (y_val, label, color) in threshold_lines
+            CairoMakie.hlines!(ax, y_val, 
+                color = color, 
+                linewidth = 2,
+                linestyle = :dash,
+                label = label
+            )
+        end
+
+        # Create individual legend for this subplot
+        CairoMakie.Legend(
+            fig[i, 2], 
+            ax, 
+            framevisible = true,
+            backgroundcolor = (:white, 0.9),
+            labelsize = 12,
+            rowgap = 2,
+            margin = (5, 5, 5, 5),
+            valign = :center,
+            halign = :left
+        )
+    end
+
+    # Now that the layout is created, set column ratios
+    CairoMakie.colsize!(fig.layout, 1, CairoMakie.Relative(0.75))  # 75% for plots
+    CairoMakie.colsize!(fig.layout, 2, CairoMakie.Relative(0.25))  # 25% for legends
+
+    # Adjust layout to prevent cutoff
+    CairoMakie.resize_to_layout!(fig)
+    
+    return fig
 end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# # Arguments
+# - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# # Keyword Arguments
+# - `entity`: Optional string to specify the entity being analyzed. If provided, chromosome titles become "\$(entity): \$(chromosome)", otherwise just "\$(chromosome)"
+
+# # Returns
+# - `CairoMakie.Figure`: A composite figure with coverage plots for each chromosome
+
+# # Details
+# Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+# distribution across genomic positions for that chromosome.
+# """
+# function visualize_genome_coverage(coverage_table; entity::Union{String, Nothing} = nothing)
+#     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
+#     num_plots = length(chromosome_groups)
+    
+#     # Create main figure with appropriate size and spacing
+#     fig = CairoMakie.Figure(
+#         size = (1400, 400 * num_plots),
+#         fontsize = 12,
+#         figure_padding = (20, 40, 20, 20)  # left, right, bottom, top
+#     )
+    
+#     # Set column ratios - give much more space to plots than legends
+#     CairoMakie.colsize!(fig.layout, 1, CairoMakie.Relative(0.75))  # 75% for plots
+#     CairoMakie.colsize!(fig.layout, 2, CairoMakie.Relative(0.25))  # 25% for legends
+    
+#     for (i, cdf) in enumerate(chromosome_groups)
+#         mean_coverage = Statistics.mean(cdf[!, "depth"])
+#         median_coverage = Statistics.median(cdf[!, "depth"])
+#         stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#         # Determine subplot title
+#         chromosome = cdf[1, "chromosome"]
+#         subplot_title = isnothing(entity) ? chromosome : "$(entity): $(chromosome)"
+
+#         # Create axis for this chromosome
+#         ax = CairoMakie.Axis(
+#             fig[i, 1],
+#             limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#             title = subplot_title,
+#             xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
+#             ylabel = "depth",
+#             titlesize = 14,
+#             xlabelpadding = 10,
+#             ylabelpadding = 10,
+#             xgridvisible = true,
+#             ygridvisible = true,
+#             xgridcolor = (:gray, 0.3),
+#             ygridcolor = (:gray, 0.3),
+#             topspinevisible = false,
+#             rightspinevisible = false
+#         )
+
+#         # Add highlighted regions for 3σ outliers
+#         is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
+#         end
+        
+#         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
+#         end
+
+#         # Create rainbow color scheme
+#         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+        
+#         # Plot main coverage line
+#         CairoMakie.lines!(ax, 
+#             equally_spaced_samples(cdf[!, "index"], 10_000), 
+#             equally_spaced_samples(cdf[!, "depth"], 10_000), 
+#             color = :black,
+#             linewidth = 1.5,
+#             label = "coverage"
+#         )
+
+#         # Add horizontal threshold lines
+#         threshold_lines = [
+#             (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+#             (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+#             (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+#             (mean_coverage, "mean_coverage", color_vec[5]),
+#             (median_coverage, "median", color_vec[4]),
+#             (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+#             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+#             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+#         ]
+        
+#         for (y_val, label, color) in threshold_lines
+#             CairoMakie.hlines!(ax, y_val, 
+#                 color = color, 
+#                 linewidth = 2,
+#                 linestyle = :dash,
+#                 label = label
+#             )
+#         end
+
+#         # Create individual legend for this subplot with smaller margins
+#         CairoMakie.Legend(
+#             fig[i, 2], 
+#             ax, 
+#             framevisible = true,
+#             backgroundcolor = (:white, 0.9),
+#             labelsize = 9,
+#             rowgap = 2,
+#             margin = (5, 5, 5, 5),  # Reduced margins
+#             valign = :center,
+#             halign = :left
+#         )
+#     end
+
+#     # Adjust layout to prevent cutoff
+#     CairoMakie.resize_to_layout!(fig)
+    
+#     return fig
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# # Arguments
+# - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# # Keyword Arguments
+# - `entity`: Optional string to specify the entity being analyzed. Default title is "Genome coverage", with entity it becomes "Genome coverage of \$(entity)"
+
+# # Returns
+# - `CairoMakie.Figure`: A composite figure with coverage plots for each chromosome
+
+# # Details
+# Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+# distribution across genomic positions for that chromosome.
+# """
+# function visualize_genome_coverage(coverage_table; entity::Union{String, Nothing} = nothing)
+#     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
+#     num_plots = length(chromosome_groups)
+    
+#     # Determine figure title
+#     fig_title = isnothing(entity) ? "Genome coverage" : "Genome coverage of $(entity)"
+    
+#     # Create main figure with appropriate size and spacing
+#     fig = CairoMakie.Figure(
+#         size = (1400, 400 * num_plots + 60),  # Extra space for main title
+#         fontsize = 12,
+#         figure_padding = (20, 120, 20, 40)  # left, right, bottom, top (increased top for title)
+#     )
+    
+#     # Add main figure title
+#     CairoMakie.Label(fig[0, :], fig_title, fontsize = 18, font = :bold)
+    
+#     for (i, cdf) in enumerate(chromosome_groups)
+#         mean_coverage = Statistics.mean(cdf[!, "depth"])
+#         median_coverage = Statistics.median(cdf[!, "depth"])
+#         stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#         # Create axis for this chromosome
+#         ax = CairoMakie.Axis(
+#             fig[i, 1],
+#             limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#             title = cdf[1, "chromosome"],
+#             xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
+#             ylabel = "depth",
+#             titlesize = 14,
+#             xlabelpadding = 10,
+#             ylabelpadding = 10,
+#             xgridvisible = true,
+#             ygridvisible = true,
+#             xgridcolor = (:gray, 0.3),
+#             ygridcolor = (:gray, 0.3),
+#             topspinevisible = false,
+#             rightspinevisible = false
+#         )
+
+#         # Add highlighted regions for 3σ outliers
+#         is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
+#         end
+        
+#         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
+#         end
+
+#         # Create rainbow color scheme
+#         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+        
+#         # Plot main coverage line
+#         CairoMakie.lines!(ax, 
+#             equally_spaced_samples(cdf[!, "index"], 10_000), 
+#             equally_spaced_samples(cdf[!, "depth"], 10_000), 
+#             color = :black,
+#             linewidth = 1.5,
+#             label = "coverage"
+#         )
+
+#         # Add horizontal threshold lines
+#         threshold_lines = [
+#             (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+#             (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+#             (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+#             (mean_coverage, "mean_coverage", color_vec[5]),
+#             (median_coverage, "median", color_vec[4]),
+#             (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+#             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+#             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+#         ]
+        
+#         for (y_val, label, color) in threshold_lines
+#             CairoMakie.hlines!(ax, y_val, 
+#                 color = color, 
+#                 linewidth = 2,
+#                 linestyle = :dash,
+#                 label = label
+#             )
+#         end
+
+#         # Create individual legend for this subplot
+#         CairoMakie.Legend(
+#             fig[i, 2], 
+#             ax, 
+#             framevisible = true,
+#             backgroundcolor = (:white, 0.9),
+#             labelsize = 10,
+#             rowgap = 3,
+#             margin = (10, 10, 10, 10),
+#             valign = :center
+#         )
+#     end
+
+#     # Adjust layout to prevent cutoff
+#     CairoMakie.resize_to_layout!(fig)
+    
+#     return fig
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# # Arguments
+# - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# # Keyword Arguments
+# - `entity`: Optional string to specify the entity being analyzed. Default title is "Genome coverage", with entity it becomes "Genome coverage of \$(entity)"
+
+# # Returns
+# - `CairoMakie.Figure`: A composite figure with coverage plots for each chromosome
+
+# # Details
+# Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+# distribution across genomic positions for that chromosome.
+# """
+# function visualize_genome_coverage(coverage_table; entity::Union{String, Nothing} = nothing)
+#     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
+#     num_plots = length(chromosome_groups)
+    
+#     # Determine figure title
+#     fig_title = isnothing(entity) ? "Genome coverage" : "Genome coverage of $(entity)"
+    
+#     # Create main figure with appropriate size and spacing
+#     fig = CairoMakie.Figure(
+#         size = (1400, 400 * num_plots + 60),  # Extra space for main title
+#         fontsize = 12,
+#         figure_padding = (20, 120, 20, 40)  # left, right, bottom, top (increased top for title)
+#     )
+    
+#     # Add main figure title
+#     CairoMakie.Label(fig[0, :], fig_title, fontsize = 18, font = :bold)
+    
+#     for (i, cdf) in enumerate(chromosome_groups)
+#         mean_coverage = Statistics.mean(cdf[!, "depth"])
+#         median_coverage = Statistics.median(cdf[!, "depth"])
+#         stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#         # Create axis for this chromosome
+#         ax = CairoMakie.Axis(
+#             fig[i, 1],
+#             limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#             title = cdf[1, "chromosome"],
+#             xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
+#             ylabel = "depth",
+#             titlesize = 14,
+#             xlabelpadding = 10,
+#             ylabelpadding = 10,
+#             xgridvisible = true,
+#             ygridvisible = true,
+#             xgridcolor = (:gray, 0.3),
+#             ygridcolor = (:gray, 0.3),
+#             topspinevisible = false,
+#             rightspinevisible = false
+#         )
+
+#         # Add highlighted regions for 3σ outliers
+#         is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
+#         end
+        
+#         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
+#         end
+
+#         # Create rainbow color scheme
+#         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+        
+#         # Plot main coverage line
+#         CairoMakie.lines!(ax, 
+#             equally_spaced_samples(cdf[!, "index"], 10_000), 
+#             equally_spaced_samples(cdf[!, "depth"], 10_000), 
+#             color = :black,
+#             linewidth = 1.5,
+#             label = "coverage"
+#         )
+
+#         # Add horizontal threshold lines
+#         threshold_lines = [
+#             (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+#             (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+#             (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+#             (mean_coverage, "mean_coverage", color_vec[5]),
+#             (median_coverage, "median", color_vec[4]),
+#             (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+#             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+#             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+#         ]
+        
+#         for (y_val, label, color) in threshold_lines
+#             CairoMakie.hlines!(ax, y_val, 
+#                 color = color, 
+#                 linewidth = 2,
+#                 linestyle = :dash,
+#                 label = label
+#             )
+#         end
+
+#         # Create individual legend for this subplot
+#         CairoMakie.Legend(
+#             fig[i, 2], 
+#             ax, 
+#             framevisible = true,
+#             backgroundcolor = (:white, 0.9),
+#             labelsize = 10,
+#             rowgap = 3,
+#             margin = (10, 10, 10, 10),
+#             valign = :center
+#         )
+#     end
+
+#     # Adjust layout to prevent cutoff
+#     CairoMakie.resize_to_layout!(fig)
+    
+#     return fig
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# # Arguments
+# - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# # Returns
+# - `CairoMakie.Figure`: A composite figure with coverage plots for each chromosome
+
+# # Details
+# Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+# distribution across genomic positions for that chromosome.
+# """
+# function visualize_genome_coverage(coverage_table)
+#     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
+#     num_plots = length(chromosome_groups)
+    
+#     # Create main figure with appropriate size and spacing
+#     fig = CairoMakie.Figure(
+#         size = (1400, 400 * num_plots),
+#         fontsize = 12,
+#         figure_padding = (20, 120, 20, 20)  # left, right, bottom, top
+#     )
+    
+#     for (i, cdf) in enumerate(chromosome_groups)
+#         mean_coverage = Statistics.mean(cdf[!, "depth"])
+#         median_coverage = Statistics.median(cdf[!, "depth"])
+#         stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#         # Create axis for this chromosome
+#         ax = CairoMakie.Axis(
+#             fig[i, 1],
+#             limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#             title = cdf[1, "chromosome"],
+#             xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
+#             ylabel = "depth",
+#             titlesize = 14,
+#             xlabelpadding = 10,
+#             ylabelpadding = 10,
+#             xgridvisible = true,
+#             ygridvisible = true,
+#             xgridcolor = (:gray, 0.3),
+#             ygridcolor = (:gray, 0.3),
+#             topspinevisible = false,
+#             rightspinevisible = false
+#         )
+
+#         # Add highlighted regions for 3σ outliers
+#         is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
+#         end
+        
+#         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
+#         end
+
+#         # Create rainbow color scheme
+#         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+        
+#         # Plot main coverage line
+#         CairoMakie.lines!(ax, 
+#             equally_spaced_samples(cdf[!, "index"], 10_000), 
+#             equally_spaced_samples(cdf[!, "depth"], 10_000), 
+#             color = :black,
+#             linewidth = 1.5,
+#             label = "coverage"
+#         )
+
+#         # Add horizontal threshold lines
+#         threshold_lines = [
+#             (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+#             (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+#             (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+#             (mean_coverage, "mean_coverage", color_vec[5]),
+#             (median_coverage, "median", color_vec[4]),
+#             (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+#             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+#             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+#         ]
+        
+#         for (y_val, label, color) in threshold_lines
+#             CairoMakie.hlines!(ax, y_val, 
+#                 color = color, 
+#                 linewidth = 2,
+#                 linestyle = :dash,
+#                 label = label
+#             )
+#         end
+
+#         # Create individual legend for this subplot
+#         CairoMakie.Legend(
+#             fig[i, 2], 
+#             ax, 
+#             framevisible = true,
+#             backgroundcolor = (:white, 0.9),
+#             labelsize = 10,
+#             rowgap = 3,
+#             margin = (10, 10, 10, 10),
+#             valign = :center
+#         )
+#     end
+
+#     # Adjust layout to prevent cutoff
+#     CairoMakie.resize_to_layout!(fig)
+    
+#     return fig
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# # Arguments
+# - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# # Returns
+# - `CairoMakie.Figure`: A composite figure with coverage plots for each chromosome
+
+# # Details
+# Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+# distribution across genomic positions for that chromosome.
+# """
+# function visualize_genome_coverage(coverage_table)
+#     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
+#     num_plots = length(chromosome_groups)
+    
+#     # Create main figure with appropriate size and spacing
+#     fig = CairoMakie.Figure(
+#         resolution = (1200, 400 * num_plots),
+#         fontsize = 12,
+#         figure_padding = (20, 100, 20, 20)  # left, right, bottom, top
+#     )
+    
+#     # Store all axes for shared legend
+#     all_axes = []
+    
+#     for (i, cdf) in enumerate(chromosome_groups)
+#         mean_coverage = Statistics.mean(cdf[!, "depth"])
+#         median_coverage = Statistics.median(cdf[!, "depth"])
+#         stddev_coverage = Statistics.std(cdf[!, "depth"])
+
+#         # Create axis for this chromosome
+#         ax = CairoMakie.Axis(
+#             fig[i, 1],
+#             limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+#             title = cdf[1, "chromosome"],
+#             xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
+#             ylabel = "depth",
+#             titlesize = 14,
+#             xlabelpadding = 10,
+#             ylabelpadding = 10,
+#             xgridvisible = true,
+#             ygridvisible = true,
+#             xgridcolor = (:gray, 0.3),
+#             ygridcolor = (:gray, 0.3),
+#             topspinevisible = false,
+#             rightspinevisible = false
+#         )
+        
+#         push!(all_axes, ax)
+
+#         # Add highlighted regions for 3σ outliers
+#         is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_above; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
+#         end
+        
+#         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
+#         for r in find_true_ranges(is_3sigma_below; min_length=1000)
+#             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
+#         end
+
+#         # Create rainbow color scheme
+#         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
+        
+#         # Plot main coverage line
+#         CairoMakie.lines!(ax, 
+#             equally_spaced_samples(cdf[!, "index"], 10_000), 
+#             equally_spaced_samples(cdf[!, "depth"], 10_000), 
+#             color = :black,
+#             linewidth = 1.5,
+#             label = "coverage"
+#         )
+
+#         # Add horizontal threshold lines
+#         threshold_lines = [
+#             (mean_coverage + 3 * stddev_coverage, "+3σ", color_vec[8]),
+#             (mean_coverage + 2 * stddev_coverage, "+2σ", color_vec[7]),
+#             (mean_coverage + 1 * stddev_coverage, "+σ", color_vec[6]),
+#             (mean_coverage, "mean_coverage", color_vec[5]),
+#             (median_coverage, "median", color_vec[4]),
+#             (mean_coverage - 1 * stddev_coverage, "-σ", color_vec[3]),
+#             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
+#             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
+#         ]
+        
+#         for (y_val, label, color) in threshold_lines
+#             CairoMakie.hlines!(ax, y_val, 
+#                 color = color, 
+#                 linewidth = 2,
+#                 linestyle = :dash,
+#                 label = label
+#             )
+#         end
+#     end
+
+#     # Create shared legend using the first axis (all have same elements)
+#     CairoMakie.Legend(
+#         fig[1:num_plots, 2], 
+#         all_axes[1], 
+#         framevisible = true,
+#         bgcolor = (:white, 0.9),
+#         labelsize = 11,
+#         rowgap = 3,
+#         margin = (10, 10, 10, 10),
+#         valign = :top
+#     )
+
+#     # Adjust layout to prevent cutoff
+#     CairoMakie.resize_to_layout!(fig)
+    
+#     return fig
+# end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Creates a multi-panel visualization of genome coverage across chromosomes.
+
+# # Arguments
+# - `coverage_table`: DataFrame containing columns "chromosome" and "coverage" with genomic coverage data
+
+# # Returns
+# - `Plots.Figure`: A composite figure with coverage plots for each chromosome
+
+# # Details
+# Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
+# distribution across genomic positions for that chromosome.
+# """
+# function visualize_genome_coverage(coverage_table)
+#     num_plots = length(unique(coverage_table[!, "chromosome"]))
+#     meta_figure = StatsPlots.plot(
+#         [chromosome_coverage_table_to_plot(cdf) for cdf in DataFrames.groupby(coverage_table, "chromosome")]...,
+#         layout = (num_plots, 1),
+#         size = (800, 600 * num_plots)) # Adjust size as needed
+#     return meta_figure
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

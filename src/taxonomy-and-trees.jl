@@ -94,13 +94,15 @@ This function processes XAM alignment data by:
 
 # Arguments
 - `xam`: Path to XAM file or XAM data structure
-- `accession2taxid_file`: Path to accession-to-taxid mapping file (.tsv.gz or .arrow)
-- `output_prefix`: Prefix for output files (.tsv.gz and .arrow). Defaults to "xam"
+- `accession2taxid_file`: Path to accession-to-taxid mapping file (.tsv.gz)
+- `output_prefix`: Prefix for output files (.tsv.gz). Defaults to "xam"
 - `verbose::Bool=true`: Whether to print progress information
 - `force_recalculate::Bool=false`: Whether to force recalculation even if cached files exist
 
 # Returns
-A NamedTuple with paths to the output files: (tsv_out, arrow_out)
+Paths to the output file: tsv_out
+
+Used to return an Arrow format but Arrow integration is poor with union and custom datatypes in Julia
 """
 function merge_xam_with_taxonomies(;
     xam, 
@@ -111,18 +113,23 @@ function merge_xam_with_taxonomies(;
 )
     # Setup output file paths
     tsv_out = output_prefix * ".taxonomy-aware.tsv.gz"
-    arrow_out = output_prefix * ".taxonomy-aware.arrow"
+    # arrow_out = output_prefix * ".taxonomy-aware.arrow"
     
+    # # Check if we can use cached results
+    # use_cache = (!force_recalculate && 
+    #              isfile(tsv_out) && 
+    #              isfile(arrow_out) && 
+    #              filesize(tsv_out) > 0 && 
+    #              filesize(arrow_out) > 0)
     # Check if we can use cached results
     use_cache = (!force_recalculate && 
                  isfile(tsv_out) && 
-                 isfile(arrow_out) && 
-                 filesize(tsv_out) > 0 && 
-                 filesize(arrow_out) > 0)
+                 filesize(tsv_out) > 0)
     
     if use_cache
-        verbose && println("Using cached taxonomy-aware data from: $arrow_out")
-        return (tsv_out=tsv_out, arrow_out=arrow_out)
+        verbose && println("Using cached taxonomy-aware data from: $tsv_out")
+        # return (tsv_out=tsv_out, arrow_out=arrow_out)
+        return tsv_out
     end
     
     # Remove existing output files if they exist to avoid conflicts
@@ -130,10 +137,10 @@ function merge_xam_with_taxonomies(;
         verbose && println("Removing existing file: $tsv_out")
         rm(tsv_out)
     end
-    if isfile(arrow_out)
-        verbose && println("Removing existing file: $arrow_out")
-        rm(arrow_out)
-    end
+    # if isfile(arrow_out)
+    #     verbose && println("Removing existing file: $arrow_out")
+    #     rm(arrow_out)
+    # end
     
     # Load accession to taxid mapping table
     verbose && println("Loading accession-to-taxid mapping table...")
@@ -271,19 +278,23 @@ function merge_xam_with_taxonomies(;
     fully_taxonomy_aware_xam_table = Mycelia.dataframe_replace_nothing_with_missing(fully_taxonomy_aware_xam_table)
     
     # Write output files
-    verbose && println("Writing results to $tsv_out and $arrow_out...")
+    # verbose && println("Writing results to $tsv_out and $arrow_out...")
+    verbose && println("Writing results to $tsv_out...")
     
     if verbose
         @time Mycelia.write_tsvgz(df=fully_taxonomy_aware_xam_table, filename=tsv_out)
-        @time Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
+        GC.gc()  # Clean up after TSV write
+        # @time Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
     else
         Mycelia.write_tsvgz(df=fully_taxonomy_aware_xam_table, filename=tsv_out)
-        Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
+        GC.gc()
+        # Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
     end
     
     verbose && println("Taxonomy merging complete!")
     
-    return (tsv_out=tsv_out, arrow_out=arrow_out)
+    # return (tsv_out=tsv_out, arrow_out=arrow_out)
+    return tsv_out
 end
 
 """

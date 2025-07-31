@@ -112,8 +112,9 @@ function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int
     # Read the gzipped TSV file back into a DataFrame with proper stream handling
     df = open(filename, "r") do file
         stream = CodecZlib.GzipDecompressorStream(file, bufsize=bufsize)
-        CSV.read(stream, DataFrames.DataFrame, delim='\t', buffer_in_memory=buffer_in_memory)
+        result = CSV.read(stream, DataFrames.DataFrame, delim='\t', buffer_in_memory=buffer_in_memory)
         close(stream)
+        result
     end
     
     return df
