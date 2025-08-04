@@ -1,4 +1,26 @@
 # Annotation & feature extraction tests
+# 
+# ```bash
+# julia --project=. --color=yes -e 'include("test/6_annotation/annotation.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/6_annotation/annotation.jl", "test/6_annotation", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+import Test
+import Mycelia
+import CSV
+import CodecZlib
+import DataFrames
+
 
 import Pkg
 if isinteractive()
@@ -11,6 +33,9 @@ import BioSequences
 import DataFrames
 import CSV
 import uCSV
+
+# T4 phage
+# result = Mycelia.download_genome_by_accession(accession="NC_000866")
 
 Test.@testset "Annotation & feature extraction" begin
 
