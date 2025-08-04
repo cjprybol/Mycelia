@@ -532,7 +532,10 @@ function plot_taxa_abundances(
     
     # Collect all missing-like values (both actual missing and "missing" string)
     missing_keys = filter(is_missing_value, keys(joint_counts))
-    missing_count = sum(joint_counts[k] for k in missing_keys)
+    missing_count = 0
+    if !isempty(missing_keys)
+        missing_count = sum(joint_counts[k] for k in missing_keys)
+    end
     
     # Remove all missing-like values from joint_counts for sorting
     for k in missing_keys
@@ -642,18 +645,19 @@ function plot_taxa_abundances(
     
     # Step 5: Create stacked bar chart visualization with CairoMakie
     
-    # Set reproducible colors if seed is provided
-    if !isnothing(color_seed)
-        Random.seed!(color_seed)
-    end
+    # # Set reproducible colors if seed is provided
+    # if !isnothing(color_seed)
+    #     Random.seed!(color_seed)
+    # end
     
     # Generate distinctive colors, reserving specific colors for "Other" and "Missing"
     n_colors_needed = length(final_taxa)
     
     # Generate base colors for all taxa except special categories
     if n_colors_needed > 0
-        colorscheme = Colors.distinguishable_colors(n_colors_needed, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
-        colorscheme = reverse(colorscheme)  # Reverse to match original behavior
+        # colorscheme = Colors.distinguishable_colors(n_colors_needed, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
+        colorscheme = Mycelia.n_maximally_distinguishable_colors(n_colors_needed)
+        # colorscheme = reverse(colorscheme)  # Reverse to match original behavior
         
         # Use light gray for "Other" and dark gray for "Missing" if they exist
         if has_other

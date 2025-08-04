@@ -525,66 +525,68 @@ end
 #     return classification_table
 # end
 
-# function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
-#     # Initialize output columns with default values
-#     n_rows = DataFrames.nrow(results_df)
-#     final_assignment = copy(results_df.top_taxid)
-#     confidence_level = fill("high", n_rows)
+function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
+    # Initialize output columns with default values
+    n_rows = DataFrames.nrow(results_df)
+    final_assignment = copy(results_df.top_taxid)
+    confidence_level = fill("high", n_rows)
     
-#     # Collect all sets of taxids that need LCA calculation
-#     lca_needed_indices = Int[]
-#     competing_taxids_list = Vector{Vector{Int}}()
+    # Collect all sets of taxids that need LCA calculation
+    lca_needed_indices = Int[]
+    competing_taxids_list = Vector{Vector{Int}}()
     
-#     # First pass: identify which rows need LCA and prepare the taxid sets
-#     for i in 1:n_rows
-#         top_taxid = results_df.top_taxid[i]
-#         top_score = results_df.top_score[i]
-#         ratio = results_df.ratio_to_next_best_score[i]
-#         additional_dict = results_df.additional_taxids[i]
+    # First pass: identify which rows need LCA and prepare the taxid sets
+    for i in 1:n_rows
+        top_taxid = results_df.top_taxid[i]
+        top_score = results_df.top_score[i]
+        ratio = results_df.ratio_to_next_best_score[i]
+        additional_dict = results_df.additional_taxids[i]
         
-#         # Skip if no competitors or ratio is high enough
-#         if isempty(additional_dict) || ratio >= ratio_threshold
-#             continue
-#         end
+        # Skip if no competitors or ratio is high enough
+        if isempty(additional_dict) || ratio >= ratio_threshold
+            continue
+        end
         
-#         # Collect taxids that are within the threshold
-#         competing_taxids = [top_taxid]
-#         for (taxid, score) in additional_dict
-#             if top_score / score < ratio_threshold
-#                 push!(competing_taxids, taxid)
-#             end
-#         end
+        # Collect taxids that are within the threshold
+        competing_taxids = [top_taxid]
+        for (taxid, score) in additional_dict
+            if top_score / score < ratio_threshold
+                push!(competing_taxids, taxid)
+            end
+        end
         
-#         # If we have multiple competing taxids, add to the batch
-#         if length(competing_taxids) > 1
-#             push!(lca_needed_indices, i)
-#             push!(competing_taxids_list, competing_taxids)
-#             confidence_level[i] = "lca"  # Mark as needing LCA
-#         end
-#     end
+        # If we have multiple competing taxids, add to the batch
+        if length(competing_taxids) > 1
+            push!(lca_needed_indices, i)
+            push!(competing_taxids_list, competing_taxids)
+            confidence_level[i] = "lca"  # Mark as needing LCA
+        end
+    end
     
-#     # If we have any rows that need LCA calculation
-#     if !isempty(lca_needed_indices)
-#         # Batch calculate all LCAs
-#         lca_results = Mycelia.batch_taxids2lca(competing_taxids_list)
+    # If we have any rows that need LCA calculation
+    if !isempty(lca_needed_indices)
+        # Batch calculate all LCAs
+        lca_results = Mycelia.batch_taxids2lca(competing_taxids_list)
         
-#         # Apply LCA results to the appropriate rows
-#         for (idx, lca_idx) in enumerate(lca_needed_indices)
-#             final_assignment[lca_idx] = lca_results[idx]
-#         end
-#     end
+        # Apply LCA results to the appropriate rows
+        for (idx, lca_idx) in enumerate(lca_needed_indices)
+            final_assignment[lca_idx] = lca_results[idx]
+        end
+    end
     
-#     # Create a new dataframe with the original data plus our new columns
-#     updated_results = DataFrames.hcat(
-#         results_df,
-#         DataFrames.DataFrame(
-#             final_assignment = final_assignment,
-#             confidence_level = confidence_level
-#         )
-#     )
+    # Create a new dataframe with the original data plus our new columns
+    updated_results = DataFrames.hcat(
+        results_df,
+        DataFrames.DataFrame(
+            final_assignment = final_assignment,
+            confidence_level = confidence_level
+        )
+    )
+
+    updated_results[(updated_results.top_taxid .== 0) .& (updated_results.top_score .== 0), "confidence_level"] .= "unclassified"
     
-#     return updated_results
-# end
+    return updated_results
+end
 
 
 # this is faster than NCBI version
@@ -1051,6 +1053,17 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     taxid_to_lineage_ranks = taxids2taxonkit_taxid2lineage_ranks(taxids)
     taxids_to_lineage_table = DataFrames.DataFrame()
     for (taxid, lineage_ranks) in taxid_to_lineage_ranks
+        if haskey(lineage_ranks, "domain")
+            domain_taxid = lineage_ranks["domain"].taxid
+            domain = lineage_ranks["domain"].lineage
+        elseif haskey(lineage_ranks, "acellular root")
+            # special case viruses
+            domain_taxid = lineage_ranks["acellular root"].taxid
+            domain = lineage_ranks["acellular root"].lineage
+        else
+            domain_taxid = missing
+            domain = missing
+        end
         # 
         row = (
             taxid = taxid,
@@ -1077,9 +1090,9 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
             
             realm_taxid = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].taxid : missing,
             realm = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].lineage : missing,
-            
-            domain_taxid = haskey(lineage_ranks, "domain") ? lineage_ranks["domain"].taxid : missing,
-            domain = haskey(lineage_ranks, "domain") ? lineage_ranks["domain"].lineage : missing,
+
+            domain_taxid = domain_taxid,
+            domain = domain
 
         )
         push!(taxids_to_lineage_table, row, promote=true)
