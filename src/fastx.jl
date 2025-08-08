@@ -696,7 +696,7 @@ function fastx2normalized_table(fastx)
         record_sha256 = String[],
         record_quality = Union{Vector{Float64}, Missing}[],
         record_alphabet = String[],
-        record_type = Symbol[],
+        record_type = String[],
         mean_record_quality = Union{Float64, Missing}[],
         median_record_quality = Union{Float64, Missing}[],
         record_length = Int[],
@@ -727,7 +727,7 @@ function fastx2normalized_table(fastx)
             record_sha256 = Mycelia.seq2sha256(record_sequence),
             record_quality = record_quality,
             record_alphabet = join(sort(collect(Set(uppercase(record_sequence))))),
-            record_type = Mycelia.detect_alphabet(record_sequence),
+            record_type = string(Mycelia.detect_alphabet(record_sequence)),
             mean_record_quality = file_type == :fastq ? Statistics.mean(record_quality) : missing,
             median_record_quality = file_type == :fastq ? Statistics.median(record_quality) : missing,
             record_length = length(record_sequence),
@@ -819,17 +819,19 @@ function write_fastas_from_normalized_fastx_tables(
     Base.Threads.@threads for i in 1:n
         table_path = table_paths[i]
         try
+            @assert occursin(r"\.jld2$", table_path)
+            loaded_table = Mycelia.load_df_jld2(table_path)
             # Determine if the table should be decompressed based on extension
-            decompress = endswith(table_path, ".gz")
-            io = open(table_path)
-            stream = decompress ? CodecZlib.GzipDecompressorStream(io) : io
-            loaded_table = CSV.read(stream, DataFrames.DataFrame, delim='\t')
-            close(io)
+            # decompress = endswith(table_path, ".gz")
+            # io = open(table_path)
+            # stream = decompress ? CodecZlib.GzipDecompressorStream(io) : io
+            # loaded_table = CSV.read(stream, DataFrames.DataFrame, delim='\t')
+            # close(io)
             # Remove .gz if present in the fastx_sha256 (basename)
             fastx_basename = loaded_table[1, "fastx_sha256"]
-            if occursin(r"\.gz$", fastx_basename)
-                fastx_basename = replace(fastx_basename, r"\.gz$" => "")
-            end
+            # if occursin(r"\.gz$", fastx_basename)
+            #     fastx_basename = replace(fastx_basename, r"\.gz$" => "")
+            # end
             fastx_filename = fastx_basename * ".fna.gz"
             fastx_file = joinpath(output_dir, fastx_filename)
             # Write if missing or overwrite specified
@@ -872,7 +874,7 @@ function write_fastas_from_normalized_fastx_tables(
 end
 
 # convert all genomes into normalized tables
-function fastxs2normalized_tables(;fastxs, outdir, force=false)
+function fastxs2normalized_tables(;fastxs, outdir, force=false, validate=false)
     mkpath(outdir)
     n = length(fastxs)
     normalized_table_paths = Vector{Union{String, Nothing}}(undef, n)
@@ -886,16 +888,26 @@ function fastxs2normalized_tables(;fastxs, outdir, force=false)
         if occursin(r"\.gz$", outfile_base)
             outfile_base = replace(outfile_base, r"\.gz$" => "")
         end
-        outfile = joinpath(outdir, outfile_base * ".tsv.gz")
+        # outfile = joinpath(outdir, outfile_base * ".tsv.gz")
+        outfile = joinpath(outdir, outfile_base * ".jld2")
         try
             if !isfile(outfile) || (filesize(outfile) == 0) || force
                 normalized_table = Mycelia.fastx2normalized_table(fastx)
-                open(outfile, "w") do file
-                    io = CodecZlib.GzipCompressorStream(file)
-                    CSV.write(io, normalized_table; delim='\t', bufsize=64*1024*1024)
-                    close(io)
+                # generated_file = Mycelia.write_tsvgz(df=normalized_table, filename=outfile, force=force)
+                Mycelia.save_df_jld2(df=normalized_table, filename=outfile, force=force)
+                if validate
+                    reread_normalized_table = Mycelia.load_df_jld2(outfile)
+                    Mycelia.validate_normalized_table(normalized_table, reread_normalized_table)
+                end
+            else
+                # if we haven't processed the fastx this run, we need to generate an in memory copy to validate against
+                if validate
+                    normalized_table = Mycelia.fastx2normalized_table(fastx)
+                    reread_normalized_table = Mycelia.load_df_jld2(outfile)
+                    Mycelia.validate_normalized_table(normalized_table, reread_normalized_table)
                 end
             end
+
             normalized_table_paths[i] = outfile
             errors[i] = nothing
         catch e
@@ -908,6 +920,79 @@ function fastxs2normalized_tables(;fastxs, outdir, force=false)
 
     ProgressMeter.finish!(prog)
     return (;normalized_table_paths, errors)
+end
+
+
+"""
+    validate_normalized_table(fastx::AbstractString, reread_table::DataFrames.DataFrame)
+
+Validate that a table re-read from disk is equivalent to the normalized table generated in-memory from the given FASTX file.
+
+Checks performed:
+- Table row count matches.
+- Set of record identifiers matches.
+- Set of record sequences matches.
+- Each sequence matches its reported record_length.
+- Set of columns matches expected.
+- (Optionally) All non-quality, non-path columns match row-wise for matching identifiers.
+Throws an informative error if any check fails.
+Returns `true` if all checks pass.
+"""
+function validate_normalized_table(ref_table::DataFrames.DataFrame, reread_table::DataFrames.DataFrame)
+    # Regenerate normalized table in-memory
+    # ref_table = Mycelia.fastx2normalized_table(fastx)
+
+    # 1. Row count
+    n_ref = DataFrames.nrow(ref_table)
+    n_reread = DataFrames.nrow(reread_table)
+    n_ref == n_reread || error("Row count mismatch: $n_ref in reference, $n_reread in reread table.")
+
+    # 2. Column names (order-insensitive)
+    setdiff(names(ref_table), names(reread_table)) == String[] ||
+        error("Columns missing from reread table: $(setdiff(names(ref_table), names(reread_table)))")
+    setdiff(names(reread_table), names(ref_table)) == String[] ||
+        error("Extra columns in reread table: $(setdiff(names(reread_table), names(ref_table)))")
+
+    # 3. Record identifier sets
+    ids_ref = Set(ref_table.record_identifier)
+    ids_reread = Set(reread_table.record_identifier)
+    ids_ref == ids_reread || error("Record identifiers do not match between reference and reread tables.")
+
+    # 4. Sequences: sets should match
+    seqs_ref = Set(ref_table.record_sequence)
+    seqs_reread = Set(reread_table.record_sequence)
+    seqs_ref == seqs_reread || error("Record sequences do not match between reference and reread tables.")
+
+    # 5. Sequence lengths: for each row, check sequence length matches record_length
+    for (seq, len, id) in zip(reread_table.record_sequence, reread_table.record_length, reread_table.record_identifier)
+        length(seq) == len || error("Sequence length mismatch for record $id: got $(length(seq)), expected $len")
+    end
+
+    # 6. Ensure all expected identifiers are present (already checked via sets, but for informative error)
+    missing_ids = setdiff(ids_ref, ids_reread)
+    isempty(missing_ids) || error("Missing identifiers in reread table: $missing_ids")
+
+    # 7. Optionally: Check per-row equivalence for all columns except path, sha256, quality (which may have type/format shifts)
+    # We'll join on record_identifier, which is unique per file
+    ref_by_id = Dict(row.record_identifier => row for row in eachrow(ref_table))
+    for row in eachrow(reread_table)
+        ref_row = get(ref_by_id, row.record_identifier, nothing)
+        isnothing(ref_row) && error("Reread table has unknown identifier: $(row.record_identifier)")
+        # Compare core columns
+        ref_row.record_sequence == row.record_sequence ||
+            error("Sequence mismatch for identifier $(row.record_identifier)")
+        ref_row.record_length == row.record_length ||
+            error("Length mismatch for identifier $(row.record_identifier)")
+        ref_row.record_type == row.record_type ||
+            error("Type mismatch for identifier $(row.record_identifier)")
+        ref_row.record_alphabet == row.record_alphabet ||
+            error("Alphabet mismatch for identifier $(row.record_identifier)")
+        ref_row.record_sha256 == row.record_sha256 ||
+            error("SHA256 mismatch for identifier $(row.record_identifier)")
+        # (Optional: compare quality, mean_quality, etc., if you expect fidelity)
+    end
+
+    return true
 end
 
 """
@@ -1005,11 +1090,13 @@ function merge_fasta_files(;fasta_files, fasta_file)
             for record in Mycelia.open_fastx(f)
                 new_record_id = f_id * "__" * FASTX.identifier(record)
                 if new_record_id in identifiers
-                    @warn "new identifier $(new_record_id) already in identifiers!!!"
+                    @warn "new identifier $(new_record_id) already in identifiers!!! Skipping"
+                    continue
+                else
+                    push!(identifiers, new_record_id)
+                    new_record = FASTX.FASTA.Record(new_record_id, FASTX.sequence(record))
+                    write(fastx_io, new_record)
                 end
-                push!(identifiers, new_record_id)
-                new_record = FASTX.FASTA.Record(new_record_id, FASTX.sequence(record))
-                write(fastx_io, new_record)
             end
         end
     end

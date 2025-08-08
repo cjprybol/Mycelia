@@ -43,81 +43,71 @@ function _get_output_files(output_dir::AbstractString)
 end
 
 """
-    write_tsvgz(df::DataFrames.DataFrame, filename::String; buffer_in_memory::Bool=false, threaded::Bool=true, bufsize::Int=10*1024*1024, force::Bool=false)
+    write_tsvgz(;df::DataFrames.DataFrame, filename::String, force::Bool=false, bufsize::Int=2*1024^3, buffer_in_memory::Bool=false)
 
-Write a DataFrame to a gzipped TSV file.
+Write a DataFrame to a gzipped TSV (.tsv.gz) file with robust stream and buffer handling.
 
 # Arguments
-- `df`: The DataFrame to write
-- `filename`: Path to the output file (will add .tsv.gz extension as needed)
-- `buffer_in_memory`: If false, uses temporary files for large data (default: false)
-- `bufsize`: Buffer size in bytes for compression stream (default: 10MB)
-- `force`: If true, overwrite existing non-empty files (default: false)
+- `df`: The DataFrame to write.
+- `filename`: Output path, extension will be enforced as `.tsv.gz`.
+- `force`: If true, overwrite an existing non-empty file.
+- `bufsize`: Buffer size in bytes for both the Gzip stream and CSV write (default: 2GB).
+- `buffer_in_memory`: If true, buffer the whole output in memory before writing.
 
 # Returns
-- `String`: The final filename with proper extension
+- The output filename as a String.
 """
-function write_tsvgz(;df::DataFrames.DataFrame, filename::String, buffer_in_memory::Bool=false, bufsize::Int=10*1024*1024, force::Bool=false)
-    # Handle extension logic for writing
-    if endswith(lowercase(filename), ".tsv.gz")
-        # Already has full extension
-        final_filename = filename
-    elseif endswith(lowercase(filename), ".tsv")
-        # Has .tsv but missing .gz
-        final_filename = filename * ".gz"
-    else
-        # Missing both extensions
-        final_filename = filename * ".tsv.gz"
+function write_tsvgz(;df::DataFrames.DataFrame, filename::String, force::Bool=false, bufsize::Int=2*1024^3, buffer_in_memory::Bool=false)
+    # Enforce .tsv.gz extension
+    if !endswith(filename, ".tsv.gz")
+        if endswith(filename, ".tsv")
+            filename = filename * ".gz"
+        else
+            filename = filename * ".tsv.gz"
+        end
     end
-    
-    # Check if file exists and is non-empty, prevent overwriting unless forced
-    if isfile(final_filename) && filesize(final_filename) > 0 && !force
-        error("File already exists and is non-empty: $final_filename. Use force=true to overwrite.")
+
+    if isfile(filename) && filesize(filename) > 0 && !force
+        @warn "File already exists and is non-empty: $filename. Use force=true to overwrite."
     end
-    
-    # Write the DataFrame to a gzipped TSV file with proper stream handling
-    open(final_filename, "w") do file
-        stream = CodecZlib.GzipCompressorStream(file, bufsize=bufsize)
-        CSV.write(stream, df, delim='\t', buffer_in_memory=buffer_in_memory)
-        close(stream)
+
+    open(filename, "w") do io
+        gzip_stream = CodecZlib.GzipCompressorStream(io, bufsize=bufsize)
+        # Use the same bufsize for both the Gzip stream and CSV.write
+        CSV.write(gzip_stream, df; delim='\t', bufsize=bufsize, buffer_in_memory=buffer_in_memory)
+        close(gzip_stream)
     end
-    
-    return final_filename
+    return filename
 end
 
 """
-    read_tsvgz(filename::String; buffer_in_memory::Bool=false, threaded::Bool=true, bufsize::Int=10*1024*1024) -> DataFrames.DataFrame
+    read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int=2*1024^3) -> DataFrames.DataFrame
 
-Read a DataFrame from a gzipped TSV file.
+Read a DataFrame from a gzipped TSV (.tsv.gz) file with proper decompression and buffering.
 
 # Arguments
-- `filename`: Path to the gzipped TSV file (must have .tsv.gz extension)
-- `buffer_in_memory`: If false, uses temporary files for large data (default: false)
-- `bufsize`: Buffer size in bytes for decompression stream (default: 10MB)
+- `filename`: Path to the gzipped TSV file (must end with `.tsv.gz`).
+- `buffer_in_memory`: If true, decompresses the whole file in memory before parsing (default: false).
+- `bufsize`: Buffer size for the decompression stream in bytes (default: 2GB).
 
 # Returns
-- The loaded DataFrame
+- The loaded DataFrame.
 """
-function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int=10*1024*1024)
-    # For reading, be strict about extension
-    if !endswith(lowercase(filename), ".tsv.gz")
+function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int=2*1024^3)
+    # Enforce .tsv.gz extension
+    if !endswith(filename, ".tsv.gz")
         error("File must have .tsv.gz extension, got: $filename")
     end
-    
-    # Check if file exists
     if !isfile(filename)
         error("File not found: $filename")
     end
-    
-    # Read the gzipped TSV file back into a DataFrame with proper stream handling
-    df = open(filename, "r") do file
-        stream = CodecZlib.GzipDecompressorStream(file, bufsize=bufsize)
-        result = CSV.read(stream, DataFrames.DataFrame, delim='\t', buffer_in_memory=buffer_in_memory)
-        close(stream)
-        result
+    result_df = open(filename, "r") do io
+        gzip_stream = CodecZlib.GzipDecompressorStream(io, bufsize=bufsize)
+        df = CSV.read(gzip_stream, DataFrames.DataFrame; delim='\t', buffer_in_memory=buffer_in_memory)
+        close(gzip_stream)
+        return df
     end
-    
-    return df
+    return result_df
 end
 
 """
@@ -840,15 +830,17 @@ Save a DataFrame to a JLD2 file.
 - `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
 - `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
 """
-function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe")
+function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe", force::Bool=false)
     # Ensure filename has .jld2 extension
-    if !endswith(lowercase(filename), ".jld2")
+    if !endswith(filename, ".jld2")
         filename = filename * ".jld2"
     end
     
     # Save the dataframe to the JLD2 file
-    JLD2.jldopen(filename, "w") do file
-        file[key] = df
+    if !isfile(filename) || force
+        JLD2.jldopen(filename, "w") do file
+            file[key] = df
+        end
     end
     
     return filename
@@ -873,12 +865,7 @@ Load a DataFrame from a JLD2 file.
 df = load_df_jld2("mydata")
 ```
 """
-function load_df_jld2(filename::String; key::String="dataframe")
-    # Ensure filename has .jld2 extension
-    if !endswith(lowercase(filename), ".jld2")
-        filename = filename * ".jld2"
-    end
-    
+function load_df_jld2(filename::String; key::String="dataframe")    
     # Check if file exists
     if !isfile(filename)
         error("File not found: $filename")
