@@ -1263,7 +1263,9 @@ A vector of `n` RGB colors that are optimized for maximum perceptual distinction
 using white (RGB(1,1,1)) and black (RGB(0,0,0)) as anchor colors.
 """
 function n_maximally_distinguishable_colors(n)
-    return Colors.distinguishable_colors(n, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
+    color_spectrum = Colors.distinguishable_colors(n+3, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=false)
+    filtered_color_spectrum = color_spectrum[[2, 5:length(color_spectrum)...]]
+    return filtered_color_spectrum
 end
 
 # https://www.giantfocal.com/toolkit/font-size-converter

@@ -1,3 +1,51 @@
+function classify_taxonomy_aware_xam_table(taxonomy_aware_xam_table)
+    template_taxid_score_table = DataFrames.combine(DataFrames.groupby(taxonomy_aware_xam_table, [:template, :taxid]), :alignment_score => sum => :total_alignment_score)
+    # replace missing (unclassified) with 0 (NCBI taxonomies start at 1, so 0 is a common, but technically non-standard NCBI taxon identifier
+    template_taxid_score_table = DataFrames.coalesce.(template_taxid_score_table, 0)
+
+    # For each template, identify top taxid and calculate score difference
+    results_df = DataFrames.combine(DataFrames.groupby(template_taxid_score_table, :template)) do group
+        # Sort scores in descending order
+        sorted = DataFrames.sort(group, :total_alignment_score, rev=true)
+    
+        # Get top taxid and score
+        top_taxid = sorted[1, :taxid]
+        top_score = sorted[1, :total_alignment_score]
+    
+        # Calculate ratio with next best (if it exists)
+        score_ratio = Inf
+        if DataFrames.nrow(sorted) > 1
+            second_score = sorted[2, :total_alignment_score]
+            score_ratio = top_score/second_score
+        end
+    
+        # Store all additional taxids and their scores (excluding the top one)
+        additional_taxids = OrderedCollections.OrderedDict{Int, Float64}()
+        if DataFrames.nrow(sorted) > 1
+            for i in 2:DataFrames.nrow(sorted)
+                additional_taxids[sorted[i, :taxid]] = sorted[i, :total_alignment_score]
+            end
+        end
+    
+        # Return a new row with the results
+        return DataFrames.DataFrame(
+            top_taxid = top_taxid,
+            top_score = top_score,
+            ratio_to_next_best_score = score_ratio,
+            additional_taxids = [additional_taxids]  # Wrap in array to make it a single element
+        )
+    end
+    classification_table = Mycelia.apply_conservative_taxonomy(results_df)
+
+    annotated_classification_table = DataFrames.leftjoin(
+        classification_table,
+        Mycelia.taxids2taxonkit_summarized_lineage_table(unique(classification_table.final_assignment)),
+        on="final_assignment" => "taxid"
+    )
+
+    return annotated_classification_table
+end
+
 function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{String}=[
         "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
     ])
@@ -1051,53 +1099,86 @@ Missing values are used when a taxonomic rank is not available.
 """
 function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     taxid_to_lineage_ranks = taxids2taxonkit_taxid2lineage_ranks(taxids)
-    taxids_to_lineage_table = DataFrames.DataFrame()
-    for (taxid, lineage_ranks) in taxid_to_lineage_ranks
+    
+    # Pre-allocate vectors for each column
+    n_rows = length(taxid_to_lineage_ranks)
+    
+    taxid_col = Vector{Int}(undef, n_rows)
+    species_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    species_col = Vector{Union{String, Missing}}(undef, n_rows)
+    genus_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    genus_col = Vector{Union{String, Missing}}(undef, n_rows)
+    family_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    family_col = Vector{Union{String, Missing}}(undef, n_rows)
+    order_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    order_col = Vector{Union{String, Missing}}(undef, n_rows)
+    class_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    class_col = Vector{Union{String, Missing}}(undef, n_rows)
+    phylum_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    phylum_col = Vector{Union{String, Missing}}(undef, n_rows)
+    kingdom_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    kingdom_col = Vector{Union{String, Missing}}(undef, n_rows)
+    realm_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    realm_col = Vector{Union{String, Missing}}(undef, n_rows)
+    domain_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
+    domain_col = Vector{Union{String, Missing}}(undef, n_rows)
+    
+    # Fill the vectors
+    for (i, (taxid, lineage_ranks)) in enumerate(taxid_to_lineage_ranks)
+        # Handle domain/superkingdom special case
         if haskey(lineage_ranks, "domain")
-            domain_taxid = lineage_ranks["domain"].taxid
-            domain = lineage_ranks["domain"].lineage
+            domain_taxid_col[i] = lineage_ranks["domain"].taxid
+            domain_col[i] = lineage_ranks["domain"].lineage
         elseif haskey(lineage_ranks, "acellular root")
             # special case viruses
-            domain_taxid = lineage_ranks["acellular root"].taxid
-            domain = lineage_ranks["acellular root"].lineage
+            domain_taxid_col[i] = lineage_ranks["acellular root"].taxid
+            domain_col[i] = lineage_ranks["acellular root"].lineage
         else
-            domain_taxid = missing
-            domain = missing
+            domain_taxid_col[i] = missing
+            domain_col[i] = missing
         end
-        # 
-        row = (
-            taxid = taxid,
-            species_taxid = haskey(lineage_ranks, "species") ? lineage_ranks["species"].taxid : missing,
-            species = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing,
-            
-            genus_taxid = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing,
-            genus = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing,
-            
-            family_taxid = haskey(lineage_ranks, "family") ? lineage_ranks["family"].taxid : missing,
-            family = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage : missing,
-            
-            order_taxid = haskey(lineage_ranks, "order") ? lineage_ranks["order"].taxid : missing,
-            order = haskey(lineage_ranks, "order") ? lineage_ranks["order"].lineage : missing,
-
-            class_taxid = haskey(lineage_ranks, "class") ? lineage_ranks["class"].taxid : missing,
-            class = haskey(lineage_ranks, "class") ? lineage_ranks["class"].lineage : missing,
-            
-            phylum_taxid = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].taxid : missing,
-            phylum = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].lineage : missing,
-            
-            kingdom_taxid = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].taxid : missing,
-            kingdom = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].lineage : missing,
-            
-            realm_taxid = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].taxid : missing,
-            realm = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].lineage : missing,
-
-            domain_taxid = domain_taxid,
-            domain = domain
-
-        )
-        push!(taxids_to_lineage_table, row, promote=true)
+        
+        taxid_col[i] = taxid
+        species_taxid_col[i] = haskey(lineage_ranks, "species") ? lineage_ranks["species"].taxid : missing
+        species_col[i] = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing
+        genus_taxid_col[i] = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing
+        genus_col[i] = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing
+        family_taxid_col[i] = haskey(lineage_ranks, "family") ? lineage_ranks["family"].taxid : missing
+        family_col[i] = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage : missing
+        order_taxid_col[i] = haskey(lineage_ranks, "order") ? lineage_ranks["order"].taxid : missing
+        order_col[i] = haskey(lineage_ranks, "order") ? lineage_ranks["order"].lineage : missing
+        class_taxid_col[i] = haskey(lineage_ranks, "class") ? lineage_ranks["class"].taxid : missing
+        class_col[i] = haskey(lineage_ranks, "class") ? lineage_ranks["class"].lineage : missing
+        phylum_taxid_col[i] = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].taxid : missing
+        phylum_col[i] = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].lineage : missing
+        kingdom_taxid_col[i] = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].taxid : missing
+        kingdom_col[i] = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].lineage : missing
+        realm_taxid_col[i] = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].taxid : missing
+        realm_col[i] = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].lineage : missing
     end
-    return taxids_to_lineage_table
+    
+    # Create DataFrame from pre-allocated vectors
+    return DataFrames.DataFrame(
+        taxid = taxid_col,
+        species_taxid = species_taxid_col,
+        species = species_col,
+        genus_taxid = genus_taxid_col,
+        genus = genus_col,
+        family_taxid = family_taxid_col,
+        family = family_col,
+        order_taxid = order_taxid_col,
+        order = order_col,
+        class_taxid = class_taxid_col,
+        class = class_col,
+        phylum_taxid = phylum_taxid_col,
+        phylum = phylum_col,
+        kingdom_taxid = kingdom_taxid_col,
+        kingdom = kingdom_col,
+        realm_taxid = realm_taxid_col,
+        realm = realm_col,
+        domain_taxid = domain_taxid_col,
+        domain = domain_col
+    )
 end
 
 """
