@@ -821,17 +821,7 @@ function write_fastas_from_normalized_fastx_tables(
         try
             @assert occursin(r"\.jld2$", table_path)
             loaded_table = Mycelia.load_df_jld2(table_path)
-            # Determine if the table should be decompressed based on extension
-            # decompress = endswith(table_path, ".gz")
-            # io = open(table_path)
-            # stream = decompress ? CodecZlib.GzipDecompressorStream(io) : io
-            # loaded_table = CSV.read(stream, DataFrames.DataFrame, delim='\t')
-            # close(io)
-            # Remove .gz if present in the fastx_sha256 (basename)
             fastx_basename = loaded_table[1, "fastx_sha256"]
-            # if occursin(r"\.gz$", fastx_basename)
-            #     fastx_basename = replace(fastx_basename, r"\.gz$" => "")
-            # end
             fastx_filename = fastx_basename * ".fna.gz"
             fastx_file = joinpath(output_dir, fastx_filename)
             # Write if missing or overwrite specified

@@ -467,7 +467,7 @@ function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2",
         
         if length(faa_files) == 1
             protein_file = first(faa_files)
-            @warn "All expected CheckM2 output files already exist. Skipping execution and returning existing results." outdir
+            # @warn "All expected CheckM2 output files already exist. Skipping execution and returning existing results." outdir
             
             return (
                 outdir = outdir,
