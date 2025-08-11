@@ -359,16 +359,16 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
     )
     
     # Check if output directory exists and all expected files are present
-    if isdir(outdir) && all(isfile, output_files)
-        @warn "CheckV output directory already exists with all expected files. Skipping analysis: $(outdir)"
-    else
+    if !(isdir(outdir) && all(isfile, output_files))
+        # @warn "CheckV output directory already exists with all expected files. Skipping analysis: $(outdir)"
+    # else
         latest_db = last(readdir(Mycelia.setup_checkv(), join=true))
         run(`$(CONDA_RUNNER) run -n checkv checkv end_to_end $(fasta_file) $(outdir) -d $(latest_db) -t $(threads)`)
     end
     
     # Clean up temporary directory if it exists
     tmp_dir = joinpath(outdir, "tmp")
-    Mycelia.cleanup_directory(tmp_dir, verbose=true, force=true)
+    Mycelia.cleanup_directory(tmp_dir, verbose=false, force=true)
     
     return (outdir=outdir, output_files...)
 end

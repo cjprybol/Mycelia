@@ -2216,8 +2216,12 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
         if fasta_file != "$(out_dir)/$(basename(fasta_file))"
             cp(fasta_file, "$(out_dir)/$(basename(fasta_file))", force=true)
         end
-        (filesize(std_out) == 0) && rm(std_out)
-        (filesize(std_err) == 0) && rm(std_err)
+        if isfile(std_out) && (filesize(std_out) == 0)
+            rm(std_out)
+        end
+        if isfile(std_err) && (filesize(std_err) == 0)
+            rm(std_err)
+        end
     end
     # return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
     return (;fasta_file, out_dir, gff, faa, fna)
