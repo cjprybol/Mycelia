@@ -35,7 +35,7 @@ Pages = [
     "tutorials.md", 
     "api.md",
     "visualization-gallery.md",
-    "troubleshooting.md",
+    "faq.md",
     "contributing.md"
 ]
 Depth = 2
