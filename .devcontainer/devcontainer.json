@@ -3,10 +3,10 @@
 {
     "name": "Mycelia Development Container",
 
-    // local on mac
-    // "image": "mcr.microsoft.com/devcontainers/base:debian-11",
     // remote on codespaces
-    "image": "mcr.microsoft.com/devcontainers/universal:2",
+    // "image": "mcr.microsoft.com/devcontainers/universal:2",
+    // local on mac
+    "image": "mcr.microsoft.com/devcontainers/base:debian-11",
     // for when/if I need more configuration than the base images provide
     // "build": {
     //     "dockerfile": "Dockerfile"
