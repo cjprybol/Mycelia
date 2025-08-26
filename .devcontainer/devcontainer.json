@@ -57,7 +57,9 @@
             ]
         }
     },
-    "postCreateCommand": "bash .devcontainer/setup.sh"
+    "postCreateCommand": "bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.Registry.update(); Pkg.resolve(); Pkg.instantiate(); Pkg.precompile()'",
+    "postStartCommand": "julia --project=. -e 'using Pkg; Pkg.resolve(); Pkg.instantiate();'",
+    // "postCreateCommand": "bash .devcontainer/setup.sh"
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
