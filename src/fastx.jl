@@ -1,4 +1,236 @@
 """
+    normalized_table2fastx(
+        table::DataFrames.DataFrame;
+        output_dir::String=".",
+        output_basename::Union{String, Nothing}=nothing,
+        gzip::Bool=false
+    )
+
+Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP compression.
+
+# Arguments
+- `table::DataFrames.DataFrame`: A DataFrame from `fastx2normalized_table`.
+
+# Keyword Arguments
+- `output_dir::String="."`: The directory to save the file.
+- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension).
+- `gzip::Bool=false`: If `true`, the output file will be GZIP compressed.
+"""
+function normalized_table2fastx(
+    table::DataFrames.DataFrame;
+    output_dir::String=".",
+    output_basename::Union{String, Nothing}=nothing,
+    gzip::Bool=false # New keyword argument for compression
+)
+    # --- 1. Determine Output Format and Record Type ---
+    is_fastq = !all(ismissing, table.record_quality)
+    RecordType = is_fastq ? FASTX.FASTQ.Record : FASTX.FASTA.Record
+    
+    # Update file extension logic to handle compression
+    file_extension = is_fastq ? ".fq" : ".fna"
+    if gzip
+        file_extension *= ".gz"
+    end
+
+    # --- 2. Construct Vector of Records ---
+    records = RecordType[]
+    sizehint!(records, nrow(table))
+
+    for row in eachrow(table)
+        if is_fastq
+            quality_integers = round.(Int, row.record_quality)
+            record = FASTX.FASTQ.Record(row.sequence_identifier, row.record_sequence, quality_integers)
+        else
+            record = FASTX.FASTA.Record(row.sequence_identifier, row.record_sequence)
+        end
+        push!(records, record)
+    end
+
+    # --- 3. Determine Final Output Path ---
+    basename = isnothing(output_basename) ? table.genome_identifier[1] : output_basename
+    final_outfile = joinpath(output_dir, basename * file_extension)
+
+    # --- 4. Call Your Existing Writer Function ---
+    if is_fastq
+        writen_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+    else
+        writen_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+    end
+
+    @assert writen_outfile == final_outfile
+
+    Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
+    return final_outfile
+end
+
+"""
+    fastx2normalized_table(; fastx_path::String, human_readable_id::String) -> DataFrames.DataFrame
+
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Reads a FASTA or FASTQ file and converts its records into a normalized `DataFrames.DataFrame` with stable, hierarchical identifiers.
+
+# Keyword Arguments
+- `fastx_path::String`: Path to a FASTA or FASTQ file.
+- `human_readable_id::String`: A required, human-readable identifier for the genome/entity (max 16 characters).
+
+# Returns
+- `DataFrames.DataFrame`: A data frame with standardized columns, including the new hierarchical identifiers.
+"""
+function fastx2normalized_table(; fastx_path::String, human_readable_id::String)
+    # --- Input Validation ---
+    @assert isfile(fastx_path) && filesize(fastx_path) > 0 "File does not exist or is empty."
+    if length(human_readable_id) > 16
+        error("Human-readable identifier cannot exceed 16 characters.")
+    end
+
+    # --- DataFrame Initialization ---
+    normalized_table = DataFrames.DataFrame(
+        record_identifier = String[],
+        record_description = String[],
+        sequence_hash = String[],
+        record_quality = Union{Vector{Float64}, Missing}[],
+        record_alphabet = String[],
+        record_type = String[],
+        mean_record_quality = Union{Float64, Missing}[],
+        median_record_quality = Union{Float64, Missing}[],
+        record_length = Int[],
+        record_sequence = String[],
+    )
+
+    # --- File Type Detection (using Mycelia) ---
+    file_type = if occursin(Mycelia.FASTA_REGEX, fastx_path)
+        :fasta
+    elseif occursin(Mycelia.FASTQ_REGEX, fastx_path)
+        :fastq
+    else
+        error("File is not FASTA or FASTQ")
+    end
+    
+    # --- Record Processing (using Mycelia) ---
+    for record in Mycelia.open_fastx(fastx_path)
+        record_sequence = FASTX.sequence(String, record)
+        record_quality = file_type == :fastq ? collect(FASTX.quality_scores(record)) : missing
+
+        push!(normalized_table, (
+            record_identifier = FASTX.identifier(record),
+            record_description = FASTX.description(record),
+            sequence_hash = create_base58_hash(record_sequence, encoded_length=16),
+            record_quality = record_quality,
+            record_alphabet = join(sort(collect(Set(uppercase(record_sequence))))),
+            record_type = string(Mycelia.detect_alphabet(record_sequence)), # Restored Mycelia call
+            mean_record_quality = !ismissing(record_quality) ? Statistics.mean(record_quality) : missing,
+            median_record_quality = !ismissing(record_quality) ? Statistics.median(record_quality) : missing,
+            record_length = length(record_sequence),
+            record_sequence = record_sequence,
+        ))
+    end
+
+    # --- Add New Hierarchical Identifier Columns ---
+    current_columns = names(normalized_table)
+    genome_hash = generate_genome_hash(normalized_table.sequence_hash, encoded_length=16)
+
+    normalized_table[!, "human_readable_id"] .= human_readable_id
+    normalized_table[!, "genome_hash"] .= genome_hash
+    normalized_table[!, "genome_identifier"] .= human_readable_id .* "_" .* genome_hash
+    normalized_table[!, "sequence_identifier"] .= normalized_table.genome_identifier .* "_" .* normalized_table.sequence_hash
+    @assert all(length.(normalized_table[!, "sequence_identifier"]) .<= 50) "NCBI identifier length limit of 50 characters exceeded."
+    normalized_table[!, "fastx_path"] .= Base.basename(fastx_path)
+
+    final_order = [
+        "fastx_path", "human_readable_id", "genome_hash", "sequence_hash",
+        "genome_identifier", "sequence_identifier", "record_identifier",
+        "record_description", "record_length", "record_alphabet", "record_type",
+        "mean_record_quality", "median_record_quality", "record_quality",
+        "record_sequence"
+    ]
+    return normalized_table[!, final_order]
+end
+
+"""
+    create_base58_hash(data_to_hash::String, encoded_length::Int) -> String
+
+Hashes a string using BLAKE3 and returns a Base58 encoded string of a
+specified approximate length.
+
+# Arguments
+- `data_to_hash::String`: The input data to hash (e.g., a biological sequence).
+- `encoded_length::Int`: The target length for the final Base58 encoded string.
+
+# Returns
+- `String`: The resulting Base58 hash string.
+"""
+function create_base58_hash(data_to_hash::String; encoded_length::Int=32)::String
+    if encoded_length <= 0
+        error("Invalid hash length: $encoded_length. It must be positive.")
+    end
+
+    # Calculate the number of raw bytes needed to generate a Base58 string
+    # of the target length. Each Base58 character encodes ~5.85 bits (log₂(58)).
+    # We use floor() to be conservative and ensure we don't exceed the target length.
+    bits_needed = encoded_length * log2(58)
+    raw_bytes_needed = floor(Int, bits_needed / 8)
+
+    # If the calculation results in 0 bytes, we can't generate a hash.
+    if raw_bytes_needed == 0
+        error("Cannot generate a hash for an encoded length of $encoded_length. It is too short.")
+    end
+
+    # Use BLAKE3 to generate the exact number of raw bytes needed
+    hasher = Blake3Hash.Blake3Ctx()
+    Blake3Hash.update!(hasher, data_to_hash)
+    output_buffer = Vector{UInt8}(undef, raw_bytes_needed)
+    Blake3Hash.digest(hasher, output_buffer)
+
+    # Encode the raw bytes and return the result
+    return Base58.encode(output_buffer)
+end
+
+"""
+    generate_genome_hash(sequences::Vector{String}; hash_len::Int=32) -> String
+
+Computes a single, order-independent hash for a collection of sequences (a genome).
+
+This function works by hashing each sequence individually, sorting the resulting
+hashes, and then hashing the concatenated list of sorted hashes. This ensures
+that the final genome hash is stable, even if the sequences are provided in a
+different order.
+
+# Arguments
+- `sequences::Vector{String}`: A vector of strings, where each string is a biological sequence.
+- `hash_len::Int=32`: The desired length for the final Base58 encoded genome hash.
+
+# Returns
+- `String`: A single, stable Base58 hash representing the entire genome.
+"""
+function generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32)::String
+    if isempty(sequences)
+        error("Input sequence vector cannot be empty.")
+    end
+
+    # 1. Hash each sequence individually and collect their hex representations
+    # We use hex here because it's a standard, sortable text format for hashes.
+    individual_hashes = Vector{String}(undef, length(sequences))
+    for i in 1:length(sequences)
+        # Get the standard 32-byte (256-bit) raw hash for maximum uniqueness
+        raw_hash = Blake3Hash.blake3(sequences[i])
+        individual_hashes[i] = bytes2hex(raw_hash)
+    end
+
+    # 2. Sort the list of hashes. This is the key to making it order-independent!
+    sort!(individual_hashes)
+
+    # 3. Combine the sorted hashes into a single string
+    combined_data = join(individual_hashes)
+
+    # 4. Hash the combined string to get the final genome hash
+    # We can use the function from our previous discussion for this final step.
+    final_genome_hash = create_base58_hash(combined_data, encoded_length=hash_len)
+
+    return final_genome_hash
+end
+
+"""
     find_fasta_files(input_path::String) -> Vector{String}
 
 Find all FASTA files in a directory or return single file if path is a file.
@@ -641,106 +873,6 @@ function fastx_stats(fastx)
 end
 
 """
-    fastx2normalized_table(fastx::AbstractString) -> DataFrames.DataFrame
-
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Read a FASTA or FASTQ file and convert its records into a normalized `DataFrames.DataFrame` where each row represents a sequence record and columns provide standardized metadata and sequence statistics.
-
-# Arguments
-
-- `fastx::AbstractString`: Path to a FASTA or FASTQ file. The file must exist and be non-empty. The file type is inferred from the filename using `Mycelia.FASTA_REGEX` and `Mycelia.FASTQ_REGEX`.
-
-# Returns
-
-- `DataFrames.DataFrame`: A data frame where each row contains information for a record from the input file, and columns include:
-    - `fastx_path`: Basename of the input file.
-    - `fastx_sha256`: Aggregated SHA256 hash of all record SHA256s in the file.
-    - `record_identifier`: Identifier from the record header.
-    - `record_description`: Description from the record header.
-    - `record_sha256`: SHA256 hash of the record sequence.
-    - `record_quality`: Vector of quality scores (`Vector{Float64}`) for FASTQ, or `missing` for FASTA.
-    - `record_alphabet`: Sorted, joined string of unique, uppercase characters in the record sequence.
-    - `record_type`: Alphabet type detected by `Mycelia.detect_alphabet` (e.g., `:DNA`, `:RNA`, etc.).
-    - `mean_record_quality`: Mean quality score (for FASTQ), or `missing` (for FASTA).
-    - `median_record_quality`: Median quality score (for FASTQ), or `missing` (for FASTA).
-    - `record_length`: Length of the sequence.
-    - `record_sequence`: The sequence string itself.
-
-# Notes
-
-- The function asserts that the file exists and is not empty.
-- File type is determined by regex matching on the filename.
-- For FASTA files, quality-related columns are set to `missing`.
-- For FASTQ files, quality scores are extracted and statistics are computed.
-- Record SHA256 hashes are aggregated to compute a file-level SHA256 via `Mycelia.metasha256`.
-- Requires the following namespaces: `DataFrames`, `Statistics`, `Mycelia`, `FASTX`, and `Base.basename`.
-- The function returns the columns in the order: `fastx_path`, `fastx_sha256`, followed by all other record columns.
-
-# Example
-
-```julia
-import DataFrames
-import Mycelia
-import FASTX
-
-table = fastx2normalized_table("example.fasta")
-DataFrames.first(table, 3)
-```
-"""
-function fastx2normalized_table(fastx)
-    @assert isfile(fastx) && filesize(fastx) > 0
-    normalized_table = DataFrames.DataFrame(
-        record_identifier = String[],
-        record_description = String[],
-        record_sha256 = String[],
-        record_quality = Union{Vector{Float64}, Missing}[],
-        record_alphabet = String[],
-        record_type = String[],
-        mean_record_quality = Union{Float64, Missing}[],
-        median_record_quality = Union{Float64, Missing}[],
-        record_length = Int[],
-        record_sequence = String[],
-    )
-
-    file_type = :unknown
-    if occursin(Mycelia.FASTA_REGEX, fastx)
-        # @info "Processing FASTA file"
-        file_type = :fasta
-    elseif occursin(Mycelia.FASTQ_REGEX, fastx)
-        # @info "Processing FASTQ file"
-        file_type = :fastq
-    else
-        error("File is not FASTA or FASTQ")
-    end
-    
-    for record in Mycelia.open_fastx(fastx)
-        record_sequence = FASTX.sequence(record)
-        if file_type == :fasta
-            record_quality = missing
-        else
-            record_quality = collect(FASTX.quality_scores(record))
-        end
-        push!(normalized_table, (
-            record_identifier = FASTX.identifier(record),
-            record_description = FASTX.description(record),
-            record_sha256 = Mycelia.seq2sha256(record_sequence),
-            record_quality = record_quality,
-            record_alphabet = join(sort(collect(Set(uppercase(record_sequence))))),
-            record_type = string(Mycelia.detect_alphabet(record_sequence)),
-            mean_record_quality = file_type == :fastq ? Statistics.mean(record_quality) : missing,
-            median_record_quality = file_type == :fastq ? Statistics.median(record_quality) : missing,
-            record_length = length(record_sequence),
-            record_sequence = record_sequence,
-        ))
-    end
-    current_columns = names(normalized_table)
-    normalized_table[!, "fastx_path"] .= basename(fastx)
-    normalized_table[!, "fastx_sha256"] .= Mycelia.metasha256(normalized_table[!, "record_sha256"])
-    return normalized_table[!, ["fastx_path", "fastx_sha256", current_columns...]]
-end
-
-"""
     write_fastq(;records, filename, gzip=false)
 
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -776,213 +908,6 @@ function write_fastq(;records, filename, gzip=false)
         close(io)
     end
     return filename
-end
-
-"""
-    write_fastas_from_normalized_fastx_tables(
-        table_paths::Vector{String};
-        output_dir::String = pwd(),
-        show_progress::Bool = true,
-        overwrite::Bool = false,
-        error_handler = (e, table_path)->display((e, table_path))
-    ) -> NamedTuple
-
-Given a vector of normalized fastx table paths, writes out gzipped FASTA files in parallel.
-Each table must have columns: "fastx_sha256", "record_sha256", "record_sequence".
-Automatically decompresses input files if they end with ".gz".
-Returns a summary NamedTuple with successes, failures, failed tables, and output files.
-
-# Keyword Arguments
-- `output_dir`: Directory to write .fna.gz files to.
-- `show_progress`: Show a progress bar (default: true).
-- `overwrite`: Overwrite existing files (default: false).
-- `error_handler`: Function called with (exception, table_path) on error.
-
-"""
-function write_fastas_from_normalized_fastx_tables(
-    table_paths::Vector{String};
-    output_dir::String = pwd(),
-    show_progress::Bool = true,
-    overwrite::Bool = false,
-    error_handler = (e, table_path)->display((e, table_path))
-)
-    n = length(table_paths)
-    successes = Base.Threads.Atomic{Int}(0)
-    failures = Base.Threads.Atomic{Int}(0)
-    failed_tables = String[]
-    failed_tables_lock = Base.Threads.SpinLock()
-    output_files = String[]
-    output_files_lock = Base.Threads.SpinLock()
-
-    progress = show_progress ? ProgressMeter.Progress(n, 1) : nothing
-
-    Base.Threads.@threads for i in 1:n
-        table_path = table_paths[i]
-        try
-            @assert occursin(r"\.jld2$", table_path)
-            loaded_table = Mycelia.load_df_jld2(table_path)
-            fastx_basename = loaded_table[1, "fastx_sha256"]
-            fastx_filename = fastx_basename * ".fna.gz"
-            fastx_file = joinpath(output_dir, fastx_filename)
-            # Write if missing or overwrite specified
-            write_file = overwrite || !isfile(fastx_file)
-            if write_file
-                fastx_records = [
-                    FASTX.FASTA.Record(row["record_sha256"], row["record_sequence"])
-                    for row in DataFrames.eachrow(loaded_table)
-                ]
-                Mycelia.write_fasta(outfile = fastx_file, records = fastx_records)
-            end
-            # Record output file path
-            Base.Threads.lock(output_files_lock) do
-                push!(output_files, fastx_file)
-            end
-            Base.Threads.atomic_add!(successes, 1)
-        catch e
-            error_handler(e, table_path)
-            Base.Threads.atomic_add!(failures, 1)
-            Base.Threads.lock(failed_tables_lock) do
-                push!(failed_tables, table_path)
-            end
-        end
-        if show_progress
-            ProgressMeter.next!(progress)
-        end
-    end
-
-    if show_progress
-        ProgressMeter.finish!(progress)
-    end
-
-    return (
-        total = n,
-        succeeded = successes[],
-        failed = failures[],
-        failed_tables = failed_tables,
-        output_files = output_files
-    )
-end
-
-# convert all genomes into normalized tables
-function fastxs2normalized_tables(;fastxs, outdir, force=false, validate=false)
-    mkpath(outdir)
-    n = length(fastxs)
-    normalized_table_paths = Vector{Union{String, Nothing}}(undef, n)
-    errors = Vector{Union{Nothing, Tuple{String, Exception}}}(undef, n)
-
-    prog = ProgressMeter.Progress(n, desc = "Processing files")
-
-    Threads.@threads for i in 1:n
-        fastx = fastxs[i]
-        outfile_base = basename(fastx)
-        if occursin(r"\.gz$", outfile_base)
-            outfile_base = replace(outfile_base, r"\.gz$" => "")
-        end
-        # outfile = joinpath(outdir, outfile_base * ".tsv.gz")
-        outfile = joinpath(outdir, outfile_base * ".jld2")
-        try
-            if !isfile(outfile) || (filesize(outfile) == 0) || force
-                normalized_table = Mycelia.fastx2normalized_table(fastx)
-                # generated_file = Mycelia.write_tsvgz(df=normalized_table, filename=outfile, force=force)
-                Mycelia.save_df_jld2(df=normalized_table, filename=outfile, force=force)
-                if validate
-                    reread_normalized_table = Mycelia.load_df_jld2(outfile)
-                    Mycelia.validate_normalized_table(normalized_table, reread_normalized_table)
-                end
-            else
-                # if we haven't processed the fastx this run, we need to generate an in memory copy to validate against
-                if validate
-                    normalized_table = Mycelia.fastx2normalized_table(fastx)
-                    reread_normalized_table = Mycelia.load_df_jld2(outfile)
-                    Mycelia.validate_normalized_table(normalized_table, reread_normalized_table)
-                end
-            end
-
-            normalized_table_paths[i] = outfile
-            errors[i] = nothing
-        catch e
-            normalized_table_paths[i] = nothing
-            errors[i] = (fastx, e)
-            @warn "Failed to process $fastx: $e"
-        end
-        ProgressMeter.next!(prog)
-    end
-
-    ProgressMeter.finish!(prog)
-    return (;normalized_table_paths, errors)
-end
-
-
-"""
-    validate_normalized_table(fastx::AbstractString, reread_table::DataFrames.DataFrame)
-
-Validate that a table re-read from disk is equivalent to the normalized table generated in-memory from the given FASTX file.
-
-Checks performed:
-- Table row count matches.
-- Set of record identifiers matches.
-- Set of record sequences matches.
-- Each sequence matches its reported record_length.
-- Set of columns matches expected.
-- (Optionally) All non-quality, non-path columns match row-wise for matching identifiers.
-Throws an informative error if any check fails.
-Returns `true` if all checks pass.
-"""
-function validate_normalized_table(ref_table::DataFrames.DataFrame, reread_table::DataFrames.DataFrame)
-    # Regenerate normalized table in-memory
-    # ref_table = Mycelia.fastx2normalized_table(fastx)
-
-    # 1. Row count
-    n_ref = DataFrames.nrow(ref_table)
-    n_reread = DataFrames.nrow(reread_table)
-    n_ref == n_reread || error("Row count mismatch: $n_ref in reference, $n_reread in reread table.")
-
-    # 2. Column names (order-insensitive)
-    setdiff(names(ref_table), names(reread_table)) == String[] ||
-        error("Columns missing from reread table: $(setdiff(names(ref_table), names(reread_table)))")
-    setdiff(names(reread_table), names(ref_table)) == String[] ||
-        error("Extra columns in reread table: $(setdiff(names(reread_table), names(ref_table)))")
-
-    # 3. Record identifier sets
-    ids_ref = Set(ref_table.record_identifier)
-    ids_reread = Set(reread_table.record_identifier)
-    ids_ref == ids_reread || error("Record identifiers do not match between reference and reread tables.")
-
-    # 4. Sequences: sets should match
-    seqs_ref = Set(ref_table.record_sequence)
-    seqs_reread = Set(reread_table.record_sequence)
-    seqs_ref == seqs_reread || error("Record sequences do not match between reference and reread tables.")
-
-    # 5. Sequence lengths: for each row, check sequence length matches record_length
-    for (seq, len, id) in zip(reread_table.record_sequence, reread_table.record_length, reread_table.record_identifier)
-        length(seq) == len || error("Sequence length mismatch for record $id: got $(length(seq)), expected $len")
-    end
-
-    # 6. Ensure all expected identifiers are present (already checked via sets, but for informative error)
-    missing_ids = setdiff(ids_ref, ids_reread)
-    isempty(missing_ids) || error("Missing identifiers in reread table: $missing_ids")
-
-    # 7. Optionally: Check per-row equivalence for all columns except path, sha256, quality (which may have type/format shifts)
-    # We'll join on record_identifier, which is unique per file
-    ref_by_id = Dict(row.record_identifier => row for row in eachrow(ref_table))
-    for row in eachrow(reread_table)
-        ref_row = get(ref_by_id, row.record_identifier, nothing)
-        isnothing(ref_row) && error("Reread table has unknown identifier: $(row.record_identifier)")
-        # Compare core columns
-        ref_row.record_sequence == row.record_sequence ||
-            error("Sequence mismatch for identifier $(row.record_identifier)")
-        ref_row.record_length == row.record_length ||
-            error("Length mismatch for identifier $(row.record_identifier)")
-        ref_row.record_type == row.record_type ||
-            error("Type mismatch for identifier $(row.record_identifier)")
-        ref_row.record_alphabet == row.record_alphabet ||
-            error("Alphabet mismatch for identifier $(row.record_identifier)")
-        ref_row.record_sha256 == row.record_sha256 ||
-            error("SHA256 mismatch for identifier $(row.record_identifier)")
-        # (Optional: compare quality, mean_quality, etc., if you expect fidelity)
-    end
-
-    return true
 end
 
 """
