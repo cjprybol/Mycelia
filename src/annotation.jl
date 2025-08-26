@@ -1403,8 +1403,8 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Perform comprehensive annotation of a FASTA file including gene prediction, protein homology search,
-and terminator prediction.
+Perform basic annotation of a FASTA file including gene prediction, protein homology search,
+and terminator prediction applicable for phage and bacteria.
 
 # Arguments
 - `fasta::String`: Path to input FASTA file
@@ -1435,15 +1435,20 @@ and terminator prediction.
 """
 function annotate_fasta(;
         fasta::String,
-        identifier::String = replace(basename(fasta), Mycelia.FASTA_REGEX => ""), # Assuming Mycelia.FASTA_REGEX is defined
-        basedir::String = pwd(),        
+        # identifier::String = replace(basename(fasta), Mycelia.FASTA_REGEX => ""), # Assuming Mycelia.FASTA_REGEX is defined
+        # basedir::String = pwd(),      
         mmseqsdb::String = joinpath(homedir(), "workspace/mmseqs/UniRef50"),
-        threads::Int = Sys.CPU_THREADS
+        threads::Int = Sys.CPU_THREADS,
+        outdir::AbstractString = replace(fasta, Mycelia.FASTA_REGEX => "") * "_annotation"
     )
     
-    outdir = joinpath(basedir, identifier)
-    @assert outdir != fasta "Output directory cannot be the same as the input FASTA file path."
-    
+    # outdir = joinpath(basedir, identifier)
+    # @assert outdir != fasta "Output directory cannot be the same as the input FASTA file path."
+
+    if isdir(outdir) && !isempty(readdir(outdir))
+        @warn "$outdir already exists, remove to regenerate"
+        return outdir
+    end
     mkpath(outdir)
     
     # Path to the FASTA file copied into the output directory

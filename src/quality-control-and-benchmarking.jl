@@ -1,4 +1,226 @@
 """
+    robust_cv(x::AbstractVector{<:Real}; epsilon::Float64 = eps(Float64))::Float64
+
+Compute a robust coefficient of variation for a vector of distances x
+using MAD as the robust scale and the median as the robust location.
+
+Returns 0.0 if the robust location is too close to zero to avoid numerical instability.
+"""
+function robust_cv(x::AbstractVector{<:Real}; epsilon::Float64 = eps(Float64))::Float64
+    xx = collect(skipmissing(x))
+    isempty(xx) && return 0.0
+    loc = Statistics.median(xx)
+    sca = StatsBase.mad(xx; normalize = true)
+    denom = max(abs(loc), epsilon)
+    return sca / denom
+end
+
+"""
+    robust_threshold(values::AbstractVector{<:Real}; k::Float64 = 3.0)::Float64
+
+Compute a robust high-side threshold using the median plus k times the normalized MAD.
+"""
+function robust_threshold(values::AbstractVector{<:Real}; k::Float64 = 3.0)::Float64
+    vv = collect(skipmissing(values))
+    isempty(vv) && return 0.0
+    m = Statistics.median(vv)
+    s = StatsBase.mad(vv; normalize = true)
+    return m + k * s
+end
+
+"""
+    filter_genome_outliers(
+        df_in::DataFrames.AbstractDataFrame;
+        group_col::AbstractString = "reference_entity",
+        path_col::AbstractString = "normalized_fastx_path",
+        k_local_median::Float64 = 3.0,
+        k_local_rcv::Float64 = 3.0,
+        k_global_median::Float64 = 3.0,
+        k_global_rcv::Float64 = 3.0,
+        combine_mode::Symbol = :or,
+    )
+
+Compute pairwise distance matrices per group, derive per-genome robust statistics from
+row-wise distances, estimate global and local robust thresholds, and flag/filter genomes
+that violate the automated checks.
+
+Returns a named tuple with filtered, flagged, metrics, and thresholds.
+"""
+function filter_genome_outliers(
+    df_in::DataFrames.AbstractDataFrame;
+    group_col::AbstractString = "reference_entity",
+    path_col::AbstractString = "normalized_fastx_path",
+    k_local_median::Float64 = 3.0,
+    k_local_rcv::Float64 = 3.0,
+    k_global_median::Float64 = 3.0,
+    k_global_rcv::Float64 = 3.0,
+    combine_mode::Symbol = :and,
+    # combine_mode::Symbol = :or,
+)
+    df = DataFrames.DataFrame(df_in)
+    n = DataFrames.nrow(df)
+    if n == 0
+        return (
+            filtered = df,
+            flagged = DataFrames.DataFrame(),
+            metrics = DataFrames.DataFrame(),
+            thresholds = (global_median = 0.0, global_rcv = 0.0),
+        )
+    end
+
+    # Track original row order to map per-genome metrics back to df
+    DataFrames.insertcols!(df, 1, :__rowid => collect(1:n))
+
+    groups = DataFrames.groupby(df, group_col)
+
+    # Storage for global threshold estimation
+    global_medians = Float64[]
+    global_rcvs = Float64[]
+
+    # Per-group cache to compute local thresholds later
+    group_results = Vector{NamedTuple{(:rowids, :group_label, :medians, :rcvs), Tuple{Vector{Int}, Any, Vector{Float64}, Vector{Float64}}}}()
+
+    # Compute per-genome metrics per group
+    for sub in groups
+        m = DataFrames.nrow(sub)
+        if m <= 1
+            continue
+        end
+
+        paths = Vector{String}(sub[!, path_col])
+        D = Mycelia.pairwise_mash_distance_matrix(input_fasta_list = paths)
+        M = Array{Float64}(D)
+
+        medians = Vector{Float64}(undef, m)
+        rcvs = Vector{Float64}(undef, m)
+
+        for i in 1:m
+            # distances from genome i to others in the same group (exclude self-distance)
+            di = Vector{Float64}(undef, m - 1)
+            idx = 1
+            for j in 1:m
+                if j == i
+                    continue
+                end
+                di[idx] = M[i, j]
+                idx += 1
+            end
+            medians[i] = Statistics.median(di)
+            rcvs[i] = robust_cv(di)
+        end
+
+        append!(global_medians, medians)
+        append!(global_rcvs, rcvs)
+
+        push!(group_results, (
+            rowids = Vector{Int}(sub[!, :__rowid]),
+            group_label = sub[1, group_col],
+            medians = medians,
+            rcvs = rcvs,
+        ))
+    end
+
+    # Compute global thresholds
+    T_global_median = robust_threshold(global_medians; k = k_global_median)
+    T_global_rcv = robust_threshold(global_rcvs; k = k_global_rcv)
+
+    # Prepare column vectors for metrics_df
+    rowids_v = Int[]
+    group_vals_v = Any[]
+    median_v = Float64[]
+    rcv_v = Float64[]
+    flag_l_m_v = Bool[]
+    flag_l_r_v = Bool[]
+    flag_g_m_v = Bool[]
+    flag_g_r_v = Bool[]
+    flag_out_v = Bool[]
+    T_local_m_v = Float64[]
+    T_local_r_v = Float64[]
+
+    flagged_rowids = Set{Int}()
+
+    # Evaluate local thresholds per group and flag rows
+    for gr in group_results
+        # Local thresholds for this group
+        T_local_median = robust_threshold(gr.medians; k = k_local_median)
+        T_local_rcv = robust_threshold(gr.rcvs; k = k_local_rcv)
+
+        for (idx, rowid) in enumerate(gr.rowids)
+            m_i = gr.medians[idx]
+            rcv_i = gr.rcvs[idx]
+
+            flag_l_m = m_i > T_local_median
+            flag_l_r = rcv_i > T_local_rcv
+            flag_g_m = m_i > T_global_median
+            flag_g_r = rcv_i > T_global_rcv
+
+            local_trigger = (flag_l_m || flag_l_r)
+            global_trigger = (flag_g_m || flag_g_r)
+
+            flag =
+                (combine_mode === :or)  ? (local_trigger || global_trigger) :
+                (combine_mode === :and) ? (local_trigger && global_trigger) :
+                (local_trigger || global_trigger)
+
+            if flag
+                push!(flagged_rowids, rowid)
+            end
+
+            push!(rowids_v, rowid)
+            push!(group_vals_v, gr.group_label)
+            push!(median_v, m_i)
+            push!(rcv_v, rcv_i)
+            push!(flag_l_m_v, flag_l_m)
+            push!(flag_l_r_v, flag_l_r)
+            push!(flag_g_m_v, flag_g_m)
+            push!(flag_g_r_v, flag_g_r)
+            push!(flag_out_v, flag)
+            push!(T_local_m_v, T_local_median)
+            push!(T_local_r_v, T_local_rcv)
+        end
+    end
+
+    # Build metrics_df from proper column vectors
+    metrics_df = DataFrames.DataFrame(
+        :__rowid => rowids_v,
+        Symbol(group_col) => group_vals_v,
+        :median_distance => median_v,
+        :robust_cv => rcv_v,
+        :flag_local_median => flag_l_m_v,
+        :flag_local_rcv => flag_l_r_v,
+        :flag_global_median => flag_g_m_v,
+        :flag_global_rcv => flag_g_r_v,
+        :flag_outlier => flag_out_v,
+        :T_local_median => T_local_m_v,
+        :T_local_rcv => T_local_r_v,
+    )
+
+    # Drop the group column on the right side to avoid duplicate names during join
+    metrics_join = DataFrames.select(metrics_df, DataFrames.Not(Symbol(group_col)))
+
+    df_joined = DataFrames.leftjoin(df, metrics_join, on = :__rowid => :__rowid)
+
+    is_flagged = hasproperty(df_joined, :flag_outlier) ? coalesce.(df_joined[!, :flag_outlier], false) : falses(DataFrames.nrow(df_joined))
+    flagged_df = df_joined[is_flagged, :]
+    filtered_df = df_joined[.!is_flagged, :]
+
+    # Clean helper column
+    if :__rowid in DataFrames.names(flagged_df)
+        DataFrames.select!(flagged_df, DataFrames.Not(:__rowid))
+    end
+    if :__rowid in DataFrames.names(filtered_df)
+        DataFrames.select!(filtered_df, DataFrames.Not(:__rowid))
+    end
+    if :__rowid in DataFrames.names(metrics_df)
+        DataFrames.select!(metrics_df, DataFrames.Not(:__rowid))
+    end
+
+    thresholds = (global_median = T_global_median, global_rcv = T_global_rcv)
+
+    return (filtered = filtered_df, flagged = flagged_df, metrics = metrics_df, thresholds = thresholds)
+end
+
+"""
     confusion_matrix(true_labels, pred_labels)
 
 Returns the confusion matrix as a Matrix{Int}, row = true, col = predicted.

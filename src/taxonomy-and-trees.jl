@@ -1,3 +1,293 @@
+# Convenience for first non-missing value in a vector
+first_nonmissing(v) = begin
+    i = findfirst(x -> !ismissing(x), v)
+    i === nothing ? missing : v[i]
+end
+
+# Robust column existence checks and key resolution
+hascol(df::DataFrames.AbstractDataFrame, col::AbstractString) =
+    (col in names(df)) || (Symbol(col) in names(df))
+hascol(df::DataFrames.AbstractDataFrame, col::Symbol) =
+    (col in names(df)) || (String(col) in names(df))
+
+function actual_name(df::DataFrames.AbstractDataFrame, name_in::Union{String,Symbol})
+    if name_in isa Symbol
+        if name_in in names(df)
+            return name_in
+        end
+        nstr = String(name_in)
+        if nstr in names(df)
+            return nstr
+        end
+    else
+        if name_in in names(df)
+            return name_in
+        end
+        nsym = Symbol(name_in)
+        if nsym in names(df)
+            return nsym
+        end
+    end
+    error("Column $(name_in) not found in DataFrame.")
+end
+
+# Ensure a column is named by a String (rename from Symbol if needed)
+function ensure_as_string!(df::DataFrames.AbstractDataFrame, name::AbstractString)
+    if !(name in names(df)) && (Symbol(name) in names(df))
+        DataFrames.rename!(df, Symbol(name) => name)
+    end
+    return df
+end
+
+# Default taxonomy ranks expected after lineage join
+function default_ranks()
+    return [
+        (taxid_col = "species_taxid", name_col = "species",      rank = "species"),
+        (taxid_col = "genus_taxid",   name_col = "genus",        rank = "genus"),
+        (taxid_col = "family_taxid",  name_col = "family",       rank = "family"),
+        (taxid_col = "order_taxid",   name_col = "order",        rank = "order"),
+        (taxid_col = "class_taxid",   name_col = "class",        rank = "class"),
+        (taxid_col = "phylum_taxid",  name_col = "phylum",       rank = "phylum"),
+        (taxid_col = "kingdom_taxid", name_col = "kingdom",      rank = "kingdom"),
+        (taxid_col = "realm_taxid",   name_col = "realm",        rank = "realm"),
+        (taxid_col = "domain_taxid",  name_col = "domain",       rank = "domain"),
+    ]
+end
+
+# Ensure lineage columns exist by joining summarized lineage on "subject tax id"
+function ensure_lineage_columns(df::DataFrames.DataFrame; ranks = default_ranks())
+    needed = String[]
+    for r in ranks
+        if !hascol(df, r.taxid_col) || !hascol(df, r.name_col)
+            push!(needed, r.taxid_col)
+            push!(needed, r.name_col)
+        end
+    end
+    if isempty(needed)
+        return df
+    end
+    if !hascol(df, "subject tax id")
+        error("Input DataFrame is missing 'subject tax id' required for lineage join.")
+    end
+    taxids = collect(unique(skipmissing(df[!, "subject tax id"])))
+    lineage = Mycelia.taxids2taxonkit_summarized_lineage_table(taxids)
+    return DataFrames.leftjoin(df, lineage, on = "subject tax id" => "taxid")
+end
+
+# Core aggregator: from joined BLAST rows to normalized confidence per query and rank
+function compute_taxonomic_confidence(
+    df::DataFrames.DataFrame;
+    weight_col::Union{String,Symbol} = "bit score",
+    evalue_max::Real = 1e-10,
+    min_weight::Real = 0.0,
+    ranks = default_ranks(),
+    collapse_per_subject::Bool = true,
+    subject_reduce::Function = sum,  # or maximum
+)
+    # Validate required columns
+    for col in ("query id", "subject id", "subject tax id")
+        if !hascol(df, col)
+            error("Input DataFrame is missing required column: $(col)")
+        end
+    end
+
+    # Resolve column keys
+    qkey = actual_name(df, "query id")
+    subjkey = actual_name(df, "subject id")
+    taxidkey = actual_name(df, "subject tax id")
+    wkey = actual_name(df, weight_col)
+
+    # Basic filtering
+    dff = df
+    if hascol(dff, "evalue")
+        ekey = actual_name(dff, "evalue")
+        dff = dff[dff[!, ekey] .<= evalue_max, :]
+    end
+    dff = dff[dff[!, wkey] .>= min_weight, :]
+
+    # Optionally reduce multiple HSPs per subject id
+    if collapse_per_subject
+        # Carry lineage columns forward, plus keys
+        carry = Any[qkey, subjkey, taxidkey]
+        for r in ranks
+            if hascol(dff, r.taxid_col)
+                push!(carry, actual_name(dff, r.taxid_col))
+            end
+            if hascol(dff, r.name_col)
+                push!(carry, actual_name(dff, r.name_col))
+            end
+        end
+        carry = unique(carry)
+
+        grp = DataFrames.groupby(dff, [qkey, subjkey])
+        kept = DataFrames.combine(
+            grp,
+            wkey => subject_reduce => "subject_weight",
+            [c => first_nonmissing => c for c in carry if !(c in (qkey, subjkey))]...,
+        )
+        work = kept
+        weight_field = "subject_weight"  # String name created above
+    else
+        work = dff
+        weight_field = wkey  # Symbol or String
+    end
+
+    # For each rank, sum weights per query + taxon, then normalize within query
+    all_ranks = DataFrames.DataFrame()
+    for r in ranks
+        if !hascol(work, r.taxid_col) || !hascol(work, r.name_col)
+            continue
+        end
+
+        r_tax_key = actual_name(work, r.taxid_col)
+        r_name_key = actual_name(work, r.name_col)
+        wcol_key = actual_name(work, weight_field)
+
+        # Drop rows without this rank's taxon
+        sub = work[.!ismissing.(work[!, r_tax_key]), :]
+
+        if DataFrames.nrow(sub) == 0
+            continue
+        end
+
+        # Build aggregations
+        groupkeys = [qkey, r_tax_key, r_name_key]
+        combine_args = Any[
+            wcol_key => sum => "weight_sum",
+            DataFrames.nrow => "n_hits",
+        ]
+        if hascol(sub, "subject id")
+            skey = actual_name(sub, "subject id")
+            push!(combine_args, skey => (x -> length(unique(x))) => "n_subjects")
+        end
+
+        agg = DataFrames.combine(
+            DataFrames.groupby(sub, groupkeys),
+            combine_args...,
+        )
+
+        # Normalize within each query id (avoid sortperm to prevent sort! kw issues)
+        conf = DataFrames.combine(DataFrames.groupby(agg, qkey)) do sdf
+            # Compute rel_conf
+            total = sum(sdf[!, "weight_sum"])
+            rel = total == 0 ? fill(0.0, DataFrames.nrow(sdf)) : sdf[!, "weight_sum"] ./ total
+            DataFrames.hcat(sdf, DataFrames.DataFrame("rel_conf" => rel))
+        end
+
+        # Standardize col names, tag the rank, enforce String names
+        DataFrames.rename!(conf, actual_name(conf, r.taxid_col) => "taxid", actual_name(conf, r.name_col) => "taxon")
+        conf[!, "rank"] = fill(r.rank, DataFrames.nrow(conf))
+
+        # Ensure expected column names are String-typed
+        for cname in ("query id", "taxid", "taxon", "weight_sum", "rel_conf", "n_subjects", "n_hits", "rank")
+            ensure_as_string!(conf, cname)
+        end
+        # Guarantee n_subjects exists (if subject id absent)
+        if !("n_subjects" in names(conf))
+            conf[!, "n_subjects"] = fill(missing, DataFrames.nrow(conf))
+        end
+
+        conf = conf[:, ["query id", "rank", "taxid", "taxon", "weight_sum", "rel_conf", "n_subjects", "n_hits"]]
+
+        all_ranks = DataFrames.vcat(all_ranks, conf; cols = :union)
+    end
+
+    return all_ranks
+end
+
+# Helper: find top-1 and second-best values without sorting (avoids sort!/sortperm issues)
+function _top2_indices_and_values(vals_any)::Tuple{Int, Float64, Int, Float64}
+    n = length(vals_any)
+    if n == 0
+        return (0, -Inf, 0, -Inf)
+    end
+    # Convert to Float64, coalescing missing to -Inf to keep indices aligned
+    vals = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        x = vals_any[i]
+        if x === missing
+            vals[i] = -Inf
+        else
+            vals[i] = Float64(x)
+        end
+    end
+    v1 = -Inf; v2 = -Inf
+    i1 = 0;    i2 = 0
+    @inbounds for i in 1:n
+        x = vals[i]
+        if x > v1
+            v2 = v1; i2 = i1
+            v1 = x;  i1 = i
+        elseif x > v2
+            v2 = x;  i2 = i
+        end
+    end
+    return (i1, v1, i2, v2)
+end
+
+# Compact per-rank top-call summary per query, with a simple margin to the second best
+function summarize_top_calls(conf_df::DataFrames.DataFrame)
+    required = ("query id", "rank", "taxid", "taxon", "rel_conf")
+    for col in required
+        if !hascol(conf_df, col)
+            error("summarize_top_calls requires column: $(col)")
+        end
+    end
+    # Ensure String names for required columns
+    for cname in ("query id", "rank", "taxid", "taxon", "rel_conf")
+        ensure_as_string!(conf_df, cname)
+    end
+    return DataFrames.combine(DataFrames.groupby(conf_df, ["query id", "rank"])) do sdf
+        (i1, v1, _i2, v2) = _top2_indices_and_values(sdf[!, "rel_conf"])
+        if i1 == 0
+            # No rows in this group; return a row of missings/zeros
+            return DataFrames.DataFrame(
+                "taxid" => missing,
+                "taxon" => missing,
+                "top_rel_conf" => 0.0,
+                "delta_to_second" => 0.0,
+                "n_taxa_considered" => 0,
+            )
+        end
+        delta = v1 - (DataFrames.nrow(sdf) >= 2 ? v2 : 0.0)
+        DataFrames.DataFrame(
+            "taxid" => sdf[i1, "taxid"],
+            "taxon" => sdf[i1, "taxon"],
+            "top_rel_conf" => v1,
+            "delta_to_second" => delta,
+            "n_taxa_considered" => DataFrames.nrow(sdf),
+        )
+    end
+end
+
+# End-to-end convenience: parse, join lineage, compute confidences, and summarize
+function taxonomic_confidence_from_blast(
+    outfile::AbstractString;
+    weight_col::Union{String,Symbol} = "bit score",
+    evalue_max::Real = 1e-10,
+    min_weight::Real = 0.0,
+    collapse_per_subject::Bool = true,
+    subject_reduce::Function = sum,
+    ranks = default_ranks(),
+)
+    parsed = Mycelia.parse_blast_report(outfile)
+    joined = ensure_lineage_columns(parsed; ranks = ranks)
+    conf = compute_taxonomic_confidence(
+        joined;
+        weight_col = weight_col,
+        evalue_max = evalue_max,
+        min_weight = min_weight,
+        ranks = ranks,
+        collapse_per_subject = collapse_per_subject,
+        subject_reduce = subject_reduce,
+    )
+    summary = summarize_top_calls(conf)
+    return (taxonomic_confidence_table = conf, classification_summary_table = summary)
+end
+
+
+
+
 function classify_taxonomy_aware_xam_table(taxonomy_aware_xam_table)
     template_taxid_score_table = DataFrames.combine(DataFrames.groupby(taxonomy_aware_xam_table, [:template, :taxid]), :alignment_score => sum => :total_alignment_score)
     # replace missing (unclassified) with 0 (NCBI taxonomies start at 1, so 0 is a common, but technically non-standard NCBI taxon identifier

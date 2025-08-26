@@ -247,24 +247,30 @@ function generate_rank_consensus_plots(
     return (;fig, png_path, svg_path)
 end
 
-function visualize_many_timeseries(time_series_data::Vector{Vector{Float64}};
-                                  title::String="High-Density Time Series Visualization")
+function visualize_many_timeseries(
+    time_series_data::Vector{Vector{Float64}};
+    title::String = "High-Density Time Series Visualization",
+    # many-trace panel controls
+    many_trace_count::Int = 2000,
+    trace_alpha::Float64 = 0.03,
+    trace_color = :black,
+    trace_linewidth::Float64 = 0.6,
+    rng::Random.AbstractRNG = Random.default_rng()
+)
     # Create x-axis values (assuming equal length for all series)
-    # If series have different lengths, you'll need to adjust this
     n_points = length(time_series_data[1])
     x_values = 1:n_points
-    
+
     # Calculate statistics for the data
     all_values = vcat(time_series_data...)
     global_min, global_max = minimum(all_values), maximum(all_values)
-    
-    # Calculate mean and quantiles
+
     means = zeros(n_points)
     q10 = zeros(n_points)
     q25 = zeros(n_points)
     q75 = zeros(n_points)
     q90 = zeros(n_points)
-    
+
     for i in 1:n_points
         point_values = [series[i] for series in time_series_data if length(series) >= i]
         means[i] = Statistics.mean(point_values)
@@ -273,99 +279,111 @@ function visualize_many_timeseries(time_series_data::Vector{Vector{Float64}};
         q75[i] = Statistics.quantile(point_values, 0.75)
         q90[i] = Statistics.quantile(point_values, 0.9)
     end
-    
-    # Setup the figure - use size instead of resolution
-    fig = CairoMakie.Figure(size=(1200, 800), fontsize=18)
-    
-    # First visualization: Density heatmap approach
-    ax1 = CairoMakie.Axis(fig[1, 1], 
-               title="Density Heatmap", 
-               xlabel="Time", 
-               ylabel="Value",
-               titlesize=22)
-    
-    # Create density heatmap - use CairoMakie.heatmap! instead of density_heatmap!
-    # First prepare data for the heatmap - extract x and y coordinates separately
+
+    # Figure with three rows now (density, bands, many-trace)
+    fig = CairoMakie.Figure(size=(1200, 1200), fontsize=18)
+
+    # 1) Density heatmap
+    ax1 = CairoMakie.Axis(fig[1, 1],
+        title = "Density Heatmap",
+        xlabel = "Time",
+        ylabel = "Value",
+        titlesize = 22)
+
     x_coords = Float64[]
     y_coords = Float64[]
-    
-    for (series_idx, series) in enumerate(time_series_data)
+    for series in time_series_data
         for (point_idx, value) in enumerate(series)
             push!(x_coords, point_idx)
             push!(y_coords, value)
         end
     end
-    
-    # Create 2D histogram manually
-    bins_x = 100  # Number of bins in x direction
-    bins_y = 100  # Number of bins in y direction
-    
+
+    bins_x = 100
+    bins_y = 100
     x_range = (minimum(x_coords), maximum(x_coords))
     y_range = (minimum(y_coords), maximum(y_coords))
-    
-    x_edges = range(x_range[1], x_range[2], length=bins_x+1)
-    y_edges = range(y_range[1], y_range[2], length=bins_y+1)
-    
+    x_edges = range(x_range[1], x_range[2], length = bins_x + 1)
+    y_edges = range(y_range[1], y_range[2], length = bins_y + 1)
+
     histogram = zeros(bins_x, bins_y)
-    
     for i in 1:length(x_coords)
-        x, y = x_coords[i], y_coords[i]
+        x = x_coords[i]
+        y = y_coords[i]
         x_bin = max(1, min(bins_x, Int(floor((x - x_range[1]) / (x_range[2] - x_range[1]) * bins_x)) + 1))
         y_bin = max(1, min(bins_y, Int(floor((y - y_range[1]) / (y_range[2] - y_range[1]) * bins_y)) + 1))
         histogram[x_bin, y_bin] += 1
     end
-    
-    # Create heatmap
-    hmap = CairoMakie.heatmap!(ax1, 
-                    x_edges[1:end-1], 
-                    y_edges[1:end-1], 
-                    histogram, 
-                    colormap=:viridis)
-    
-    # Add mean line
-    CairoMakie.lines!(ax1, x_values, means, color=:white, linewidth=3)
-    
-    CairoMakie.Colorbar(fig[1, 2], hmap, label="Density")
-    
-    # Second visualization: Sample with transparency
-    ax2 = CairoMakie.Axis(fig[2, 1], 
-               title="Sample with Statistical Bands", 
-               xlabel="Time", 
-               ylabel="Value",
-               titlesize=22)
-    
-    # Draw a random sample of the time series with high transparency
+
+    hmap = CairoMakie.heatmap!(ax1,
+        x_edges[1:end-1],
+        y_edges[1:end-1],
+        histogram,
+        colormap = :viridis)
+
+    CairoMakie.lines!(ax1, x_values, means, color = :white, linewidth = 3)
+    CairoMakie.Colorbar(fig[1, 2], hmap, label = "Density")
+
+    # 2) Sample with statistical bands
+    ax2 = CairoMakie.Axis(fig[2, 1],
+        title = "Sample with Statistical Bands",
+        xlabel = "Time",
+        ylabel = "Value",
+        titlesize = 22)
+
     sample_size = min(500, length(time_series_data))
-    sample_indices = rand(1:length(time_series_data), sample_size)
-    
+    sample_indices = rand(rng, 1:length(time_series_data), sample_size)
+
     for idx in sample_indices
-        CairoMakie.lines!(ax2, x_values[1:length(time_series_data[idx])], time_series_data[idx], 
-               color=(ColorSchemes.viridis[rand()], 0.05), linewidth=0.5)
+        series = time_series_data[idx]
+        CairoMakie.lines!(ax2, x_values[1:length(series)], series,
+            color = (ColorSchemes.viridis[rand(rng)], 0.05), linewidth = 0.5)
     end
-    
-    # Add statistical bands
-    CairoMakie.band!(ax2, x_values, q10, q90, color=(:blue, 0.2))
-    CairoMakie.band!(ax2, x_values, q25, q75, color=(:blue, 0.3))
-    
-    # Add mean line
-    CairoMakie.lines!(ax2, x_values, means, color=:red, linewidth=3)
-    
-    # Add legend
+
+    CairoMakie.band!(ax2, x_values, q10, q90, color = (:blue, 0.2))
+    CairoMakie.band!(ax2, x_values, q25, q75, color = (:blue, 0.3))
+    CairoMakie.lines!(ax2, x_values, means, color = :red, linewidth = 3)
+
     CairoMakie.Legend(fig[2, 2],
-           [
-            CairoMakie.LineElement(color=:red, linewidth=3),
-            CairoMakie.PolyElement(color=(:blue, 0.2)),
-            CairoMakie.PolyElement(color=(:blue, 0.3))
-           ],
-           ["Mean", "10-90% Range", "25-75% Range"]
+        [
+            CairoMakie.LineElement(color = :red, linewidth = 3),
+            CairoMakie.PolyElement(color = (:blue, 0.2)),
+            CairoMakie.PolyElement(color = (:blue, 0.3))
+        ],
+        ["Mean", "10-90% Range", "25-75% Range"]
     )
-    
-    # Link the axes
-    CairoMakie.linkaxes!(ax1, ax2)
-    
-    # Add overall title
-    CairoMakie.Label(fig[0, :], text=title, fontsize=26)
-    
+
+    # 3) Many sampled line trace plot (thin, semi-transparent traces)
+    ax3 = CairoMakie.Axis(fig[3, 1],
+        title = "Many Sampled Traces",
+        xlabel = "Time",
+        ylabel = "Value",
+        titlesize = 22)
+
+    # sample without replacement, like your StatsBase.sample snippet
+    sampled_series = StatsBase.sample(rng, time_series_data,
+        min(many_trace_count, length(time_series_data));
+        replace = false)
+
+    for series in sampled_series
+        if !isempty(series)
+            CairoMakie.lines!(ax3,
+                x_values[1:length(series)],
+                series,
+                color = (trace_color, trace_alpha),
+                linewidth = trace_linewidth)
+        end
+    end
+
+    # Optional: overlay mean for reference
+    CairoMakie.lines!(ax3, x_values, means, color = (:black, 0.6), linewidth = 2)
+
+    # Link axes across all three panels
+    CairoMakie.linkaxes!(ax1, ax2, ax3)
+
+    # Overall title
+    CairoMakie.Label(fig[0, :], text = title, fontsize = 26)
+
     return fig
 end
 

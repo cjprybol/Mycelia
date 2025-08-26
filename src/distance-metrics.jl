@@ -11,8 +11,8 @@ function generate_mash_sketch(;input_fasta_list::Vector{String}, output_sketch_p
         end
         # Use the conda environment runner to execute the mash command
         # with live streaming output
-        @info "Running mash sketch on input files: $(input_fasta_list)"
-        @info "Output sketch will be saved to: $sketch_output"
+        # @info "Running mash sketch on input files: $(input_fasta_list)"
+        # @info "Output sketch will be saved to: $sketch_output"
         # Run the mash sketch command with the input list file and output prefix
         Mycelia.add_bioconda_env("mash")
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash sketch -l $(mash_input_sketch_list_file) -p $(Sys.CPU_THREADS) -o $(output_sketch_path_prefix)`)
@@ -28,7 +28,7 @@ function pairwise_mash_distance_matrix(;
 )
     mash_sketch_file = generate_mash_sketch(input_fasta_list=input_fasta_list)
     pairwise_mash_results = CSV.read(
-        open(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash dist -p $(Sys.CPU_THREADS) $(sketch_output) $(sketch_output)`),
+        open(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash dist -p $(Sys.CPU_THREADS) $(mash_sketch_file) $(mash_sketch_file)`),
         DataFrames.DataFrame,
         delim='\t',
         header = ["reference", "query", "mash_distance", "p_value", "matching_hashes"]
@@ -37,7 +37,8 @@ function pairwise_mash_distance_matrix(;
         rm(mash_sketch_file)
     end
 
-    mash_distance_matrix = zeros(length(mash_input_sketch_list), length(mash_input_sketch_list))
+    fastx_to_index_map = Dict(fasta => i for (i, fasta) in enumerate(input_fasta_list))
+    mash_distance_matrix = zeros(length(input_fasta_list), length(input_fasta_list))
     for row in DataFrames.eachrow(pairwise_mash_results)
         matrix_row = fastx_to_index_map[row["reference"]]
         matrix_column = fastx_to_index_map[row["query"]]
