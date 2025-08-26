@@ -146,10 +146,19 @@ makedocs(
     warnonly = [:cross_references, :example_block, :missing_docs],
     pages = [
         "Home" => "index.md",
+        "Installation" => "installation.md",
         "Getting Started" => "getting-started.md",
         "Concepts" => "concepts.md",
+        "Probabilistic Assembly" => "probabilistic-assembly-hub.md",
         # "Tutorials" => tutorial_pages,  # Temporarily disabled to test basic build
+        "Documentation" => [
+            "Architecture Overview" => "architecture.md",
+            "Assembly Method Selection" => "assembly-method-selection.md",
+            "Performance Guide" => "performance.md",
+            "FAQ" => "faq.md"
+        ],
         "API Reference" => [
+            "Complete API Reference" => "api-reference.md",
             "Workflows" => [
                 "Assembly Suite" => "api/workflows/assembly-suite.md",
                 # "Data Acquisition" => "api/workflows/data-acquisition.md",  # Has broken refs
@@ -163,7 +172,7 @@ makedocs(
             "Examples" => [
                 "Basic Workflows" => "api/examples/basic-workflows.md"
             ],
-            "API Documentation" => "api.md"
+            "Legacy API Documentation" => "api.md"
         ],
         # "Visualization Gallery" => "visualization-gallery.md"  # Has broken refs
     ]

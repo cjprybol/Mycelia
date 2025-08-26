@@ -458,4 +458,4 @@ After completing these basic workflows, you can:
 - [Function Index](../quick-reference/function-index.md) - Complete function reference
 - [Workflow-Specific Guides](../workflows/) - Detailed workflow documentation
 - [Tutorials](../../tutorials.md) - Step-by-step learning materials
-- [Troubleshooting Guide](../../troubleshooting.md) - Common issues and solutions
+- [FAQ](../../faq.md) - Common questions and troubleshooting

@@ -204,7 +204,7 @@ Browse the [complete API documentation](api.md) for detailed function references
 
 If you encounter issues:
 
-1. Check the [troubleshooting guide](troubleshooting.md)
+1. Check the [FAQ](faq.md) for common issues
 2. Browse [example workflows](examples.md)
 3. Report bugs on [GitHub Issues](https://github.com/cjprybol/Mycelia/issues)
 

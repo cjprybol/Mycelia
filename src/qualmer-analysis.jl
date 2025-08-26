@@ -40,6 +40,10 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Get the canonical representation of an amino acid qualmer.
+For amino acid sequences, the qualmer is returned unchanged since
+amino acids do not have reverse complements like DNA/RNA.
 """
 function canonical(qmer::Qualmer{<:Kmers.AAKmer})
     return qmer
@@ -61,6 +65,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate unambiguous DNA qualmers from sequence and quality scores.
+Only includes k-mers that contain unambiguous nucleotides (A, T, G, C).
+Skips k-mers containing ambiguous bases like N.
+
+# Arguments
+- `sequence`: DNA sequence as LongDNA
+- `quality`: Vector of quality scores corresponding to each base
+- `::Val{K}`: K-mer size as a type parameter
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples for each unambiguous k-mer
 """
 function qualmers_unambiguous(sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
     return (
@@ -73,6 +89,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate unambiguous RNA qualmers from sequence and quality scores.
+Only includes k-mers that contain unambiguous nucleotides (A, U, G, C).
+Skips k-mers containing ambiguous bases like N.
+
+# Arguments
+- `sequence`: RNA sequence as LongRNA
+- `quality`: Vector of quality scores corresponding to each base
+- `::Val{K}`: K-mer size as a type parameter
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples for each unambiguous k-mer
 """
 function qualmers_unambiguous(sequence::BioSequences.LongSequence{BioSequences.RNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
     return (
@@ -85,6 +113,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate amino acid qualmers from protein sequence and quality scores.
+For amino acid sequences, all k-mers are considered unambiguous, so this
+falls back to the forward qualmer generation.
+
+# Arguments
+- `sequence`: Protein sequence as LongAA
+- `quality`: Vector of quality scores corresponding to each amino acid
+- `::Val{K}`: K-mer size as a type parameter
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples for each k-mer
 """
 function qualmers_unambiguous(sequence::BioSequences.LongSequence{BioSequences.AminoAcidAlphabet}, quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
     return qualmers_fw(sequence, quality, Val(K))
@@ -92,6 +132,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate canonical DNA qualmers from sequence and quality scores.
+For each k-mer, returns the lexicographically smaller of the k-mer and its
+reverse complement, ensuring consistent representation regardless of strand.
+
+# Arguments
+- `sequence`: DNA sequence as LongDNA
+- `quality`: Vector of quality scores corresponding to each base
+- `::Val{K}`: K-mer size as a type parameter
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples with canonical k-mer representation
 """
 function qualmers_canonical(sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
     return (
@@ -104,6 +156,18 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate canonical amino acid qualmers from protein sequence and quality scores.
+For amino acid sequences, canonical representation is the same as forward
+representation since proteins don't have reverse complements.
+
+# Arguments
+- `sequence`: Protein sequence as LongAA
+- `quality`: Vector of quality scores corresponding to each amino acid
+- `::Val{K}`: K-mer size as a type parameter
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples for each k-mer
 """
 function qualmers_canonical(sequence::BioSequences.LongSequence{BioSequences.AminoAcidAlphabet}, quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
     return qualmers_fw(sequence, quality, Val(K))
@@ -111,6 +175,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate forward qualmers from a FASTQ record.
+Extracts all k-mers in the forward direction with their associated
+quality scores from the FASTQ record.
+
+# Arguments
+- `record`: FASTQ record containing sequence and quality data
+- `k`: K-mer size
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples for each k-mer
 """
 function qualmers_fw(record::FASTX.FASTQ.Record, k::Int)
     sequence = Mycelia.convert_sequence(FASTX.sequence(record))
@@ -120,6 +195,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate canonical qualmers from a FASTQ record.
+Extracts k-mers in canonical representation (lexicographically smaller
+of forward and reverse complement) with their associated quality scores.
+
+# Arguments
+- `record`: FASTQ record containing sequence and quality data
+- `k`: K-mer size
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples with canonical k-mer representation
 """
 function qualmers_canonical(record::FASTX.FASTQ.Record, k::Int)
     sequence = Mycelia.convert_sequence(FASTX.FASTQ.sequence(record))
@@ -129,6 +215,17 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate unambiguous qualmers from a FASTQ record.
+Extracts only k-mers that contain unambiguous nucleotides (no N bases)
+with their associated quality scores.
+
+# Arguments
+- `record`: FASTQ record containing sequence and quality data
+- `k`: K-mer size
+
+# Returns
+- Iterator yielding (Qualmer, position) tuples for each unambiguous k-mer
 """
 function qualmers_unambiguous(record::FASTX.FASTQ.Record, k::Int)
     sequence = Mycelia.convert_sequence(FASTX.sequence(record))

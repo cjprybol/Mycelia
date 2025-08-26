@@ -1,6 +1,25 @@
 # Look back at this for additional inspiration
 # https://github.com/fargolo/TextGraphs.jl
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract all n-grams from a string.
+Returns a vector containing all contiguous substrings of length `n` from the input string.
+
+# Arguments
+- `s`: Input string to extract n-grams from
+- `n`: Length of each n-gram (must be positive)
+
+# Returns
+- `Vector{String}`: All n-grams of length `n` from the string
+
+# Examples
+```julia
+ngrams("hello", 3)  # Returns ["hel", "ell", "llo"]
+ngrams("abcd", 2)   # Returns ["ab", "bc", "cd"]
+```
+"""
 function ngrams(s::AbstractString, n::Int)
     len = lastindex(s)
     count = max(len - n + 1, 0)
@@ -15,6 +34,36 @@ end
 #     [s[i:i+n-1] for i in 1:length(s)-n+1]
 # end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a directed graph from string n-grams with edge and vertex weights.
+Creates a MetaGraph where vertices represent unique n-grams and edges represent
+transitions between consecutive n-grams in the original string.
+
+# Arguments  
+- `s`: Input string to build graph from
+- `n`: N-gram size (length of each substring)
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: Directed graph with:
+  - Vertex labels: String n-grams
+  - Vertex data: Integer counts of n-gram occurrences
+  - Edge data: Integer counts of n-gram transitions
+
+# Details
+The graph construction process:
+1. Extract all n-grams from the string
+2. Count occurrences of each unique n-gram (stored as vertex data)
+3. Count transitions between consecutive n-grams (stored as edge data)
+4. Build a directed graph representing the n-gram sequence structure
+
+# Examples
+```julia
+graph = string_to_ngram_graph(s="abcabc", n=2)
+# Creates graph with vertices "ab", "bc", "ca" and weighted edges
+```
+"""
 function string_to_ngram_graph(; s, n)
     observed_ngrams = ngrams(s, n)
     unique_ngrams = sort(collect(Set(observed_ngrams)))
@@ -48,6 +97,28 @@ function string_to_ngram_graph(; s, n)
     return mg
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create a visual plot of an n-gram graph using GraphPlot.jl.
+Displays the graph structure with vertex labels showing the n-grams.
+
+# Arguments
+- `g`: MetaGraph containing n-gram data (typically from `string_to_ngram_graph`)
+
+# Returns
+- Plot object showing the graph layout with labeled vertices
+
+# Details
+Uses a spring layout algorithm to position vertices and displays n-gram strings
+as vertex labels for easy interpretation of the graph structure.
+
+# Examples
+```julia
+graph = string_to_ngram_graph(s="hello", n=2)
+plot_ngram_graph(graph)  # Shows visual representation
+```
+"""
 function plot_ngram_graph(g)
     GraphPlot.gplot(
         g,
@@ -88,6 +159,24 @@ function collapse_unbranching_paths(graph::MetaGraphsNext.MetaGraph{<:Graphs.Abs
     return collapsed
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find vertices that can be collapsed in graph simplification.
+Identifies vertices with exactly one incoming and one outgoing edge (directed graphs)
+or vertices with degree 2 (undirected graphs) that represent linear path segments.
+
+# Arguments
+- `graph`: MetaGraph to analyze for collapsible vertices
+
+# Returns
+- `Vector{Int}`: Vertex indices that can be safely collapsed
+
+# Details
+For directed graphs: finds vertices with in-degree=1 and out-degree=1
+For undirected graphs: finds vertices with degree=2
+These represent linear segments that can be collapsed to simplify the graph structure.
+"""
 function _find_collapsible_vertices(graph::MetaGraphsNext.MetaGraph{<:Graphs.AbstractSimpleGraph})
     verts = Int[]
     g = MetaGraphsNext.underlying_graph(graph)
