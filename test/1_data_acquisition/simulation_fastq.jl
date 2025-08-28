@@ -160,318 +160,373 @@ Test.@testset "FASTQ simulation" begin
         
         rm(phiX174_assembly_id, recursive=true)
     end
-    # Test.@testset "Nanopore" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-    #     read_simulation_result = Mycelia.simulate_nanopore_reads(fasta = phiX174_assembly_dataset.genome, quantity=10)
-    #     Test.@test isfile(read_simulation_result)
-    #     Test.@test endswith(read_simulation_result, ".fq.gz")
-    # end
-    # Test.@testset "PacBio" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-    #     read_simulation_result = Mycelia.simulate_pacbio_reads(fasta = phiX174_assembly_dataset.genome, quantity=10)
-    #     Test.@test isfile(read_simulation_result)
-    #     Test.@test endswith(read_simulation_result, ".fq.gz")
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
-    # Test.@testset "Nearly Perfect Long Reads" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-    #     read_simulation_result = Mycelia.simulate_nearly_perfect_long_reads(fasta = phiX174_assembly_dataset.genome, quantity="10x")
-    #     Test.@test isfile(read_simulation_result)
-    #     Test.@test endswith(read_simulation_result, ".fq.gz")
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
     
-    # Test.@testset "Nanopore R9.4.1 Reads" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-    #     read_simulation_result = Mycelia.simulate_nanopore_r941_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
-    #     Test.@test isfile(read_simulation_result)
-    #     Test.@test endswith(read_simulation_result, ".fq.gz")
-    #     Test.@test contains(read_simulation_result, "nanopore_r941")
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
+    Test.@testset "Ultima Genomics" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        
+        # Test basic Ultima simulation with default parameters (250bp)
+        read_simulation_result = Mycelia.simulate_ultima_reads(fasta = phiX174_assembly_dataset.genome, coverage=5)
+        Test.@test isfile(read_simulation_result.forward_reads)
+        Test.@test read_simulation_result.reverse_reads === nothing  # Single-end only
+        Test.@test isfile(read_simulation_result.sam)
+        Test.@test isfile(read_simulation_result.error_free_sam)
+        
+        # Verify files are not empty
+        Test.@test filesize(read_simulation_result.forward_reads) > 0
+        Test.@test filesize(read_simulation_result.sam) > 0
+        Test.@test filesize(read_simulation_result.error_free_sam) > 0
+        
+        # Test filename pattern for single-end reads
+        Test.@test contains(read_simulation_result.forward_reads, ".fq.gz")
+        Test.@test contains(read_simulation_result.forward_reads, "ultima")
+        
+        # Test with custom parameters
+        custom_result = Mycelia.simulate_ultima_reads(
+            fasta = phiX174_assembly_dataset.genome, 
+            coverage = 3,
+            read_length = 200,
+            insertion_rate = 0.005,
+            deletion_rate = 0.003,
+            id = "test_ultima"
+        )
+        Test.@test isfile(custom_result.forward_reads)
+        Test.@test custom_result.reverse_reads === nothing
+        Test.@test isfile(custom_result.sam)
+        Test.@test isfile(custom_result.error_free_sam)
+        
+        # Clean up files
+        cleanup_files = [
+            read_simulation_result.forward_reads, 
+            read_simulation_result.sam, 
+            read_simulation_result.error_free_sam,
+            custom_result.forward_reads,
+            custom_result.sam,
+            custom_result.error_free_sam
+        ]
+        for file in cleanup_files
+            if isfile(file)
+                rm(file)
+            end
+        end
+        
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "Very Bad Reads" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-    #     read_simulation_result = Mycelia.simulate_very_bad_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
-    #     Test.@test isfile(read_simulation_result)
-    #     Test.@test endswith(read_simulation_result, ".fq.gz")
-    #     Test.@test contains(read_simulation_result, "very_bad")
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
+    Test.@testset "Nanopore" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_nanopore_reads(fasta = phiX174_assembly_dataset.genome, quantity=10)
+        Test.@test isfile(read_simulation_result)
+        Test.@test endswith(read_simulation_result, ".fq.gz")
+    end
+    Test.@testset "PacBio" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_pacbio_reads(fasta = phiX174_assembly_dataset.genome, quantity=10)
+        Test.@test isfile(read_simulation_result)
+        Test.@test endswith(read_simulation_result, ".fq.gz")
+        rm(phiX174_assembly_id, recursive=true)
+    end
+    Test.@testset "Nearly Perfect Long Reads" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_nearly_perfect_long_reads(fasta = phiX174_assembly_dataset.genome, quantity="10x")
+        Test.@test isfile(read_simulation_result)
+        Test.@test endswith(read_simulation_result, ".fq.gz")
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "Pretty Good Reads" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-    #     read_simulation_result = Mycelia.simulate_pretty_good_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
-    #     Test.@test isfile(read_simulation_result)
-    #     Test.@test endswith(read_simulation_result, ".fq.gz")
-    #     Test.@test contains(read_simulation_result, "pretty_good")
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
+    Test.@testset "Nanopore R9.4.1 Reads" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_nanopore_r941_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        Test.@test isfile(read_simulation_result)
+        Test.@test endswith(read_simulation_result, ".fq.gz")
+        Test.@test contains(read_simulation_result, "nanopore_r941")
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "General Badread Reads" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        
-    #     ## Test with default parameters
-    #     result1 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
-    #     Test.@test isfile(result1)
-    #     Test.@test endswith(result1, ".fq.gz")
-    #     Test.@test contains(result1, "custom")
-        
-    #     ## Test with custom error/qscore models
-    #     result2 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x", 
-    #                                            error_model="nanopore2020", qscore_model="nanopore2020")
-    #     Test.@test isfile(result2)
-    #     Test.@test contains(result2, "nanopore2020")
-        
-    #     ## Test with PacBio-like settings
-    #     result3 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-    #                                            error_model="pacbio2021", qscore_model="pacbio2021", 
-    #                                            identity="30,3", length="20000,10000")
-    #     Test.@test isfile(result3)
-    #     Test.@test contains(result3, "pacbio2021")
-        
-    #     ## Test with random error model
-    #     result4 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-    #                                            error_model="random", qscore_model="ideal")
-    #     Test.@test isfile(result4)
-    #     Test.@test contains(result4, "random")
-        
-    #     ## Test with custom seed for reproducibility
-    #     result5 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-    #                                            seed=12345)
-    #     Test.@test isfile(result5)
-        
-    #     ## Test with high junk/random/chimera rates
-    #     result6 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-    #                                            junk_reads=10.0, random_reads=5.0, chimeras=15.0)
-    #     Test.@test isfile(result6)
-        
-    #     ## Test with small plasmid bias
-    #     result7 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-    #                                            small_plasmid_bias=true)
-    #     Test.@test isfile(result7)
-        
-    #     ## Test with custom adapters
-    #     result8 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-    #                                            start_adapter_seq="ATCGATCG", end_adapter_seq="CGATCGAT")
-    #     Test.@test isfile(result8)
-        
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
+    Test.@testset "Very Bad Reads" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_very_bad_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        Test.@test isfile(read_simulation_result)
+        Test.@test endswith(read_simulation_result, ".fq.gz")
+        Test.@test contains(read_simulation_result, "very_bad")
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "Error Model Coverage Tests" begin
-    #     if isdir(phiX174_assembly_id)
-    #         rm(phiX174_assembly_id, recursive=true)
-    #     end
-    #     phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        
-    #     ## Test all supported error models
-    #     error_models = ["nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random"]
-    #     for error_model in error_models
-    #         result = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, 
-    #                                               quantity="2x", error_model=error_model)
-    #         Test.@test isfile(result)
-    #         Test.@test contains(result, error_model)
-    #     end
-        
-    #     ## Test all supported qscore models
-    #     qscore_models = ["nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random", "ideal"]
-    #     for qscore_model in qscore_models
-    #         result = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome,
-    #                                               quantity="2x", qscore_model=qscore_model)
-    #         Test.@test isfile(result)
-    #         Test.@test contains(result, qscore_model)
-    #     end
-        
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
+    Test.@testset "Pretty Good Reads" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
+        read_simulation_result = Mycelia.simulate_pretty_good_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        Test.@test isfile(read_simulation_result)
+        Test.@test endswith(read_simulation_result, ".fq.gz")
+        Test.@test contains(read_simulation_result, "pretty_good")
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "Observe Functions" begin
-    #     ## Test observe() with FASTA record
-    #     test_seq = BioSequences.randdnaseq(100)
-    #     test_record = FASTX.FASTA.Record("test_seq", test_seq)
+    Test.@testset "General Badread Reads" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
         
-    #     ## Test with no errors
-    #     observed_record = Mycelia.observe(test_record, error_rate=0.0)
-    #     Test.@test isa(observed_record, FASTX.FASTQ.Record)
-    #     Test.@test FASTX.sequence(BioSequences.LongDNA{4}, observed_record) == test_seq
-    #     Test.@test length(FASTX.quality(observed_record)) == length(test_seq)
+        ## Test with default parameters
+        result1 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        Test.@test isfile(result1)
+        Test.@test endswith(result1, ".fq.gz")
+        Test.@test contains(result1, "custom")
         
-    #     ## Test with errors
-    #     observed_with_errors = Mycelia.observe(test_record, error_rate=0.1)
-    #     Test.@test isa(observed_with_errors, FASTX.FASTQ.Record)
-    #     Test.@test length(FASTX.quality(observed_with_errors)) > 0
+        ## Test with custom error/qscore models
+        result2 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x", 
+                                               error_model="nanopore2020", qscore_model="nanopore2020")
+        Test.@test isfile(result2)
+        Test.@test contains(result2, "nanopore2020")
         
-    #     ## Test observe() with BioSequence directly
-    #     dna_seq = BioSequences.randdnaseq(50)
-    #     observed_seq, quality_scores = Mycelia.observe(dna_seq, error_rate=0.0, tech=:illumina)
-    #     Test.@test isa(observed_seq, BioSequences.LongDNA{4})
-    #     Test.@test length(quality_scores) == length(observed_seq)
-    #     Test.@test all(q -> q >= 20, quality_scores) ## Illumina should have reasonable quality
+        ## Test with PacBio-like settings
+        result3 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
+                                               error_model="pacbio2021", qscore_model="pacbio2021", 
+                                               identity="30,3", length="20000,10000")
+        Test.@test isfile(result3)
+        Test.@test contains(result3, "pacbio2021")
         
-    #     ## Test different technologies
-    #     for tech in [:illumina, :nanopore, :pacbio, :ultima]
-    #         obs_seq, quals = Mycelia.observe(dna_seq, error_rate=0.01, tech=tech)
-    #         Test.@test isa(obs_seq, BioSequences.LongDNA{4})
-    #         Test.@test length(quals) > 0
-    #     end
+        ## Test with random error model
+        result4 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
+                                               error_model="random", qscore_model="ideal")
+        Test.@test isfile(result4)
+        Test.@test contains(result4, "random")
         
-    #     ## Test RNA sequence
-    #     rna_seq = BioSequences.randrnaseq(30)
-    #     observed_rna, rna_quals = Mycelia.observe(rna_seq, error_rate=0.01, tech=:illumina)
-    #     Test.@test isa(observed_rna, BioSequences.LongRNA{4})
+        ## Test with custom seed for reproducibility
+        result5 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
+                                               seed=12345)
+        Test.@test isfile(result5)
         
-    #     ## Test amino acid sequence
-    #     aa_seq = BioSequences.randaaseq(20)
-    #     observed_aa, aa_quals = Mycelia.observe(aa_seq, error_rate=0.01, tech=:illumina)
-    #     Test.@test isa(observed_aa, BioSequences.LongAA)
-    # end
+        ## Test with high junk/random/chimera rates
+        result6 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
+                                               junk_reads=10.0, random_reads=5.0, chimeras=15.0)
+        Test.@test isfile(result6)
+        
+        ## Test with small plasmid bias
+        result7 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
+                                               small_plasmid_bias=true)
+        Test.@test isfile(result7)
+        
+        ## Test with custom adapters
+        result8 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
+                                               start_adapter_seq="ATCGATCG", end_adapter_seq="CGATCGAT")
+        Test.@test isfile(result8)
+        
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "String Mutation Functions" begin
-    #     ## Test mutate_string with default alphabet
-    #     test_string = "ACGTACGT"
-    #     mutated = Mycelia.mutate_string(test_string, error_rate=0.5)
-    #     Test.@test isa(mutated, String)
-    #     Test.@test length(mutated) >= 1 ## Should not be empty
+    Test.@testset "Error Model Coverage Tests" begin
+        if isdir(phiX174_assembly_id)
+            rm(phiX174_assembly_id, recursive=true)
+        end
+        phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
         
-    #     ## Test with custom alphabet
-    #     custom_alphabet = ['A', 'T', 'G', 'C']
-    #     mutated_custom = Mycelia.mutate_string(test_string, alphabet=custom_alphabet, error_rate=0.3)
-    #     Test.@test isa(mutated_custom, String)
+        ## Test all supported error models
+        error_models = ["nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random"]
+        for error_model in error_models
+            result = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, 
+                                                  quantity="2x", error_model=error_model)
+            Test.@test isfile(result)
+            Test.@test contains(result, error_model)
+        end
         
-    #     ## Test with zero error rate (should return identical string)
-    #     no_errors = Mycelia.mutate_string(test_string, error_rate=0.0)
-    #     Test.@test no_errors == test_string
-    # end
+        ## Test all supported qscore models
+        qscore_models = ["nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random", "ideal"]
+        for qscore_model in qscore_models
+            result = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome,
+                                                  quantity="2x", qscore_model=qscore_model)
+            Test.@test isfile(result)
+            Test.@test contains(result, qscore_model)
+        end
+        
+        rm(phiX174_assembly_id, recursive=true)
+    end
     
-    # Test.@testset "FASTQ Generation Functions" begin
-    #     ## Test generate_test_fastq_data
-    #     temp_fastq = tempname() * ".fq"
-    #     Mycelia.generate_test_fastq_data(10, 100, temp_fastq)
-    #     Test.@test isfile(temp_fastq)
+    Test.@testset "Observe Functions" begin
+        ## Test observe() with FASTA record
+        test_seq = BioSequences.randdnaseq(100)
+        test_record = FASTX.FASTA.Record("test_seq", test_seq)
         
-    #     ## Verify FASTQ content
-    #     record_count = 0
-    #     for record in FASTX.FASTQ.Reader(open(temp_fastq))
-    #         record_count += 1
-    #         Test.@test length(FASTX.sequence(record)) == 100
-    #         Test.@test length(FASTX.quality(record)) == 100
-    #     end
-    #     Test.@test record_count == 10
-    #     rm(temp_fastq)
+        ## Test with no errors
+        observed_record = Mycelia.observe(test_record, error_rate=0.0)
+        Test.@test isa(observed_record, FASTX.FASTQ.Record)
+        Test.@test FASTX.sequence(BioSequences.LongDNA{4}, observed_record) == test_seq
+        Test.@test length(FASTX.quality(observed_record)) == length(test_seq)
         
-    #     ## Test generate_paired_end_reads
-    #     ref_seq = BioSequences.randdnaseq(1000)
-    #     reads_1, reads_2 = Mycelia.generate_paired_end_reads(ref_seq, 5, 100, 300, error_rate=0.01)
-    #     Test.@test length(reads_1) == length(reads_2)
-    #     Test.@test length(reads_1) > 0
-    #     Test.@test all(r -> isa(r, BioSequences.LongDNA{4}), reads_1)
-    #     Test.@test all(r -> isa(r, BioSequences.LongDNA{4}), reads_2)
+        ## Test with errors
+        observed_with_errors = Mycelia.observe(test_record, error_rate=0.1)
+        Test.@test isa(observed_with_errors, FASTX.FASTQ.Record)
+        Test.@test length(FASTX.quality(observed_with_errors)) > 0
         
-    #     ## Test introduce_sequencing_errors
-    #     test_seq = BioSequences.randdnaseq(100)
-    #     error_seq = Mycelia.introduce_sequencing_errors(test_seq, 0.1)
-    #     Test.@test isa(error_seq, BioSequences.LongDNA{4})
-    #     ## With 10% error rate, sequences should likely be different
-    #     Test.@test length(error_seq) >= 50 ## Should not be too short
+        ## Test observe() with BioSequence directly
+        dna_seq = BioSequences.randdnaseq(50)
+        observed_seq, quality_scores = Mycelia.observe(dna_seq, error_rate=0.0, tech=:illumina)
+        Test.@test isa(observed_seq, BioSequences.LongDNA{4})
+        Test.@test length(quality_scores) == length(observed_seq)
+        Test.@test all(q -> q >= 20, quality_scores) ## Illumina should have reasonable quality
         
-    #     ## Test save_reads_as_fastq
-    #     test_reads = [BioSequences.randdnaseq(50) for _ in 1:5]
-    #     temp_output = tempname() * ".fq"
-    #     Mycelia.save_reads_as_fastq(test_reads, temp_output, 25)
-    #     Test.@test isfile(temp_output)
+        ## Test different technologies
+        for tech in [:illumina, :nanopore, :pacbio, :ultima]
+            obs_seq, quals = Mycelia.observe(dna_seq, error_rate=0.01, tech=tech)
+            Test.@test isa(obs_seq, BioSequences.LongDNA{4})
+            Test.@test length(quals) > 0
+        end
         
-    #     ## Verify saved FASTQ
-    #     saved_count = 0
-    #     for record in FASTX.FASTQ.Reader(open(temp_output))
-    #         saved_count += 1
-    #         Test.@test length(FASTX.sequence(record)) == 50
-    #     end
-    #     Test.@test saved_count == 5
-    #     rm(temp_output)
-    # end
+        ## Test RNA sequence
+        rna_seq = BioSequences.randrnaseq(30)
+        observed_rna, rna_quals = Mycelia.observe(rna_seq, error_rate=0.01, tech=:illumina)
+        Test.@test isa(observed_rna, BioSequences.LongRNA{4})
+        
+        ## Test amino acid sequence
+        aa_seq = BioSequences.randaaseq(20)
+        observed_aa, aa_quals = Mycelia.observe(aa_seq, error_rate=0.01, tech=:illumina)
+        Test.@test isa(observed_aa, BioSequences.LongAA)
+    end
     
-    # Test.@testset "Sequence Generation Functions" begin
-    #     ## Test random_fasta_record with different molecular types
-    #     for moltype in [:DNA, :RNA, :AA]
-    #         record = Mycelia.random_fasta_record(moltype=moltype, seed=12345, L=100)
-    #         Test.@test isa(record, FASTX.FASTA.Record)
-    #         Test.@test length(FASTX.sequence(record)) == 100
+    Test.@testset "String Mutation Functions" begin
+        ## Test mutate_string with default alphabet
+        test_string = "ACGTACGT"
+        mutated = Mycelia.mutate_string(test_string, error_rate=0.5)
+        Test.@test isa(mutated, String)
+        Test.@test length(mutated) >= 1 ## Should not be empty
+        
+        ## Test with custom alphabet
+        custom_alphabet = ['A', 'T', 'G', 'C']
+        mutated_custom = Mycelia.mutate_string(test_string, alphabet=custom_alphabet, error_rate=0.3)
+        Test.@test isa(mutated_custom, String)
+        
+        ## Test with zero error rate (should return identical string)
+        no_errors = Mycelia.mutate_string(test_string, error_rate=0.0)
+        Test.@test no_errors == test_string
+    end
+    
+    Test.@testset "FASTQ Generation Functions" begin
+        ## Test generate_test_fastq_data
+        temp_fastq = tempname() * ".fq"
+        Mycelia.generate_test_fastq_data(10, 100, temp_fastq)
+        Test.@test isfile(temp_fastq)
+        
+        ## Verify FASTQ content
+        record_count = 0
+        for record in FASTX.FASTQ.Reader(open(temp_fastq))
+            record_count += 1
+            Test.@test length(FASTX.sequence(record)) == 100
+            Test.@test length(FASTX.quality(record)) == 100
+        end
+        Test.@test record_count == 10
+        rm(temp_fastq)
+        
+        ## Test generate_paired_end_reads
+        ref_seq = BioSequences.randdnaseq(1000)
+        reads_1, reads_2 = Mycelia.generate_paired_end_reads(ref_seq, 5, 100, 300, error_rate=0.01)
+        Test.@test length(reads_1) == length(reads_2)
+        Test.@test length(reads_1) > 0
+        Test.@test all(r -> isa(r, BioSequences.LongDNA{4}), reads_1)
+        Test.@test all(r -> isa(r, BioSequences.LongDNA{4}), reads_2)
+        
+        ## Test introduce_sequencing_errors
+        test_seq = BioSequences.randdnaseq(100)
+        error_seq = Mycelia.introduce_sequencing_errors(test_seq, 0.1)
+        Test.@test isa(error_seq, BioSequences.LongDNA{4})
+        ## With 10% error rate, sequences should likely be different
+        Test.@test length(error_seq) >= 50 ## Should not be too short
+        
+        ## Test save_reads_as_fastq
+        test_reads = [BioSequences.randdnaseq(50) for _ in 1:5]
+        temp_output = tempname() * ".fq"
+        Mycelia.save_reads_as_fastq(test_reads, temp_output, 25)
+        Test.@test isfile(temp_output)
+        
+        ## Verify saved FASTQ
+        saved_count = 0
+        for record in FASTX.FASTQ.Reader(open(temp_output))
+            saved_count += 1
+            Test.@test length(FASTX.sequence(record)) == 50
+        end
+        Test.@test saved_count == 5
+        rm(temp_output)
+    end
+    
+    Test.@testset "Sequence Generation Functions" begin
+        ## Test random_fasta_record with different molecular types
+        for moltype in [:DNA, :RNA, :AA]
+            record = Mycelia.random_fasta_record(moltype=moltype, seed=12345, L=100)
+            Test.@test isa(record, FASTX.FASTA.Record)
+            Test.@test length(FASTX.sequence(record)) == 100
             
-    #         if moltype == :DNA
-    #             Test.@test isa(FASTX.sequence(BioSequences.LongDNA{4}, record), BioSequences.LongDNA{4})
-    #         elseif moltype == :RNA
-    #             Test.@test isa(FASTX.sequence(BioSequences.LongRNA{4}, record), BioSequences.LongRNA{4})
-    #         elseif moltype == :AA
-    #             Test.@test isa(FASTX.sequence(BioSequences.LongAA, record), BioSequences.LongAA)
-    #         end
-    #     end
+            if moltype == :DNA
+                Test.@test isa(FASTX.sequence(BioSequences.LongDNA{4}, record), BioSequences.LongDNA{4})
+            elseif moltype == :RNA
+                Test.@test isa(FASTX.sequence(BioSequences.LongRNA{4}, record), BioSequences.LongRNA{4})
+            elseif moltype == :AA
+                Test.@test isa(FASTX.sequence(BioSequences.LongAA, record), BioSequences.LongAA)
+            end
+        end
         
-    #     ## Test generate_test_sequences
-    #     sequences = Mycelia.generate_test_sequences(500, 3)
-    #     Test.@test length(sequences) == 3
-    #     Test.@test all(s -> isa(s, BioSequences.LongDNA{4}), sequences)
-    #     Test.@test all(s -> length(s) == 500, sequences)
+        ## Test generate_test_sequences
+        sequences = Mycelia.generate_test_sequences(500, 3)
+        Test.@test length(sequences) == 3
+        Test.@test all(s -> isa(s, BioSequences.LongDNA{4}), sequences)
+        Test.@test all(s -> length(s) == 500, sequences)
         
-    #     ## Test generate_test_genome_with_genes
-    #     genome, gene_positions = Mycelia.generate_test_genome_with_genes(10000, 0.05)
-    #     Test.@test isa(genome, BioSequences.LongDNA{4})
-    #     Test.@test length(genome) == 10000
-    #     Test.@test isa(gene_positions, Vector)
-    #     Test.@test all(pos -> isa(pos, Tuple{Int,Int}), gene_positions)
-    #     Test.@test all(pos -> pos[1] <= pos[2], gene_positions) ## Start <= end
+        ## Test generate_test_genome_with_genes
+        genome, gene_positions = Mycelia.generate_test_genome_with_genes(10000, 0.05)
+        Test.@test isa(genome, BioSequences.LongDNA{4})
+        Test.@test length(genome) == 10000
+        Test.@test isa(gene_positions, Vector)
+        Test.@test all(pos -> isa(pos, Tuple{Int,Int}), gene_positions)
+        Test.@test all(pos -> pos[1] <= pos[2], gene_positions) ## Start <= end
         
-    #     ## Test save_genome_as_fasta
-    #     temp_fasta = tempname() * ".fa"
-    #     Mycelia.save_genome_as_fasta(genome, temp_fasta)
-    #     Test.@test isfile(temp_fasta)
+        ## Test save_genome_as_fasta
+        temp_fasta = tempname() * ".fa"
+        Mycelia.save_genome_as_fasta(genome, temp_fasta)
+        Test.@test isfile(temp_fasta)
         
-    #     ## Verify saved genome
-    #     saved_genome = nothing
-    #     for record in FASTX.FASTA.Reader(open(temp_fasta))
-    #         saved_genome = FASTX.sequence(BioSequences.LongDNA{4}, record)
-    #         break
-    #     end
-    #     Test.@test saved_genome == genome
-    #     rm(temp_fasta)
-    # end
+        ## Verify saved genome
+        saved_genome = nothing
+        for record in FASTX.FASTA.Reader(open(temp_fasta))
+            saved_genome = FASTX.sequence(BioSequences.LongDNA{4}, record)
+            break
+        end
+        Test.@test saved_genome == genome
+        rm(temp_fasta)
+    end
     
-    # Test.@testset "Quality Score Functions" begin
-    #     ## Test get_correct_quality for different technologies
-    #     for tech in [:illumina, :nanopore, :pacbio, :ultima]
-    #         quality = Mycelia.get_correct_quality(tech, 1, 100)
-    #         Test.@test isa(quality, Int)
-    #         Test.@test quality >= 5 ## Reasonable minimum quality
+    Test.@testset "Quality Score Functions" begin
+        ## Test get_correct_quality for different technologies
+        for tech in [:illumina, :nanopore, :pacbio, :ultima]
+            quality = Mycelia.get_correct_quality(tech, 1, 100)
+            Test.@test isa(quality, Int)
+            Test.@test quality >= 5 ## Reasonable minimum quality
             
-    #         error_quality = Mycelia.get_error_quality(tech)
-    #         Test.@test isa(error_quality, Int)
-    #         Test.@test error_quality >= 5 ## Reasonable minimum quality
-    #         ## Error quality should generally be lower than correct quality
-    #         Test.@test error_quality <= quality + 10 ## Allow some overlap
-    #     end
-    # end
-    # if isdir(phiX174_assembly_id)
-    #     rm(phiX174_assembly_id, recursive=true)
-    # end
+            error_quality = Mycelia.get_error_quality(tech)
+            Test.@test isa(error_quality, Int)
+            Test.@test error_quality >= 5 ## Reasonable minimum quality
+            ## Error quality should generally be lower than correct quality
+            Test.@test error_quality <= quality + 10 ## Allow some overlap
+        end
+    end
+    if isdir(phiX174_assembly_id)
+        rm(phiX174_assembly_id, recursive=true)
+    end
 end

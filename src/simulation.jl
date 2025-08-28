@@ -444,6 +444,118 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Simulate Ultima Genomics-like reads using ART with custom error profiles.
+
+Uses MiSeq v3 profile as a base with custom insertion/deletion rates to mimic Ultima Genomics sequencing characteristics.
+The Ultima platform produces single-end reads with specific error patterns including higher indel rates compared to traditional Illumina systems.
+
+# Arguments
+- `fasta::String`: Path to input reference FASTA file
+- `coverage::Union{Nothing,Number}=30`: Fold coverage (default: 30x as recommended for Ultima)
+- `read_count::Union{Nothing,Int}=nothing`: Alternative to coverage - total number of reads
+- `read_length::Int=250`: Read length in base pairs (default: 250bp for Ultima long reads)
+- `insertion_rate::Float64=0.004`: Insertion error rate (4 per 1000 bases)
+- `deletion_rate::Float64=0.004`: Deletion error rate (4 per 1000 bases)
+- `id::String="sim_ultima"`: Read group identifier
+
+# Returns
+Named tuple with paths to generated files: (forward_reads, reverse_reads=nothing, sam, error_free_sam)
+
+# Notes
+- Produces single-end reads only (reverse_reads will be nothing)
+- Uses MSv3 (MiSeq v3) profile as base since it supports longer reads up to 250bp
+- Higher indel rates (0.4% each) reflect Ultima's characteristic error profile
+- Generates both regular and error-free alignment files for validation
+
+See also: `simulate_illumina_reads`, `simulate_illumina_ns50_75bp`
+"""
+function simulate_ultima_reads(;fasta::String, 
+                              coverage::Union{Nothing,Number}=30,
+                              read_count::Union{Nothing,Int}=nothing,
+                              read_length::Int=250,
+                              insertion_rate::Float64=0.004,
+                              deletion_rate::Float64=0.004,
+                              id::String="sim_ultima",
+                              kwargs...)
+    
+    # Ensure ART is available via Bioconda
+    Mycelia.add_bioconda_env("art")
+    
+    # Generate output base name
+    outbase = isempty(get(kwargs, :outbase, "")) ? "$(fasta).ultima_$(coverage !== nothing ? "$(coverage)x" : "rcount_$(read_count)").art" : kwargs[:outbase]
+    
+    # Build command for Ultima-like simulation (single-end only)
+    if read_count !== nothing
+        full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+            --errfree \
+            --noALN \
+            --seqSys MSv3 \
+            --len $(read_length) \
+            --rndSeed $(get(kwargs, :rndSeed, Mycelia.current_unix_datetime())) \
+            --rcount $(read_count) \
+            --id $(id) \
+            -ir $(insertion_rate) \
+            -dr $(deletion_rate) \
+            --in $(fasta) \
+            --out $(outbase)`
+    elseif coverage !== nothing  
+        full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+            --errfree \
+            --noALN \
+            --seqSys MSv3 \
+            --len $(read_length) \
+            --rndSeed $(get(kwargs, :rndSeed, Mycelia.current_unix_datetime())) \
+            --fcov $(coverage) \
+            --id $(id) \
+            -ir $(insertion_rate) \
+            -dr $(deletion_rate) \
+            --in $(fasta) \
+            --out $(outbase)`
+    else
+        error("Either `coverage` or `read_count` must be provided.")
+    end
+
+    # Define expected output files (single-end for Ultima)
+    forward_fq = "$(outbase).fq"
+    forward_gz = forward_fq * ".gz"
+    samfile = outbase * ".sam"
+    samfile_gz = samfile * ".gz"
+    error_free_samfile = outbase * "_errFree.sam"
+    error_free_samfile_gz = error_free_samfile * ".gz"
+
+    # Check if all expected files exist
+    expected_files = [forward_gz, samfile_gz, error_free_samfile_gz]
+    if !all(isfile.(expected_files))
+        @info "Running ART with command: $(full_cmd)"
+        @time run(full_cmd)
+    
+        # Process output FASTQ file
+        @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
+        run(`gzip $(forward_fq)`)
+        @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
+    
+        # Process SAM files
+        @assert isfile(samfile)
+        if !isfile(samfile_gz)
+            run(`gzip $(samfile)`)
+            @assert isfile(samfile_gz)
+        end
+        
+        @assert isfile(error_free_samfile)
+        if !isfile(error_free_samfile_gz)
+            run(`gzip $(error_free_samfile)`)
+            @assert isfile(error_free_samfile_gz)
+        end
+    else
+        @info "All files already present, returning existing paths..."
+    end
+
+    return (forward_reads = forward_gz, reverse_reads = nothing, sam = samfile_gz, error_free_sam = error_free_samfile_gz)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Simulate PacBio HiFi reads using optimized Badread settings.
 
 Uses PacBio 2021 error and quality score models with identity settings optimized for HiFi reads.
