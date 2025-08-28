@@ -140,8 +140,19 @@ to enable amplicon mode, and to optionally generate a zero-error SAM file.
 - `read_length::Int`: Length of reads to simulate (default: 150).
 - `mflen::Int`: Mean fragment length for paired-end simulations (default: 500).
 - `sdev::Int`: Standard deviation of fragment lengths (default: 10).
-- `seqSys::String`: Illumina sequencing system ID (e.g. "HS25" for HiSeq 2500) (default: "HS25").
-- `paired::Bool`: Whether to simulate paired-end reads (default: true).
+- `seqSys::String`: Illumina sequencing system ID (default: "HS25"). Available ART profiles:
+  - `"GA1"`: Genome Analyzer I (max length: 36bp or 44bp)
+  - `"GA2"`: Genome Analyzer II (max length: 50bp or 75bp)  
+  - `"HS10"`: HiSeq 1000 (max length: 100bp)
+  - `"HS20"`: HiSeq 2000 (max length: 100bp)
+  - `"HS25"`: HiSeq 2500 (max length: 125bp or 150bp)
+  - `"HSXn"`: HiSeqX v2.5 PCR free (max length: 150bp)
+  - `"HSXt"`: HiSeqX v2.5 TruSeq (max length: 150bp)
+  - `"MSv1"`: MiSeq v1 (max length: 250bp)
+  - `"MSv3"`: MiSeq v3 (max length: 250bp)
+  - `"MinS"`: MiniSeq TruSeq (max length: 50bp)
+  - `"NS50"`: NextSeq 500 v2 (max length: 75bp)
+- `paired::Bool`: Whether to simulate paired-end reads (default: true). Some systems like MinS only support single-end.
 - `amplicon::Bool`: Enable amplicon sequencing simulation mode (default: false).
 - `errfree::Bool`: Generate an extra SAM file with zero sequencing errors (default: false).
 - `rndSeed::Union{Nothing,Int}`: Optional seed for reproducibility (default: nothing).
@@ -165,7 +176,7 @@ Requires ART simulator (installed via Bioconda) and the Mycelia environment help
 
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_pacbio_reads`
 """
-function simulate_illumina_paired_reads(;in_fasta::String,
+function simulate_illumina_reads(;fasta::String,
     coverage::Union{Nothing, Number}=nothing,
     read_count::Union{Nothing, Int}=nothing,
     outbase::String = "",
@@ -175,6 +186,7 @@ function simulate_illumina_paired_reads(;in_fasta::String,
     seqSys::String = "HS25",
     amplicon::Bool = false,
     errfree::Bool = true,
+    paired::Bool = true,
     rndSeed::Int = current_unix_datetime()
     )
 
@@ -184,45 +196,73 @@ function simulate_illumina_paired_reads(;in_fasta::String,
     # Determine read count or coverage
     if read_count !== nothing
         if isempty(outbase)
-            outbase = "$(in_fasta).rcount_$(read_count).art"
+            outbase = "$(fasta).rcount_$(read_count).art"
         end
-        full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
-            --paired \
-            --errfree \
-            --noALN \
-            --seqSys $(seqSys) \
-            --len $(read_length) \
-            --mflen $(mflen) \
-            --sdev $(sdev) \
-            --rndSeed $(rndSeed) \
-            --rcount $(read_count) \
-            --in $(in_fasta) \
-            --out $(outbase)`
+        # Build command based on pairing mode
+        if paired
+            full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+                --paired \
+                --errfree \
+                --noALN \
+                --seqSys $(seqSys) \
+                --len $(read_length) \
+                --mflen $(mflen) \
+                --sdev $(sdev) \
+                --rndSeed $(rndSeed) \
+                --rcount $(read_count) \
+                --in $(fasta) \
+                --out $(outbase)`
+        else
+            full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+                --errfree \
+                --noALN \
+                --seqSys $(seqSys) \
+                --len $(read_length) \
+                --rndSeed $(rndSeed) \
+                --rcount $(read_count) \
+                --in $(fasta) \
+                --out $(outbase)`
+        end
     elseif coverage !== nothing
         if isempty(outbase)
-            outbase = "$(in_fasta).fcov_$(coverage)x.art"
+            outbase = "$(fasta).fcov_$(coverage)x.art"
         end
-        full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
-            --paired \
-            --errfree \
-            --noALN \
-            --seqSys $(seqSys) \
-            --len $(read_length) \
-            --mflen $(mflen) \
-            --sdev $(sdev) \
-            --rndSeed $(rndSeed) \
-            --fcov $(coverage) \
-            --in $(in_fasta) \
-            --out $(outbase)`
+        # Build command based on pairing mode
+        if paired
+            full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+                --paired \
+                --errfree \
+                --noALN \
+                --seqSys $(seqSys) \
+                --len $(read_length) \
+                --mflen $(mflen) \
+                --sdev $(sdev) \
+                --rndSeed $(rndSeed) \
+                --fcov $(coverage) \
+                --in $(fasta) \
+                --out $(outbase)`
+        else
+            full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
+                --errfree \
+                --noALN \
+                --seqSys $(seqSys) \
+                --len $(read_length) \
+                --rndSeed $(rndSeed) \
+                --fcov $(coverage) \
+                --in $(fasta) \
+                --out $(outbase)`
+        end
     else
         error("Either `coverage` or `read_count` must be provided.")
     end
 
-    forward_fq = "$(outbase)1.fq"
+    # For single-end, ART outputs to outbase.fq, for paired-end it's outbase1.fq  
+    forward_fq = paired ? "$(outbase)1.fq" : "$(outbase).fq"
     forward_gz = forward_fq * ".gz"
     
-    reverse_fq = "$(outbase)2.fq"
-    reverse_gz = reverse_fq * ".gz"
+    # For paired-end, we expect a reverse file
+    reverse_fq = paired ? "$(outbase)2.fq" : ""
+    reverse_gz = paired ? (reverse_fq * ".gz") : ""
     
     samfile = outbase * ".sam"
     samfile_gz = samfile * ".gz"
@@ -230,7 +270,12 @@ function simulate_illumina_paired_reads(;in_fasta::String,
     error_free_samfile = outbase * "_errFree.sam"
     error_free_samfile_gz = error_free_samfile * ".gz"
 
-    if !(isfile(forward_gz) && isfile(reverse_gz) && isfile(samfile_gz) && isfile(error_free_samfile_gz))
+    # Check if all expected files exist
+    expected_files = [forward_gz, samfile_gz, error_free_samfile_gz]
+    if paired
+        push!(expected_files, reverse_gz)
+    end
+    if !all(isfile.(expected_files))
         @info "Running ART with command: $(full_cmd)"
         @time run(full_cmd)
     
@@ -242,9 +287,12 @@ function simulate_illumina_paired_reads(;in_fasta::String,
         run(`gzip $(forward_fq)`)
         @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
     
-        @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
-        run(`gzip $(reverse_fq)`)
-        @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
+        # Only process reverse reads if paired-end
+        if paired
+            @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
+            run(`gzip $(reverse_fq)`)
+            @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
+        end
     
         #  SAM Alignment File:
     
@@ -263,31 +311,161 @@ function simulate_illumina_paired_reads(;in_fasta::String,
         @info "All files already present, returning existing paths..."
     end
 
-    return (forward_reads = forward_gz, reverse_reads = reverse_gz, sam = samfile_gz, error_free_sam = error_free_samfile_gz)
+    return (forward_reads = forward_gz, reverse_reads = paired ? reverse_gz : nothing, sam = samfile_gz, error_free_sam = error_free_samfile_gz)
+end
+
+# Individual ART Illumina profile functions with specific parameters
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using GA1 Genome Analyzer I with 36bp read length.
+"""
+function simulate_illumina_ga1_36bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="GA1", read_length=36, kwargs...)
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Simulate PacBio HiFi reads using the Badread error model.
+Simulate Illumina reads using GA1 Genome Analyzer I with 44bp read length.
+"""
+function simulate_illumina_ga1_44bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="GA1", read_length=44, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using GA2 Genome Analyzer II with 50bp read length.
+"""
+function simulate_illumina_ga2_50bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="GA2", read_length=50, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using GA2 Genome Analyzer II with 75bp read length.
+"""
+function simulate_illumina_ga2_75bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="GA2", read_length=75, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using HS10 HiSeq 1000 with 100bp read length.
+"""
+function simulate_illumina_hs10_100bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="HS10", read_length=100, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using HS20 HiSeq 2000 with 100bp read length.
+"""
+function simulate_illumina_hs20_100bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="HS20", read_length=100, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using HS25 HiSeq 2500 with 125bp read length.
+"""
+function simulate_illumina_hs25_125bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="HS25", read_length=125, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using HS25 HiSeq 2500 with 150bp read length.
+"""
+function simulate_illumina_hs25_150bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="HS25", read_length=150, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using HSXn HiSeqX v2.5 PCR free with 150bp read length.
+"""
+function simulate_illumina_hsxn_150bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="HSXn", read_length=150, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using HSXt HiSeqX v2.5 TruSeq with 150bp read length.
+"""
+function simulate_illumina_hsxt_150bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="HSXt", read_length=150, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using MSv1 MiSeq v1 with 250bp read length.
+"""
+function simulate_illumina_msv1_250bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="MSv1", read_length=250, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using MSv3 MiSeq v3 with 250bp read length.
+"""
+function simulate_illumina_msv3_250bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="MSv3", read_length=250, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using MinS MiniSeq TruSeq with 50bp read length.
+"""
+function simulate_illumina_mins_50bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="MinS", read_length=50, paired=false, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate Illumina reads using NS50 NextSeq 500 v2 with 75bp read length.
+"""
+function simulate_illumina_ns50_75bp(;fasta::String, coverage::Union{Nothing,Number}=nothing, read_count::Union{Nothing,Int}=nothing, kwargs...)
+    return simulate_illumina_reads(;fasta=fasta, coverage=coverage, read_count=read_count, seqSys="NS50", read_length=75, kwargs...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate PacBio HiFi reads using optimized Badread settings.
+
+Uses PacBio 2021 error and quality score models with identity settings optimized for HiFi reads.
+Follows the recommended PacBio HiFi simulation parameters from the Badread documentation.
 
 # Arguments
 - `fasta::String`: Path to input FASTA file containing reference sequence
-- `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000") - NOT TOTAL READS
-- `outfile::String`: Output filepath for simulated reads. Defaults to input filename with ".badread.pacbio2021.\${quantity}.fq.gz" suffix
+- `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000")
+- `outfile::String`: Output filepath for simulated reads. Defaults to input filename with PacBio HiFi suffix
 
 # Returns
 - `String`: Path to the generated output file
 
 # Notes
-- Requires Badread tool from Bioconda
-- Uses PacBio 2021 error and quality score models
+- Uses pacbio2021 error and quality score models
+- Sets identity to 30,3 for HiFi-appropriate accuracy
 - Average read length ~15kb
 - Output is gzipped FASTQ format
 
-See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_short_reads`
+See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_badread_reads`
 """
-function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio2021.$(quantity).fq.gz"))
+function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"))
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
@@ -301,7 +479,10 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Simulate Oxford Nanopore sequencing reads using the Badread tool with 2023 error models.
+Simulate Oxford Nanopore R10.4.1 sequencing reads using Badread's default settings.
+
+Badread's default settings correspond to Oxford Nanopore R10.4.1 reads of mediocre quality.
+Uses nanopore2023 error and quality models with default identity and length distributions.
 
 # Arguments
 - `fasta::String`: Path to input reference FASTA file
@@ -311,13 +492,12 @@ Simulate Oxford Nanopore sequencing reads using the Badread tool with 2023 error
 # Returns
 - `String`: Path to the generated output FASTQ file
 
-See also: `simulate_pacbio_reads`, `simulate_nearly_perfect_long_reads`, `simulate_short_reads`
+See also: `simulate_pacbio_reads`, `simulate_nanopore_r941_reads`, `simulate_badread_reads`
 """
-function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore2023.$(quantity).fq.gz"))
-# badread simulate --reference ref.fasta --quantity 50x | gzip > reads.fastq.gz
+function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"))
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2023 --qscore_model nanopore2023 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, `gzip`)
         run(pipeline(p, outfile))
     else
         @info "$(outfile) already exists, skipping..."
@@ -331,26 +511,258 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Simulate high-quality long reads with minimal errors using Badread.
 
 # Arguments
-- `reference::String`: Path to reference FASTA file
+- `fasta::String`: Path to reference FASTA file
 - `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000")
 - `length_mean::Int=40000`: Mean read length
 - `length_sd::Int=20000`: Standard deviation of read length
+- `outfile::String`: Output filepath for simulated reads. Defaults to input filename with ".badread.perfect.\${quantity}.fq.gz" suffix
 
 # Returns
-Vector of simulated reads in FASTQ format
+- `String`: Path to the generated output file
 
 # Details
 Generates nearly perfect long reads by setting error rates and artifacts to minimum values.
 Uses ideal quality scores and disables common sequencing artifacts like chimeras and adapters.
 
-See also: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_short_reads`
+See also: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_illumina_reads`
 """
-function simulate_nearly_perfect_long_reads()
-    @error "finish implementing me"
-    # badread simulate --reference ref.fasta --quantity 50x --error_model random \
-    # --qscore_model ideal --glitches 0,0,0 --junk_reads 0 --random_reads 0 --chimeras 0 \
-    # --identity 30,3 --length 40000,20000 --start_adapter_seq "" --end_adapter_seq "" \
-    # | gzip > reads.fastq.gz
+function simulate_nearly_perfect_long_reads(;fasta, quantity, length_mean::Int=40000, length_sd::Int=20000, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.perfect.$(quantity).fq.gz"))
+    if !isfile(outfile) || (filesize(outfile) == 0)
+        Mycelia.add_bioconda_env("badread")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate \
+            --reference $(fasta) \
+            --quantity $(quantity) \
+            --error_model random \
+            --qscore_model ideal \
+            --glitches 0,0,0 \
+            --junk_reads 0 \
+            --random_reads 0 \
+            --chimeras 0 \
+            --identity 30,3 \
+            --length $(length_mean),$(length_sd) \
+            --start_adapter_seq "" \
+            --end_adapter_seq ""`, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate older Oxford Nanopore R9.4.1 sequencing reads with worse basecalling.
+
+Uses nanopore2020 error and quality models with identity settings that reflect the lower
+accuracy of older nanopore sequencing technology and basecalling algorithms.
+
+# Arguments
+- `fasta::String`: Path to input reference FASTA file
+- `quantity::String`: Either fold coverage (e.g. "50x") or total bases to sequence (e.g. "1000000")
+- `outfile::String`: Output path for gzipped FASTQ file. Defaults to input filename with R9.4.1 suffix
+
+# Returns
+- `String`: Path to the generated output FASTQ file
+
+# Notes
+- Uses nanopore2020 error and quality models
+- Sets identity to 90,98,5 for R9.4.1-appropriate lower accuracy
+- Average read length ~15kb (default Badread length)
+- Output is gzipped FASTQ format
+
+See also: `simulate_nanopore_reads`, `simulate_pacbio_reads`, `simulate_badread_reads`
+"""
+function simulate_nanopore_r941_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r941.$(quantity).fq.gz"))
+    if !isfile(outfile) || (filesize(outfile) == 0)
+        Mycelia.add_bioconda_env("badread")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2020 --qscore_model nanopore2020 --identity 90,98,5 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate very bad quality sequencing reads with high error rates and artifacts.
+
+Simulates reads with high error rates, frequent glitches, junk reads, random reads, 
+and chimeras to test assembly algorithms under challenging conditions.
+
+# Arguments
+- `fasta::String`: Path to input reference FASTA file
+- `quantity::String`: Either fold coverage (e.g. "50x") or total bases to sequence (e.g. "1000000")
+- `outfile::String`: Output path for gzipped FASTQ file. Defaults to input filename with "very_bad" suffix
+
+# Returns
+- `String`: Path to the generated output FASTQ file
+
+# Notes
+- High glitch rates: 1000,100,100
+- 5% junk reads, 5% random reads, 10% chimeras
+- Low identity: 80,90,6 (80% mean, 90% max, 6% stdev)
+- Shorter reads: 4000±2000 bp
+- Designed to stress-test assembly algorithms
+
+See also: `simulate_pretty_good_reads`, `simulate_nanopore_reads`, `simulate_badread_reads`
+"""
+function simulate_very_bad_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.very_bad.$(quantity).fq.gz"))
+    if !isfile(outfile) || (filesize(outfile) == 0)
+        Mycelia.add_bioconda_env("badread")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 1000,100,100 --junk_reads 5 --random_reads 5 --chimeras 10 --identity 80,90,6 --length 4000,2000 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate pretty good quality sequencing reads with low error rates and minimal artifacts.
+
+Simulates high-quality reads with low error rates and minimal sequencing artifacts,
+suitable for testing assembly algorithms under favorable conditions.
+
+# Arguments
+- `fasta::String`: Path to input reference FASTA file
+- `quantity::String`: Either fold coverage (e.g. "50x") or total bases to sequence (e.g. "1000000")
+- `outfile::String`: Output path for gzipped FASTQ file. Defaults to input filename with "pretty_good" suffix
+
+# Returns
+- `String`: Path to the generated output FASTQ file
+
+# Notes
+- Low glitch rates: 10000,10,10
+- Minimal artifacts: 0.1% junk reads, 0.1% random reads, 0.1% chimeras
+- High identity: 20,3 (mean 20%, stdev 3% - using qscore distribution)
+- Default read length: ~15kb
+- Designed for high-quality assembly testing
+
+See also: `simulate_very_bad_reads`, `simulate_nearly_perfect_long_reads`, `simulate_badread_reads`
+"""
+function simulate_pretty_good_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pretty_good.$(quantity).fq.gz"))
+    if !isfile(outfile) || (filesize(outfile) == 0)
+        Mycelia.add_bioconda_env("badread")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 10000,10,10 --junk_reads 0.1 --random_reads 0.1 --chimeras 0.1 --identity 20,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+General Badread simulator with full parameter control.
+
+Provides access to all Badread simulation parameters for custom read simulation scenarios.
+This function exposes the complete Badread parameter set for maximum flexibility.
+
+# Arguments
+- `fasta::String`: Path to input reference FASTA file  
+- `quantity::String`: Either fold coverage (e.g. "50x") or total bases to sequence (e.g. "1000000")
+
+# Keywords
+- `length::String="15000,13000"`: Fragment length distribution (mean,stdev)
+- `identity::String="95,99,2.5"`: Sequencing identity distribution (mean,max,stdev for beta or mean,stdev for normal qscore)
+- `error_model::String="nanopore2023"`: Error model ("nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random", or filename)
+- `qscore_model::String="nanopore2023"`: Quality score model ("nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random", "ideal", or filename)
+- `seed::Union{Nothing,Int}=nothing`: Random seed for deterministic output
+- `start_adapter::String="90,60"`: Adapter parameters for read starts (rate,amount)
+- `end_adapter::String="50,20"`: Adapter parameters for read ends (rate,amount)  
+- `start_adapter_seq::String="AATGTACTTCGTTCAGTTACGTATTGCT"`: Adapter sequence for read starts
+- `end_adapter_seq::String="GCAATACGTAACTGAACGAAGT"`: Adapter sequence for read ends
+- `junk_reads::Float64=1.0`: Percentage of low-complexity junk reads
+- `random_reads::Float64=1.0`: Percentage of random sequence reads
+- `chimeras::Float64=1.0`: Percentage at which separate fragments join
+- `glitches::String="10000,25,25"`: Read glitch parameters (rate,size,skip)
+- `small_plasmid_bias::Bool=false`: Lose small circular plasmids when fragment length is too high
+- `outfile::String=""`: Output path for gzipped FASTQ file. Auto-generated if empty
+
+# Returns
+- `String`: Path to the generated output FASTQ file
+
+# Examples
+```julia
+# Custom nanopore simulation with specific error rates
+simulate_badread_reads(fasta="ref.fasta", quantity="50x", 
+                      error_model="nanopore2020", identity="85,95,8")
+
+# Custom PacBio-like simulation  
+simulate_badread_reads(fasta="ref.fasta", quantity="25x",
+                      error_model="pacbio2021", qscore_model="pacbio2021", 
+                      identity="30,3", length="20000,15000")
+```
+
+See also: `simulate_nanopore_reads`, `simulate_pacbio_reads`, `simulate_very_bad_reads`
+"""
+function simulate_badread_reads(;fasta::String, quantity::String,
+                               length::String="15000,13000",
+                               identity::String="95,99,2.5", 
+                               error_model::String="nanopore2023",
+                               qscore_model::String="nanopore2023",
+                               seed::Union{Nothing,Int}=nothing,
+                               start_adapter::String="90,60",
+                               end_adapter::String="50,20",
+                               start_adapter_seq::String="AATGTACTTCGTTCAGTTACGTATTGCT",
+                               end_adapter_seq::String="GCAATACGTAACTGAACGAAGT",
+                               junk_reads::Float64=1.0,
+                               random_reads::Float64=1.0,
+                               chimeras::Float64=1.0,
+                               glitches::String="10000,25,25",
+                               small_plasmid_bias::Bool=false,
+                               outfile::String="")
+    
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.custom.$(error_model).$(qscore_model).$(quantity).fq.gz")
+    end
+    
+    if !isfile(outfile) || (filesize(outfile) == 0)
+        Mycelia.add_bioconda_env("badread")
+        
+        # Build command with all parameters
+        cmd_parts = [
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate`,
+            `--reference $(fasta)`,
+            `--quantity $(quantity)`,
+            `--length $(length)`,
+            `--identity $(identity)`,
+            `--error_model $(error_model)`,
+            `--qscore_model $(qscore_model)`,
+            `--start_adapter $(start_adapter)`,
+            `--end_adapter $(end_adapter)`,
+            `--start_adapter_seq $(start_adapter_seq)`,
+            `--end_adapter_seq $(end_adapter_seq)`,
+            `--junk_reads $(junk_reads)`,
+            `--random_reads $(random_reads)`,
+            `--chimeras $(chimeras)`,
+            `--glitches $(glitches)`
+        ]
+        
+        # Add optional parameters
+        if seed !== nothing
+            push!(cmd_parts, `--seed $(seed)`)
+        end
+        
+        if small_plasmid_bias
+            push!(cmd_parts, `--small_plasmid_bias`)
+        end
+        
+        # Combine all command parts
+        full_cmd = reduce(((a, b) -> `$a $b`), cmd_parts)
+        
+        p = pipeline(full_cmd, `gzip`)
+        run(pipeline(p, outfile))
+    else
+        @info "$(outfile) already exists, skipping..."
+    end
+    return outfile
 end
 
 # src/matrix_generation.jl
@@ -557,9 +969,11 @@ A new FASTQ.Record with:
 function observe(record::R; error_rate = 0.0) where {R <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     converted_sequence = convert_sequence(FASTX.sequence(record))
     new_seq, quality_scores = observe(converted_sequence, error_rate=error_rate)
-    new_seq_id = UUIDs.uuid4()
+    new_seq_id = string(UUIDs.uuid4())
     new_seq_description = FASTX.identifier(record)
-    return FASTX.FASTQ.Record(new_seq_id, new_seq_description, new_seq, quality_scores)
+    # Convert quality scores to string (Phred+33 encoding)
+    quality_string = String([Char(q + 33) for q in quality_scores])
+    return FASTX.FASTQ.Record(new_seq_id, new_seq, quality_string)
 end
 
 
@@ -717,7 +1131,7 @@ performance testing and validation.
 # See Also
 - `Mycelia.write_fastq`: For writing FASTQ records
 - `Mycelia.fastq_record`: For creating FASTQ records
-- `Mycelia.simulate_illumina_paired_reads`: For more sophisticated read simulation
+- `Mycelia.simulate_illumina_reads`: For more sophisticated read simulation
 """
 function generate_test_fastq_data(n_reads::Int, read_length::Int, filename::String)
     # Generate FASTQ records
@@ -726,16 +1140,12 @@ function generate_test_fastq_data(n_reads::Int, read_length::Int, filename::Stri
         # Generate random DNA sequence
         seq = BioSequences.randdnaseq(read_length)
         
-        # Generate realistic quality scores (Phred+33)
+        # Generate realistic quality scores (Phred+33 encoding)
         qual_scores = rand(20:40, read_length)  # Quality range 20-40
         qual_string = String([Char(q + 33) for q in qual_scores])
         
-        # Use existing fastq_record function pattern
-        record = Mycelia.fastq_record(
-            identifier="read_$i",
-            sequence=seq,
-            quality_scores=qual_string
-        )
+        # Create FASTQ record directly
+        record = FASTX.FASTQ.Record("read_$i", seq, qual_string)
         
         push!(records, record)
     end
@@ -793,7 +1203,7 @@ optional sequencing errors for assembly benchmarking.
 - Tuple of (forward_reads, reverse_reads) as vectors of BioSequences.LongDNA{4}
 
 # See Also
-- `simulate_illumina_paired_reads`: For more sophisticated read simulation using ART
+- `simulate_illumina_reads`: For more sophisticated read simulation using ART
 - `introduce_sequencing_errors`: For adding realistic sequencing errors
 """
 function generate_paired_end_reads(reference_seq, coverage, read_length, insert_size; error_rate=0.01)
@@ -889,14 +1299,11 @@ Converts a vector of DNA sequences to FASTQ format with uniform quality scores.
 function save_reads_as_fastq(reads, filename, base_quality=30)
     records = []
     for (i, read) in enumerate(reads)
-        # Generate quality scores
+        # Generate quality scores (Phred+33 encoding)
         qual_string = String([Char(base_quality + 33) for _ in 1:length(read)])
         
-        record = Mycelia.fastq_record(
-            identifier="read_$i",
-            sequence=read,
-            quality_scores=qual_string
-        )
+        # Create FASTQ record directly
+        record = FASTX.FASTQ.Record("read_$i", read, qual_string)
         
         push!(records, record)
     end
