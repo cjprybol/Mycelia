@@ -5,9 +5,11 @@ __precompile__(false)  # Disabled for testing framework fix
 
 import AlgebraOfGraphics
 import Arrow
+import Base58
 import BioAlignments
 import BioSequences
 import BioSymbols
+import Blake3Hash
 import CairoMakie
 import Clustering
 # import CodecBase

@@ -13,53 +13,58 @@ Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP 
 
 # Keyword Arguments
 - `output_dir::String="."`: The directory to save the file.
-- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension).
+- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension). Defaults to the normalized genome identifier in the table.
 - `gzip::Bool=false`: If `true`, the output file will be GZIP compressed.
 """
 function normalized_table2fastx(
     table::DataFrames.DataFrame;
-    output_dir::String=".",
+    output_dir::AbstractString=".",
     output_basename::Union{String, Nothing}=nothing,
+    force::Bool=false,
+    verbose::Bool=false,
     gzip::Bool=false # New keyword argument for compression
 )
     # --- 1. Determine Output Format and Record Type ---
     is_fastq = !all(ismissing, table.record_quality)
-    RecordType = is_fastq ? FASTX.FASTQ.Record : FASTX.FASTA.Record
     
     # Update file extension logic to handle compression
     file_extension = is_fastq ? ".fq" : ".fna"
     if gzip
         file_extension *= ".gz"
     end
-
-    # --- 2. Construct Vector of Records ---
-    records = RecordType[]
-    sizehint!(records, nrow(table))
-
-    for row in eachrow(table)
-        if is_fastq
-            quality_integers = round.(Int, row.record_quality)
-            record = FASTX.FASTQ.Record(row.sequence_identifier, row.record_sequence, quality_integers)
-        else
-            record = FASTX.FASTA.Record(row.sequence_identifier, row.record_sequence)
-        end
-        push!(records, record)
-    end
-
-    # --- 3. Determine Final Output Path ---
+    
+    # --- 2. Determine Final Output Path ---
     basename = isnothing(output_basename) ? table.genome_identifier[1] : output_basename
     final_outfile = joinpath(output_dir, basename * file_extension)
 
-    # --- 4. Call Your Existing Writer Function ---
-    if is_fastq
-        writen_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+    if !isfile(final_outfile) || force
+        # --- 3. Construct Vector of Records ---
+        RecordType = is_fastq ? FASTX.FASTQ.Record : FASTX.FASTA.Record
+        records = RecordType[]
+        sizehint!(records, DataFrames.nrow(table))
+    
+        for row in eachrow(table)
+            if is_fastq
+                quality_integers = round.(Int, row.record_quality)
+                record = FASTX.FASTQ.Record(row.sequence_identifier, row.record_sequence, quality_integers)
+            else
+                record = FASTX.FASTA.Record(row.sequence_identifier, row.record_sequence)
+            end
+            push!(records, record)
+        end
+        
+        # --- 4. Call Your Existing Writer Function ---
+        if is_fastq
+            writen_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+        else
+            writen_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+        end
+        @assert writen_outfile == final_outfile
+    
+        verbose && Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
     else
-        writen_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+        verbose && @warn "$(final_outfile) already present, use force=true to overwrite"
     end
-
-    @assert writen_outfile == final_outfile
-
-    Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
     return final_outfile
 end
 
@@ -77,7 +82,7 @@ Reads a FASTA or FASTQ file and converts its records into a normalized `DataFram
 # Returns
 - `DataFrames.DataFrame`: A data frame with standardized columns, including the new hierarchical identifiers.
 """
-function fastx2normalized_table(; fastx_path::String, human_readable_id::String)
+function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id::AbstractString)
     # --- Input Validation ---
     @assert isfile(fastx_path) && filesize(fastx_path) > 0 "File does not exist or is empty."
     if length(human_readable_id) > 16
@@ -148,46 +153,38 @@ function fastx2normalized_table(; fastx_path::String, human_readable_id::String)
 end
 
 """
-    create_base58_hash(data_to_hash::String, encoded_length::Int) -> String
+    create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=32) -> String
 
 Hashes a string using BLAKE3 and returns a Base58 encoded string of a
-specified approximate length.
-
-# Arguments
-- `data_to_hash::String`: The input data to hash (e.g., a biological sequence).
-- `encoded_length::Int`: The target length for the final Base58 encoded string.
-
-# Returns
-- `String`: The resulting Base58 hash string.
+specified *exact* length.
 """
-function create_base58_hash(data_to_hash::String; encoded_length::Int=32)::String
+function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=32)::String
     if encoded_length <= 0
         error("Invalid hash length: $encoded_length. It must be positive.")
     end
 
-    # Calculate the number of raw bytes needed to generate a Base58 string
-    # of the target length. Each Base58 character encodes ~5.85 bits (log₂(58)).
-    # We use floor() to be conservative and ensure we don't exceed the target length.
     bits_needed = encoded_length * log2(58)
-    raw_bytes_needed = floor(Int, bits_needed / 8)
+    raw_bytes_needed = ceil(Int, bits_needed / 8)
 
-    # If the calculation results in 0 bytes, we can't generate a hash.
     if raw_bytes_needed == 0
         error("Cannot generate a hash for an encoded length of $encoded_length. It is too short.")
     end
-
-    # Use BLAKE3 to generate the exact number of raw bytes needed
+    
     hasher = Blake3Hash.Blake3Ctx()
-    Blake3Hash.update!(hasher, data_to_hash)
+    data_as_bytes = Vector{UInt8}(data_to_hash)
+    Blake3Hash.update!(hasher, data_as_bytes)
+    
     output_buffer = Vector{UInt8}(undef, raw_bytes_needed)
     Blake3Hash.digest(hasher, output_buffer)
 
-    # Encode the raw bytes and return the result
-    return Base58.encode(output_buffer)
+    # FIX: Changed `Base58.encode` to the correct function name `Base58.base58encode`
+    encoded_hash = Base58.base58encode(output_buffer)
+
+    return String(first(encoded_hash, encoded_length))
 end
 
 """
-    generate_genome_hash(sequences::Vector{String}; hash_len::Int=32) -> String
+    generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32) -> String
 
 Computes a single, order-independent hash for a collection of sequences (a genome).
 
@@ -198,12 +195,12 @@ different order.
 
 # Arguments
 - `sequences::Vector{String}`: A vector of strings, where each string is a biological sequence.
-- `hash_len::Int=32`: The desired length for the final Base58 encoded genome hash.
+- `encoded_length::Int=32`: The desired length for the final Base58 encoded genome hash.
 
 # Returns
 - `String`: A single, stable Base58 hash representing the entire genome.
 """
-function generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32)::String
+function generate_genome_hash(sequences::Vector{<:AbstractString}; encoded_length::Int=32)::String
     if isempty(sequences)
         error("Input sequence vector cannot be empty.")
     end
@@ -213,7 +210,12 @@ function generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32)
     individual_hashes = Vector{String}(undef, length(sequences))
     for i in 1:length(sequences)
         # Get the standard 32-byte (256-bit) raw hash for maximum uniqueness
-        raw_hash = Blake3Hash.blake3(sequences[i])
+        
+        # --- EDIT 1: Replaced the single problematic line with the robust 3-step hash ---
+        hasher = Blake3Hash.Blake3Ctx()
+        Blake3Hash.update!(hasher, Vector{UInt8}(sequences[i])) # Also converts String to bytes
+        raw_hash = Blake3Hash.digest(hasher)
+        
         individual_hashes[i] = bytes2hex(raw_hash)
     end
 
@@ -225,7 +227,9 @@ function generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32)
 
     # 4. Hash the combined string to get the final genome hash
     # We can use the function from our previous discussion for this final step.
-    final_genome_hash = create_base58_hash(combined_data, encoded_length=hash_len)
+    
+    # --- EDIT 2: Corrected the keyword argument name to match the function signature ---
+    final_genome_hash = create_base58_hash(combined_data, encoded_length=encoded_length)
 
     return final_genome_hash
 end
