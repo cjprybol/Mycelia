@@ -491,6 +491,102 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
         end
     end
 
+    Test.@testset "Serialization - Arrow and JLD2" begin
+        mktempdir() do dir
+            ## Create a test FASTA file to get a normalized table
+            fasta_path = joinpath(dir, "test.fasta")
+            open(fasta_path, "w") do io
+                println(io, ">seq1")
+                println(io, "ACGTACGTACGTACGT")
+                println(io, ">seq2")
+                println(io, "GGGGCCCCAAAATTTT")
+            end
+            
+            ## Get normalized table
+            normalized_table = Mycelia.fastx2normalized_table(fasta_path; human_readable_id="test_genome")
+            
+            Test.@testset "Arrow serialization" begin
+                ## Test write_arrow and read_arrow round trip
+                arrow_file = joinpath(dir, "test.arrow")
+                
+                ## Write the table
+                written_file = Mycelia.write_arrow(normalized_table; filename=arrow_file)
+                Test.@test written_file == arrow_file
+                Test.@test isfile(arrow_file)
+                
+                ## Read back the table
+                read_table = Mycelia.read_arrow(arrow_file)
+                
+                ## Check that sanitized version matches (Arrow converts mixed types to strings)
+                sanitized_table = Mycelia.sanitize_for_arrow(normalized_table)
+                Test.@test isequal(read_table, sanitized_table)
+                
+                ## Verify key properties are preserved
+                Test.@test DataFrames.nrow(read_table) == DataFrames.nrow(normalized_table)
+                Test.@test names(read_table) == names(normalized_table)
+                Test.@test read_table.human_readable_id == normalized_table.human_readable_id
+                Test.@test read_table.record_sequence == normalized_table.record_sequence
+                
+                ## Test with auto-sanitization (default behavior)
+                arrow_file2 = joinpath(dir, "test2.arrow")
+                written_file2 = Mycelia.write_arrow(normalized_table; filename=arrow_file2, sanitize=true)
+                read_table2 = Mycelia.read_arrow(arrow_file2)
+                Test.@test isequal(read_table2, sanitized_table)
+            end
+            
+            Test.@testset "JLD2 serialization" begin
+                ## Test JLD2_write_table and JLD2_read_table
+                jld2_file = joinpath(dir, "test.jld2")
+                
+                ## Write the table using JLD2
+                Mycelia.JLD2_write_table(df=normalized_table, filename=jld2_file)
+                Test.@test isfile(jld2_file)
+                
+                ## Read back the table
+                read_table = Mycelia.JLD2_read_table(jld2_file)
+                
+                ## JLD2 should preserve exact data types and values
+                Test.@test isequal(read_table, normalized_table)
+                Test.@test DataFrames.nrow(read_table) == DataFrames.nrow(normalized_table)
+                Test.@test names(read_table) == names(normalized_table)
+                
+                ## Test save_df_jld2 and load_df_jld2 functions
+                jld2_file2 = joinpath(dir, "test2")  ## Extension will be added automatically by save
+                Mycelia.save_df_jld2(df=normalized_table, filename=jld2_file2)
+                Test.@test isfile(jld2_file2 * ".jld2")
+                
+                ## Need to include .jld2 extension when loading since load doesn't auto-add it
+                read_table2 = Mycelia.load_df_jld2(jld2_file2 * ".jld2")
+                Test.@test isequal(read_table2, normalized_table)
+                
+                ## Test with custom key
+                jld2_file3 = joinpath(dir, "test3.jld2")
+                Mycelia.save_df_jld2(df=normalized_table, filename=jld2_file3, key="normalized_genome")
+                read_table3 = Mycelia.load_df_jld2(jld2_file3, key="normalized_genome")
+                Test.@test isequal(read_table3, normalized_table)
+            end
+            
+            Test.@testset "Sanitization behavior" begin
+                ## Test sanitize_for_arrow function behavior
+                sanitized = Mycelia.sanitize_for_arrow(normalized_table)
+                
+                ## Should have same structure but potentially different types
+                Test.@test DataFrames.nrow(sanitized) == DataFrames.nrow(normalized_table)
+                Test.@test names(sanitized) == names(normalized_table)
+                
+                ## String columns should be preserved as strings
+                for col in names(sanitized)
+                    if eltype(normalized_table[!, col]) <: AbstractString
+                        Test.@test eltype(sanitized[!, col]) <: AbstractString
+                    end
+                end
+                
+                ## Check that missing values are handled correctly
+                Test.@test sum(ismissing.(sanitized.record_quality)) == sum(ismissing.(normalized_table.record_quality))
+            end
+        end
+    end
+
     Test.@testset "fastx_stats and fastx2normalized_table - fixtures" begin
         mktempdir() do dir
             fasta_path = joinpath(dir, "small.fasta")
@@ -550,5 +646,35 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
             Test.@test isapprox(gc_val, 75.0; atol=0.01)
             Test.@test isapprox(Statistics.mean(skipmissing(nfastq.mean_record_quality)), 40.0; atol=0.01)
         end
+    end
+
+    Test.@testset "Test Suite Cleanup Verification" begin
+        ## Verify no test files are left behind in the workspace root
+        workspace_files = readdir("/workspaces/Mycelia")
+        
+        ## Check for common test file patterns that shouldn't be in workspace root
+        test_patterns = [r"\.fasta$", r"\.fastq$", r"\.fna$", r"\.fq$", r"\.arrow$", r"\.jld2$"]
+        test_files = []
+        
+        for file in workspace_files
+            for pattern in test_patterns
+                if occursin(pattern, file)
+                    push!(test_files, file)
+                end
+            end
+        end
+        
+        if !isempty(test_files)
+            @warn "Found lingering test files in workspace root: $(test_files)"
+        end
+        Test.@test isempty(test_files)
+        
+        ## Check that fastx-stats-test directory was cleaned up
+        if isdir("/workspaces/Mycelia/fastx-stats-test")
+            @warn "fastx-stats-test directory was not cleaned up"
+        end
+        Test.@test !isdir("/workspaces/Mycelia/fastx-stats-test")
+        
+        println("✅ Test suite cleanup verification passed - no lingering files found")
     end
 end
