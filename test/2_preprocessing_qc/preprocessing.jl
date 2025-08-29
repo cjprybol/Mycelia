@@ -1,11 +1,24 @@
-# Preprocessing & QC tests
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/2_preprocessing_qc/preprocessing.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/preprocessing.jl", "test/2_preprocessing_qc", execute=false)'
+# ```
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
+import FASTX
+import CSV
 
 const phiX174_accession_id = "NC_001422.1"
 

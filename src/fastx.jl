@@ -69,24 +69,124 @@ function normalized_table2fastx(
 end
 
 """
-    fastx2normalized_table(; fastx_path::String, human_readable_id::String) -> DataFrames.DataFrame
+    _extract_human_readable_id_from_fastx_path(fastx_path::String, force_truncate::Bool=false) -> String
+
+Internal function to intelligently extract a human-readable identifier from a FASTX filename.
+Handles common bioinformatics naming patterns and attempts to find the longest meaningful prefix.
+"""
+function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, force_truncate::Bool=false)
+    filename = basename(fastx_path)
+    
+    # Remove file extensions using existing regex patterns
+    base_name = if occursin(Mycelia.FASTA_REGEX, filename)
+        replace(filename, Mycelia.FASTA_REGEX => "")
+    elseif occursin(Mycelia.FASTQ_REGEX, filename) 
+        replace(filename, Mycelia.FASTQ_REGEX => "")
+    else
+        error("File '$(filename)' does not match FASTA or FASTQ naming patterns. Supported extensions: .fasta, .fna, .faa, .fa, .frn, .fastq, .fq (optionally .gz compressed)")
+    end
+    
+    # If already <= 16 characters, return as-is
+    if length(base_name) <= 16
+        return base_name
+    end
+    
+    # Try to find meaningful prefixes by splitting on common delimiters
+    delimiters = ['_', '-', ' ', '.']
+    viable_prefixes = String[]
+    
+    for delimiter in delimiters
+        if occursin(delimiter, base_name)
+            parts = split(base_name, delimiter)
+            # Build cumulative prefixes
+            current_prefix = ""
+            for part in parts
+                test_prefix = isempty(current_prefix) ? part : current_prefix * string(delimiter) * part
+                if length(test_prefix) <= 16
+                    current_prefix = test_prefix
+                    push!(viable_prefixes, current_prefix)
+                else
+                    break
+                end
+            end
+        end
+    end
+    
+    # Find the longest viable prefix
+    if !isempty(viable_prefixes)
+        longest_prefix = maximum(viable_prefixes, init="") do prefix
+            length(prefix)
+        end
+        
+        # Skip very short prefixes that aren't meaningful for common patterns
+        if length(longest_prefix) >= 3
+            # Check for common bioinformatics prefixes we want to avoid stopping at
+            meaningless_prefixes = ["GCA", "GCF", "NC", "NZ", "NW", "NT", "AC", "AE", "AF", "AY", "DQ", "EF", "EU", "FJ", "GQ", "HM", "JF", "JN", "JQ", "JX", "KC", "KF", "KJ", "KM", "KP", "KR", "KT", "KU", "KX", "KY", "MF", "MG", "MH", "MK", "MN", "MT", "MW", "MZ"]
+            
+            # If we have a short meaningless prefix, try to get more context
+            if longest_prefix in meaningless_prefixes && length(viable_prefixes) > 1
+                # Look for a longer prefix that includes more meaningful information
+                longer_prefixes = filter(p -> length(p) > length(longest_prefix) && length(p) <= 16, viable_prefixes)
+                if !isempty(longer_prefixes)
+                    longest_prefix = maximum(longer_prefixes, init="") do prefix
+                        length(prefix)
+                    end
+                end
+            end
+            
+            return longest_prefix
+        end
+    end
+    
+    # If no viable prefix found, either truncate with warning or error
+    if force_truncate
+        truncated = base_name[1:16]
+        @warn "Could not find meaningful identifier prefix for '$(base_name)'. Using truncated version: '$(truncated)'"
+        return truncated
+    else
+        error("Could not extract a viable identifier (≤16 chars) from filename '$(base_name)'. Consider using force_truncate=true or providing human_readable_id explicitly.")
+    end
+end
+
+"""
+    fastx2normalized_table(fastx_path::String; human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false) -> DataFrames.DataFrame
+    fastx2normalized_table(; fastx_path::String, human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false) -> DataFrames.DataFrame
 
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Reads a FASTA or FASTQ file and converts its records into a normalized `DataFrames.DataFrame` with stable, hierarchical identifiers.
 
+# Arguments (positional version)
+- `fastx_path::String`: Path to a FASTA or FASTQ file.
+
 # Keyword Arguments
 - `fastx_path::String`: Path to a FASTA or FASTQ file.
-- `human_readable_id::String`: A required, human-readable identifier for the genome/entity (max 16 characters).
+- `human_readable_id::Union{String,Nothing}`: A human-readable identifier for the genome/entity (max 16 characters). 
+  If `nothing`, attempts to extract from filename intelligently.
+- `force_truncate::Bool`: If true, truncates long identifiers to 16 characters with warning instead of erroring.
 
 # Returns
 - `DataFrames.DataFrame`: A data frame with standardized columns, including the new hierarchical identifiers.
 """
-function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id::AbstractString)
+function fastx2normalized_table(fastx_path::AbstractString; human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false)
+    return fastx2normalized_table(; fastx_path=fastx_path, human_readable_id=human_readable_id, force_truncate=force_truncate)
+end
+
+function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false)
+    # --- Extract human_readable_id from filename if not provided ---
+    if isnothing(human_readable_id)
+        human_readable_id = _extract_human_readable_id_from_fastx_path(fastx_path, force_truncate)
+    end
+
     # --- Input Validation ---
     @assert isfile(fastx_path) && filesize(fastx_path) > 0 "File does not exist or is empty."
     if length(human_readable_id) > 16
-        error("Human-readable identifier cannot exceed 16 characters.")
+        if force_truncate
+            @warn "Human-readable identifier '$(human_readable_id)' exceeds 16 characters, truncating to '$(human_readable_id[1:16])'"
+            human_readable_id = human_readable_id[1:16]
+        else
+            error("Human-readable identifier '$(human_readable_id)' cannot exceed 16 characters. Use force_truncate=true to allow truncation.")
+        end
     end
 
     # --- DataFrame Initialization ---

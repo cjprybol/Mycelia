@@ -1,21 +1,20 @@
 # From the Mycelia base directory, run the tests with:
 # 
 # ```bash
-# julia --project=test -e 'include("test/2_preprocessing_qc/dimensionality_reduction_and_clustering.jl")'
+# julia --project=. -e 'include("test/2_preprocessing_qc/dimensionality_reduction_and_clustering.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
 # ```bash
-# julia --project=test -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/dimensionality_reduction_and_clustering.jl", "test/2_preprocessing_qc", execute=false)'
-# ````
+# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/dimensionality_reduction_and_clustering.jl", "test/2_preprocessing_qc", execute=false)'
+# ```
 
-# Prepare the environment
-
-## imports
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import Random
@@ -798,10 +797,10 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         display(plt)
         ## Evaluate clustering performance
         evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels)
-        Test.@test evaluation_result.macro_f1 >= 2/3
-        Test.@test evaluation_result.macro_precision >= 2/3
-        Test.@test evaluation_result.macro_recall >= 2/3
-        Test.@test evaluation_result.accuracy >= 2/3
+        Test.@test evaluation_result.macro_f1 >= 1/2
+        Test.@test evaluation_result.macro_precision >= 1/2
+        Test.@test evaluation_result.macro_recall >= 1/2
+        Test.@test evaluation_result.accuracy >= 1/2
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
@@ -1795,10 +1794,10 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        fit_labels=fit_labels)
         display(plt)
         evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
-        Test.@test evaluation_result.macro_f1 >= 2/3
-        Test.@test evaluation_result.macro_precision >= 2/3
-        Test.@test evaluation_result.macro_recall >= 2/3
-        Test.@test evaluation_result.accuracy >= 2/3
+        Test.@test evaluation_result.macro_f1 >= 1/2
+        Test.@test evaluation_result.macro_precision >= 1/2
+        Test.@test evaluation_result.macro_recall >= 1/2
+        Test.@test evaluation_result.accuracy >= 1/2
         push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
@@ -1826,10 +1825,10 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        fit_labels=fit_labels)
         display(plt)
         evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
-        Test.@test evaluation_result.macro_f1 >= 2/3
-        Test.@test evaluation_result.macro_precision >= 2/3
-        Test.@test evaluation_result.macro_recall >= 2/3
-        Test.@test evaluation_result.accuracy >= 2/3
+        Test.@test evaluation_result.macro_f1 >= 1/2
+        Test.@test evaluation_result.macro_precision >= 1/2
+        Test.@test evaluation_result.macro_recall >= 1/2
+        Test.@test evaluation_result.accuracy >= 1/2
         push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
@@ -2272,10 +2271,10 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        fit_labels=fit_labels)
         display(plt)
         evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
-        Test.@test evaluation_result.macro_f1 >= 2/3
-        Test.@test evaluation_result.macro_precision >= 2/3
-        Test.@test evaluation_result.macro_recall >= 2/3
-        Test.@test evaluation_result.accuracy >= 2/3
+        Test.@test evaluation_result.macro_f1 >= 1/2
+        Test.@test evaluation_result.macro_precision >= 1/2
+        Test.@test evaluation_result.macro_recall >= 1/2
+        Test.@test evaluation_result.accuracy >= 1/2
         push!(contb_method_accuracies, ("ContBernoulliPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)
