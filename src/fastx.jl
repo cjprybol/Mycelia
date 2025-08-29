@@ -114,9 +114,7 @@ function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, 
     
     # Find the longest viable prefix
     if !isempty(viable_prefixes)
-        longest_prefix = maximum(viable_prefixes, init="") do prefix
-            length(prefix)
-        end
+        longest_prefix = viable_prefixes[argmax(length.(viable_prefixes))]
         
         # Skip very short prefixes that aren't meaningful for common patterns
         if length(longest_prefix) >= 3
@@ -128,9 +126,7 @@ function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, 
                 # Look for a longer prefix that includes more meaningful information
                 longer_prefixes = filter(p -> length(p) > length(longest_prefix) && length(p) <= 16, viable_prefixes)
                 if !isempty(longer_prefixes)
-                    longest_prefix = maximum(longer_prefixes, init="") do prefix
-                        length(prefix)
-                    end
+                    longest_prefix = longer_prefixes[argmax(length.(longer_prefixes))]
                 end
             end
             
@@ -579,47 +575,6 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
     return results_table
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
-
-# # Arguments
-# - `outdir::String`: Output directory containing input FASTQ files
-# - `identifier::String`: Prefix for input/output filenames
-
-# # Input files
-# Expects paired FASTQ files in `outdir` named:
-# - `{identifier}_1.fastq.gz` (forward reads)
-# - `{identifier}_2.fastq.gz` (reverse reads)
-
-# # Output files
-# Creates trimmed reads in `outdir/trim_galore/`:
-# - `{identifier}_1_val_1.fq.gz` (trimmed forward reads)
-# - `{identifier}_2_val_2.fq.gz` (trimmed reverse reads)
-
-# # Dependencies
-# Requires trim_galore conda environment:
-# """
-# function trim_galore(;outdir="", identifier="")
-    
-#     trim_galore_dir = joinpath(outdir, "trim_galore")
-    
-#     forward_reads = joinpath(outdir, "$(identifier)_1.fastq.gz")
-#     reverse_reads = joinpath(outdir, "$(identifier)_2.fastq.gz")
-    
-#     trimmed_forward_reads = joinpath(trim_galore_dir, "$(identifier)_1_val_1.fq.gz")
-#     trimmed_reverse_reads = joinpath(trim_galore_dir, "$(identifier)_2_val_2.fq.gz")
-    
-#     # mamba create -n trim_galore -c bioconda trim_galore
-#     if !isfile(trimmed_forward_reads) && !isfile(trimmed_reverse_reads)
-#         cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
-#         run(cmd)
-#     else
-#         @info "$(trimmed_forward_reads) & $(trimmed_reverse_reads) already present"
-#     end
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -634,10 +589,10 @@ Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and Fas
 - `Tuple{String, String}`: Paths to trimmed forward and reverse read files
 
 # Dependencies
-Requires trim_galore conda environment:
-- `mamba create -n trim_galore -c bioconda trim_galore`
+Requires trim_galore conda environment
 """
 function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd())
+    Mycelia.add_bioconda_env("trim-galore")
     # Create output directory if it doesn't exist
     trim_galore_dir = mkpath(joinpath(outdir, "trim_galore"))
     
@@ -650,7 +605,7 @@ function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdi
     trimmed_reverse = joinpath(trim_galore_dir, replace(reverse_base, Mycelia.FASTQ_REGEX => "_val_2.fq.gz"))
     
     if !isfile(trimmed_forward) && !isfile(trimmed_reverse)
-        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
         run(cmd)
     else
         @info "$(trimmed_forward) & $(trimmed_reverse) already present"
@@ -916,38 +871,56 @@ function qc_filter_long_reads_filtlong(;
     return out_fastq
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# Perform QC filtering on long-read FASTQ files using chopper.
+Perform QC filtering on long-read FASTQ files using chopper.
 
-# # Arguments
-# - `in_fastq::String`: Path to the input FASTQ file.
-# - `out_fastq::String`: Path to the output FASTQ file.
-# - `quality_threshold::Int`: Minimum average quality to retain a read (default 10).
-# - `min_length::Int`: Minimum read length (default 1000).
+# Arguments
+- `in_fastq::String`: Path to the input FASTQ file.
+- `out_fastq::String`: Path to the output FASTQ file (optional, auto-generated if not provided).
+- `quality_threshold::Int`: Minimum average quality to retain a read (default 20).
+- `min_length::Int`: Minimum read length (default 1000).
 
-# # Returns
-# - `String`: Path to the filtered FASTQ file.
+# Returns
+- `String`: Path to the filtered FASTQ file.
 
-# # Details
-# This function uses chopper to discard long reads that do not meet the minimum quality or length thresholds.
-# It is intended for Oxford Nanopore or similar long-read datasets.
+# Details
+This function uses chopper to discard long reads that do not meet the minimum quality or length thresholds.
+It is intended for Oxford Nanopore or similar long-read datasets.
 
-# # Dependencies
-# Requires chopper to be installed via conda
-# """
-# function qc_filter_long_reads_chopper(in_fastq::String, out_fastq::String; quality_threshold::Int=20, min_length::Int=1000)
-#     # chopper reads from STDIN and writes to STDOUT, so we pipe the file
-#     Mycelia.add_bioconda_env("chopper")
-#     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n chopper chopper --input (in_fastq) --quality $(quality_threshold) --minlength $(min_length)`
-#     p = pipeline(`cat $(in_fastq)`, cmd)
-#     , out_fastq)
-#     open(out_fastq, "w") do outf
-#         run(pipeline(`cat $(in_fastq)`, cmd; stdout=outf))
-#     end
-#     return out_fastq
-# end
+# Dependencies
+Requires chopper to be installed via conda
+"""
+function qc_filter_long_reads_chopper(;
+        in_fastq::String,
+        out_fastq::String = replace(in_fastq, Mycelia.FASTQ_REGEX => ".chopper.fq.gz"),
+        quality_threshold::Int = 20,
+        min_length::Int = 1000
+    )
+    if !isfile(out_fastq)
+        Mycelia.add_bioconda_env("chopper")
+        # chopper reads from STDIN and writes to STDOUT, so we pipe the file
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n chopper chopper --quality $(quality_threshold) --minlength $(min_length)`
+        
+        # Handle both compressed and uncompressed input files
+        input_cmd = if endswith(in_fastq, ".gz")
+            `zcat $(in_fastq)`
+        else
+            `cat $(in_fastq)`
+        end
+        
+        # Create pipeline: input file -> chopper -> gzip -> output
+        pipeline_cmd = pipeline(
+            input_cmd,
+            cmd,
+            `gzip`
+        )
+        
+        run(pipeline(pipeline_cmd, out_fastq))
+    end
+    return out_fastq
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
