@@ -949,6 +949,7 @@ the result is loaded and returned. If `force` is true or the file does not exist
 - `rarefaction_data_filename::AbstractString`: Filename for the TSV output of rarefaction data. If a relative path, will be written to `out_dir`.
 - `rarefaction_plot_basename::AbstractString`: Basename for the output rarefaction plots. If a relative path, will be written to `out_dir`.
 - `show_rarefaction_plot::Bool`: Whether to display the rarefaction plot after generation. Defaults to `true`.
+- `skip_rarefaction_plot::Bool`: If true, completely skip rarefaction plot generation (including loading plotting libraries). Defaults to `false`.
 - `result_file::Union{Nothing, AbstractString}`: Optional. If provided, path to a file to save/load the full results (kmers, counts, etc) as a JLD2 file.
 - `out_dir::Union{Nothing, AbstractString}`: Optional. Output directory for auxiliary outputs. Defaults as described above.
 - `force::Bool`: If true, recompute and overwrite the output file even if it exists. Defaults to `false`.
@@ -972,9 +973,20 @@ function fasta_list_to_sparse_kmer_counts(;
     rarefaction_data_filename::AbstractString = "$(normalized_current_datetime()).$(lowercase(string(alphabet)))$(k)mer_rarefaction.tsv",
     rarefaction_plot_basename::AbstractString = replace(rarefaction_data_filename, ".tsv" => ""),
     show_rarefaction_plot::Bool = true,
+    skip_rarefaction_plot::Bool = false,
     result_file::Union{Nothing, AbstractString} = nothing,
     out_dir::Union{Nothing, AbstractString} = nothing,
     force::Bool = false,
+    # Optimization control parameters
+    force_threading::Union{Bool, Nothing} = nothing,
+    force_temp_files::Union{Bool, Nothing} = nothing,
+    force_progress_bars::Union{Bool, Nothing} = nothing,
+    skip_rarefaction_data::Bool = false,
+    # Heuristic tuning parameters
+    threading_file_threshold::Int = 4,
+    threading_size_threshold::Int = 10_000_000,
+    memory_safety_factor::Float64 = 0.5,
+    progress_time_threshold::Float64 = 5.0,
     rarefaction_plot_kwargs...
 )
 
@@ -1036,6 +1048,40 @@ function fasta_list_to_sparse_kmer_counts(;
         isdefined(Main, func_name) ? getfield(Main, func_name) : (isdefined(@__MODULE__, func_name) ? getfield(@__MODULE__, func_name) : error("$func_name not found"))
     end
 
+    # --- Smart Optimization Heuristics ---
+    # Analyze file characteristics for optimization decisions  
+    file_sizes = [Base.Filesystem.filesize(f) for f in fasta_list]
+    total_file_size = sum(file_sizes)
+    
+    # Threading decision
+    use_threading = if !isnothing(force_threading)
+        force_threading
+    else
+        (num_files >= threading_file_threshold && total_file_size > threading_size_threshold) || 
+        num_files >= 2 * threading_file_threshold
+    end
+    
+    # Memory strategy decision
+    estimated_avg_kmers_per_file = min(1000, total_file_size ÷ max(1, num_files) ÷ 4)
+    estimated_total_kmer_dicts_memory = num_files * estimated_avg_kmers_per_file * 24
+    use_temp_files = if !isnothing(force_temp_files)
+        force_temp_files
+    else
+        estimated_total_kmer_dicts_memory > (1_000_000_000 * memory_safety_factor)
+    end
+    
+    # Progress bars decision
+    show_progress = if !isnothing(force_progress_bars)
+        force_progress_bars
+    else
+        num_files > 20 || total_file_size > 50_000_000
+    end
+    
+    # Rarefaction decision
+    compute_rarefaction = !skip_rarefaction_data && (show_progress || !skip_rarefaction_plot)
+    
+    Base.@info "Sparse optimization decisions: threading=$use_threading, temp_files=$use_temp_files, progress=$show_progress, rarefaction=$compute_rarefaction ($(num_files) files, $(Base.format_bytes(total_file_size)))"
+
     temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="kmer_counts_3pass_")
     Base.@info "Using temporary directory for intermediate counts: $temp_dir"
     temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
@@ -1073,9 +1119,9 @@ function fasta_list_to_sparse_kmer_counts(;
     max_observed_count = 0
     total_non_zero_entries = 0
     nnz_per_file = Vector{Int}(undef, num_files)
-    rarefaction_points = Vector{Tuple{Int, Int}}()
+    rarefaction_points = compute_rarefaction ? Vector{Tuple{Int, Int}}() : Tuple{Int, Int}[]
 
-    progress_pass2 = ProgressMeter.Progress(num_files; desc="Pass 2 (Aggregating Serially): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:yellow)
+    progress_pass2 = show_progress ? ProgressMeter.Progress(num_files; desc="Pass 2 (Aggregating Serially): ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:yellow) : nothing
 
     for i in 1:num_files
         temp_filename = temp_file_paths[i]
@@ -1101,43 +1147,64 @@ function fasta_list_to_sparse_kmer_counts(;
         end
         nnz_per_file[i] = current_file_nnz
         total_non_zero_entries += current_file_nnz
-        push!(rarefaction_points, (i, length(all_kmers_set)))
-        ProgressMeter.next!(progress_pass2; showvalues = [(:unique_kmers, length(all_kmers_set))])
+        if compute_rarefaction
+            push!(rarefaction_points, (i, length(all_kmers_set)))
+        end
+        if show_progress && !isnothing(progress_pass2)
+            if compute_rarefaction
+                ProgressMeter.next!(progress_pass2; showvalues = [(:unique_kmers, length(all_kmers_set))])
+            else
+                ProgressMeter.next!(progress_pass2)
+            end
+        end
     end
-    ProgressMeter.finish!(progress_pass2)
+    if show_progress && !isnothing(progress_pass2)
+        ProgressMeter.finish!(progress_pass2)
+    end
     Base.@info "Pass 2 aggregation finished."
 
     # --- Process and Save/Plot Rarefaction Data (after Pass 2) ---
     rarefaction_data_path = _resolve_outpath(rarefaction_data_filename)
-    Base.@info "Saving rarefaction data to $rarefaction_data_path..."
-    try
-        data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
-        if !isempty(data_to_write)
-            DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
-        else
-            Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
-            DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
+    
+    if compute_rarefaction
+        Base.@info "Saving rarefaction data to $rarefaction_data_path..."
+    else
+        Base.@info "Skipping rarefaction data collection and saving (skip_rarefaction_data=true)."
+    end
+    if compute_rarefaction
+        try
+            data_to_write = [ [pt[1], pt[2]] for pt in rarefaction_points ]
+            if !isempty(data_to_write)
+                DelimitedFiles.writedlm(rarefaction_data_path, data_to_write, '\t')
+            else
+                Base.@warn "No rarefaction points recorded. TSV file will be empty or not created."
+                DelimitedFiles.writedlm(rarefaction_data_path, Array{Int}(undef,0,2), '\t')
+            end
+        catch e
+            Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
         end
-    catch e
-        Base.@error "Failed to write rarefaction data to $rarefaction_data_path: $e"
     end
 
-    rarefaction_plot_base = _resolve_outpath(rarefaction_plot_basename)
-    if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
-        Base.@info "Generating k-mer rarefaction plot..."
-        try
-            plot_kmer_rarefaction(
-                rarefaction_data_path;
-                output_dir = Base.Filesystem.dirname(rarefaction_plot_base),
-                output_basename = Base.Filesystem.basename(rarefaction_plot_base),
-                display_plot = show_rarefaction_plot,
-                rarefaction_plot_kwargs...
-            )
-        catch e
-            Base.@error "Failed to generate rarefaction plot: $e. Ensure Makie and a backend are correctly set up. Also ensure 'plot_kmer_rarefaction' function is loaded."
+    if !skip_rarefaction_plot
+        rarefaction_plot_base = _resolve_outpath(rarefaction_plot_basename)
+        if Base.Filesystem.isfile(rarefaction_data_path) && !isempty(rarefaction_points)
+            Base.@info "Generating k-mer rarefaction plot..."
+            try
+                plot_kmer_rarefaction(
+                    rarefaction_data_path;
+                    output_dir = Base.Filesystem.dirname(rarefaction_plot_base),
+                    output_basename = Base.Filesystem.basename(rarefaction_plot_base),
+                    display_plot = show_rarefaction_plot,
+                    rarefaction_plot_kwargs...
+                )
+            catch e
+                Base.@error "Failed to generate rarefaction plot: $e. Ensure Makie and a backend are correctly set up. Also ensure 'plot_kmer_rarefaction' function is loaded."
+            end
+        else
+            Base.@warn "Skipping rarefaction plot generation as data file is missing or empty."
         end
     else
-        Base.@warn "Skipping rarefaction plot generation as data file is missing or empty."
+        Base.@info "Skipping rarefaction plot generation (skip_rarefaction_plot=true)."
     end
 
     # --- Determine Value Type, Prepare for Pass 3 ---
@@ -1576,6 +1643,124 @@ function count_kmers(::Type{KMER_TYPE}, fastx_file::AbstractString) where {KMER_
 end
 
 """
+Fast in-memory implementation of dense k-mer counting for small datasets.
+Skips temporary files and processes everything in memory for better performance.
+"""
+function _dense_kmer_counts_in_memory(
+    fasta_list, sorted_kmers, KMER_TYPE, COUNT_FUNCTION, 
+    use_threading, show_progress, count_element_type, result_file
+)
+    num_files = length(fasta_list)
+    num_kmers = length(sorted_kmers)
+    
+    # Build kmer index for matrix rows
+    kmer_index = Dict{KMER_TYPE,Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
+    
+    # Process files and collect k-mer counts directly in memory
+    all_kmer_counts = Vector{Dict{KMER_TYPE,Int}}(undef, num_files)
+    max_observed_count = 0
+    
+    progress = show_progress ? ProgressMeter.Progress(num_files; desc="Counting (in-memory): ", color=:cyan) : nothing
+    
+    if use_threading
+        Threads.@threads for idx in 1:num_files
+            try
+                kmer_counts = COUNT_FUNCTION(KMER_TYPE, fasta_list[idx])
+                all_kmer_counts[idx] = kmer_counts
+                if show_progress
+                    ProgressMeter.next!(progress)
+                end
+            catch e
+                Base.@error "Error processing file $(fasta_list[idx]): $e"
+                all_kmer_counts[idx] = Dict{KMER_TYPE,Int}()
+                if show_progress
+                    ProgressMeter.next!(progress)
+                end
+            end
+        end
+    else
+        for idx in 1:num_files
+            try
+                kmer_counts = COUNT_FUNCTION(KMER_TYPE, fasta_list[idx])
+                all_kmer_counts[idx] = kmer_counts
+                if show_progress
+                    ProgressMeter.next!(progress)
+                end
+            catch e
+                Base.@error "Error processing file $(fasta_list[idx]): $e"
+                all_kmer_counts[idx] = Dict{KMER_TYPE,Int}()
+                if show_progress
+                    ProgressMeter.next!(progress)
+                end
+            end
+        end
+    end
+    
+    if show_progress && !isnothing(progress)
+        ProgressMeter.finish!(progress)
+    end
+    
+    # Find maximum count for data type selection
+    for kmer_counts in all_kmer_counts
+        if !isempty(kmer_counts)
+            local_max = maximum(Base.values(kmer_counts))
+            if local_max > max_observed_count
+                max_observed_count = local_max
+            end
+        end
+    end
+    
+    # Determine value type
+    ValType = if isnothing(count_element_type)
+        max_observed_count <= typemax(UInt8) ? UInt8 :
+        max_observed_count <= typemax(UInt16) ? UInt16 :
+        max_observed_count <= typemax(UInt32) ? UInt32 : UInt64
+    else
+        count_element_type
+        if max_observed_count > typemax(count_element_type)
+            Base.@warn "User-specified count_element_type $count_element_type may be too small for max observed count $max_observed_count"
+        end
+        count_element_type
+    end
+    
+    Base.@info "Using $ValType for kmer counts: Maximum count observed = $max_observed_count"
+    
+    # Build dense matrix directly
+    kmer_counts_matrix = zeros(ValType, num_kmers, num_files)
+    
+    progress2 = show_progress ? ProgressMeter.Progress(num_files; desc="Building matrix: ", color=:green) : nothing
+    
+    for (col, kmer_counts) in enumerate(all_kmer_counts)
+        for (kmer, count) in kmer_counts
+            row = kmer_index[kmer]
+            kmer_counts_matrix[row, col] = ValType(count)
+        end
+        if show_progress && !isnothing(progress2)
+            ProgressMeter.next!(progress2)
+        end
+    end
+    
+    if show_progress && !isnothing(progress2)
+        ProgressMeter.finish!(progress2)
+    end
+    
+    # Create result
+    result = (kmers = sorted_kmers, counts = kmer_counts_matrix)
+    
+    # Save to file if requested
+    if !isnothing(result_file)
+        try
+            JLD2.save_object(result_file, result)
+            Base.@info "Results saved to $result_file"
+        catch e
+            Base.@warn "Failed to save results to $result_file: $e"
+        end
+    end
+    
+    return result
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create a dense k-mer counts table for a set of FASTA files, with disk-backed temporary storage, 
@@ -1589,7 +1774,16 @@ function fasta_list_to_dense_kmer_counts(;
     count_element_type::Union{Type{<:Unsigned}, Nothing} = nothing,
     result_file::Union{Nothing, AbstractString} = nothing,
     force::Bool = false,
-    cleanup_temp::Bool = true
+    cleanup_temp::Bool = true,
+    # Optimization control parameters
+    force_threading::Union{Bool, Nothing} = nothing,
+    force_temp_files::Union{Bool, Nothing} = nothing,
+    force_progress_bars::Union{Bool, Nothing} = nothing,
+    # Heuristic tuning parameters
+    threading_file_threshold::Int = 4,
+    threading_size_threshold::Int = 10_000_000,
+    memory_safety_factor::Float64 = 0.5,
+    progress_time_threshold::Float64 = 5.0
 )
 
     num_files = length(fasta_list)
@@ -1622,6 +1816,44 @@ function fasta_list_to_dense_kmer_counts(;
         error("Missing FASTA files: $(join(missing_files, ", ")).")
     end
 
+    # --- Smart Optimization Heuristics ---
+    # Analyze file characteristics for optimization decisions
+    file_sizes = [Base.Filesystem.filesize(f) for f in fasta_list]
+    total_file_size = sum(file_sizes)
+    
+    # Threading decision: use threading if we have enough files AND they're large enough,
+    # OR if we have many files regardless of size
+    use_threading = if !isnothing(force_threading)
+        force_threading
+    else
+        (num_files >= threading_file_threshold && total_file_size > threading_size_threshold) || 
+        num_files >= 2 * threading_file_threshold
+    end
+    
+    # Estimate memory requirements for in-memory vs temp file strategy
+    # This is a rough estimate - we'll do more precise calculation later
+    estimated_avg_kmers_per_file = min(1000, total_file_size ÷ max(1, num_files) ÷ 4)  ## Rough estimate based on file size
+    estimated_total_kmer_dicts_memory = num_files * estimated_avg_kmers_per_file * 24  ## Dict overhead estimate
+    
+    # Memory strategy decision
+    use_temp_files = if !isnothing(force_temp_files)
+        force_temp_files
+    else
+        # Use temp files if estimated memory usage exceeds safety factor
+        # We'll do a more precise check later, this is just initial heuristic
+        estimated_total_kmer_dicts_memory > (1_000_000_000 * memory_safety_factor)  ## 1GB base threshold
+    end
+    
+    # Progress bars decision
+    show_progress = if !isnothing(force_progress_bars)
+        force_progress_bars
+    else
+        # Show progress for operations that might take a while
+        num_files > 20 || total_file_size > 50_000_000  ## 50MB threshold
+    end
+    
+    Base.@info "Optimization decisions: threading=$use_threading, temp_files=$use_temp_files, progress=$show_progress ($(num_files) files, $(Base.format_bytes(total_file_size)))"
+
     # Output file short-circuit
     if !isnothing(result_file) && Base.Filesystem.isfile(result_file) && !force
         Base.@info "result_file exists at $result_file. Loading and returning."
@@ -1652,18 +1884,39 @@ function fasta_list_to_dense_kmer_counts(;
     num_kmers = length(sorted_kmers)
     Base.@info "Counting $num_kmers $(KMER_TYPE) across $num_files files..."
 
-    # Temp files
+    # Branch to optimized execution path based on heuristics
+    if !use_temp_files
+        return _dense_kmer_counts_in_memory(
+            fasta_list, sorted_kmers, KMER_TYPE, COUNT_FUNCTION, 
+            use_threading, show_progress, count_element_type, result_file
+        )
+    end
+
+    # Temp files (original temp file-based implementation)
     temp_dir = Base.Filesystem.mktempdir(temp_dir_parent; prefix="dense_kmer_counts_")
     temp_file_paths = [Base.Filesystem.joinpath(temp_dir, "counts_$(i).jld2") for i in 1:num_files]
 
     # Pass 1: count kmers per file, record max, save to temp
-    progress1 = ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan)
-    lock = Base.ReentrantLock()
+    progress1 = show_progress ? ProgressMeter.Progress(num_files; desc="Counting: ", barglyphs=ProgressMeter.BarGlyphs("[=> ]"), color=:cyan) : nothing
+    lock = use_threading ? Base.ReentrantLock() : nothing
     error_log = Vector{Tuple{Int, String}}()
     successful_indices = Vector{Int}()
     max_observed_count_ref = Ref{Int}(0)
 
-    Threads.@threads for idx in 1:num_files
+    # Define processing loop based on threading decision
+    function process_files()
+        if use_threading
+            Threads.@threads for idx in 1:num_files
+                process_single_file(idx)
+            end
+        else
+            for idx in 1:num_files
+                process_single_file(idx)
+            end
+        end
+    end
+    
+    function process_single_file(idx)
         fasta_file = fasta_list[idx]
         temp_file = temp_file_paths[idx]
         local_max = 0
@@ -1673,32 +1926,52 @@ function fasta_list_to_dense_kmer_counts(;
             if !isempty(kmer_counts)
                 local_max = maximum(Base.values(kmer_counts))
             end
-            Base.lock(lock)
+            if use_threading
+                Base.lock(lock)
+            end
             try
                 push!(successful_indices, idx)
                 if local_max > max_observed_count_ref[]
                     max_observed_count_ref[] = local_max
                 end
             finally
-                Base.unlock(lock)
+                if use_threading
+                    Base.unlock(lock)
+                end
             end
         catch e
-            Base.lock(lock)
+            if use_threading
+                Base.lock(lock)
+            end
             try
                 push!(error_log, (idx, string(e)))
             finally
-                Base.unlock(lock)
+                if use_threading
+                    Base.unlock(lock)
+                end
             end
             try JLD2.save_object(temp_file, Dict{KMER_TYPE, Int}()) catch end
         end
-        Base.lock(lock)
-        try
-            ProgressMeter.next!(progress1)
-        finally
-            Base.unlock(lock)
+        if show_progress
+            if use_threading
+                Base.lock(lock)
+            end
+            try
+                ProgressMeter.next!(progress1)
+            finally
+                if use_threading
+                    Base.unlock(lock)
+                end
+            end
         end
     end
-    ProgressMeter.finish!(progress1)
+    
+    # Execute the file processing
+    process_files()
+    
+    if show_progress && !isnothing(progress1)
+        ProgressMeter.finish!(progress1)
+    end
 
     sorted_successful_indices = sort(successful_indices)
     successful_fasta_list = fasta_list[sorted_successful_indices]
@@ -2187,14 +2460,15 @@ function estimate_genome_size_from_kmers(sequence::Union{BioSequences.LongSequen
     end
     
     # Count k-mers using existing infrastructure
-    if BioSequences.alphabet(bio_sequence) isa BioSequences.DNAAlphabet
+    # Use direct sequence type checks - much more robust than type parameter extraction
+    if bio_sequence isa BioSequences.LongDNA
         kmer_counts = count_kmers(Kmers.DNAKmer{k}, bio_sequence)
-    elseif BioSequences.alphabet(bio_sequence) isa BioSequences.RNAAlphabet  
+    elseif bio_sequence isa BioSequences.LongRNA  
         kmer_counts = count_kmers(Kmers.RNAKmer{k}, bio_sequence)
-    elseif BioSequences.alphabet(bio_sequence) isa BioSequences.AminoAcidAlphabet
+    elseif bio_sequence isa BioSequences.LongAA
         kmer_counts = count_kmers(Kmers.AAKmer{k}, bio_sequence)
     else
-        error("Unsupported sequence alphabet: $(BioSequences.alphabet(bio_sequence))")
+        error("Unsupported sequence type: $(typeof(bio_sequence))")
     end
     
     unique_kmers = length(kmer_counts)
@@ -2226,17 +2500,19 @@ Overload for processing FASTQ or FASTA records directly.
 - `Dict{String, Any}`: Dictionary with k-mer statistics and genome size estimate
 """
 function estimate_genome_size_from_kmers(records::AbstractVector{T}, k::Integer) where {T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
-    # Determine sequence type from first record
-    first_seq = FASTX.sequence(records[1])
+    # Determine sequence type from first record using existing robust functions
+    first_seq_string = String(FASTX.sequence(records[1]))
+    first_seq_biosequence = convert_sequence(first_seq_string)
     
-    if BioSequences.alphabet(first_seq) isa BioSequences.DNAAlphabet
+    # Use direct sequence type checks on the converted BioSequence
+    if first_seq_biosequence isa BioSequences.LongDNA
         kmer_type = Kmers.DNAKmer{k}
-    elseif BioSequences.alphabet(first_seq) isa BioSequences.RNAAlphabet
+    elseif first_seq_biosequence isa BioSequences.LongRNA
         kmer_type = Kmers.RNAKmer{k}  
-    elseif BioSequences.alphabet(first_seq) isa BioSequences.AminoAcidAlphabet
+    elseif first_seq_biosequence isa BioSequences.LongAA
         kmer_type = Kmers.AAKmer{k}
     else
-        error("Unsupported sequence alphabet")
+        error("Unsupported sequence type: $(typeof(first_seq_biosequence))")
     end
     
     # Count k-mers across all records

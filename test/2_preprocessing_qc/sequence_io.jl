@@ -1,10 +1,24 @@
-# Sequence IO tests
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/2_preprocessing_qc/sequence_io.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/sequence_io.jl", "test/2_preprocessing_qc", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
+import FASTX
+import BioSequences
 
 Test.@testset "sequence IO" begin
     Test.@testset "detect alphabet type" begin
