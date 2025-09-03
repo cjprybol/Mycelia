@@ -1,10 +1,27 @@
-# Assembly Merging tests
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# TODO: Add more tests for merging assemblies, including edge cases and larger graphs.
+
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/assembly_merging.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/assembly_merging.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
+import MetaGraphs
+import MetaGraphsNext
+import Graphs
 
 Test.@testset "Assembly Merging" begin
     Test.@testset "Contig Merging" begin
