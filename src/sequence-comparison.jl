@@ -15,17 +15,18 @@ function shannon_entropy(seq; k::Int=1, base::Real=2, alphabet=nothing)
         end
         
         # Determine k-mer type and counting function based on sequence alphabet
-        if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+        # TODO: use the constants in this repo instead of hardcoding
+        if seq isa BioSequences.LongDNA
             kmer_type = Kmers.DNAKmer{k}
-            counts = count_canonical_kmers(kmer_type, seq)
-        elseif BioSequences.alphabet(seq) isa BioSequences.RNAAlphabet
+            counts = count_kmers(kmer_type, seq)  # Use non-canonical for entropy
+        elseif seq isa BioSequences.LongRNA
             kmer_type = Kmers.RNAKmer{k}
             counts = count_kmers(kmer_type, seq)
-        elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+        elseif seq isa BioSequences.LongAA
             kmer_type = Kmers.AAKmer{k}
             counts = count_kmers(kmer_type, seq)
         else
-            error("Unsupported sequence alphabet: $(BioSequences.alphabet(seq))")
+            error("Unsupported sequence type: $(typeof(seq))")
         end
     else
         # Use existing ngram infrastructure for generic strings
@@ -59,17 +60,18 @@ function renyi_entropy(seq; k::Int=1, α::Real=2, base::Real=2)
         end
         
         # Determine k-mer type and counting function based on sequence alphabet
-        if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+        # TODO: use the constants in this repo instead of hardcoding
+        if seq isa BioSequences.LongDNA
             kmer_type = Kmers.DNAKmer{k}
-            counts = count_canonical_kmers(kmer_type, seq)
-        elseif BioSequences.alphabet(seq) isa BioSequences.RNBioSequences.DNAAlphabetlphabet
+            counts = count_kmers(kmer_type, seq)  # Use non-canonical for entropy
+        elseif seq isa BioSequences.LongRNA
             kmer_type = Kmers.RNAKmer{k}
             counts = count_kmers(kmer_type, seq)
-        elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+        elseif seq isa BioSequences.LongAA
             kmer_type = Kmers.AAKmer{k}
             counts = count_kmers(kmer_type, seq)
         else
-            error("Unsupported sequence alphabet: $(BioSequences.alphabet(seq))")
+            error("Unsupported sequence type: $(typeof(seq))")
         end
     else
         # Use existing ngram infrastructure for generic strings
@@ -103,20 +105,21 @@ function kmer_richness(seq, k; alphabet=nothing, normalize::Bool=true)
         end
         
         # Determine k-mer type and counting function based on sequence alphabet
-        if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+        # TODO: use the constants in this repo instead of hardcoding
+        if seq isa BioSequences.LongDNA
             kmer_type = Kmers.DNAKmer{k}
             kmer_counts = count_canonical_kmers(kmer_type, seq)
             A = isnothing(alphabet) ? 4 : alphabet
-        elseif BioSequences.alphabet(seq) isa BioSequences.RNAAlphabet
+        elseif seq isa BioSequences.LongRNA
             kmer_type = Kmers.RNAKmer{k}
             kmer_counts = count_kmers(kmer_type, seq)
             A = isnothing(alphabet) ? 4 : alphabet
-        elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+        elseif seq isa BioSequences.LongAA
             kmer_type = Kmers.AAKmer{k}
             kmer_counts = count_kmers(kmer_type, seq)
             A = isnothing(alphabet) ? 20 : alphabet
         else
-            error("Unsupported sequence alphabet: $(BioSequences.alphabet(seq))")
+            error("Unsupported sequence type: $(typeof(seq))")
         end
         
         uniq = length(kmer_counts)
@@ -149,17 +152,18 @@ If `kmax` is omitted, it defaults to the full range 1:floor(Int, log_A(L)) or si
 Returns (profile, summary), where profile is a Vector{Float64} of length kmax
 and summary is `reducer(profile)`.
 """
-function linguistic_complexity(seq; kmax=nothing, alphabet=nothing, reducer=mean)
+function linguistic_complexity(seq; kmax=nothing, alphabet=nothing, reducer=Statistics.mean)
     # Determine sequence type and properties
     if seq isa BioSequences.BioSequence
         L = length(seq)
         # Infer alphabet size from sequence type if not provided
+        # TODO: use the constants in this repo instead of hardcoding
         if isnothing(alphabet)
-            if BioSequences.alphabet(seq) isa BioSequences.DNAAlphabet
+            if seq isa BioSequences.LongDNA
                 A = 4
-            elseif BioSequences.alphabet(seq) isa BioSequences.RNAAlphabet
+            elseif seq isa BioSequences.LongRNA
                 A = 4
-            elseif BioSequences.alphabet(seq) isa BioSequences.AminoAcidAlphabet
+            elseif seq isa BioSequences.LongAA
                 A = 20
             else
                 A = 4  # default fallback

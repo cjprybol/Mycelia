@@ -29,8 +29,38 @@ the quality scores accordingly.
 function canonical(qmer::Qualmer{KmerT}) where {KmerT<:Union{Kmers.DNAKmer, Kmers.RNAKmer}}
     canon_kmer = BioSequences.canonical(qmer.kmer)
     
-    if canon_kmer == BioSequences.reverse_complement(qmer.kmer)
+    # If the canonical form is different from the original, it means we reverse-complemented
+    # In that case, we need to reverse the quality scores
+    if canon_kmer != qmer.kmer
         K = length(qmer.qualities)
+        reversed_quals = ntuple(i -> qmer.qualities[K - i + 1], K)
+        return Qualmer(canon_kmer, reversed_quals)
+    else
+        return Qualmer(canon_kmer, qmer.qualities)
+    end
+end
+
+# Additional method for the Mer types from FwKmers
+function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequences.DNAAlphabet{N}}} where N
+    canon_kmer = BioSequences.canonical(qmer.kmer)
+    
+    # If the canonical form is different from the original, it means we reverse-complemented
+    # In that case, we need to reverse the quality scores
+    if canon_kmer != qmer.kmer
+        reversed_quals = ntuple(i -> qmer.qualities[K - i + 1], K)
+        return Qualmer(canon_kmer, reversed_quals)
+    else
+        return Qualmer(canon_kmer, qmer.qualities)
+    end
+end
+
+# Additional method for RNA Mer types
+function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequences.RNAAlphabet{N}}} where N
+    canon_kmer = BioSequences.canonical(qmer.kmer)
+    
+    # If the canonical form is different from the original, it means we reverse-complemented
+    # In that case, we need to reverse the quality scores
+    if canon_kmer != qmer.kmer
         reversed_quals = ntuple(i -> qmer.qualities[K - i + 1], K)
         return Qualmer(canon_kmer, reversed_quals)
     else
@@ -147,10 +177,10 @@ reverse complement, ensuring consistent representation regardless of strand.
 """
 function qualmers_canonical(sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
     return (
-        (Qualmer(
+        (canonical(Qualmer(
             kmer,
             quality[pos:pos+K-1]
-        ), pos) for (pos, kmer) in enumerate(Kmers.CanonicalKmers{BioSequences.DNAAlphabet{N}, K}(sequence))
+        )), pos) for (pos, kmer) in enumerate(Kmers.FwKmers{BioSequences.DNAAlphabet{N}, K}(sequence))
     )
 end
 
@@ -286,7 +316,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Convert PHRED quality score to error probability.
 """
 function phred_to_error_probability(phred_score::UInt8)
-    return 10.0^(-phred_score / 10.0)
+    return 10.0^(-Float64(phred_score) / 10.0)
 end
 
 """
@@ -796,7 +826,7 @@ Identifies fraction of k-mers below confidence threshold as potential error indi
 """
 function calculate_assembly_quality_metrics(qualmer_graph; low_confidence_threshold::Float64=0.95)
     # Get all vertex data
-    vertices = [qualmer_graph[v] for v in Graphs.vertices(qualmer_graph)]
+    vertices = [qualmer_graph[v] for v in MetaGraphsNext.labels(qualmer_graph)]
     
     if isempty(vertices)
         return (
@@ -837,7 +867,7 @@ Identify potential sequencing errors based on quality scores and coverage patter
 - `min_confidence::Float64=0.95`: Minimum joint probability threshold
 
 # Returns
-- `Vector{Int}`: Vertex indices of potential error k-mers
+- `Vector`: K-mer labels of potential error k-mers
 
 # Details
 Identifies k-mers that are likely errors based on:
@@ -849,9 +879,9 @@ function identify_potential_errors(graph;
                                  min_coverage::Int=2, 
                                  min_quality::Float64=20.0, 
                                  min_confidence::Float64=0.95)
-    error_vertices = Int[]
+    error_labels = []
     
-    for v in Graphs.vertices(graph)
+    for v in MetaGraphsNext.labels(graph)
         vdata = graph[v]
         
         # Check if vertex meets error criteria
@@ -861,9 +891,9 @@ function identify_potential_errors(graph;
         
         # Consider it an error if it fails any criterion
         if is_low_coverage || is_low_quality || is_low_confidence
-            push!(error_vertices, v)
+            push!(error_labels, v)
         end
     end
     
-    return error_vertices
+    return error_labels
 end
