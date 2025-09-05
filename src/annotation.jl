@@ -33,8 +33,33 @@ function run_phage_annotation(;
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer  phynteny_transformer --help --advanced`)
 end
 
+"""
+    run_pgap(; fasta, organism, pgap_dir, outdir, as_string, force, threads, prefix)
 
+Run the PGAP (Prokaryotic Genome Annotation Pipeline) tool on a FASTA file.
 
+This function automatically handles compressed FASTA files (gzip, bzip2, xz) by creating 
+temporary uncompressed versions when needed. The temporary files are automatically cleaned 
+up after processing, regardless of whether the PGAP run succeeds or fails.
+
+# Arguments
+- `fasta::AbstractString`: Path to the input FASTA file. Can be compressed (.gz, .bz2, .xz) or uncompressed.
+- `organism::AbstractString`: Organism name for taxonomic classification and annotation.
+- `pgap_dir`: Directory containing PGAP installation. Defaults to `~/workspace/pgap`.
+- `outdir`: Output directory for results. Defaults to input filename with "_pgap" suffix.
+- `as_string::Bool=false`: If true, returns the command string instead of executing it.
+- `force::Bool=false`: If true, overwrites existing output directory.
+- `threads::Int`: Number of CPU threads to use. Defaults to system CPU count.
+- `prefix`: Prefix for output files. Defaults to input filename without extension.
+
+# Returns
+- `String`: Path to output directory when `as_string=false`, or bash command string when `as_string=true`.
+
+# Notes
+The function will automatically download and set up PGAP if not already present in the specified directory.
+For compressed input files, temporary uncompressed versions are created and automatically cleaned up.
+The PGAP tool requires uncompressed FASTA files, so this function handles the decompression transparently.
+"""
 function run_pgap(;
         fasta::AbstractString,
         organism::AbstractString,
@@ -63,15 +88,52 @@ function run_pgap(;
         return outdir
     end    
     @assert !isdir(outdir)
-    if as_string
-        # Generate the fully expanded bash command
-        # --report-usage-false
-        bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta --report-usage-true --taxcheck --auto-correct-tax --organism $organism --cpu $(threads) --prefix $(prefix)"
-        # Print it so you can copy and paste
-        return bash_command
+    
+    # Detect if the input FASTA is compressed and handle accordingly
+    is_compressed = endswith(lowercase(fasta), ".gz") || endswith(lowercase(fasta), ".bz2") || endswith(lowercase(fasta), ".xz")
+    
+    if is_compressed
+        # Create temporary uncompressed file
+        temp_fasta = tempname() * ".fasta"
+        
+        try
+            # Decompress based on file extension
+            if endswith(lowercase(fasta), ".gz")
+                run(pipeline(`gunzip -c $(fasta)`, temp_fasta))
+            elseif endswith(lowercase(fasta), ".bz2")
+                run(pipeline(`bunzip2 -c $(fasta)`, temp_fasta))
+            elseif endswith(lowercase(fasta), ".xz")
+                run(pipeline(`xz -dc $(fasta)`, temp_fasta))
+            end
+            
+            # Use the temporary uncompressed file for PGAP
+            fasta_to_use = temp_fasta
+            
+            if as_string
+                # Generate the fully expanded bash command
+                bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta_to_use --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
+                return bash_command
+            else
+                @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta_to_use) --report-usage-true --taxcheck --auto-correct-tax --organism "$(organism)" --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+                return outdir
+            end
+            
+        finally
+            # Clean up temporary file regardless of success or failure
+            if isfile(temp_fasta)
+                rm(temp_fasta)
+            end
+        end
     else
-        @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism $(organism) --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-        return outdir
+        # File is not compressed, use original logic
+        if as_string
+            # Generate the fully expanded bash command
+            bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
+            return bash_command
+        else
+            @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism "$(organism)" --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+            return outdir
+        end
     end
 end
 

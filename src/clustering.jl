@@ -1,4 +1,114 @@
 """
+Cluster sequences based on pairwise identity threshold and return representative sequences.
+
+This function treats the problem as a graph clustering task where:
+- Each unique sequence is a node
+- Edges exist between sequences with identity ≥ threshold
+- Connected components represent clusters of similar sequences
+- The first occurrence (by original order) in each cluster is retained as representative
+"""
+function deduplicate_sequences(df::DataFrames.DataFrame, threshold::Float64=99.5)
+    # Get all unique sequences and create mapping
+    all_sequences = unique([df.query; df.reference])
+    seq_to_index = Dict(seq => i for (i, seq) in enumerate(all_sequences))
+    n_sequences = length(all_sequences)
+    
+    # Create undirected graph
+    graph = Graphs.SimpleGraph(n_sequences)
+    
+    # Add edges for sequence pairs meeting threshold
+    for row in DataFrames.eachrow(df)
+        if row."%_identity" >= threshold
+            query_idx = seq_to_index[row.query]
+            ref_idx = seq_to_index[row.reference]
+            Graphs.add_edge!(graph, query_idx, ref_idx)
+        end
+    end
+    
+    # Find connected components (clusters)
+    components = Graphs.connected_components(graph)
+    
+    # For each cluster, find the representative (earliest appearing sequence)
+    representatives = String[]
+    cluster_info = DataFrames.DataFrame(
+        representative = String[],
+        cluster_size = Int[],
+        cluster_members = Vector{String}[]
+    )
+    
+    for component in components
+        # Get sequences in this cluster
+        cluster_seqs = all_sequences[component]
+        
+        # Find the representative (first occurrence in original data)
+        # Check both query and reference columns for first appearance
+        first_positions = Int[]
+        for seq in cluster_seqs
+            query_positions = findall(x -> x == seq, df.query)
+            ref_positions = findall(x -> x == seq, df.reference)
+            all_positions = [query_positions; ref_positions]
+            if !isempty(all_positions)
+                push!(first_positions, minimum(all_positions))
+            else
+                push!(first_positions, typemax(Int))  # Should not happen
+            end
+        end
+        
+        # Representative is sequence with minimum first position
+        min_pos_idx = argmin(first_positions)
+        representative = cluster_seqs[min_pos_idx]
+        
+        push!(representatives, representative)
+        push!(cluster_info, (
+            representative = representative,
+            cluster_size = length(cluster_seqs),
+            cluster_members = cluster_seqs
+        ))
+    end
+    
+    return (;representatives, cluster_info)
+end
+
+"""
+Filter original dataframe to only include rows involving representative sequences.
+"""
+function filter_to_representatives(df::DataFrames.DataFrame, representatives::Vector{String})
+    rep_set = Set(representatives)
+    mask = [row.query in rep_set && row.reference in rep_set for row in DataFrames.eachrow(df)]
+    return df[mask, :]
+end
+
+"""
+Generate summary statistics about the clustering results.
+"""
+function clustering_summary(original_df::DataFrames.DataFrame, cluster_info::DataFrames.DataFrame)
+    n_original_sequences = length(unique([original_df.query; original_df.reference]))
+    n_clusters = nrow(cluster_info)
+    n_representatives = n_clusters
+    
+    cluster_sizes = cluster_info.cluster_size
+    
+    println("=== Sequence Deduplication Summary ===")
+    println("Original sequences: $n_original_sequences")
+    println("Representative sequences: $n_representatives")
+    println("Sequences removed: $(n_original_sequences - n_representatives)")
+    println("Reduction: $(round((1 - n_representatives/n_original_sequences) * 100, digits=2))%")
+    println()
+    println("Cluster size distribution:")
+    size_counts = StatsBase.countmap(cluster_sizes)
+    for size in sort(collect(keys(size_counts)))
+        count = size_counts[size]
+        println("  Size $size: $count clusters")
+    end
+    
+    return (
+        original_count = n_original_sequences,
+        representative_count = n_representatives,
+        reduction_percent = (1 - n_representatives/n_original_sequences) * 100
+    )
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Cluster protein or nucleotide sequences using MMseqs2 easy-cluster workflow.
