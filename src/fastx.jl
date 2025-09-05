@@ -1,3 +1,213 @@
+# Streaming FASTA/FASTQ normalization to a compressed JSON Lines file, record-by-record,
+# with an optional progress meter.
+
+"""
+    fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
+                                   output_path::Union{Nothing,AbstractString}=nothing,
+                                   human_readable_id::Union{String,Nothing}=nothing,
+                                   force_truncate::Bool=false,
+                                   show_progress::Bool=true,
+                                   progress_every::Int=1000,
+                                   progress_desc::AbstractString="Streaming normalization",
+                                   progress_output::IO=stderr)
+
+Stream the input FASTA/FASTQ file and write one JSON object per line (NDJSON) to
+a compressed output file. This avoids loading the entire table or very long
+sequences into memory and avoids delimiter limitations of TSV/CSV.
+
+When `output_path` is not provided, a default is derived by replacing the file
+extension matched by `Mycelia.FAST(A|Q)_REGEX` (including optional .gz) with
+`.normalized.jsonl.gz`.
+
+A lightweight progress meter can be shown during streaming. It displays processed
+records, elapsed time, and records/second as an indefinite spinner. Control its
+frequency with `progress_every` to reduce overhead.
+"""
+function fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
+                                       output_path::Union{Nothing,AbstractString}=nothing,
+                                       human_readable_id::Union{String,Nothing}=nothing,
+                                       force_truncate::Bool=false,
+                                       show_progress::Bool=true,
+                                       progress_every::Int=1000,
+                                       progress_desc::AbstractString="Streaming normalization",
+                                       progress_output::IO=stderr)
+
+    # --- Extract human_readable_id from filename if not provided ---
+    if isnothing(human_readable_id)
+        human_readable_id = _extract_human_readable_id_from_fastx_path(fastx_path, force_truncate)
+    end
+
+    # --- Input Validation ---
+    @assert isfile(fastx_path) && filesize(fastx_path) > 0 "File does not exist or is empty."
+    if length(human_readable_id) > 16
+        if force_truncate
+            @warn "Human-readable identifier '$(human_readable_id)' exceeds 16 characters, truncating to '$(human_readable_id[1:16])'"
+            human_readable_id = human_readable_id[1:16]
+        else
+            error("Human-readable identifier '$(human_readable_id)' cannot exceed 16 characters. Use force_truncate=true to allow truncation.")
+        end
+    end
+
+    # --- File Type Detection (using Mycelia) ---
+    file_type = if occursin(Mycelia.FASTA_REGEX, fastx_path)
+        :fasta
+    elseif occursin(Mycelia.FASTQ_REGEX, fastx_path)
+        :fastq
+    else
+        error("File is not FASTA or FASTQ")
+    end
+
+    # --- Derive output path if not provided ---
+    out_path = isnothing(output_path) ? _default_out_path(fastx_path) : String(output_path)
+
+    # --- Stream records and write NDJSON.gz ---
+    if endswith(out_path, ".gz")
+        open(out_path, "w") do raw
+            gz = CodecZlib.GzipCompressorStream(raw)
+            try
+                _write_ndjson_stream(
+                    gz, fastx_path, human_readable_id, file_type;
+                    show_progress=show_progress,
+                    progress_every=progress_every,
+                    progress_desc=progress_desc,
+                    progress_output=progress_output,
+                )
+                flush(gz)
+            finally
+                close(gz)
+            end
+        end
+    else
+        open(out_path, "w") do io
+            _write_ndjson_stream(
+                io, fastx_path, human_readable_id, file_type;
+                show_progress=show_progress,
+                progress_every=progress_every,
+                progress_desc=progress_desc,
+                progress_output=progress_output,
+            )
+            flush(io)
+        end
+    end
+
+    return out_path
+end
+
+# --- Helpers ---
+
+# Build the default output path by replacing FASTX suffix (including optional .gz) with .normalized.jsonl.gz
+function _default_out_path(fastx_path::AbstractString)
+    m_fasta = match(Mycelia.FASTA_REGEX, fastx_path)
+    m_fastq = match(Mycelia.FASTQ_REGEX, fastx_path)
+    if (m_fasta === nothing) && (m_fastq === nothing)
+        error("Input path does not match expected regex pattern: $(fastx_path)")
+    else
+        if !(m_fasta === nothing)
+            output_path = replace(fastx_path, Mycelia.FASTA_REGEX => ".normalized.jsonl.gz")
+        else
+            output_path = replace(fastx_path, Mycelia.FASTQ_REGEX => ".normalized.jsonl.gz")
+        end
+    end
+    return output_path
+end
+
+# Core streaming writer: one JSON object per record, with optional progress meter
+function _write_ndjson_stream(io::IO, fastx_path::AbstractString, human_readable_id::String, file_type::Symbol;
+                              show_progress::Bool,
+                              progress_every::Int,
+                              progress_desc::AbstractString,
+                              progress_output::IO)
+
+    n_processed::Int = 0
+    t0 = time()
+    p = nothing
+    if show_progress
+        p = ProgressMeter.ProgressUnknown(desc=progress_desc, dt=0.5, output=progress_output)
+    end
+
+    for record in Mycelia.open_fastx(fastx_path)
+        record_sequence = FASTX.sequence(String, record)
+
+        # Quality handling
+        record_quality = if file_type == :fastq
+            Float64.(collect(FASTX.quality_scores(record)))
+        else
+            nothing
+        end
+
+        # Compute derived fields
+        record_identifier = FASTX.identifier(record)
+        record_description = FASTX.description(record)
+        sequence_hash = create_base58_hash(record_sequence, encoded_length=16)
+        record_alphabet = join(sort(collect(Set(uppercase(record_sequence)))))
+        record_type = string(Mycelia.detect_alphabet(record_sequence))
+        mean_record_quality = (record_quality === nothing) ? nothing : Statistics.mean(record_quality)
+        median_record_quality = (record_quality === nothing) ? nothing : Statistics.median(record_quality)
+        record_length = length(record_sequence)
+
+        # Simplified hierarchical identifier without joint sequence hash
+        sequence_identifier = string(human_readable_id, "_", sequence_hash)
+        if length(sequence_identifier) > 50
+            error("NCBI identifier length limit of 50 characters exceeded: $(sequence_identifier)")
+        end
+
+        # Emit JSON in a deterministic key order via NamedTuple literal
+        obj = (
+            fastx_path = Base.basename(fastx_path),
+            human_readable_id = human_readable_id,
+            sequence_hash = sequence_hash,
+            sequence_identifier = sequence_identifier,
+            record_identifier = record_identifier,
+            record_description = record_description,
+            record_length = record_length,
+            record_alphabet = record_alphabet,
+            record_type = record_type,
+            mean_record_quality = mean_record_quality,
+            median_record_quality = median_record_quality,
+            record_quality = record_quality,
+            record_sequence = record_sequence,
+            file_type = String(file_type),
+        )
+
+        JSON.print(io, obj)
+        write(io, '\n')
+
+        # Progress
+        n_processed += 1
+        if show_progress && (n_processed % progress_every == 0)
+            elapsed = time() - t0
+            rps = elapsed > 0 ? (n_processed / elapsed) : 0.0
+            ProgressMeter.next!(p; showvalues=[
+                (:records, n_processed),
+                (:elapsed, _fmt_hms(elapsed)),
+                (:rps, round(rps, digits=2)),
+            ])
+        end
+    end
+
+    if show_progress
+        elapsed = time() - t0
+        rps = elapsed > 0 ? (n_processed / elapsed) : 0.0
+        ProgressMeter.finish!(p; showvalues=[
+            (:records, n_processed),
+            (:elapsed, _fmt_hms(elapsed)),
+            (:rps, round(rps, digits=2)),
+        ])
+    end
+
+    nothing
+end
+
+# Format seconds as HH:MM:SS
+function _fmt_hms(t::Real)
+    t ≤ 0 && return "00:00:00"
+    s = floor(Int, t)
+    h = s ÷ 3600
+    m = (s % 3600) ÷ 60
+    ss = s % 60
+    return Printf.@sprintf("%02d:%02d:%02d", h, m, ss)
+end
+
 """
     normalized_table2fastx(
         table::DataFrames.DataFrame;
@@ -13,7 +223,7 @@ Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP 
 
 # Keyword Arguments
 - `output_dir::String="."`: The directory to save the file.
-- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension). Defaults to the normalized genome identifier in the table.
+- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension). Defaults to the normalized fastx identifier in the table.
 - `gzip::Bool=false`: If `true`, the output file will be GZIP compressed.
 """
 function normalized_table2fastx(
@@ -34,7 +244,7 @@ function normalized_table2fastx(
     end
     
     # --- 2. Determine Final Output Path ---
-    basename = isnothing(output_basename) ? table.genome_identifier[1] : output_basename
+    basename = isnothing(output_basename) ? table.fastx_identifier[1] : output_basename
     final_outfile = joinpath(output_dir, basename * file_extension)
 
     if !isfile(final_outfile) || force
@@ -229,18 +439,18 @@ function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id:
 
     # --- Add New Hierarchical Identifier Columns ---
     current_columns = names(normalized_table)
-    genome_hash = generate_genome_hash(normalized_table.sequence_hash, encoded_length=16)
+    joint_sequence_hash = generate_joint_sequence_hash(normalized_table.sequence_hash, encoded_length=16)
 
     normalized_table[!, "human_readable_id"] .= human_readable_id
-    normalized_table[!, "genome_hash"] .= genome_hash
-    normalized_table[!, "genome_identifier"] .= human_readable_id .* "_" .* genome_hash
-    normalized_table[!, "sequence_identifier"] .= normalized_table.genome_identifier .* "_" .* normalized_table.sequence_hash
+    normalized_table[!, "joint_sequence_hash"] .= joint_sequence_hash
+    normalized_table[!, "fastx_identifier"] .= human_readable_id .* "_" .* joint_sequence_hash
+    normalized_table[!, "sequence_identifier"] .= normalized_table.fastx_identifier .* "_" .* normalized_table.sequence_hash
     @assert all(length.(normalized_table[!, "sequence_identifier"]) .<= 50) "NCBI identifier length limit of 50 characters exceeded."
     normalized_table[!, "fastx_path"] .= Base.basename(fastx_path)
 
     final_order = [
-        "fastx_path", "human_readable_id", "genome_hash", "sequence_hash",
-        "genome_identifier", "sequence_identifier", "record_identifier",
+        "fastx_path", "human_readable_id", "joint_sequence_hash", "sequence_hash",
+        "fastx_identifier", "sequence_identifier", "record_identifier",
         "record_description", "record_length", "record_alphabet", "record_type",
         "mean_record_quality", "median_record_quality", "record_quality",
         "record_sequence"
@@ -280,23 +490,23 @@ function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=32
 end
 
 """
-    generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32) -> String
+    generate_joint_sequence_hash(sequences::Vector{String}; encoded_length::Int=32) -> String
 
-Computes a single, order-independent hash for a collection of sequences (a genome).
+Computes a single, order-independent hash for a collection of sequences.
 
 This function works by hashing each sequence individually, sorting the resulting
 hashes, and then hashing the concatenated list of sorted hashes. This ensures
-that the final genome hash is stable, even if the sequences are provided in a
+that the final joint sequence hash is stable, even if the sequences are provided in a
 different order.
 
 # Arguments
 - `sequences::Vector{String}`: A vector of strings, where each string is a biological sequence.
-- `encoded_length::Int=32`: The desired length for the final Base58 encoded genome hash.
+- `encoded_length::Int=32`: The desired length for the final Base58 encoded hash.
 
 # Returns
-- `String`: A single, stable Base58 hash representing the entire genome.
+- `String`: A single, stable Base58 hash representing the joint set of sequences.
 """
-function generate_genome_hash(sequences::Vector{<:AbstractString}; encoded_length::Int=32)::String
+function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; encoded_length::Int=32)::String
     if isempty(sequences)
         error("Input sequence vector cannot be empty.")
     end
@@ -321,13 +531,13 @@ function generate_genome_hash(sequences::Vector{<:AbstractString}; encoded_lengt
     # 3. Combine the sorted hashes into a single string
     combined_data = join(individual_hashes)
 
-    # 4. Hash the combined string to get the final genome hash
+    # 4. Hash the combined string to get the final joint sequence hash
     # We can use the function from our previous discussion for this final step.
     
     # --- EDIT 2: Corrected the keyword argument name to match the function signature ---
-    final_genome_hash = create_base58_hash(combined_data, encoded_length=encoded_length)
+    final_joint_sequence_hash = create_base58_hash(combined_data, encoded_length=encoded_length)
 
-    return final_genome_hash
+    return final_joint_sequence_hash
 end
 
 """
@@ -1336,7 +1546,7 @@ Calculate the total size (in bases) of all sequences in a FASTA file.
 # Returns
 - `Int`: Sum of lengths of all sequences in the FASTA file
 """
-function fasta_genome_size(fasta_file)
+function total_fasta_size(fasta_file)
     return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
 end
 

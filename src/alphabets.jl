@@ -16,41 +16,64 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Determines the alphabet of a sequence. The function scans through `seq` only once:
-- If a 'T' or 't' is found (and no 'U/u'), the sequence is classified as DNA.
-- If a 'U' or 'u' is found (and no 'T/t'), it is classified as RNA.
-- If both T and U occur, an error is thrown.
-- If a character outside the canonical nucleotide and ambiguity codes is encountered,
-  the sequence is assumed to be protein.
-- If neither T nor U are found, the sequence is assumed to be DNA.
+Determines the most likely alphabet of a biological sequence.
+
+The function follows a hierarchical approach, from the most specific (unambiguous)
+to the most general (ambiguous) alphabets. It checks if the set of characters
+in the input sequence is a subset of the character sets defined in `Mycelia.alphabets`.
+
+The order of checking is:
+1.  Unambiguous RNA
+2.  Unambiguous DNA
+3.  Unambiguous Amino Acid
+4.  Ambiguous RNA (if not a fit for any unambiguous set)
+5.  Ambiguous DNA
+6.  Ambiguous Amino Acid
+
+If a sequence fits multiple alphabets (e.g., "ACGU" is valid RNA and AA), it is
+classified as the first one matched in the hierarchy (RNA in this case). If the
+sequence does not fit any of the defined alphabets or is empty, an `ArgumentError` is thrown.
 """
 function detect_alphabet(seq::AbstractString)::Symbol
-    hasT = false
-    hasU = false
-    # Define allowed nucleotide characters (both for DNA and RNA, including common ambiguity codes)
-    # TODO: define this by merging the alphabets from BioSymbols
-    valid_nucleotides = "ACGTacgtACGUacguNRYSWKMBDHnryswkmbdh"
-    for c in seq
-        if c == 'T' || c == 't'
-            hasT = true
-        elseif c == 'U' || c == 'u'
-            hasU = true
-        elseif !(c in valid_nucleotides)
-            # If an unexpected character is encountered, assume it's a protein sequence.
-            return :AA
-        end
-        if hasT && hasU
-            throw(ArgumentError("Sequence contains both T and U, ambiguous alphabet"))
-        end
+    if isempty(seq)
+        throw(ArgumentError("Input sequence cannot be empty."))
     end
-    if hasT
-        return :DNA
-    elseif hasU
+
+    seq_chars = Set(seq)
+
+    # --- Step 1: Check against Unambiguous Alphabets ---
+    # From smallest to largest to find the most specific classification.
+
+    # RNA is the most restrictive unambiguous nucleotide alphabet.
+    if issubset(seq_chars, UNAMBIGUOUS_RNA_CHARSET)
         return :RNA
-    else
-        # In the absence of explicit T or U, default to DNA.
+    end
+    # DNA is the next most restrictive.
+    if issubset(seq_chars, UNAMBIGUOUS_DNA_CHARSET)
         return :DNA
     end
+    # Amino Acid is the least restrictive unambiguous alphabet.
+    if issubset(seq_chars, UNAMBIGUOUS_AA_CHARSET)
+        return :AA
+    end
+
+    # --- Step 2: Check against Ambiguous Alphabets ---
+    # This block is reached only if the sequence contains ambiguous characters.
+
+    if issubset(seq_chars, AMBIGUOUS_RNA_CHARSET)
+        return :RNA
+    end
+    if issubset(seq_chars, AMBIGUOUS_DNA_CHARSET)
+        return :DNA
+    end
+    if issubset(seq_chars, AMBIGUOUS_AA_CHARSET)
+        return :AA
+    end
+
+    # --- Step 3: No Alphabet Found ---
+    # If the sequence characters do not form a subset of any known alphabet.
+    unmatched_chars = setdiff(seq_chars, union(AMBIGUOUS_DNA_CHARSET, AMBIGUOUS_RNA_CHARSET, AMBIGUOUS_AA_CHARSET))
+    throw(ArgumentError("Sequence contains characters that do not belong to any known alphabet: $(join(unmatched_chars, ", "))"))
 end
 
 """
