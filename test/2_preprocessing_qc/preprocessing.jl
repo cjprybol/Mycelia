@@ -22,6 +22,7 @@ import CSV
 import CodecZlib
 import DataFrames
 import Statistics
+import JSON
 
 const phiX174_accession_id = "NC_001422.1"
 
@@ -170,14 +171,156 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
             
             ## Test fastp (short reads)
             Test.@testset "fastp" begin
-                result = Mycelia.qc_filter_short_reads_fastp(
-                    forward_reads = fastq_R1,
-                    reverse_reads = fastq_R2
-                )
-                Test.@test isfile(result.out_forward)
-                Test.@test isfile(result.out_reverse) 
-                Test.@test isfile(result.json)
-                Test.@test isfile(result.html)
+                ## Test default behavior (automatic dedup logic)
+                Test.@testset "fastp default (auto dedup)" begin
+                    result = Mycelia.qc_filter_short_reads_fastp(
+                        forward_reads = fastq_R1,
+                        reverse_reads = fastq_R2
+                    )
+                    Test.@test isfile(result.out_forward)
+                    Test.@test isfile(result.out_reverse) 
+                    Test.@test isfile(result.json)
+                    Test.@test isfile(result.html)
+                end
+                
+                ## Test with explicit deduplication disabled
+                Test.@testset "fastp dedup disabled" begin
+                    result = Mycelia.qc_filter_short_reads_fastp(
+                        forward_reads = fastq_R1,
+                        reverse_reads = fastq_R2,
+                        enable_dedup = false
+                    )
+                    Test.@test isfile(result.out_forward)
+                    Test.@test isfile(result.out_reverse) 
+                    Test.@test isfile(result.json)
+                    Test.@test isfile(result.html)
+                end
+                
+                ## Test with explicit deduplication enabled
+                Test.@testset "fastp dedup enabled" begin
+                    result = Mycelia.qc_filter_short_reads_fastp(
+                        forward_reads = fastq_R1,
+                        reverse_reads = fastq_R2,
+                        enable_dedup = true
+                    )
+                    Test.@test isfile(result.out_forward)
+                    Test.@test isfile(result.out_reverse) 
+                    Test.@test isfile(result.json)
+                    Test.@test isfile(result.html)
+                end
+                
+                ## Test deduplication functionality with actual duplicated sequences
+                Test.@testset "fastp deduplication validation" begin
+                    ## Create unique temporary directories for each test to avoid conflicts
+                    dup_test_dir = mktempdir(dir)
+                    
+                    ## Create test files with duplicated sequences using Mycelia.write_fastq
+                    dup_fastq_R1 = joinpath(dup_test_dir, "test_dup_R1.fastq.gz")
+                    dup_fastq_R2 = joinpath(dup_test_dir, "test_dup_R2.fastq.gz")
+                    
+                    try
+                        ## Create FASTQ records with duplicates:
+                        ## - Same sequence, different identifiers (should be deduplicated)
+                        ## - Same sequence, same identifier (should be deduplicated)  
+                        ## - Unique sequences (should be retained)
+                        duplicate_records = [
+                            ## First occurrence of duplicate sequence
+                            FASTX.FASTQ.Record("seq1", "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT", "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"),
+                            ## Same sequence, different identifier (duplicate)
+                            FASTX.FASTQ.Record("seq2_different_id", "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT", "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"),
+                            ## Same sequence, same identifier (duplicate)
+                            FASTX.FASTQ.Record("seq1", "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT", "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"),
+                            ## Unique sequence 1
+                            FASTX.FASTQ.Record("seq3_unique", "TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA", "JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ"),
+                            ## Unique sequence 2
+                            FASTX.FASTQ.Record("seq4_another_unique", "GGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCCGGCC", "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK")
+                        ]
+                        
+                        ## Write duplicate test files using Mycelia.write_fastq
+                        Mycelia.write_fastq(records=duplicate_records, filename=dup_fastq_R1)
+                        Mycelia.write_fastq(records=duplicate_records, filename=dup_fastq_R2)
+                        
+                        ## Test with deduplication disabled - should keep all sequences
+                        Test.@testset "dedup disabled - keeps duplicates" begin
+                            ## Use unique output paths to avoid caching
+                            no_dedup_out_forward = joinpath(dup_test_dir, "test_no_dedup_R1.fastp.1.fq.gz")
+                            no_dedup_out_reverse = joinpath(dup_test_dir, "test_no_dedup_R2.fastp.2.fq.gz")
+                            no_dedup_json = joinpath(dup_test_dir, "test_no_dedup_R.fastp_report.json")
+                            no_dedup_html = joinpath(dup_test_dir, "test_no_dedup_R.fastp_report.html")
+                            
+                            result_no_dedup = nothing
+                            reader = nothing
+                            try
+                                result_no_dedup = Mycelia.qc_filter_short_reads_fastp(
+                                    forward_reads = dup_fastq_R1,
+                                    reverse_reads = dup_fastq_R2,
+                                    out_forward = no_dedup_out_forward,
+                                    out_reverse = no_dedup_out_reverse,
+                                    json = no_dedup_json,
+                                    html = no_dedup_html,
+                                    enable_dedup = false
+                                )
+                                
+                                ## Count sequences in output (should have all 5 sequences per file)
+                                seq_count_r1 = 0
+                                reader = Mycelia.open_fastx(result_no_dedup.out_forward)
+                                for record in reader
+                                    seq_count_r1 += 1
+                                end
+                                Test.@test seq_count_r1 == 5  ## All sequences should be retained
+                            finally
+                                ## Cleanup reader
+                                reader !== nothing && close(reader)
+                            end
+                        end
+                        
+                        ## Test with deduplication enabled - should remove duplicates
+                        Test.@testset "dedup enabled - removes duplicates" begin
+                            ## Use different output paths to avoid file caching
+                            dedup_out_forward = joinpath(dup_test_dir, "test_dedup_R1.fastp.1.fq.gz")
+                            dedup_out_reverse = joinpath(dup_test_dir, "test_dedup_R2.fastp.2.fq.gz")
+                            dedup_json = joinpath(dup_test_dir, "test_dedup_R.fastp_report.json")
+                            dedup_html = joinpath(dup_test_dir, "test_dedup_R.fastp_report.html")
+                            
+                            result_with_dedup = nothing
+                            reader = nothing
+                            try
+                                result_with_dedup = Mycelia.qc_filter_short_reads_fastp(
+                                    forward_reads = dup_fastq_R1,
+                                    reverse_reads = dup_fastq_R2,
+                                    out_forward = dedup_out_forward,
+                                    out_reverse = dedup_out_reverse,
+                                    json = dedup_json,
+                                    html = dedup_html,
+                                    enable_dedup = true
+                                )
+                                
+                                ## Count sequences in output (should have fewer sequences after dedup)
+                                seq_count_r1 = 0
+                                reader = Mycelia.open_fastx(result_with_dedup.out_forward)
+                                for record in reader
+                                    seq_count_r1 += 1
+                                end
+                                
+                                ## Should have removed duplicates - expecting 3 unique sequences:
+                                ## seq1 (first occurrence), seq3_unique, seq4_another_unique
+                                Test.@test seq_count_r1 < 5  ## Should have fewer than original
+                                Test.@test seq_count_r1 >= 3  ## Should retain at least the 3 unique sequences
+                                
+                                ## Verify the JSON report contains deduplication stats
+                                Test.@test isfile(result_with_dedup.json)
+                                json_content = JSON.parse(read(result_with_dedup.json, String))
+                                Test.@test haskey(json_content, "duplication")  ## fastp should report duplication stats
+                            finally
+                                ## Cleanup reader
+                                reader !== nothing && close(reader)
+                            end
+                        end
+                    finally
+                        ## Cleanup test directory and all its contents
+                        isdir(dup_test_dir) && rm(dup_test_dir, recursive=true, force=true)
+                    end
+                end
             end
             
             ## Test trim_galore (paired-end)

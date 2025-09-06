@@ -26,13 +26,6 @@ import FASTX
 
 Test.@testset "Assembly Merging Tests" begin
 
-    function create_test_fasta(path, records)
-        writer = FASTX.FASTA.Writer(open(path, "w"))
-        for record in records
-            write(writer, record)
-        end
-        close(writer)
-    end
 
     Test.@testset "1. merge_fasta_files" begin
         fasta1_path = joinpath(tempdir(), "merge_test1.fa")
@@ -42,8 +35,8 @@ Test.@testset "Assembly Merging Tests" begin
         records1 = [FASTX.FASTA.Record("seq1", "ATCG")]
         records2 = [FASTX.FASTA.Record("seq2", "GCTA")]
 
-        create_test_fasta(fasta1_path, records1)
-        create_test_fasta(fasta2_path, records2)
+        Mycelia.write_fasta(records=records1, outfile=fasta1_path)
+        Mycelia.write_fasta(records=records2, outfile=fasta2_path)
 
         Mycelia.merge_fasta_files(fasta_files=[fasta1_path, fasta2_path], fasta_file=merged_path)
 
@@ -72,8 +65,8 @@ Test.@testset "Assembly Merging Tests" begin
         # Assembly 2 has an overlapping contig
         records2 = [FASTX.FASTA.Record("contig2_part2", "GATTACA" * "CTAGCTAG")]
 
-        create_test_fasta(assembly1_path, records1)
-        create_test_fasta(assembly2_path, records2)
+        Mycelia.write_fasta(records=records1, outfile=assembly1_path)
+        Mycelia.write_fasta(records=records2, outfile=assembly2_path)
 
         # Ensure the bioconda environment is available
         Mycelia.add_bioconda_env("quickmerge")

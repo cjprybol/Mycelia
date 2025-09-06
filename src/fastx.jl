@@ -827,21 +827,37 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Perform quality control (QC) filtering and trimming on short-read FASTQ files using fastp.
+Perform quality control (QC) filtering and trimming on paired-end short-read FASTQ files using fastp.
 
 # Arguments
-- `in_fastq::String`: Path to the input FASTQ file.
-- `out_fastq::String`: Path to the output FASTQ file.
-- `adapter_seq::String`: Adapter sequence to trim.
-- `quality_threshold::Int`: Minimum phred score for trimming (default 20).
-- `min_length::Int`: Minimum read length to retain (default 50).
+- `forward_reads::String`: Path to the forward (R1) FASTQ file.
+- `reverse_reads::String`: Path to the reverse (R2) FASTQ file.
+- `out_forward::String`: Output path for filtered forward reads (auto-generated if not specified).
+- `out_reverse::String`: Output path for filtered reverse reads (auto-generated if not specified).
+- `report_title::String`: Title for the HTML/JSON report (auto-generated if not specified).
+- `html::String`: Output path for HTML report (auto-generated if not specified).
+- `json::String`: Output path for JSON report (auto-generated if not specified).
+- `enable_dedup::Union{Bool,Nothing}`: Control deduplication behavior. If `true`, forces deduplication with memory-aware settings. If `false`, disables deduplication. If `nothing` (default), uses automatic logic based on file size and available memory.
 
 # Returns
-- `String`: Path to the filtered and trimmed FASTQ file.
+- Named tuple containing paths to: `(out_forward, out_reverse, json, html)`
 
 # Details
-This function uses fastp to remove adapter contamination, trim low‐quality bases from the 3′ end,
-and discard reads shorter than `min_length`. It’s a simple wrapper that executes the external fastp command.
+This function uses fastp to perform quality control, adapter trimming, and optional deduplication on paired-end reads.
+
+## Smart Deduplication Logic
+The function includes intelligent memory management for deduplication:
+
+- **User Control**: Set `enable_dedup=true` to force deduplication, or `enable_dedup=false` to disable it.
+- **Automatic Mode**: When `enable_dedup=nothing` (default), the function:
+  - Skips deduplication for small files (< 100MB total) for efficiency
+  - For larger files, enables deduplication if sufficient memory is available
+- **Memory-Aware Settings**: Automatically adjusts fastp's `--dup_calc_accuracy` based on available system memory:
+  - Default: Level 3 (4GB memory) if sufficient memory available
+  - Fallback: Level 2 (2GB memory) or Level 1 (1GB memory) if needed
+  - Disables deduplication if < 1GB memory available
+
+This ensures the process won't be killed due to out-of-memory conditions while maintaining deduplication benefits when feasible.
 """
 function qc_filter_short_reads_fastp(;
         forward_reads::String,
@@ -850,7 +866,8 @@ function qc_filter_short_reads_fastp(;
         out_reverse::String=replace(reverse_reads, Mycelia.FASTQ_REGEX => ".fastp.2.fq.gz"),
         report_title::String="$(forward_reads) $(reverse_reads) fastp report",
         html::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.html",
-        json::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.json"
+        json::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.json",
+        enable_dedup::Union{Bool,Nothing}=nothing
     )
     # usage: fastp -i <in1> -o <out1> [-I <in1> -O <out2>] [options...]
     # options:
@@ -973,6 +990,66 @@ function qc_filter_short_reads_fastp(;
     #   -?, --help                         print this message
     if !isfile(out_forward) || !isfile(out_reverse) || !isfile(json) || !isfile(html)
         Mycelia.add_bioconda_env("fastp")
+        
+        ## Smart deduplication logic based on file size and available memory
+        dedup_args = String[]
+        
+        if enable_dedup === false
+            ## User explicitly disabled dedup - don't add any dedup arguments
+            @info "Deduplication explicitly disabled by user"
+        elseif enable_dedup === true
+            ## User explicitly enabled dedup - use default settings but check memory
+            file_size_bytes = filesize(forward_reads) + filesize(reverse_reads)
+            available_memory = Sys.free_memory()
+            
+            ## fastp dedup accuracy levels: 1G, 2G, 4G, 8G, 16G, 24G (levels 1-6)
+            ## Default is level 3 (4GB) for dedup mode
+            dedup_memory_gb = 4
+            dedup_memory_bytes = dedup_memory_gb * 1024^3
+            
+            if dedup_memory_bytes > available_memory
+                @warn "Not enough memory for default deduplication (need $(Base.format_bytes(dedup_memory_bytes)), have $(Base.format_bytes(available_memory))). Using lower accuracy level."
+                ## Try progressively lower accuracy levels
+                if available_memory >= 2 * 1024^3  ## 2GB available
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "2")
+                    @info "Using dedup accuracy level 2 (2GB memory)"
+                elseif available_memory >= 1024^3  ## 1GB available
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "1")
+                    @info "Using dedup accuracy level 1 (1GB memory)"
+                else
+                    @warn "Insufficient memory for deduplication (need at least 1GB). Disabling deduplication."
+                end
+            else
+                push!(dedup_args, "--dedup")
+                @info "Using default deduplication (accuracy level 3, 4GB memory)"
+            end
+        else
+            ## enable_dedup is nothing - use automatic logic based on file size and memory
+            file_size_bytes = filesize(forward_reads) + filesize(reverse_reads)
+            available_memory = Sys.free_memory()
+            
+            ## Heuristic: if files are small (< 100MB total), dedup is probably not worth the memory cost
+            if file_size_bytes < 100 * 1024^2
+                @info "Small input files ($(Base.format_bytes(file_size_bytes))). Skipping deduplication for efficiency."
+            else
+                ## For larger files, check if we have enough memory for dedup
+                dedup_memory_bytes = 4 * 1024^3  ## Default level 3 needs 4GB
+                
+                if dedup_memory_bytes <= available_memory
+                    push!(dedup_args, "--dedup")
+                    @info "Enabling deduplication with default settings (4GB memory, $(Base.format_bytes(available_memory)) available)"
+                elseif available_memory >= 2 * 1024^3
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "2")
+                    @info "Enabling deduplication with reduced accuracy (2GB memory, $(Base.format_bytes(available_memory)) available)"
+                elseif available_memory >= 1024^3
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "1")
+                    @info "Enabling deduplication with minimal accuracy (1GB memory, $(Base.format_bytes(available_memory)) available)"
+                else
+                    @warn "Insufficient memory for deduplication (need at least 1GB, have $(Base.format_bytes(available_memory))). Disabling deduplication."
+                end
+            end
+        end
+        
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastp fastp
                 --in1 $(forward_reads)
                 --in2 $(reverse_reads)
@@ -981,7 +1058,7 @@ function qc_filter_short_reads_fastp(;
                 --json $(json)
                 --html $(html)
                 --report_title $(report_title)
-                --dedup`
+                $(dedup_args)`
         run(cmd)
     else
         @show isfile(out_forward)
