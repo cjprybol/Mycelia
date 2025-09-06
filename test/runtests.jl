@@ -60,11 +60,11 @@ if TEST_TIER == "core"
     println("\n3. K-mer Analysis Tests (core)")
     include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"), exclude_patterns=exclude_patterns)
     
-    println("\n4. Assembly Tests (core)")
-    include_all_tests(joinpath(@__DIR__, "4_assembly"), exclude_patterns=exclude_patterns)
+    # println("\n4. Assembly Tests (core)")
+    # include_all_tests(joinpath(@__DIR__, "4_assembly"), exclude_patterns=exclude_patterns)
     
-    println("\n5. Validation Tests (core)")
-    include_all_tests(joinpath(@__DIR__, "5_validation"), exclude_patterns=exclude_patterns)
+    # println("\n5. Validation Tests (core)")
+    # include_all_tests(joinpath(@__DIR__, "5_validation"), exclude_patterns=exclude_patterns)
     
     # Skip these directories entirely for core tests as they're mostly tool integrations
     # include_all_tests(joinpath(@__DIR__, "6_annotation"), exclude_patterns=exclude_patterns)

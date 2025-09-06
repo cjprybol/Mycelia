@@ -58,8 +58,8 @@ Test.@testset "Preprocessing" begin
         
         ## Test that we get expected columns
         expected_cols = [
-            "fastx_path", "human_readable_id", "genome_hash", "sequence_hash",
-            "genome_identifier", "sequence_identifier", "record_identifier",
+            "fastx_path", "human_readable_id", "dataset_hash", "sequence_hash",
+            "dataset_identifier", "sequence_identifier", "record_identifier",
             "record_description", "record_length", "record_alphabet", "record_type",
             "mean_record_quality", "median_record_quality", "record_quality",
             "record_sequence"
@@ -401,7 +401,7 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                     ## Test automatic ID extraction
                     table = Mycelia.fastx2normalized_table(filepath)
                     Test.@test table.human_readable_id[1] == expected_id
-                    Test.@test startswith(table.genome_identifier[1], expected_id * "_")
+                    Test.@test startswith(table.dataset_identifier[1], expected_id * "_")
                     Test.@test startswith(table.sequence_identifier[1], expected_id * "_")
                 end
             end
@@ -416,7 +416,7 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 
                 table = Mycelia.fastx2normalized_table(filepath; human_readable_id="custom_id")
                 Test.@test table.human_readable_id[1] == "custom_id"
-                Test.@test startswith(table.genome_identifier[1], "custom_id_")
+                Test.@test startswith(table.dataset_identifier[1], "custom_id_")
             end
             
             ## Test force_truncate functionality
@@ -474,18 +474,18 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 
                 ## Check that all identifiers have proper hierarchy
                 Test.@test all(table.human_readable_id .== "test_genome")
-                Test.@test all(length.(table.genome_hash) .== 16)  ## Base58 encoded, 16 chars
+                Test.@test all(length.(table.dataset_hash) .== 16)  ## Base58 encoded, 16 chars
                 Test.@test all(length.(table.sequence_hash) .== 16)  ## Base58 encoded, 16 chars
                 
-                ## genome_identifier = human_readable_id + "_" + genome_hash
+                ## dataset_identifier = human_readable_id + "_" + dataset_hash
                 for row in DataFrames.eachrow(table)
-                    Test.@test row.genome_identifier == "test_genome_" * row.genome_hash
-                    Test.@test row.sequence_identifier == row.genome_identifier * "_" * row.sequence_hash
+                    Test.@test row.dataset_identifier == "test_genome_" * row.dataset_hash
+                    Test.@test row.sequence_identifier == row.dataset_identifier * "_" * row.sequence_hash
                     Test.@test length(row.sequence_identifier) <= 50  ## NCBI limit
                 end
                 
-                ## All sequences should have the same genome_identifier but different sequence_identifier
-                Test.@test length(unique(table.genome_identifier)) == 1
+                ## All sequences should have the same dataset_identifier but different sequence_identifier
+                Test.@test length(unique(table.dataset_identifier)) == 1
                 Test.@test length(unique(table.sequence_identifier)) == 2
             end
         end
@@ -630,8 +630,8 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
             ## Updated column names for fastx2normalized_table
             norm_cols = [
-                "fastx_path", "human_readable_id", "genome_hash", "sequence_hash",
-                "genome_identifier", "sequence_identifier", "record_identifier",
+                "fastx_path", "human_readable_id", "dataset_hash", "sequence_hash",
+                "dataset_identifier", "sequence_identifier", "record_identifier",
                 "record_description", "record_length", "record_alphabet", "record_type",
                 "mean_record_quality", "median_record_quality", "record_quality",
                 "record_sequence"

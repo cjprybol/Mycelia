@@ -31,6 +31,16 @@ function symbols_to_char_set(symbols)
     return Set([chars..., lowercase.(chars)...])
 end
 
+# --- ACGTN and ACGUN Alphabets (including N ambiguous character) ---
+# These are intermediate alphabets that include the most common ambiguous character (N)
+# but avoid the full set of ambiguous characters for more efficient detection.
+
+const ACGTN_DNA_SYMBOLS = BioSymbols.ACGTN
+const ACGUN_RNA_SYMBOLS = BioSymbols.ACGUN
+
+const ACGTN_DNA_CHARSET = symbols_to_char_set(ACGTN_DNA_SYMBOLS)
+const ACGUN_RNA_CHARSET = symbols_to_char_set(ACGUN_RNA_SYMBOLS)
+
 # --- Unambiguous (Canonical) Alphabets ---
 # Filtered to exclude ambiguous symbols and gaps, representing the core characters.
 

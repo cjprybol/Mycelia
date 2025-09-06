@@ -23,12 +23,14 @@ to the most general (ambiguous) alphabets. It checks if the set of characters
 in the input sequence is a subset of the character sets defined in `Mycelia.alphabets`.
 
 The order of checking is:
-1.  Unambiguous RNA
-2.  Unambiguous DNA
-3.  Unambiguous Amino Acid
-4.  Ambiguous RNA (if not a fit for any unambiguous set)
-5.  Ambiguous DNA
-6.  Ambiguous Amino Acid
+1.  Unambiguous DNA
+2.  Unambiguous RNA
+3.  DNA + N (ACGTN)
+4.  RNA + N (ACGUN)
+5.  Unambiguous Amino Acid
+6.  Ambiguous DNA (if not a fit for any previous set)
+7.  Ambiguous RNA
+8.  Ambiguous Amino Acid
 
 If a sequence fits multiple alphabets (e.g., "ACGU" is valid RNA and AA), it is
 classified as the first one matched in the hierarchy (RNA in this case). If the
@@ -44,33 +46,45 @@ function detect_alphabet(seq::AbstractString)::Symbol
     # --- Step 1: Check against Unambiguous Alphabets ---
     # From smallest to largest to find the most specific classification.
 
-    # RNA is the most restrictive unambiguous nucleotide alphabet.
-    if issubset(seq_chars, UNAMBIGUOUS_RNA_CHARSET)
-        return :RNA
-    end
-    # DNA is the next most restrictive.
+    # DNA is the most restrictive unambiguous nucleotide alphabet.
     if issubset(seq_chars, UNAMBIGUOUS_DNA_CHARSET)
         return :DNA
     end
+    # RNA is the next most restrictive unambiguous nucleotide alphabet.
+    if issubset(seq_chars, UNAMBIGUOUS_RNA_CHARSET)
+        return :RNA
+    end
+
+    # --- Step 2: Check against N-containing Alphabets ---
+    # Check DNA+N and RNA+N before full ambiguous sets.
+
+    if issubset(seq_chars, ACGTN_DNA_CHARSET)
+        return :DNA
+    end
+    if issubset(seq_chars, ACGUN_RNA_CHARSET)
+        return :RNA
+    end
+
+    # --- Step 3: Check Unambiguous Amino Acid ---
     # Amino Acid is the least restrictive unambiguous alphabet.
     if issubset(seq_chars, UNAMBIGUOUS_AA_CHARSET)
         return :AA
     end
 
-    # --- Step 2: Check against Ambiguous Alphabets ---
-    # This block is reached only if the sequence contains ambiguous characters.
+    # --- Step 4: Check against Full Ambiguous Alphabets ---
+    # This block is reached only if the sequence contains multiple ambiguous characters.
 
-    if issubset(seq_chars, AMBIGUOUS_RNA_CHARSET)
-        return :RNA
-    end
     if issubset(seq_chars, AMBIGUOUS_DNA_CHARSET)
         return :DNA
+    end
+    if issubset(seq_chars, AMBIGUOUS_RNA_CHARSET)
+        return :RNA
     end
     if issubset(seq_chars, AMBIGUOUS_AA_CHARSET)
         return :AA
     end
 
-    # --- Step 3: No Alphabet Found ---
+    # --- Step 5: No Alphabet Found ---
     # If the sequence characters do not form a subset of any known alphabet.
     unmatched_chars = setdiff(seq_chars, union(AMBIGUOUS_DNA_CHARSET, AMBIGUOUS_RNA_CHARSET, AMBIGUOUS_AA_CHARSET))
     throw(ArgumentError("Sequence contains characters that do not belong to any known alphabet: $(join(unmatched_chars, ", "))"))

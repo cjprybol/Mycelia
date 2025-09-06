@@ -23,14 +23,22 @@ Named tuple containing:
 """
 function run_megahit(;fastq1, fastq2=nothing, outdir="megahit_output", min_contig_len=200, k_list="21,29,39,59,79,99,119,141")
     Mycelia.add_bioconda_env("megahit")
-    mkpath(outdir)
     
+    # MEGAHIT requires the output directory to not exist, so check output file first
     if !isfile(joinpath(outdir, "final.contigs.fa"))
+        # Remove output directory if it exists (MEGAHIT will create it)
+        if isdir(outdir)
+            rm(outdir, recursive=true)
+        end
+        
         if isnothing(fastq2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit -r $(fastq1) -o $(outdir) --min-contig-len $(min_contig_len) --k-list $(k_list) -t $(Sys.CPU_THREADS)`)
         else
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit -1 $(fastq1) -2 $(fastq2) -o $(outdir) --min-contig-len $(min_contig_len) --k-list $(k_list) -t $(Sys.CPU_THREADS)`)
         end
+    else
+        # If output already exists, ensure directory exists for return value
+        mkpath(outdir)
     end
     return (;outdir, contigs=joinpath(outdir, "final.contigs.fa"))
 end
@@ -67,6 +75,44 @@ function run_metaspades(;fastq1, fastq2=nothing, outdir="metaspades_output", k_l
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades metaspades.py -s $(fastq1) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
         else
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades metaspades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
+        end
+    end
+    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run SPAdes assembler for single genome isolate assembly.
+
+# Arguments
+- `fastq1::String`: Path to first paired-end FASTQ file
+- `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
+- `outdir::String`: Output directory path (default: "spades_output")
+- `k_list::String`: k-mer sizes to use (default: "21,33,55,77")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `contigs::String`: Path to assembled contigs file
+- `scaffolds::String`: Path to scaffolds file
+
+# Details
+- Automatically creates and uses a conda environment with spades
+- Designed for single bacterial/archaeal genome assembly
+- Optimized for uniform coverage isolate data
+- Skips assembly if output directory already exists
+- Utilizes all available CPU threads
+"""
+function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,33,55,77")
+    Mycelia.add_bioconda_env("spades")
+    mkpath(outdir)
+    
+    if !isfile(joinpath(outdir, "contigs.fasta"))
+        if isnothing(fastq2)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -s $(fastq1) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
+        else
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
         end
     end
     return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"))
@@ -261,7 +307,7 @@ function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio")
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
     
-    prefix = basename(fastq, ".fastq")
+    prefix = splitext(basename(fastq))[1]
     if !isfile(joinpath(outdir, "$(prefix).contigs.fasta"))
         if read_type == "pacbio"
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS)`)
@@ -297,9 +343,11 @@ Named tuple containing:
 function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
-    hifiasm_outputs = filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true))
+    # Check if output directory exists before trying to read it
+    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
     # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
     if isempty(hifiasm_outputs)
+        mkpath(outdir)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm --primary -l0 -o $(hifiasm_outprefix) -t $(Sys.CPU_THREADS) $(fastq)`)
     end
     return (;outdir, hifiasm_outprefix)
@@ -331,11 +379,12 @@ Named tuple containing:
 """
 function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", similarity=0.85, purge_level=2)
     Mycelia.add_bioconda_env("hifiasm")
-    mkpath(outdir)
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
-    hifiasm_outputs = filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true))
+    # Check if output directory exists before trying to read it
+    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
     
     if isempty(hifiasm_outputs)
+        mkpath(outdir)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm-meta -t $(Sys.CPU_THREADS) -o $(hifiasm_outprefix) --purge-cov $(purge_level) --similarity $(similarity) $(fastq)`)
     end
     return (;outdir, hifiasm_outprefix)
@@ -365,14 +414,22 @@ Named tuple containing:
 """
 function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_output")
     Mycelia.add_bioconda_env("unicycler")
-    mkpath(outdir)
     
+    # Unicycler requires the output directory to not exist, so check output file first
     if !isfile(joinpath(outdir, "assembly.fasta"))
+        # Remove output directory if it exists (Unicycler will create it)
+        if isdir(outdir)
+            rm(outdir, recursive=true)
+        end
+        
         if isnothing(short_2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -s $(short_1) -l $(long_reads) -o $(outdir) -t $(Sys.CPU_THREADS)`)
         else
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -1 $(short_1) -2 $(short_2) -l $(long_reads) -o $(outdir) -t $(Sys.CPU_THREADS)`)
         end
+    else
+        # If output already exists, ensure directory exists for return value
+        mkpath(outdir)
     end
     return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
 end
@@ -2118,6 +2175,60 @@ function run_velvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdi
         
         # Step 2: velvetg (graph construction and traversal)
         cmd_args = ["velvetg", outdir, "-min_contig_lgth", string(min_contig_lgth)]
+        
+        if exp_cov != "auto"
+            push!(cmd_args, "-exp_cov", exp_cov)
+        end
+        
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet $(cmd_args)`)
+    end
+    
+    return (;outdir, contigs=contigs_file)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run metaVelvet assembler for metagenomic short-read assembly.
+
+# Arguments
+- `fastq1::String`: Path to first paired-end FASTQ file
+- `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
+- `outdir::String`: Output directory path (default: "metavelvet_output")
+- `k::Int`: K-mer size for assembly (default: 31)
+- `exp_cov::String`: Expected coverage (default: "auto")
+- `min_contig_lgth::Int`: Minimum contig length (default: 200)
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `contigs::String`: Path to assembled contigs file
+
+# Details
+- Uses metaVelvet's approach for metagenomic data with varying coverage
+- Two-step process: velveth (indexing) + meta-velvetg (metagenomic assembly)
+- Designed for mixed community samples with uneven coverage
+- Automatically creates and uses a conda environment with velvet
+- Skips assembly if output directory already exists
+"""
+function run_metavelvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdir::String="metavelvet_output", k::Int=31, exp_cov::String="auto", min_contig_lgth::Int=200)
+    Mycelia.add_bioconda_env("velvet")
+    mkpath(outdir)
+    
+    contigs_file = joinpath(outdir, "meta-velvetg.contigs.fa")
+    
+    if !isfile(contigs_file)
+        # Step 1: velveth (k-mer hashing and indexing) - same as regular velvet
+        if isnothing(fastq2)
+            # Single-end reads
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet velveth $(outdir) $(k) -short -fastq $(fastq1)`)
+        else
+            # Paired-end reads
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet velveth $(outdir) $(k) -shortPaired -fastq -separate $(fastq1) $(fastq2)`)
+        end
+        
+        # Step 2: meta-velvetg (metagenomic graph construction and traversal)
+        cmd_args = ["meta-velvetg", outdir, "-min_contig_lgth", string(min_contig_lgth)]
         
         if exp_cov != "auto"
             push!(cmd_args, "-exp_cov", exp_cov)
