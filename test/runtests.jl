@@ -27,6 +27,9 @@ println("\n=== Running Tests ===")
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
+
+include("test/4_assembly/assembly_merging.jl")
+
 # include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # include_all_tests(joinpath(@__DIR__, "5_validation"))
 # include_all_tests(joinpath(@__DIR__, "6_annotation"))

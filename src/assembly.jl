@@ -1799,44 +1799,45 @@ function _simplify_ngram_to_string_graph(ngram_graph)
     return ngram_graph
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# ISN'T AVAILABLE IN BIOCONDA
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run QuickMerge for assembly merging and scaffolding.
+# Run QuickMerge for assembly merging and scaffolding.
 
-# Arguments
-- `self_assembly::String`: Path to self assembly FASTA file (primary assembly)
-- `ref_assembly::String`: Path to reference assembly FASTA file (hybrid assembly)
-- `outdir::String`: Output directory path (default: "quickmerge_output")
-- `hco::Float64`: HCO threshold for overlap detection (default: 5.0)
-- `c::Float64`: Coverage cutoff for contig filtering (default: 1.5)
-- `l::Int`: Minimum alignment length (default: 5000)
+# # Arguments
+# - `self_assembly::String`: Path to self assembly FASTA file (primary assembly)
+# - `ref_assembly::String`: Path to reference assembly FASTA file (hybrid assembly)
+# - `outdir::String`: Output directory path (default: "quickmerge_output")
+# - `hco::Float64`: HCO threshold for overlap detection (default: 5.0)
+# - `c::Float64`: Coverage cutoff for contig filtering (default: 1.5)
+# - `l::Int`: Minimum alignment length (default: 5000)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `merged_assembly::String`: Path to merged assembly file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `merged_assembly::String`: Path to merged assembly file
 
-# Details
-- Uses MUMmer-based approach for identifying high-confidence overlaps
-- Merges assemblies by splicing contigs at overlap boundaries
-- Optimized for merging complementary assemblies (e.g., short+long read)
-- Automatically creates and uses a conda environment with quickmerge
-- Skips analysis if output files already exist
-"""
-function run_quickmerge(self_assembly::String, ref_assembly::String; outdir::String="quickmerge_output", hco::Float64=5.0, c::Float64=1.5, l::Int=5000)
-    Mycelia.add_bioconda_env("quickmerge")
-    mkpath(outdir)
+# # Details
+# - Uses MUMmer-based approach for identifying high-confidence overlaps
+# - Merges assemblies by splicing contigs at overlap boundaries
+# - Optimized for merging complementary assemblies (e.g., short+long read)
+# - Automatically creates and uses a conda environment with quickmerge
+# - Skips analysis if output files already exist
+# """
+# function run_quickmerge(self_assembly::String, ref_assembly::String; outdir::String="quickmerge_output", hco::Float64=5.0, c::Float64=1.5, l::Int=5000)
+#     Mycelia.add_bioconda_env("bioconda::quickmerge")
+#     mkpath(outdir)
     
-    merged_assembly = joinpath(outdir, "merged.fasta")
+#     merged_assembly = joinpath(outdir, "merged.fasta")
     
-    if !isfile(merged_assembly)
-        # Run QuickMerge
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quickmerge merge_wrapper.py $(self_assembly) $(ref_assembly) -pre $(outdir)/merged -hco $(hco) -c $(c) -l $(l)`)
-    end
+#     if !isfile(merged_assembly)
+#         # Run QuickMerge
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quickmerge merge_wrapper.py $(self_assembly) $(ref_assembly) -pre $(outdir)/merged -hco $(hco) -c $(c) -l $(l)`)
+#     end
     
-    return (;outdir, merged_assembly)
-end
+#     return (;outdir, merged_assembly)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

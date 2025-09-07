@@ -1378,6 +1378,7 @@ function merge_fasta_files(;fasta_files, fasta_file)
                 end
             end
         end
+        close(fastx_io)
     end
     @info "$(length(identifiers)) records merged..."
     return fasta_file
