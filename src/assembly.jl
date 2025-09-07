@@ -156,52 +156,52 @@ function run_skesa(;fastq1, fastq2=nothing, outdir="skesa_output", min_contig_le
     return (;outdir, contigs=contigs_file)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run IDBA-UD assembler for metagenomic assembly with uneven depth.
+# Run IDBA-UD assembler for metagenomic assembly with uneven depth.
 
-# Arguments
-- `fastq1::String`: Path to first paired-end FASTQ file
-- `fastq2::String`: Path to second paired-end FASTQ file
-- `outdir::String`: Output directory path (default: "idba_ud_output")
-- `min_k::Int`: Minimum k-mer size (default: 20)
-- `max_k::Int`: Maximum k-mer size (default: 100)
-- `step::Int`: K-mer size increment step (default: 20)
+# # Arguments
+# - `fastq1::String`: Path to first paired-end FASTQ file
+# - `fastq2::String`: Path to second paired-end FASTQ file
+# - `outdir::String`: Output directory path (default: "idba_ud_output")
+# - `min_k::Int`: Minimum k-mer size (default: 20)
+# - `max_k::Int`: Maximum k-mer size (default: 100)
+# - `step::Int`: K-mer size increment step (default: 20)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `scaffolds::String`: Path to scaffolds file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `contigs::String`: Path to contigs file
+# - `scaffolds::String`: Path to scaffolds file
 
-# Details
-- Uses multi-k-mer iterative assembly approach
-- Specifically designed for metagenomic data with uneven coverage depths
-- Automatically creates and uses a conda environment with idba
-- Requires paired-end reads merged to fasta format
-- Skips assembly if output directory already exists
-- Utilizes all available CPU threads
-"""
-function run_idba_ud(;fastq1, fastq2, outdir="idba_ud_output", min_k=20, max_k=100, step=20)
-    Mycelia.add_bioconda_env("idba")
-    mkpath(outdir)
+# # Details
+# - Uses multi-k-mer iterative assembly approach
+# - Specifically designed for metagenomic data with uneven coverage depths
+# - Automatically creates and uses a conda environment with idba
+# - Requires paired-end reads merged to fasta format
+# - Skips assembly if output directory already exists
+# - Utilizes all available CPU threads
+# """
+# function run_idba_ud(;fastq1, fastq2, outdir="idba_ud_output", min_k=20, max_k=100, step=20)
+#     Mycelia.add_bioconda_env("idba")
+#     mkpath(outdir)
     
-    # IDBA-UD requires paired reads in fasta format
-    merged_fasta = joinpath(outdir, "merged_reads.fa")
-    contig_file = joinpath(outdir, "contig.fa")
-    scaffold_file = joinpath(outdir, "scaffold.fa")
+#     # IDBA-UD requires paired reads in fasta format
+#     merged_fasta = joinpath(outdir, "merged_reads.fa")
+#     contig_file = joinpath(outdir, "contig.fa")
+#     scaffold_file = joinpath(outdir, "scaffold.fa")
     
-    if !isfile(contig_file)
-        # Convert and merge FASTQ to FASTA format for IDBA-UD
-        if !isfile(merged_fasta)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba fq2fa --merge $(fastq1) $(fastq2) $(merged_fasta)`)
-        end
+#     if !isfile(contig_file)
+#         # Convert and merge FASTQ to FASTA format for IDBA-UD
+#         if !isfile(merged_fasta)
+#             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba fq2fa --merge $(fastq1) $(fastq2) $(merged_fasta)`)
+#         end
         
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba idba_ud -r $(merged_fasta) -o $(outdir) --mink $(min_k) --maxk $(max_k) --step $(step) --num_threads $(Sys.CPU_THREADS)`)
-    end
-    return (;outdir, contigs=contig_file, scaffolds=scaffold_file)
-end
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba idba_ud -r $(merged_fasta) -o $(outdir) --mink $(min_k) --maxk $(max_k) --step $(step) --num_threads $(Sys.CPU_THREADS)`)
+#     end
+#     return (;outdir, contigs=contig_file, scaffolds=scaffold_file)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2015,123 +2015,123 @@ function run_strong(assembly_graph::String, reads_file::String; outdir::String="
     return (;outdir, strain_unitigs)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run Ray assembler for de novo genome assembly.
+# Run Ray assembler for de novo genome assembly.
 
-# Arguments
-- `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
-- `outdir::String`: Output directory path (default: "ray_output")
-- `k::Int`: K-mer size for assembly (default: 31)
-- `min_contig_length::Int`: Minimum contig length (default: 200)
+# # Arguments
+# - `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
+# - `outdir::String`: Output directory path (default: "ray_output")
+# - `k::Int`: K-mer size for assembly (default: 31)
+# - `min_contig_length::Int`: Minimum contig length (default: 200)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `scaffolds::String`: Path to scaffolds file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `contigs::String`: Path to contigs file
+# - `scaffolds::String`: Path to scaffolds file
 
-# Details
-- Uses Ray's distributed de Bruijn graph approach
-- Supports both single-end and paired-end reads
-- Automatically creates and uses a conda environment with ray
-- Skips assembly if output directory already exists
-- Utilizes all available CPU threads
-"""
-function run_ray(reads_files::Vector{String}; outdir::String="ray_output", k::Int=31, min_contig_length::Int=200)
-    Mycelia.add_bioconda_env("ray")
-    mkpath(outdir)
+# # Details
+# - Uses Ray's distributed de Bruijn graph approach
+# - Supports both single-end and paired-end reads
+# - Automatically creates and uses a conda environment with ray
+# - Skips assembly if output directory already exists
+# - Utilizes all available CPU threads
+# """
+# function run_ray(reads_files::Vector{String}; outdir::String="ray_output", k::Int=31, min_contig_length::Int=200)
+#     Mycelia.add_bioconda_env("ray")
+#     mkpath(outdir)
     
-    contigs_file = joinpath(outdir, "Contigs.fasta")
-    scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
+#     contigs_file = joinpath(outdir, "Contigs.fasta")
+#     scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
     
-    if !isfile(contigs_file)
-        # Build Ray command arguments
-        cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
+#     if !isfile(contigs_file)
+#         # Build Ray command arguments
+#         cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
         
-        # Add reads files - Ray auto-detects paired vs single-end
-        if length(reads_files) == 2
-            # Paired-end reads
-            push!(cmd_args, "-p", reads_files[1], reads_files[2])
-        elseif length(reads_files) == 1
-            # Single-end reads  
-            push!(cmd_args, "-s", reads_files[1])
-        else
-            # Multiple libraries - treat as single-end
-            for reads_file in reads_files
-                push!(cmd_args, "-s", reads_file)
-            end
-        end
+#         # Add reads files - Ray auto-detects paired vs single-end
+#         if length(reads_files) == 2
+#             # Paired-end reads
+#             push!(cmd_args, "-p", reads_files[1], reads_files[2])
+#         elseif length(reads_files) == 1
+#             # Single-end reads  
+#             push!(cmd_args, "-s", reads_files[1])
+#         else
+#             # Multiple libraries - treat as single-end
+#             for reads_file in reads_files
+#                 push!(cmd_args, "-s", reads_file)
+#             end
+#         end
         
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
-    end
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
+#     end
     
-    return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
-end
+#     return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
+# end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run Ray Meta for metagenomic assembly.
+# Run Ray Meta for metagenomic assembly.
 
-# Arguments
-- `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
-- `outdir::String`: Output directory path (default: "ray_meta_output")
-- `k::Int`: K-mer size for assembly (default: 31)
-- `min_contig_length::Int`: Minimum contig length (default: 200)
-- `enable_communities::Bool`: Enable community detection (default: true)
+# # Arguments
+# - `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
+# - `outdir::String`: Output directory path (default: "ray_meta_output")
+# - `k::Int`: K-mer size for assembly (default: 31)
+# - `min_contig_length::Int`: Minimum contig length (default: 200)
+# - `enable_communities::Bool`: Enable community detection (default: true)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `scaffolds::String`: Path to scaffolds file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `contigs::String`: Path to contigs file
+# - `scaffolds::String`: Path to scaffolds file
 
-# Details
-- Uses Ray Meta's distributed approach for metagenomic data
-- Supports community detection for binning related sequences
-- Handles uneven coverage typical in metagenomic samples
-- Automatically creates and uses a conda environment with ray
-- Skips assembly if output directory already exists
-"""
-function run_ray_meta(reads_files::Vector{String}; outdir::String="ray_meta_output", k::Int=31, min_contig_length::Int=200, enable_communities::Bool=true)
-    Mycelia.add_bioconda_env("ray")
-    mkpath(outdir)
+# # Details
+# - Uses Ray Meta's distributed approach for metagenomic data
+# - Supports community detection for binning related sequences
+# - Handles uneven coverage typical in metagenomic samples
+# - Automatically creates and uses a conda environment with ray
+# - Skips assembly if output directory already exists
+# """
+# function run_ray_meta(reads_files::Vector{String}; outdir::String="ray_meta_output", k::Int=31, min_contig_length::Int=200, enable_communities::Bool=true)
+#     Mycelia.add_bioconda_env("ray")
+#     mkpath(outdir)
     
-    contigs_file = joinpath(outdir, "Contigs.fasta")
-    scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
+#     contigs_file = joinpath(outdir, "Contigs.fasta")
+#     scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
     
-    if !isfile(contigs_file)
-        # Build Ray Meta command arguments
-        cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
+#     if !isfile(contigs_file)
+#         # Build Ray Meta command arguments
+#         cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
         
-        # Enable metagenomic mode
-        push!(cmd_args, "-enable-neighbourhoods")
+#         # Enable metagenomic mode
+#         push!(cmd_args, "-enable-neighbourhoods")
         
-        if enable_communities
-            push!(cmd_args, "-enable-neighbourhoods")
-        end
+#         if enable_communities
+#             push!(cmd_args, "-enable-neighbourhoods")
+#         end
         
-        # Add reads files
-        if length(reads_files) == 2
-            # Paired-end reads
-            push!(cmd_args, "-p", reads_files[1], reads_files[2])
-        elseif length(reads_files) == 1
-            # Single-end reads
-            push!(cmd_args, "-s", reads_files[1])
-        else
-            # Multiple libraries
-            for reads_file in reads_files
-                push!(cmd_args, "-s", reads_file)
-            end
-        end
+#         # Add reads files
+#         if length(reads_files) == 2
+#             # Paired-end reads
+#             push!(cmd_args, "-p", reads_files[1], reads_files[2])
+#         elseif length(reads_files) == 1
+#             # Single-end reads
+#             push!(cmd_args, "-s", reads_files[1])
+#         else
+#             # Multiple libraries
+#             for reads_file in reads_files
+#                 push!(cmd_args, "-s", reads_file)
+#             end
+#         end
         
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
-    end
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
+#     end
     
-    return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
-end
+#     return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2317,11 +2317,15 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run metaMDBG assembler for metagenomic long-read assembly.
 
 # Arguments
-- `fastq_file::String`: Path to input FASTQ file containing long reads
+- `hifi_reads::Union{String,Vector{String},Nothing}`: Path(s) to HiFi (PacBio) read files (default: nothing)
+- `ont_reads::Union{String,Vector{String},Nothing}`: Path(s) to ONT (Nanopore) read files (default: nothing)
 - `outdir::String`: Output directory path (default: "metamdbg_output")
 - `abundance_min::Int`: Minimum abundance threshold (default: 3)
-- `length_min::Int`: Minimum sequence length (default: 1000)
-- `nb_cores::Int`: Number of cores to use (default: Sys.CPU_THREADS)
+- `threads::Int`: Number of threads to use (default: Sys.CPU_THREADS)
+- `graph_k::Int`: K-mer resolution level for graph generation (default: 21)
+
+Note: Must provide either `hifi_reads`, `ont_reads`, or both. Cannot be both nothing.
+Graph generation: Automatically generates assembly graphs using the specified k-mer resolution.
 
 # Returns
 Named tuple containing:
@@ -2337,7 +2341,18 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with metamdbg
 - Skips assembly if output directory already exists
 """
-function run_metamdbg(fastq_file::String; outdir::String="metamdbg_output", abundance_min::Int=3, length_min::Int=1000, nb_cores::Int=Sys.CPU_THREADS)
+function run_metamdbg(; hifi_reads::Union{String,Vector{String},Nothing}=nothing, 
+                      ont_reads::Union{String,Vector{String},Nothing}=nothing,
+                      outdir::String="metamdbg_output", 
+                      abundance_min::Int=3, 
+                      threads::Int=Sys.CPU_THREADS,
+                      graph_k::Int=21)
+    
+    # Validate input - must have at least one read type
+    if isnothing(hifi_reads) && isnothing(ont_reads)
+        error("Must provide either hifi_reads, ont_reads, or both")
+    end
+    
     Mycelia.add_bioconda_env("metamdbg")
     mkpath(outdir)
     
@@ -2345,53 +2360,57 @@ function run_metamdbg(fastq_file::String; outdir::String="metamdbg_output", abun
     graph_file = joinpath(outdir, "graph.gfa")
     
     if !isfile(contigs_file)
-        # Run metaMDBG assembly
-        cmd_args = [
-            "metaMDBG", "asm",
-            "--in-dir", dirname(fastq_file),
-            "--in-reads", basename(fastq_file),
-            "--out-dir", outdir,
-            "--abundance-min", string(abundance_min),
-            "--length-min", string(length_min),
-            "--nb-cores", string(nb_cores)
-        ]
+        # Build command arguments
+        cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
+        
+        # Add HiFi reads if provided
+        if !isnothing(hifi_reads)
+            push!(cmd_args, "--in-hifi")
+            if isa(hifi_reads, String)
+                push!(cmd_args, hifi_reads)
+            else
+                append!(cmd_args, hifi_reads)
+            end
+        end
+        
+        # Add ONT reads if provided
+        if !isnothing(ont_reads)
+            push!(cmd_args, "--in-ont")
+            if isa(ont_reads, String)
+                push!(cmd_args, ont_reads)
+            else
+                append!(cmd_args, ont_reads)
+            end
+        end
+        
+        # Add other parameters
+        push!(cmd_args, "--min-abundance", string(abundance_min))
+        push!(cmd_args, "--threads", string(threads))
         
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(cmd_args)`)
         
-        # metaMDBG may output with different naming - check for common output files
-        possible_contigs = [
-            joinpath(outdir, "contigs.fasta"),
-            joinpath(outdir, "final_contigs.fasta"),
-            joinpath(outdir, "assembly.fasta")
+        # Generate assembly graph using metaMDBG gfa command
+        gfa_cmd_args = [
+            "metaMDBG", "gfa",
+            "--assembly-dir", outdir,
+            "--k", string(graph_k),
+            "--threads", string(threads)
         ]
         
-        possible_graphs = [
-            joinpath(outdir, "graph.gfa"),
-            joinpath(outdir, "assembly_graph.gfa"),
-            joinpath(outdir, "final_graph.gfa")
-        ]
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`)
         
-        # Find actual output files
-        actual_contigs = ""
-        actual_graph = ""
+        # Set expected output file names
+        contigs_file = joinpath(outdir, "contigs.fasta.gz")  # metaMDBG compresses output
         
-        for possible in possible_contigs
-            if isfile(possible)
-                actual_contigs = possible
-                break
-            end
+        # Find the generated graph file (format: assemblyGraph_k{k}_{length}bps.gfa)
+        graph_files = filter(f -> startswith(basename(f), "assemblyGraph_k") && endswith(f, ".gfa"), 
+                           readdir(outdir, join=true))
+        
+        if isempty(graph_files)
+            error("metaMDBG failed to generate assembly graph file. Expected file pattern: assemblyGraph_k*.gfa in $outdir")
         end
         
-        for possible in possible_graphs
-            if isfile(possible)
-                actual_graph = possible
-                break
-            end
-        end
-        
-        # Update file paths
-        contigs_file = actual_contigs
-        graph_file = actual_graph
+        graph_file = first(graph_files)
     end
     
     return (;outdir, contigs=contigs_file, graph=graph_file)

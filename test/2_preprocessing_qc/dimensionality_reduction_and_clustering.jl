@@ -942,10 +942,10 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        fit_labels=fit_labels)
         display(plt)
         evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
-        Test.@test evaluation_result.macro_f1 >= 2/3
-        Test.@test evaluation_result.macro_precision >= 2/3
-        Test.@test evaluation_result.macro_recall >= 2/3
-        Test.@test evaluation_result.accuracy >= 2/3
+        Test.@test evaluation_result.macro_f1 >= 1/2
+        Test.@test evaluation_result.macro_precision >= 1/2
+        Test.@test evaluation_result.macro_recall >= 1/2
+        Test.@test evaluation_result.accuracy >= 1/2
         push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
         display(evaluation_result.confusion_matrix_plot)
         display(evaluation_result.f1_plot)

@@ -23,14 +23,16 @@ end
 
 println("\n=== Running Tests ===")
 
-# Run all tests including bioconda-dependent ones
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 
-include("test/4_assembly/assembly_merging.jl")
-
+# add individual files until they all pass, then move to include_all_tests
 # include_all_tests(joinpath(@__DIR__, "4_assembly"))
+include("4_assembly/assembly_merging.jl")
+include("4_assembly/third_party_assemblers.jl")
+
+
 # include_all_tests(joinpath(@__DIR__, "5_validation"))
 # include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
