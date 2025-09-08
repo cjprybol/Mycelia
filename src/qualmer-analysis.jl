@@ -1,3 +1,28 @@
+"""
+$(DocStringExtensions.TYPEDEF)
+
+A quality-aware k-mer that pairs sequence k-mers with their corresponding quality scores.
+
+# Fields
+$(DocStringExtensions.TYPEDFIELDS)
+
+# Examples
+```julia
+using Mycelia
+using Kmers
+
+# Create a DNA k-mer with quality scores
+kmer = DNAKmer("ATCG")
+qualities = [30, 35, 32, 28]  # Phred quality scores
+qmer = Qualmer(kmer, qualities)
+
+# Access individual bases and qualities
+base, quality = qmer[1]  # Returns ('A', 30)
+```
+
+This structure is essential for quality-aware sequence analysis and assembly algorithms
+that consider both sequence content and sequencing quality information.
+"""
 struct Qualmer{KmerT, K}
     kmer::KmerT
     qualities::NTuple{K,UInt8}
@@ -456,7 +481,15 @@ struct QualmerObservation{QualmerT<:Qualmer}
 end
 
 """
-Vertex data for quality-aware k-mer graphs.
+$(DocStringExtensions.TYPEDEF)
+
+Vertex data for quality-aware k-mer graphs that stores k-mer observations with quality scores.
+
+# Fields
+$(DocStringExtensions.TYPEDFIELDS)
+
+This structure aggregates multiple observations of the same k-mer and computes quality-based
+statistics for use in quality-aware assembly algorithms.
 """
 struct QualmerVertexData{QualmerT<:Qualmer}
     canonical_qualmer::QualmerT              # Canonical representation
@@ -492,7 +525,15 @@ struct QualmerVertexData{QualmerT<:Qualmer}
 end
 
 """
-Edge data for quality-aware k-mer graphs.
+$(DocStringExtensions.TYPEDEF)
+
+Edge data for quality-aware k-mer graphs that connects k-mer vertices with strand information.
+
+# Fields
+$(DocStringExtensions.TYPEDFIELDS)
+
+This structure represents connections between k-mers in quality-aware graphs, including
+strand orientation and quality-weighted edge weights for assembly algorithms.
 """
 struct QualmerEdgeData
     observations::Vector{Tuple{Int, Int}}   # (sequence_id, position) pairs

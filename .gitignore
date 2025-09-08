@@ -2,7 +2,7 @@
 *.jl.cov
 *.jl.mem
 *Manifest.toml
-docs/build/
+docs/build/*
 *.ipynb_checkpoints*
 *.md_checkpoints
 *.ipynb.md
@@ -39,3 +39,4 @@ test/test-development.jl
 *.arrow
 Manifest.toml
 scratch*
+build/*

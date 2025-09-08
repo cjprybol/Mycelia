@@ -230,9 +230,29 @@ function _concatenate_sequences!(graph::MetaGraphsNext.MetaGraph, target, source
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Assemble strings by performing graph walks from each connected component.
+
+Traverses the string graph to reconstruct sequences by walking through connected
+components and assembling overlapping n-grams back into full strings.
+
+# Arguments
+- `graph`: MetaGraphsNext.MetaGraph containing n-gram vertices and transition edges
+
+# Returns
+- `Vector{String}`: Assembled sequences, one for each connected component
+
+# Examples
+```julia
+# Create a string graph from overlapping sequences
+graph = build_string_ngram_metagraph("ATCGATCG", 3)
+sequences = assemble_strings(graph)
+```
+
+This function is useful for reconstructing original sequences from n-gram decompositions
+and for string-based genome assembly approaches.
 """
-# function assemble_strings(graph::MetaGraphsNext.MetaGraph{<:Graphs.AbstractSimpleGraph})
 function assemble_strings(graph::MetaGraphsNext.MetaGraph)
     assemblies = String[]
     @show find_connected_components(graph)
