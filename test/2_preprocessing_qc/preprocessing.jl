@@ -792,8 +792,9 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
     end
 
     Test.@testset "Test Suite Cleanup Verification" begin
-        ## Verify no test files are left behind in the workspace root
-        workspace_files = readdir("/workspaces/Mycelia")
+        ## Verify no test files are left behind in the project root
+        project_root = dirname(dirname(dirname(@__FILE__)))  # Go up from test/2_preprocessing_qc to project root
+        workspace_files = readdir(project_root)
         
         ## Check for common test file patterns that shouldn't be in workspace root
         test_patterns = [r"\.fasta$", r"\.fastq$", r"\.fna$", r"\.fq$", r"\.arrow$", r"\.jld2$"]
