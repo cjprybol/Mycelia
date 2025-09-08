@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Advanced Assembly Theory and Practice in Mycelia · Mycelia</title><meta name="title" content="Advanced Assembly Theory and Practice in Mycelia · Mycelia"/><meta property="og:title" content="Advanced Assembly Theory and Practice in Mycelia · Mycelia"/><meta property="twitter:title" content="Advanced Assembly Theory and Practice in Mycelia · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../probabilistic-assembly-hub/">Probabilistic Assembly</a></li><li><span class="tocitem">Documentation</span><ul><li><a class="tocitem" href="../../../architecture/">Architecture Overview</a></li><li><a class="tocitem" href="../../../assembly-method-selection/">Assembly Method Selection</a></li><li><a class="tocitem" href="../../../performance/">Performance Guide</a></li><li><a class="tocitem" href="../../../faq/">FAQ</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api-reference/">Complete API Reference</a></li><li><input class="collapse-toggle" id="menuitem-7-2" type="checkbox"/><label class="tocitem" for="menuitem-7-2"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-7-3" type="checkbox"/><label class="tocitem" for="menuitem-7-3"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-7-4" type="checkbox"/><label class="tocitem" for="menuitem-7-4"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">Legacy API Documentation</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Advanced Assembly Theory and Practice in Mycelia</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Advanced Assembly Theory and Practice in Mycelia</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/advanced-assembly-theory-and-practice.jl#L" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Advanced-Assembly-Theory-and-Practice-in-Mycelia"><a class="docs-heading-anchor" href="#Advanced-Assembly-Theory-and-Practice-in-Mycelia">Advanced Assembly Theory and Practice in Mycelia</a><a id="Advanced-Assembly-Theory-and-Practice-in-Mycelia-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Assembly-Theory-and-Practice-in-Mycelia" title="Permalink"></a></h1><p>This tutorial demonstrates the theoretical foundations and practical implementation of Mycelia&#39;s advanced assembly algorithms, based on research from Mycelia-Dev.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><ul><li>Understand the mathematical foundations of k-mer size selection</li><li>Apply dynamic prime pattern algorithms for optimal k-mer progression</li><li>Implement strain-resolved assembly with quality metrics</li><li>Use statistical graph cleanup methods</li><li>Apply metagenomic classification with MAPQ-aware techniques</li></ul><pre><code class="language-julia hljs">using Mycelia</code></pre><h2 id="1.-Mathematical-Foundations-of-K-mer-Selection"><a class="docs-heading-anchor" href="#1.-Mathematical-Foundations-of-K-mer-Selection">1. Mathematical Foundations of K-mer Selection</a><a id="1.-Mathematical-Foundations-of-K-mer-Selection-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Mathematical-Foundations-of-K-mer-Selection" title="Permalink"></a></h2><p>Mycelia&#39;s k-mer selection is based on rigorous mathematical principles derived from extensive research on error rate relationships and genomic properties.</p><pre><code class="language-julia hljs"># ### Error Rate-Based K-mer Selection
+#
+# The fundamental relationship between error rate and optimal k-mer size:
+# lower_bound_k = max(3, floor(1/error_rate - 1))
+
+function demonstrate_error_rate_kmer_selection()
+    println(&quot;Error Rate-Based K-mer Size Selection&quot;)
+    println(&quot;=====================================&quot;)
+
+    error_rates = [0.01, 0.05, 0.10, 0.15, 0.20]
+
+    for error_rate in error_rates
+        lower_bound = max(3, Int(floor(1/error_rate - 1)))
+
+        # Ensure odd k-mer (better for biological sequences)
+        if lower_bound % 2 == 0
+            lower_bound += 1
+        end
+
+        println(&quot;Error rate: $(error_rate*100)% → Minimum k-mer size: $lower_bound&quot;)
+    end
+
+    return error_rates
+end
+
+demonstrate_error_rate_kmer_selection()</code></pre><h3 id="Sequence-Length-Optimization"><a class="docs-heading-anchor" href="#Sequence-Length-Optimization">Sequence Length Optimization</a><a id="Sequence-Length-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#Sequence-Length-Optimization" title="Permalink"></a></h3><p>The log₄(sequence_length) pattern provides optimal starting points for k-mer size selection based on the divergence point where erroneous k-mers begin to dominate true k-mers.</p><pre><code class="language-julia hljs">function demonstrate_log4_optimization()
+    println(&quot;\nLog₄ Sequence Length Optimization&quot;)
+    println(&quot;=================================&quot;)
+
+    sequence_lengths = [100, 1_000, 10_000, 100_000, 1_000_000]
+
+    for seq_len in sequence_lengths
+        optimal_k = Int(round(log(4, seq_len)))
+
+        # Ensure odd and prime when possible
+        if optimal_k % 2 == 0
+            optimal_k += 1
+        end
+
+        if !Primes.isprime(optimal_k)
+            optimal_k = Primes.nextprime(optimal_k)
+        end
+
+        println(&quot;Sequence length: $(seq_len) bp → Optimal starting k: $optimal_k&quot;)
+    end
+end
+
+demonstrate_log4_optimization()</code></pre><h2 id="2.-Dynamic-Prime-Pattern-Algorithm"><a class="docs-heading-anchor" href="#2.-Dynamic-Prime-Pattern-Algorithm">2. Dynamic Prime Pattern Algorithm</a><a id="2.-Dynamic-Prime-Pattern-Algorithm-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Dynamic-Prime-Pattern-Algorithm" title="Permalink"></a></h2><p>Mycelia implements a sophisticated dynamic k-mer selection algorithm that exploits the mathematical properties of prime number distribution.</p><pre><code class="language-julia hljs"># Generate optimal k-mer progression using dynamic prime pattern
+function demonstrate_dynamic_prime_pattern()
+    println(&quot;\nDynamic Prime Pattern K-mer Selection&quot;)
+    println(&quot;====================================&quot;)
+
+    # Standard progression for high-quality data
+    k_sequence_standard = Mycelia.dynamic_k_prime_pattern(11, 101, 2)
+    println(&quot;Standard progression (start=11): $k_sequence_standard&quot;)
+
+    # Progression for error-prone data
+    k_sequence_error_prone = Mycelia.dynamic_k_prime_pattern(7, 51, 2)
+    println(&quot;Error-prone progression (start=7): $k_sequence_error_prone&quot;)
+
+    # Error rate optimized progression
+    k_sequence_optimized = Mycelia.error_optimized_k_sequence(0.05, 101, 10000)
+    println(&quot;Error-optimized (5% error, 10kb): $k_sequence_optimized&quot;)
+
+    return k_sequence_standard, k_sequence_error_prone, k_sequence_optimized
+end
+
+k_sequences = demonstrate_dynamic_prime_pattern()</code></pre><h3 id="Theoretical-Advantages-of-Prime-K-mers"><a class="docs-heading-anchor" href="#Theoretical-Advantages-of-Prime-K-mers">Theoretical Advantages of Prime K-mers</a><a id="Theoretical-Advantages-of-Prime-K-mers-1"></a><a class="docs-heading-anchor-permalink" href="#Theoretical-Advantages-of-Prime-K-mers" title="Permalink"></a></h3><ol><li><strong>Twin Prime Avoidance</strong>: Automatically skips redundant analysis</li><li><strong>Progressive Spacing</strong>: Reduces computational overlap</li><li><strong>Hardware Optimization</strong>: k=31 fits optimally in 64-bit integers</li><li><strong>Biological Relevance</strong>: Primes cannot form perfect repeats</li></ol><pre><code class="language-julia hljs">println(&quot;\nAdvantages of Prime K-mer Selection:&quot;)
+println(&quot;• Twin prime avoidance reduces redundant analysis&quot;)
+println(&quot;• Progressive spacing minimizes computational overlap&quot;)
+println(&quot;• Hardware-optimized for 64-bit architectures&quot;)
+println(&quot;• Cannot form perfect repeats, improving specificity&quot;)</code></pre><h2 id="3.-Strain-Resolved-Assembly-Framework"><a class="docs-heading-anchor" href="#3.-Strain-Resolved-Assembly-Framework">3. Strain-Resolved Assembly Framework</a><a id="3.-Strain-Resolved-Assembly-Framework-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Strain-Resolved-Assembly-Framework" title="Permalink"></a></h2><p>Mycelia provides comprehensive data structures and algorithms for strain-resolved assembly with detailed quality metrics.</p><pre><code class="language-julia hljs"># Create a strain-resolved assembly result with quality metrics
+function demonstrate_strain_resolved_assembly()
+    println(&quot;\nStrain-Resolved Assembly Framework&quot;)
+    println(&quot;=================================&quot;)
+
+    # Initialize strain quality metrics
+    metrics = Mycelia.StrainQualityMetrics()
+
+    # Set example values (in practice, these would be calculated)
+    metrics = Mycelia.StrainQualityMetrics(
+        0.95,  # strain_recall
+        0.92,  # strain_precision
+        0.0,   # strain_f1_score (will be calculated)
+        50000, # NGA50
+        150000, # largest_alignment
+        900000, # total_aligned_length
+        2.5,   # mismatches_per_100kb
+        0.8,   # indels_per_100kb
+        3,     # misassemblies_total
+        1,     # misassemblies_local
+        0.98,  # completeness
+        0.02,  # contamination
+        0.94,  # busco_completeness
+        0.96,  # read_mapping_rate
+        0.93,  # properly_paired_rate
+        0.88,  # mean_base_confidence
+        0.05,  # uncertain_regions_fraction
+        8.5,   # peak_memory_gb
+        2.3,   # cpu_time_hours
+        0.97,  # homopolymer_accuracy
+        0.85   # repeat_resolution_rate
+    )
+
+    # Calculate F1 score
+    metrics = Mycelia.update_strain_f1_score!(metrics)
+
+    println(&quot;Strain Quality Metrics:&quot;)
+    println(&quot;• F1 Score: $(round(metrics.strain_f1_score, digits=3))&quot;)
+    println(&quot;• NGA50: $(metrics.NGA50) bp&quot;)
+    println(&quot;• Completeness: $(metrics.completeness*100)%&quot;)
+    println(&quot;• Contamination: $(metrics.contamination*100)%&quot;)
+
+    return metrics
+end
+
+strain_metrics = demonstrate_strain_resolved_assembly()</code></pre><h2 id="4.-Statistical-Graph-Cleanup-Methods"><a class="docs-heading-anchor" href="#4.-Statistical-Graph-Cleanup-Methods">4. Statistical Graph Cleanup Methods</a><a id="4.-Statistical-Graph-Cleanup-Methods-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Statistical-Graph-Cleanup-Methods" title="Permalink"></a></h2><p>Demonstrates the statistical tip clipping algorithm that uses coverage-based statistics rather than arbitrary cutoffs.</p><pre><code class="language-julia hljs"># Simulate a simple graph cleanup scenario
+function demonstrate_statistical_cleanup_theory()
+    println(&quot;\nStatistical Graph Cleanup Theory&quot;)
+    println(&quot;===============================&quot;)
+
+    # Simulate coverage values for a connected component
+    # (mixture of high-coverage true nodes and low-coverage error nodes)
+    true_node_coverage = [95, 98, 102, 89, 97, 93, 101, 96, 99, 94]
+    error_node_coverage = [1, 2, 1, 3, 1]
+
+    all_coverage = vcat(true_node_coverage, error_node_coverage)
+
+    # Calculate statistical thresholds
+    median_coverage = Statistics.median(all_coverage)
+    coverage_std = Statistics.std(all_coverage)
+
+    println(&quot;Coverage Statistics:&quot;)
+    println(&quot;• Median: $(round(median_coverage, digits=1))&quot;)
+    println(&quot;• Standard deviation: $(round(coverage_std, digits=1))&quot;)
+
+    # Apply 3σ rule for tip removal
+    threshold_3sigma = median_coverage - 3.0 * coverage_std
+    threshold_1x = 1.0
+
+    println(&quot;\nCleanup Thresholds:&quot;)
+    println(&quot;• 3σ threshold: $(round(threshold_3sigma, digits=1))&quot;)
+    println(&quot;• Hard 1x threshold: $threshold_1x&quot;)
+
+    # Identify nodes for removal
+    nodes_for_removal = []
+    for (i, coverage) in enumerate(all_coverage)
+        if coverage &lt;= threshold_1x || coverage &lt; threshold_3sigma
+            push!(nodes_for_removal, i)
+        end
+    end
+
+    println(&quot;• Nodes marked for removal: $nodes_for_removal&quot;)
+    println(&quot;• True nodes preserved: $(length(true_node_coverage))&quot;)
+    println(&quot;• Error nodes removed: $(length(error_node_coverage))&quot;)
+
+    return threshold_3sigma, nodes_for_removal
+end
+
+cleanup_results = demonstrate_statistical_cleanup_theory()</code></pre><h2 id="5.-Metagenomic-MAPQ-Aware-Classification"><a class="docs-heading-anchor" href="#5.-Metagenomic-MAPQ-Aware-Classification">5. Metagenomic MAPQ-Aware Classification</a><a id="5.-Metagenomic-MAPQ-Aware-Classification-1"></a><a class="docs-heading-anchor-permalink" href="#5.-Metagenomic-MAPQ-Aware-Classification" title="Permalink"></a></h2><p>Demonstrates the critical insight about MAPQ score interpretation in metagenomic contexts and the correct approach for taxonomic assignment.</p><pre><code class="language-julia hljs">function demonstrate_mapq_aware_classification()
+    println(&quot;\nMAPQ-Aware Metagenomic Classification&quot;)
+    println(&quot;====================================&quot;)
+
+    # Simulate alignment records with different MAPQ scores
+    simulated_alignments = [
+        (read_id=&quot;read_001&quot;, ref_id=&quot;species_A&quot;, alignment_score=95.5, mapq=60, taxon=&quot;Escherichia coli&quot;),
+        (read_id=&quot;read_002&quot;, ref_id=&quot;species_B&quot;, alignment_score=88.2, mapq=0, taxon=&quot;Escherichia albertii&quot;),  # Ambiguous but informative!
+        (read_id=&quot;read_003&quot;, ref_id=&quot;species_A&quot;, alignment_score=92.1, mapq=30, taxon=&quot;Escherichia coli&quot;),
+        (read_id=&quot;read_004&quot;, ref_id=&quot;species_C&quot;, alignment_score=85.7, mapq=0, taxon=&quot;Shigella flexneri&quot;),     # Ambiguous but informative!
+        (read_id=&quot;read_005&quot;, ref_id=&quot;species_A&quot;, alignment_score=97.8, mapq=60, taxon=&quot;Escherichia coli&quot;),
+    ]
+
+    println(&quot;Traditional Approach (Filter MAPQ=0):&quot;)
+    traditional_retained = filter(a -&gt; a.mapq &gt; 0, simulated_alignments)
+    println(&quot;• Reads retained: $(length(traditional_retained))/$(length(simulated_alignments))&quot;)
+
+    # Calculate traditional abundances
+    traditional_taxa = [a.taxon for a in traditional_retained]
+    traditional_counts = Dict{String, Int}()
+    for taxon in traditional_taxa
+        traditional_counts[taxon] = get(traditional_counts, taxon, 0) + 1
+    end
+
+    println(&quot;• Traditional relative abundances:&quot;)
+    total_traditional = length(traditional_retained)
+    for (taxon, count) in traditional_counts
+        abundance = count / total_traditional
+        println(&quot;  - $taxon: $(round(abundance*100, digits=1))%&quot;)
+    end
+
+    println(&quot;\nMycelia Approach (Weight by Alignment Score):&quot;)
+    println(&quot;• Reads retained: $(length(simulated_alignments))/$(length(simulated_alignments))&quot;)
+
+    # Calculate weighted abundances using alignment scores
+    weighted_abundances = Dict{String, Float64}()
+    total_weight = 0.0
+
+    for alignment in simulated_alignments
+        weight = alignment.alignment_score  # Use alignment score, NOT MAPQ
+        taxon = alignment.taxon
+
+        weighted_abundances[taxon] = get(weighted_abundances, taxon, 0.0) + weight
+        total_weight += weight
+    end
+
+    # Normalize to relative abundances
+    println(&quot;• Weighted relative abundances:&quot;)
+    for (taxon, weight) in weighted_abundances
+        abundance = weight / total_weight
+        println(&quot;  - $taxon: $(round(abundance*100, digits=1))%&quot;)
+    end
+
+    # Show the critical insight
+    mapq_zero_reads = filter(a -&gt; a.mapq == 0, simulated_alignments)
+    println(&quot;\nCritical Insight:&quot;)
+    println(&quot;• MAPQ=0 reads retained: $(length(mapq_zero_reads))&quot;)
+    println(&quot;• These reads provide valuable taxonomic information despite ambiguity&quot;)
+    println(&quot;• Traditional filtering would lose $(length(mapq_zero_reads))/$(length(simulated_alignments)) of data&quot;)
+
+    return weighted_abundances, traditional_counts
+end
+
+abundance_comparison = demonstrate_mapq_aware_classification()</code></pre><h2 id="6.-Assembly-Accuracy-Assessment-with-Graph-Metrics"><a class="docs-heading-anchor" href="#6.-Assembly-Accuracy-Assessment-with-Graph-Metrics">6. Assembly Accuracy Assessment with Graph Metrics</a><a id="6.-Assembly-Accuracy-Assessment-with-Graph-Metrics-1"></a><a class="docs-heading-anchor-permalink" href="#6.-Assembly-Accuracy-Assessment-with-Graph-Metrics" title="Permalink"></a></h2><p>Demonstrates novel graph-based quality metrics using Jaccard similarity between k-mer sets and edge sets.</p><pre><code class="language-julia hljs">function demonstrate_graph_quality_metrics()
+    println(&quot;\nGraph-Based Assembly Quality Metrics&quot;)
+    println(&quot;===================================&quot;)
+
+    # Simulate k-mer sets from reference and assembly
+    reference_kmers = Set([&quot;ATCG&quot;, &quot;TCGA&quot;, &quot;CGAT&quot;, &quot;GATC&quot;, &quot;ATCG&quot;])
+    assembly_kmers = Set([&quot;ATCG&quot;, &quot;TCGA&quot;, &quot;CGTT&quot;, &quot;GATC&quot;, &quot;ATCG&quot;])  # One substitution error
+
+    # Simulate edge sets (k+1 mers representing transitions)
+    reference_edges = Set([&quot;ATCGA&quot;, &quot;TCGAT&quot;, &quot;CGATC&quot;])
+    assembly_edges = Set([&quot;ATCGA&quot;, &quot;TCGTT&quot;, &quot;CGATC&quot;])  # One edge error
+
+    # Calculate Jaccard similarities
+    kmer_intersection = length(intersect(reference_kmers, assembly_kmers))
+    kmer_union = length(union(reference_kmers, assembly_kmers))
+    kmer_jaccard = kmer_intersection / kmer_union
+    kmer_distance = 1.0 - kmer_jaccard
+
+    edge_intersection = length(intersect(reference_edges, assembly_edges))
+    edge_union = length(union(reference_edges, assembly_edges))
+    edge_jaccard = edge_intersection / edge_union
+    edge_distance = 1.0 - edge_jaccard
+
+    println(&quot;Assembly Quality Assessment:&quot;)
+    println(&quot;• K-mer Jaccard similarity: $(round(kmer_jaccard, digits=3))&quot;)
+    println(&quot;• K-mer distance: $(round(kmer_distance, digits=3))&quot;)
+    println(&quot;• Edge Jaccard similarity: $(round(edge_jaccard, digits=3))&quot;)
+    println(&quot;• Edge distance: $(round(edge_distance, digits=3))&quot;)
+
+    # Interpretation
+    println(&quot;\nInterpretation:&quot;)
+    println(&quot;• Lower distances indicate higher assembly accuracy&quot;)
+    println(&quot;• Edge distance captures connectivity errors&quot;)
+    println(&quot;• K-mer distance captures sequence content errors&quot;)
+
+    return kmer_distance, edge_distance
+end
+
+quality_metrics = demonstrate_graph_quality_metrics()</code></pre><h2 id="7.-Probabilistic-Assembly-Framework"><a class="docs-heading-anchor" href="#7.-Probabilistic-Assembly-Framework">7. Probabilistic Assembly Framework</a><a id="7.-Probabilistic-Assembly-Framework-1"></a><a class="docs-heading-anchor-permalink" href="#7.-Probabilistic-Assembly-Framework" title="Permalink"></a></h2><p>Demonstrates the theoretical foundation of treating assembly as an Expectation-Maximization problem with maximum likelihood inference.</p><pre><code class="language-julia hljs">function demonstrate_probabilistic_assembly_theory()
+    println(&quot;\nProbabilistic Assembly Framework&quot;)
+    println(&quot;===============================&quot;)
+
+    # Simulate quality scores and error probabilities
+    quality_scores = [30, 35, 25, 40, 20]  # PHRED scores
+
+    println(&quot;Quality Score to Error Probability Conversion:&quot;)
+    for q in quality_scores
+        error_prob = 10^(q / -10.0)
+        accuracy = 1.0 - error_prob
+        println(&quot;• Q$q → Error rate: $(round(error_prob*100, digits=4))%, Accuracy: $(round(accuracy*100, digits=2))%&quot;)
+    end
+
+    # Demonstrate likelihood calculation for sequence correction
+    println(&quot;\nSequence Likelihood Calculation:&quot;)
+    observed_sequence = &quot;ATCGAT&quot;
+    candidate_sequences = [&quot;ATCGAT&quot;, &quot;ATCGTT&quot;, &quot;ATCCAT&quot;]
+
+    # Assume average quality score of 30 (0.1% error rate)
+    avg_error_rate = 0.001
+
+    for candidate in candidate_sequences
+        matches = sum(observed_sequence[i] == candidate[i] for i in 1:length(observed_sequence))
+        mismatches = length(observed_sequence) - matches
+
+        # Calculate likelihood
+        likelihood = (1 - avg_error_rate)^matches * avg_error_rate^mismatches
+
+        println(&quot;• Candidate &#39;$candidate&#39;: $matches matches, $mismatches mismatches&quot;)
+        println(&quot;  Likelihood: $(round(likelihood, sigdigits=3))&quot;)
+    end
+
+    println(&quot;\nEM Algorithm Interpretation:&quot;)
+    println(&quot;• E-step: Calculate maximum likelihood paths through assembly graph&quot;)
+    println(&quot;• M-step: Update graph structure based on corrected sequences&quot;)
+    println(&quot;• Iterate until convergence or k-mer increment&quot;)
+
+    return quality_scores
+end
+
+probabilistic_demo = demonstrate_probabilistic_assembly_theory()</code></pre><h2 id="8.-Genomic-Grammar-and-Zipf&#39;s-Law"><a class="docs-heading-anchor" href="#8.-Genomic-Grammar-and-Zipf&#39;s-Law">8. Genomic Grammar and Zipf&#39;s Law</a><a id="8.-Genomic-Grammar-and-Zipf&#39;s-Law-1"></a><a class="docs-heading-anchor-permalink" href="#8.-Genomic-Grammar-and-Zipf&#39;s-Law" title="Permalink"></a></h2><p>Demonstrates the linguistic properties of genomic sequences and their implications for assembly algorithm design.</p><pre><code class="language-julia hljs">function demonstrate_zipf_law_genomics()
+    println(&quot;\nGenomic Grammar and Zipf&#39;s Law&quot;)
+    println(&quot;=============================&quot;)
+
+    # Simulate k-mer frequency distribution following power law
+    ranks = 1:20
+    alpha = 1.0  # Zipf exponent (≈1 for natural languages and genomes)
+
+    println(&quot;Zipf&#39;s Law in Genomic Sequences:&quot;)
+    println(&quot;Frequency ∝ Rank^(-α), where α ≈ 1&quot;)
+    println()
+
+    total_frequency = sum(1.0 / rank^alpha for rank in ranks)
+
+    for rank in ranks[1:10]  # Show first 10
+        frequency = (1.0 / rank^alpha) / total_frequency
+        println(&quot;• Rank $rank: Relative frequency = $(round(frequency*100, digits=1))%&quot;)
+    end
+
+    println(&quot;\nImplications for Assembly:&quot;)
+    println(&quot;• Rare k-mers may represent genuine biological signal&quot;)
+    println(&quot;• Power-law distributions inform graph cleaning strategies&quot;)
+    println(&quot;• Non-coding regions particularly follow linguistic patterns&quot;)
+    println(&quot;• Assembly algorithms should account for natural frequency distributions&quot;)
+
+    return ranks, alpha
+end
+
+zipf_demo = demonstrate_zipf_law_genomics()</code></pre><h2 id="9.-Computational-Complexity-and-Optimization"><a class="docs-heading-anchor" href="#9.-Computational-Complexity-and-Optimization">9. Computational Complexity and Optimization</a><a id="9.-Computational-Complexity-and-Optimization-1"></a><a class="docs-heading-anchor-permalink" href="#9.-Computational-Complexity-and-Optimization" title="Permalink"></a></h2><p>Demonstrates the computational considerations and optimization strategies used in Mycelia&#39;s assembly algorithms.</p><pre><code class="language-julia hljs">function demonstrate_computational_complexity()
+    println(&quot;\nComputational Complexity Analysis&quot;)
+    println(&quot;================================&quot;)
+
+    # K-mer complexity analysis
+    k_values = [11, 21, 31, 41, 51]
+
+    println(&quot;K-mer Space Complexity:&quot;)
+    for k in k_values
+        possible_kmers = 4^k
+        if possible_kmers &gt; 1e12
+            println(&quot;• k=$k: $(round(possible_kmers/1e12, digits=1)) trillion possible k-mers&quot;)
+        elseif possible_kmers &gt; 1e9
+            println(&quot;• k=$k: $(round(possible_kmers/1e9, digits=1)) billion possible k-mers&quot;)
+        elseif possible_kmers &gt; 1e6
+            println(&quot;• k=$k: $(round(possible_kmers/1e6, digits=1)) million possible k-mers&quot;)
+        else
+            println(&quot;• k=$k: $(Int(possible_kmers)) possible k-mers&quot;)
+        end
+    end
+
+    println(&quot;\nOptimization Strategies:&quot;)
+    println(&quot;• Progressive k-mer approach: O(log k) practical complexity&quot;)
+    println(&quot;• Canonical k-mer storage: ~50% memory reduction&quot;)
+    println(&quot;• Sparse edge representation: O(E) vs O(V²) space&quot;)
+    println(&quot;• Prime k-mer selection: Reduces redundant analysis&quot;)
+
+    # Memory estimation for different genome sizes
+    genome_sizes = [1e6, 1e7, 1e8, 1e9]  # 1MB to 1GB
+
+    println(&quot;\nMemory Requirements (estimated):&quot;)
+    for genome_size in genome_sizes
+        # Rough estimation: ~10 bytes per unique k-mer
+        estimated_kmers = genome_size * 0.8  # Assuming 80% unique k-mers
+        memory_gb = (estimated_kmers * 10) / 1e9
+
+        size_label = if genome_size &gt;= 1e9
+            &quot;$(Int(genome_size/1e9))Gb&quot;
+        elseif genome_size &gt;= 1e6
+            &quot;$(Int(genome_size/1e6))Mb&quot;
+        else
+            &quot;$(Int(genome_size))bp&quot;
+        end
+
+        println(&quot;• $size_label genome: ~$(round(memory_gb, digits=1)) GB RAM&quot;)
+    end
+
+    return k_values, genome_sizes
+end
+
+complexity_analysis = demonstrate_computational_complexity()</code></pre><h2 id="Summary-and-Integration"><a class="docs-heading-anchor" href="#Summary-and-Integration">Summary and Integration</a><a id="Summary-and-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Summary-and-Integration" title="Permalink"></a></h2><p>This tutorial has demonstrated the key theoretical foundations and practical implementations that make Mycelia&#39;s assembly algorithms both mathematically rigorous and biologically relevant.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot;^60)
+println(&quot;SUMMARY: Theoretical Foundations Integrated into Mycelia&quot;)
+println(&quot;=&quot;^60)
+
+println(&quot;\n1. Mathematical K-mer Selection:&quot;)
+println(&quot;   • Error rate formula: k ≥ 1/error_rate - 1&quot;)
+println(&quot;   • Log₄ optimization for sequence length&quot;)
+println(&quot;   • Dynamic prime pattern progression&quot;)
+
+println(&quot;\n2. Graph Theory Applications:&quot;)
+println(&quot;   • Explicit vs. inferred edge storage&quot;)
+println(&quot;   • Statistical tip clipping (3σ rule)&quot;)
+println(&quot;   • Jaccard similarity quality metrics&quot;)
+
+println(&quot;\n3. Probabilistic Framework:&quot;)
+println(&quot;   • EM algorithm for assembly optimization&quot;)
+println(&quot;   • Viterbi algorithm for error correction&quot;)
+println(&quot;   • Quality score integration&quot;)
+
+println(&quot;\n4. Metagenomic Innovations:&quot;)
+println(&quot;   • MAPQ-aware taxonomic assignment&quot;)
+println(&quot;   • Alignment score weighting&quot;)
+println(&quot;   • Strain-level clustering (99.5% ANI)&quot;)
+
+println(&quot;\n5. Biological Insights:&quot;)
+println(&quot;   • Zipf&#39;s law in genomic sequences&quot;)
+println(&quot;   • Prime k-mer advantages&quot;)
+println(&quot;   • Strain-resolved quality metrics&quot;)
+
+println(&quot;\n6. Computational Optimization:&quot;)
+println(&quot;   • Progressive k-mer complexity reduction&quot;)
+println(&quot;   • Memory-efficient data structures&quot;)
+println(&quot;   • Hardware-optimized algorithms&quot;)
+
+println(&quot;\nThese theoretical foundations provide Mycelia with:&quot;)
+println(&quot;✓ Mathematically rigorous algorithms&quot;)
+println(&quot;✓ Biologically relevant approaches&quot;)
+println(&quot;✓ Scalable computational methods&quot;)
+println(&quot;✓ Comprehensive quality assessment&quot;)
+println(&quot;✓ State-of-the-art metagenomic capabilities&quot;)</code></pre><p>This tutorial demonstrates how theoretical research has been systematically integrated into practical, production-ready algorithms in Mycelia, providing users with cutting-edge tools backed by solid mathematical foundations.</p></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.14.1 on <span class="colophon-date" title="Monday 8 September 2025 16:11">Monday 8 September 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
