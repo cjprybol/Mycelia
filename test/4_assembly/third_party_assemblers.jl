@@ -35,7 +35,7 @@ Test.@testset "Short Read Isolate Assembly" begin
         Mycelia.write_fasta(outfile=ref_fasta, records=[fasta_record])
         
         # Simulate Illumina paired-end reads with coverage for isolate assembly
-        simulated_reads = Mycelia.simulate_illumina_reads(fasta=ref_fasta, coverage=15)
+        simulated_reads = Mycelia.simulate_illumina_reads(fasta=ref_fasta, coverage=15, quiet=true)
         
         # Extract the paired read files from the result
         fastq1 = simulated_reads.forward_reads
@@ -243,7 +243,7 @@ Test.@testset "Short Read Metagenomic Assembly" begin
         Mycelia.write_fasta(outfile=meta_ref_fasta, records=[meta_fasta_record1, meta_fasta_record2])
         
         # Simulate Illumina paired-end reads with coverage for metagenomic assembly
-        meta_simulated_reads = Mycelia.simulate_illumina_reads(fasta=meta_ref_fasta, coverage=12)
+        meta_simulated_reads = Mycelia.simulate_illumina_reads(fasta=meta_ref_fasta, coverage=12, quiet=true)
         
         # Extract the paired read files from the result
         meta_fastq1 = meta_simulated_reads.forward_reads

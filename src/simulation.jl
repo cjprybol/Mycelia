@@ -187,11 +187,12 @@ function simulate_illumina_reads(;fasta::String,
     amplicon::Bool = false,
     errfree::Bool = true,
     paired::Bool = true,
-    rndSeed::Int = current_unix_datetime()
+    rndSeed::Int = current_unix_datetime(),
+    quiet::Bool = false
     )
 
     # Ensure ART is available via Bioconda
-    Mycelia.add_bioconda_env("art")
+    Mycelia.add_bioconda_env("art", quiet=quiet)
     
     # Determine read count or coverage
     if read_count !== nothing
@@ -276,8 +277,14 @@ function simulate_illumina_reads(;fasta::String,
         push!(expected_files, reverse_gz)
     end
     if !all(isfile.(expected_files))
-        @info "Running ART with command: $(full_cmd)"
-        @time run(full_cmd)
+        if !quiet
+            @info "Running ART with command: $(full_cmd)"
+        end
+        if quiet
+            run(pipeline(full_cmd, stdout=devnull, stderr=devnull))
+        else
+            @time run(full_cmd)
+        end
     
         # Process output FASTQ files: gzip them if not already compressed.
         # For paired-end, output files are expected as outbase1.fq and outbase2.fq.
@@ -476,10 +483,11 @@ function simulate_ultima_reads(;fasta::String,
                               insertion_rate::Float64=0.004,
                               deletion_rate::Float64=0.004,
                               id::String="sim_ultima",
+                              quiet::Bool=false,
                               kwargs...)
     
     # Ensure ART is available via Bioconda
-    Mycelia.add_bioconda_env("art")
+    Mycelia.add_bioconda_env("art", quiet=quiet)
     
     # Generate output base name
     outbase = isempty(get(kwargs, :outbase, "")) ? "$(fasta).ultima_$(coverage !== nothing ? "$(coverage)x" : "rcount_$(read_count)").art" : kwargs[:outbase]
@@ -526,8 +534,14 @@ function simulate_ultima_reads(;fasta::String,
     # Check if all expected files exist
     expected_files = [forward_gz, samfile_gz, error_free_samfile_gz]
     if !all(isfile.(expected_files))
-        @info "Running ART with command: $(full_cmd)"
-        @time run(full_cmd)
+        if !quiet
+            @info "Running ART with command: $(full_cmd)"
+        end
+        if quiet
+            run(pipeline(full_cmd, stdout=devnull, stderr=devnull))
+        else
+            @time run(full_cmd)
+        end
     
         # Process output FASTQ file
         @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
@@ -581,10 +595,12 @@ See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simu
 function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -614,10 +630,12 @@ See also: `simulate_pacbio_reads`, `simulate_nanopore_r941_reads`, `simulate_bad
 function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -650,22 +668,36 @@ See also: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_illumina
 function simulate_nearly_perfect_long_reads(;fasta, quantity, length_mean::Int=40000, length_sd::Int=20000, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.perfect.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate \
-            --reference $(fasta) \
-            --quantity $(quantity) \
-            --error_model random \
-            --qscore_model ideal \
-            --glitches 0,0,0 \
-            --junk_reads 0 \
-            --random_reads 0 \
-            --chimeras 0 \
-            --identity 30,3 \
-            --length $(length_mean),$(length_sd) \
-            --start_adapter_seq "" \
-            --end_adapter_seq ""`, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate \
+                --reference $(fasta) \
+                --quantity $(quantity) \
+                --error_model random \
+                --qscore_model ideal \
+                --glitches 0,0,0 \
+                --junk_reads 0 \
+                --random_reads 0 \
+                --chimeras 0 \
+                --identity 30,3 \
+                --length $(length_mean),$(length_sd) \
+                --start_adapter_seq "" \
+                --end_adapter_seq ""`, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate \
+                --reference $(fasta) \
+                --quantity $(quantity) \
+                --error_model random \
+                --qscore_model ideal \
+                --glitches 0,0,0 \
+                --junk_reads 0 \
+                --random_reads 0 \
+                --chimeras 0 \
+                --identity 30,3 \
+                --length $(length_mean),$(length_sd) \
+                --start_adapter_seq "" \
+                --end_adapter_seq ""`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -701,10 +733,12 @@ See also: `simulate_nanopore_reads`, `simulate_pacbio_reads`, `simulate_badread_
 function simulate_nanopore_r941_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r941.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2020 --qscore_model nanopore2020 --identity 90,98,5 --reference $(fasta) --quantity $(quantity)`, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2020 --qscore_model nanopore2020 --identity 90,98,5 --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2020 --qscore_model nanopore2020 --identity 90,98,5 --reference $(fasta) --quantity $(quantity)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -741,10 +775,12 @@ See also: `simulate_pretty_good_reads`, `simulate_nanopore_reads`, `simulate_bad
 function simulate_very_bad_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.very_bad.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 1000,100,100 --junk_reads 5 --random_reads 5 --chimeras 10 --identity 80,90,6 --length 4000,2000 --reference $(fasta) --quantity $(quantity)`, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 1000,100,100 --junk_reads 5 --random_reads 5 --chimeras 10 --identity 80,90,6 --length 4000,2000 --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 1000,100,100 --junk_reads 5 --random_reads 5 --chimeras 10 --identity 80,90,6 --length 4000,2000 --reference $(fasta) --quantity $(quantity)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -781,10 +817,12 @@ See also: `simulate_very_bad_reads`, `simulate_nearly_perfect_long_reads`, `simu
 function simulate_pretty_good_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pretty_good.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 10000,10,10 --junk_reads 0.1 --random_reads 0.1 --chimeras 0.1 --identity 20,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 10000,10,10 --junk_reads 0.1 --random_reads 0.1 --chimeras 0.1 --identity 20,3 --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 10000,10,10 --junk_reads 0.1 --random_reads 0.1 --chimeras 0.1 --identity 20,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -895,10 +933,12 @@ function simulate_badread_reads(;fasta::String, quantity::String,
         # Combine all command parts
         full_cmd = reduce(((a, b) -> `$a $b`), cmd_parts)
         
-        p = pipeline(full_cmd, `gzip`)
         if quiet
-            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+            cmd = pipeline(full_cmd, stderr=devnull)
+            p = pipeline(cmd, `gzip`)
+            run(pipeline(p, outfile))
         else
+            p = pipeline(full_cmd, `gzip`)
             run(pipeline(p, outfile))
         end
     else

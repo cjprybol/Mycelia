@@ -5,8 +5,6 @@
 #   Benchmarks: julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:  julia --project=. tutorials/run_all_tutorials.jl
 
-println("Running Mycelia tests")
-
 # Helper function to include all test files in a directory
 function include_all_tests(dir)
     test_count = 0
@@ -20,8 +18,6 @@ function include_all_tests(dir)
     end
     return test_count
 end
-
-println("\n=== Running Tests ===")
 
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
@@ -38,5 +34,3 @@ include("4_assembly/basic_graph_tests.jl")
 # include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
-
-println("\n✅ Tests completed!")

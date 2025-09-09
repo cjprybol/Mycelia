@@ -29,7 +29,7 @@ Test.@testset "FASTQ simulation" begin
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
         
         # Test default system (HS25)
-        read_simulation_result = Mycelia.simulate_illumina_reads(fasta = phiX174_assembly_dataset.genome, coverage=10)
+        read_simulation_result = Mycelia.simulate_illumina_reads(fasta = phiX174_assembly_dataset.genome, coverage=10, quiet=true)
         Test.@test isfile(read_simulation_result.forward_reads)
         Test.@test isfile(read_simulation_result.reverse_reads)
         Test.@test isfile(read_simulation_result.sam)
@@ -129,7 +129,8 @@ Test.@testset "FASTQ simulation" begin
                             fasta = phiX174_assembly_dataset.genome,
                             coverage = 1,
                             seqSys = seqSys,
-                            read_length = max_length
+                            read_length = max_length,
+                            quiet = true
                         )
                         Test.@test isfile(result_max.forward_reads)
                         # Clean up successful run
@@ -152,7 +153,8 @@ Test.@testset "FASTQ simulation" begin
                         fasta = phiX174_assembly_dataset.genome,
                         coverage = 1,
                         seqSys = seqSys,
-                        read_length = excessive_length
+                        read_length = excessive_length,
+                        quiet = true
                     )
                 end
             end
@@ -168,7 +170,7 @@ Test.@testset "FASTQ simulation" begin
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
         
         # Test basic Ultima simulation with default parameters (250bp)
-        read_simulation_result = Mycelia.simulate_ultima_reads(fasta = phiX174_assembly_dataset.genome, coverage=5)
+        read_simulation_result = Mycelia.simulate_ultima_reads(fasta = phiX174_assembly_dataset.genome, coverage=5, quiet=true)
         Test.@test isfile(read_simulation_result.forward_reads)
         Test.@test read_simulation_result.reverse_reads === nothing  # Single-end only
         Test.@test isfile(read_simulation_result.sam)
@@ -190,7 +192,8 @@ Test.@testset "FASTQ simulation" begin
             read_length = 200,
             insertion_rate = 0.005,
             deletion_rate = 0.003,
-            id = "test_ultima"
+            id = "test_ultima",
+            quiet = true
         )
         Test.@test isfile(custom_result.forward_reads)
         Test.@test custom_result.reverse_reads === nothing
