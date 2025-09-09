@@ -1625,18 +1625,77 @@ This function first ensures that the 'padloc' environment is available via Bioco
 It then attempts to update the 'padloc' database. 
 If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
 it runs 'padloc' with the specified FASTA file as input.
+
+If the input FASTA is compressed (recognized by extensions .gz, .bz2, .xz, .zip) this function
+creates a temporary uncompressed copy, runs padloc on that temporary file, and then removes the
+temporary files and directory after the run completes.
 """
-function run_padloc(;fasta_file, outdir=dirname(abspath(fasta_file)), threads=Sys.CPU_THREADS)
-    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), ".fna" => "") * "_padloc.csv")
+function run_padloc(;fasta_file, outdir=replace(fasta_file, Mycelia.FASTA_REGEX => "") * "_padloc", threads=Sys.CPU_THREADS)
+    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "") * "_padloc.csv")
     if !isfile(padloc_outfile)
         setup_padloc()
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file) --outdir $(outdir) --cpu $(threads)`)
+        if !isdir(outdir)
+            mkpath(outdir)
+        end
+
+        # Detect common compressed FASTA extensions
+        compressed_ext_regex = r"\.(gz|bz2|xz|zip)$"i
+        is_compressed = occursin(compressed_ext_regex, fasta_file)
+
+        # Prepare variables for optional temporary uncompressed FASTA
+        temp_dir = ""
+        temp_fasta = ""
+        input_fasta = fasta_file
+
+        if is_compressed
+            # Create a temporary directory to hold the uncompressed FASTA
+            temp_dir = mktempdir()
+            # Strip only the compression extension for the temp filename
+            temp_fname = replace(basename(fasta_file), compressed_ext_regex => "")
+            temp_fasta = joinpath(temp_dir, temp_fname)
+            @info "Detected compressed FASTA; creating temporary uncompressed copy at $(temp_fasta)"
+
+            # Decompress into the temporary file using the system's decompressors
+            open(temp_fasta, "w") do io
+                lf = lowercase(fasta_file)
+                if endswith(lf, ".gz")
+                    run(pipeline(`gzip -dc $fasta_file`, stdout=io))
+                elseif endswith(lf, ".bz2")
+                    run(pipeline(`bzip2 -dc $fasta_file`, stdout=io))
+                elseif endswith(lf, ".xz")
+                    run(pipeline(`xz -dc $fasta_file`, stdout=io))
+                elseif endswith(lf, ".zip")
+                    run(pipeline(`unzip -p $fasta_file`, stdout=io))
+                else
+                    # Fallback: try gzip -dc (may fail if not actually gzipped)
+                    run(pipeline(`gzip -dc $fasta_file`, stdout=io))
+                end
+            end
+
+            input_fasta = temp_fasta
+        end
+
+        # Run padloc against the chosen input_fasta; ensure temporary files get cleaned up
+        try
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(input_fasta) --outdir $(outdir) --cpu $(threads)`)
+        finally
+            if is_compressed && temp_dir != ""
+                try
+                    # Remove the temporary directory and its contents
+                    rm(temp_dir; force=true, recursive=true)
+                    @info "Removed temporary directory $(temp_dir)"
+                catch err
+                    @warn "Failed to remove temporary files at $(temp_dir): $err"
+                end
+            end
+        end
     else
         @info "$(padloc_outfile) already present"
     end
-    padloc_faa = replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa")
-    padloc_gff = replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff")
-    padloc_domtblout = replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout")
+
+    padloc_faa = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa"))
+    padloc_gff = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff"))
+    padloc_domtblout = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout"))
     if !isfile(padloc_outfile)
         padloc_outfile = missing
     end
