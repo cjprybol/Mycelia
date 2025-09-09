@@ -468,8 +468,8 @@ Test.@testset "Long Read Isolate Assembly" begin
             canu_fasta_record = FASTX.FASTA.Record("canu_test_genome", canu_genome)
             Mycelia.write_fasta(outfile=canu_ref_fasta, records=[canu_fasta_record])
             
-            # Simulate PacBio reads with 12x coverage (minimal for Canu)
-            canu_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=canu_ref_fasta, quantity="12x", quiet=true)
+            # Simulate PacBio reads with 15x coverage (sufficient for Canu's 10x minimum requirement)
+            canu_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=canu_ref_fasta, quantity="15x", quiet=true)
             
             # Decompress for canu (canu expects uncompressed fastq)
             canu_fastq = joinpath(dir, "canu_reads.fq")
@@ -481,7 +481,7 @@ Test.@testset "Long Read Isolate Assembly" begin
                 rm(canu_outdir, recursive=true)
             end
             try
-                result = Mycelia.run_canu(fastq=canu_fastq, outdir=canu_outdir, genome_size="25k")
+                result = Mycelia.run_canu(fastq=canu_fastq, outdir=canu_outdir, genome_size="25k", stopOnLowCoverage=8)
                 Test.@test result.outdir == canu_outdir
                 Test.@test result.assembly == joinpath(canu_outdir, "canu_reads.contigs.fasta")
                 Test.@test isfile(result.assembly)
@@ -491,7 +491,7 @@ Test.@testset "Long Read Isolate Assembly" begin
                 if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "coverage")
                     @warn """
                     Canu assembly failed due to resource constraints or insufficient coverage.
-                    Current test: 25kb genome, 12x coverage, ~300kb total sequence data
+                    Current test: 25kb genome, 15x coverage, ~375kb total sequence data
                     
                     Required resources for Canu:
                     - Memory: ~4-8GB RAM minimum  

@@ -291,6 +291,7 @@ Run Canu assembler for long read assembly.
 - `outdir::String`: Output directory path (default: "canu_output")
 - `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
 - `read_type::String`: Type of reads ("pacbio", "nanopore")
+- `stopOnLowCoverage::Integer`: Minimum coverage required to continue assembly (default: 10)
 
 # Returns
 Named tuple containing:
@@ -302,17 +303,18 @@ Named tuple containing:
 - Includes error correction, trimming, and assembly stages
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
+- Can reduce `stopOnLowCoverage` for CI environments or low-coverage datasets
 """
-function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio")
+function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10)
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
     
     prefix = splitext(basename(fastq))[1]
     if !isfile(joinpath(outdir, "$(prefix).contigs.fasta"))
         if read_type == "pacbio"
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage)`)
         elseif read_type == "nanopore"
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(Sys.CPU_THREADS)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage)`)
         else
             error("Unsupported read type: $(read_type). Use 'pacbio' or 'nanopore'.")
         end
