@@ -42,13 +42,20 @@ This function automatically handles compressed FASTA files (gzip, bzip2, xz) by 
 temporary uncompressed versions when needed. The temporary files are automatically cleaned 
 up after processing, regardless of whether the PGAP run succeeds or fails.
 
+If a previous run failed and left a partially-populated output directory, this function
+will automatically remove it and retry without requiring `force=true`. The `force` parameter
+is only required to overwrite a directory that contains a successful prior run.
+
+A run is considered successful if either a success marker file (`.pgap_success`) is present
+in the output directory, or if all expected output files for the given `prefix` are present.
+
 # Arguments
 - `fasta::AbstractString`: Path to the input FASTA file. Can be compressed (.gz, .bz2, .xz) or uncompressed.
 - `organism::AbstractString`: Organism name for taxonomic classification and annotation.
 - `pgap_dir`: Directory containing PGAP installation. Defaults to `~/workspace/pgap`.
 - `outdir`: Output directory for results. Defaults to input filename with "_pgap" suffix.
 - `as_string::Bool=false`: If true, returns the command string instead of executing it.
-- `force::Bool=false`: If true, overwrites existing output directory.
+- `force::Bool=false`: If true, overwrites existing output directory (only needed if a prior run completed successfully).
 - `threads::Int`: Number of CPU threads to use. Defaults to system CPU count.
 - `prefix`: Prefix for output files. Defaults to input filename without extension.
 
@@ -71,68 +78,125 @@ function run_pgap(;
         prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => "")
         # --memory
     )
+    # Helper: expected outputs derived from your provided successful run screenshot
+    _expected_outputs(outdir::AbstractString, prefix::AbstractString) = String[
+        joinpath(outdir, "$(prefix)_cds_from_genomic.fna"),
+        joinpath(outdir, "$(prefix)_translated_cds.faa"),
+        joinpath(outdir, "$(prefix)_with_genomic_fasta.gff"),
+        joinpath(outdir, "$(prefix).faa"),
+        joinpath(outdir, "$(prefix).fna"),
+        joinpath(outdir, "$(prefix).gbk"),
+        joinpath(outdir, "$(prefix).gff"),
+        joinpath(outdir, "$(prefix).sqn"),
+        joinpath(outdir, "$(prefix)ani-tax-report.txt"),
+        joinpath(outdir, "$(prefix)ani-tax-report.xml"),
+        joinpath(outdir, "$(prefix)checkm.txt"),
+        joinpath(outdir, "$(prefix)cwltool.log"),
+        joinpath(outdir, "$(prefix)fastaval.xml"),
+        joinpath(outdir, "$(prefix)uuid.txt"),
+    ]
+
+    # Helper: success detection (marker OR full expected set)
+    success_marker = joinpath(outdir, ".pgap_success")
+    function _run_is_successful(outdir::AbstractString, prefix::AbstractString)
+        if isfile(success_marker)
+            return true
+        end
+        expected = _expected_outputs(outdir, prefix)
+        return all(isfile, expected)
+    end
+
     pgap_py_script = joinpath(pgap_dir, "pgap.py")
     if !isfile(pgap_py_script)
         mkpath(dirname(pgap_py_script))
         run(`wget -O $(pgap_py_script) https://github.com/ncbi/pgap/raw/prod/scripts/pgap.py`)
-        # run(`chmod +x $(pgap_py_script)`)
         @assert isfile(pgap_py_script)
     end
     if isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
         @time run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-    end 
-    if force && isdir(outdir)
-        rm(outdir, recursive=true)
-    elseif !force && isdir(outdir)
-        @warn "$outdir already exists, use `force=true` to overwrite existing results"
-        return outdir
-    end    
+    end
+
+    # Handle existing outdir
+    if isdir(outdir)
+        if force
+            rm(outdir, recursive=true)
+        else
+            if _run_is_successful(outdir, prefix)
+                @info "Detected completed PGAP run in $outdir; reusing outputs"
+                return outdir
+            else
+                @warn "$outdir exists but appears incomplete; removing it to allow a clean retry"
+                rm(outdir, recursive=true)
+            end
+        end
+    end
     @assert !isdir(outdir)
-    
-    # Detect if the input FASTA is compressed and handle accordingly
-    is_compressed = endswith(lowercase(fasta), ".gz") || endswith(lowercase(fasta), ".bz2") || endswith(lowercase(fasta), ".xz")
-    
+
+    # Detect compressed input
+    lcf = lowercase(fasta)
+    is_compressed = endswith(lcf, ".gz") || endswith(lcf, ".bz2") || endswith(lcf, ".xz")
+
+    # Prepare genome path to use (possibly a temp decompressed file)
     if is_compressed
-        # Create temporary uncompressed file
         temp_fasta = tempname() * ".fasta"
-        
         try
-            # Decompress based on file extension
-            if endswith(lowercase(fasta), ".gz")
+            if endswith(lcf, ".gz")
                 run(pipeline(`gunzip -c $(fasta)`, temp_fasta))
-            elseif endswith(lowercase(fasta), ".bz2")
+            elseif endswith(lcf, ".bz2")
                 run(pipeline(`bunzip2 -c $(fasta)`, temp_fasta))
-            elseif endswith(lowercase(fasta), ".xz")
+            elseif endswith(lcf, ".xz")
                 run(pipeline(`xz -dc $(fasta)`, temp_fasta))
             end
-            
-            # Use the temporary uncompressed file for PGAP
             fasta_to_use = temp_fasta
-            
+
             if as_string
-                # Generate the fully expanded bash command
-                bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta_to_use --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
-                return bash_command
+                cmd = "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --output $(outdir) --genome $(fasta_to_use) --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
+                return cmd
             else
-                @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta_to_use) --report-usage-true --taxcheck --auto-correct-tax --organism "$(organism)" --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-                return outdir
+                try
+                    @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta_to_use) --report-usage-true --taxcheck --auto-correct-tax --organism "$(organism)" --cpu $(threads) --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+                    # Write success marker
+                    open(success_marker, "w") do io
+                        write(io, "ok\n")
+                    end
+                    return outdir
+                catch e
+                    # Cleanup partial outputs so re-run won't require force
+                    if isdir(outdir)
+                        try
+                            rm(outdir, recursive=true)
+                        catch
+                        end
+                    end
+                    rethrow(e)
+                end
             end
-            
         finally
-            # Clean up temporary file regardless of success or failure
             if isfile(temp_fasta)
                 rm(temp_fasta)
             end
         end
     else
-        # File is not compressed, use original logic
         if as_string
-            # Generate the fully expanded bash command
-            bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
-            return bash_command
+            cmd = "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
+            return cmd
         else
-            @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism "$(organism)" --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-            return outdir
+            try
+                @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism "$(organism)" --cpu $(threads) --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+                # Write success marker
+                open(success_marker, "w") do io
+                    write(io, "ok\n")
+                end
+                return outdir
+            catch e
+                if isdir(outdir)
+                    try
+                        rm(outdir, recursive=true)
+                    catch
+                    end
+                end
+                rethrow(e)
+            end
         end
     end
 end
