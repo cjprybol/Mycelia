@@ -177,7 +177,7 @@ quality_graph = qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
 ```
 """
 function qualmer_graph_to_quality_biosequence_graph(qualmer_graph::MetaGraphsNext.MetaGraph; 
-                                                   min_path_length::Int=2)
+                                                   min_path_length::Int=1)
     
     # Determine sequence type from qualmer graph
     qualmer_labels = collect(MetaGraphsNext.labels(qualmer_graph))

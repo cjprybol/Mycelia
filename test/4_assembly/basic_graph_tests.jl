@@ -1,17 +1,26 @@
-"""
-Basic Graph Type Tests
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/basic_graph_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/basic_graph_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
-Simple tests to verify each graph type can be constructed and accessed.
-"""
-
-if isinteractive()
-    Pkg.activate("..")
-end
-
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import FASTX
 import BioSequences
+import MetaGraphs
+import Graphs
 
 Test.@testset "Basic Graph Type Construction Tests" begin
     
@@ -207,13 +216,4 @@ Test.@testset "Basic Graph Type Construction Tests" begin
         Test.@test row.lengths == "4,4"
         Test.@test length(result.records) == 2
     end
-
-    println("\n" * "="^60)
-    println("BASIC GRAPH TYPE TESTS SUMMARY")
-    println("="^60)
-    println("✓ All 6 graph types can be constructed")
-    println("✓ Type stability maintained throughout")
-    println("✓ Quality-aware functionality working")
-    println("✓ Graph conversions operational")
-    println("="^60)
 end

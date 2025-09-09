@@ -31,6 +31,7 @@ include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 # include_all_tests(joinpath(@__DIR__, "4_assembly"))
 include("4_assembly/assembly_merging.jl")
 include("4_assembly/third_party_assemblers.jl")
+include("4_assembly/basic_graph_tests.jl")
 
 
 # include_all_tests(joinpath(@__DIR__, "5_validation"))

@@ -565,6 +565,7 @@ Follows the recommended PacBio HiFi simulation parameters from the Badread docum
 - `fasta::String`: Path to input FASTA file containing reference sequence
 - `quantity::String`: Coverage depth (e.g. "50x") or total bases (e.g. "1000000")
 - `outfile::String`: Output filepath for simulated reads. Defaults to input filename with PacBio HiFi suffix
+- `quiet::Bool=false`: If true, suppress badread output to stdout/stderr
 
 # Returns
 - `String`: Path to the generated output file
@@ -577,11 +578,15 @@ Follows the recommended PacBio HiFi simulation parameters from the Badread docum
 
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_badread_reads`
 """
-function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"))
+function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end
@@ -606,11 +611,15 @@ Uses nanopore2023 error and quality models with default identity and length dist
 
 See also: `simulate_pacbio_reads`, `simulate_nanopore_r941_reads`, `simulate_badread_reads`
 """
-function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"))
+function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end
@@ -638,7 +647,7 @@ Uses ideal quality scores and disables common sequencing artifacts like chimeras
 
 See also: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_illumina_reads`
 """
-function simulate_nearly_perfect_long_reads(;fasta, quantity, length_mean::Int=40000, length_sd::Int=20000, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.perfect.$(quantity).fq.gz"))
+function simulate_nearly_perfect_long_reads(;fasta, quantity, length_mean::Int=40000, length_sd::Int=20000, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.perfect.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate \
@@ -654,7 +663,11 @@ function simulate_nearly_perfect_long_reads(;fasta, quantity, length_mean::Int=4
             --length $(length_mean),$(length_sd) \
             --start_adapter_seq "" \
             --end_adapter_seq ""`, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end
@@ -685,11 +698,15 @@ accuracy of older nanopore sequencing technology and basecalling algorithms.
 
 See also: `simulate_nanopore_reads`, `simulate_pacbio_reads`, `simulate_badread_reads`
 """
-function simulate_nanopore_r941_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r941.$(quantity).fq.gz"))
+function simulate_nanopore_r941_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r941.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model nanopore2020 --qscore_model nanopore2020 --identity 90,98,5 --reference $(fasta) --quantity $(quantity)`, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end
@@ -721,11 +738,15 @@ and chimeras to test assembly algorithms under challenging conditions.
 
 See also: `simulate_pretty_good_reads`, `simulate_nanopore_reads`, `simulate_badread_reads`
 """
-function simulate_very_bad_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.very_bad.$(quantity).fq.gz"))
+function simulate_very_bad_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.very_bad.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 1000,100,100 --junk_reads 5 --random_reads 5 --chimeras 10 --identity 80,90,6 --length 4000,2000 --reference $(fasta) --quantity $(quantity)`, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end
@@ -757,11 +778,15 @@ suitable for testing assembly algorithms under favorable conditions.
 
 See also: `simulate_very_bad_reads`, `simulate_nearly_perfect_long_reads`, `simulate_badread_reads`
 """
-function simulate_pretty_good_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pretty_good.$(quantity).fq.gz"))
+function simulate_pretty_good_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pretty_good.$(quantity).fq.gz"), quiet=false)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --glitches 10000,10,10 --junk_reads 0.1 --random_reads 0.1 --chimeras 0.1 --identity 20,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end
@@ -829,7 +854,8 @@ function simulate_badread_reads(;fasta::String, quantity::String,
                                chimeras::Float64=1.0,
                                glitches::String="10000,25,25",
                                small_plasmid_bias::Bool=false,
-                               outfile::String="")
+                               outfile::String="",
+                               quiet::Bool=false)
     
     if isempty(outfile)
         outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.custom.$(error_model).$(qscore_model).$(quantity).fq.gz")
@@ -870,7 +896,11 @@ function simulate_badread_reads(;fasta::String, quantity::String,
         full_cmd = reduce(((a, b) -> `$a $b`), cmd_parts)
         
         p = pipeline(full_cmd, `gzip`)
-        run(pipeline(p, outfile))
+        if quiet
+            run(pipeline(p, outfile, stderr=devnull, stdout=devnull))
+        else
+            run(pipeline(p, outfile))
+        end
     else
         @info "$(outfile) already exists, skipping..."
     end

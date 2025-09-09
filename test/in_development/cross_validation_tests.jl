@@ -1,18 +1,20 @@
-"""
-Tests for cross-validation pipeline for hybrid assembly quality assessment (Phase 5.1c)
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/cross_validation_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/cross_validation_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
-This module tests the cross-validation system that implements:
-- K-fold validation through read partitioning
-- Holdout validation through read mapping
-- Intelligent vs iterative assembly comparison
-- Consensus pangenome generation
-- Statistical performance analysis
-"""
-
-if isinteractive()
-    Pkg.activate("..")
-end
-
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import BioSequences

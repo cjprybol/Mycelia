@@ -1,12 +1,12 @@
 # From the Mycelia base directory, run the tests from the root directory with:
 # 
 # ```bash
-# julia --project=. -e 'include("test/0_development/unicode-graph-assembly.jl")'
+# julia --project=. -e 'include("test/4_assembly/unicode-graph-assembly.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run from the Mycelia base directory:
 # ```bash
-# julia --project=. -e 'import Literate; Literate.notebook("test/0_development/unicode-graph-assembly.jl", "test/0_development", execute=false)'
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/unicode-graph-assembly.jl", "test/4_assembly", execute=false)'
 # ````
 
 

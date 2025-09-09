@@ -1,20 +1,20 @@
-"""
-End-to-End Assembly Tests
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/end_to_end_assembly_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/end_to_end_assembly_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
-This file contains comprehensive end-to-end tests for the three main assembly pipelines:
-1. String-graph assembly
-2. Strand-specific sequence-graph-next 
-3. Canonical/double-stranded sequence-graph-next
-
-Tests cover basic random strings, DNA, RNA, and amino acid sequences with various
-error rates and coverage depths.
-"""
-
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
-
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import MetaGraphsNext
@@ -569,26 +569,5 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test total_coverage > 0
             end
         end
-    end
-end
-
-# Helper function to run a subset of tests for quick validation
-function run_quick_tests()
-    Test.@testset "Quick Assembly Tests" begin
-        # Test basic functionality with small sequences
-        reference_seq = string(BioSequences.randdnaseq(50))
-        reads = create_test_reads(reference_seq, 20, 0.01)
-        
-        kmer_type = BioSequences.DNAKmer{5}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                            graph_mode=Mycelia.DoubleStrand)
-        
-        Test.@test !isempty(MetaGraphsNext.labels(graph))
-        Test.@test graph isa MetaGraphsNext.MetaGraph
-        
-        # Test string graph
-        test_string = Mycelia.rand_ascii_greek_string(50)
-        string_graph = Mycelia.string_to_ngram_graph(s=test_string, n=3)
-        Test.@test !isempty(MetaGraphsNext.labels(string_graph))
     end
 end

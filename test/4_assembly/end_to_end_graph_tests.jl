@@ -406,18 +406,4 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             end
         end
     end
-    
-    println("\n" * "="^80)
-    println("END-TO-END ASSEMBLY TESTS SUMMARY")
-    println("="^80)
-    println("All 6 graph types tested with realistic workflows:")
-    println("1. ✓ N-gram Graphs - Unicode text processing")
-    println("2. ✓ K-mer Graphs - DNA/RNA/Protein sequence analysis")
-    println("3. ✓ Qualmer Graphs - Quality-aware assembly")
-    println("4. ✓ String Graphs - Simplified N-gram processing")
-    println("5. ✓ FASTA Graphs - Variable-length BioSequence assembly")
-    println("6. ✓ FASTQ Graphs - Quality-aware BioSequence assembly")
-    println("7. ✓ Graph Hierarchy - Type conversions and quality preservation")
-    println("8. ✓ Assembly Pipeline - Unified interface and auto-detection")
-    println("="^80)
 end

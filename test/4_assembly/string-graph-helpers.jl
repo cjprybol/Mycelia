@@ -1,11 +1,11 @@
 # 
 # ```bash
-# julia --project=. --color=yes -e 'include("test/0_development/string-graph-helpers.jl")'
+# julia --project=. --color=yes -e 'include("test/4_assembly/string-graph-helpers.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run from the Mycelia base directory:
 # ```bash
-# julia --project=. -e 'import Literate; Literate.notebook("test/0_development/string-graph-helpers.jl", "test/0_development", execute=false)'
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/string-graph-helpers.jl", "test/4_assembly", execute=false)'
 # ```
 
 ## If running Literate notebook, ensure the package is activated:

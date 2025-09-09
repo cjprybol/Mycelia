@@ -220,7 +220,7 @@ Test.@testset "FASTQ simulation" begin
             rm(phiX174_assembly_id, recursive=true)
         end
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        read_simulation_result = Mycelia.simulate_nanopore_reads(fasta = phiX174_assembly_dataset.genome, quantity=10)
+        read_simulation_result = Mycelia.simulate_nanopore_reads(fasta = phiX174_assembly_dataset.genome, quantity=10, quiet=true)
         Test.@test isfile(read_simulation_result)
         Test.@test endswith(read_simulation_result, ".fq.gz")
     end
@@ -229,7 +229,7 @@ Test.@testset "FASTQ simulation" begin
             rm(phiX174_assembly_id, recursive=true)
         end
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        read_simulation_result = Mycelia.simulate_pacbio_reads(fasta = phiX174_assembly_dataset.genome, quantity=10)
+        read_simulation_result = Mycelia.simulate_pacbio_reads(fasta = phiX174_assembly_dataset.genome, quantity=10, quiet=true)
         Test.@test isfile(read_simulation_result)
         Test.@test endswith(read_simulation_result, ".fq.gz")
         rm(phiX174_assembly_id, recursive=true)
@@ -239,7 +239,7 @@ Test.@testset "FASTQ simulation" begin
             rm(phiX174_assembly_id, recursive=true)
         end
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        read_simulation_result = Mycelia.simulate_nearly_perfect_long_reads(fasta = phiX174_assembly_dataset.genome, quantity="10x")
+        read_simulation_result = Mycelia.simulate_nearly_perfect_long_reads(fasta = phiX174_assembly_dataset.genome, quantity="10x", quiet=true)
         Test.@test isfile(read_simulation_result)
         Test.@test endswith(read_simulation_result, ".fq.gz")
         rm(phiX174_assembly_id, recursive=true)
@@ -250,7 +250,7 @@ Test.@testset "FASTQ simulation" begin
             rm(phiX174_assembly_id, recursive=true)
         end
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        read_simulation_result = Mycelia.simulate_nanopore_r941_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        read_simulation_result = Mycelia.simulate_nanopore_r941_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x", quiet=true)
         Test.@test isfile(read_simulation_result)
         Test.@test endswith(read_simulation_result, ".fq.gz")
         Test.@test contains(read_simulation_result, "nanopore_r941")
@@ -262,7 +262,7 @@ Test.@testset "FASTQ simulation" begin
             rm(phiX174_assembly_id, recursive=true)
         end
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        read_simulation_result = Mycelia.simulate_very_bad_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        read_simulation_result = Mycelia.simulate_very_bad_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x", quiet=true)
         Test.@test isfile(read_simulation_result)
         Test.@test endswith(read_simulation_result, ".fq.gz")
         Test.@test contains(read_simulation_result, "very_bad")
@@ -274,7 +274,7 @@ Test.@testset "FASTQ simulation" begin
             rm(phiX174_assembly_id, recursive=true)
         end
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
-        read_simulation_result = Mycelia.simulate_pretty_good_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        read_simulation_result = Mycelia.simulate_pretty_good_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x", quiet=true)
         Test.@test isfile(read_simulation_result)
         Test.@test endswith(read_simulation_result, ".fq.gz")
         Test.@test contains(read_simulation_result, "pretty_good")
@@ -288,48 +288,48 @@ Test.@testset "FASTQ simulation" begin
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="genome")
         
         ## Test with default parameters
-        result1 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x")
+        result1 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="5x", quiet=true)
         Test.@test isfile(result1)
         Test.@test endswith(result1, ".fq.gz")
         Test.@test contains(result1, "custom")
         
         ## Test with custom error/qscore models
         result2 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x", 
-                                               error_model="nanopore2020", qscore_model="nanopore2020")
+                                               error_model="nanopore2020", qscore_model="nanopore2020", quiet=true)
         Test.@test isfile(result2)
         Test.@test contains(result2, "nanopore2020")
         
         ## Test with PacBio-like settings
         result3 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
                                                error_model="pacbio2021", qscore_model="pacbio2021", 
-                                               identity="30,3", length="20000,10000")
+                                               identity="30,3", length="20000,10000", quiet=true)
         Test.@test isfile(result3)
         Test.@test contains(result3, "pacbio2021")
         
         ## Test with random error model
         result4 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-                                               error_model="random", qscore_model="ideal")
+                                               error_model="random", qscore_model="ideal", quiet=true)
         Test.@test isfile(result4)
         Test.@test contains(result4, "random")
         
         ## Test with custom seed for reproducibility
         result5 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-                                               seed=12345)
+                                               seed=12345, quiet=true)
         Test.@test isfile(result5)
         
         ## Test with high junk/random/chimera rates
         result6 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-                                               junk_reads=10.0, random_reads=5.0, chimeras=15.0)
+                                               junk_reads=10.0, random_reads=5.0, chimeras=15.0, quiet=true)
         Test.@test isfile(result6)
         
         ## Test with small plasmid bias
         result7 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-                                               small_plasmid_bias=true)
+                                               small_plasmid_bias=true, quiet=true)
         Test.@test isfile(result7)
         
         ## Test with custom adapters
         result8 = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, quantity="3x",
-                                               start_adapter_seq="ATCGATCG", end_adapter_seq="CGATCGAT")
+                                               start_adapter_seq="ATCGATCG", end_adapter_seq="CGATCGAT", quiet=true)
         Test.@test isfile(result8)
         
         rm(phiX174_assembly_id, recursive=true)
@@ -345,7 +345,7 @@ Test.@testset "FASTQ simulation" begin
         error_models = ["nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random"]
         for error_model in error_models
             result = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome, 
-                                                  quantity="2x", error_model=error_model)
+                                                  quantity="2x", error_model=error_model, quiet=true)
             Test.@test isfile(result)
             Test.@test contains(result, error_model)
         end
@@ -354,7 +354,7 @@ Test.@testset "FASTQ simulation" begin
         qscore_models = ["nanopore2018", "nanopore2020", "nanopore2023", "pacbio2016", "pacbio2021", "random", "ideal"]
         for qscore_model in qscore_models
             result = Mycelia.simulate_badread_reads(fasta = phiX174_assembly_dataset.genome,
-                                                  quantity="2x", qscore_model=qscore_model)
+                                                  quantity="2x", qscore_model=qscore_model, quiet=true)
             Test.@test isfile(result)
             Test.@test contains(result, qscore_model)
         end

@@ -416,7 +416,7 @@ Test.@testset "Long Read Isolate Assembly" begin
             Mycelia.write_fasta(outfile=flye_ref_fasta, records=[flye_fasta_record])
             
             # Simulate nanopore reads with 12x coverage (minimum for Flye)
-            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="12x")
+            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="12x", quiet=true)
             
             # Decompress for flye
             flye_fastq = joinpath(dir, "flye_reads.fq")
@@ -469,7 +469,7 @@ Test.@testset "Long Read Isolate Assembly" begin
             Mycelia.write_fasta(outfile=canu_ref_fasta, records=[canu_fasta_record])
             
             # Simulate PacBio reads with 12x coverage (minimal for Canu)
-            canu_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=canu_ref_fasta, quantity="12x")
+            canu_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=canu_ref_fasta, quantity="12x", quiet=true)
             
             # Decompress for canu (canu expects uncompressed fastq)
             canu_fastq = joinpath(dir, "canu_reads.fq")
@@ -521,7 +521,7 @@ Test.@testset "Long Read Isolate Assembly" begin
             Mycelia.write_fasta(outfile=hifiasm_ref_fasta, records=[hifiasm_fasta_record])
             
             # Simulate PacBio reads with 12x coverage (HiFi-like)
-            hifiasm_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=hifiasm_ref_fasta, quantity="12x")
+            hifiasm_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=hifiasm_ref_fasta, quantity="12x", quiet=true)
             
             # Decompress for hifiasm
             hifiasm_fastq = joinpath(dir, "hifiasm_reads.fq")
@@ -578,7 +578,7 @@ Test.@testset "Long Read Metagenomic Assembly" begin
         Mycelia.write_fasta(outfile=meta_long_ref_fasta, records=[meta_long_fasta_record1, meta_long_fasta_record2])
         
         # Simulate PacBio reads for metagenomic assembly (reuse for all metagenomic tests)
-        meta_long_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=meta_long_ref_fasta, quantity="12x")
+        meta_long_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=meta_long_ref_fasta, quantity="12x", quiet=true)
         
         # Decompress for assemblers
         meta_long_fastq = joinpath(dir, "meta_long_reads.fq")
@@ -698,7 +698,7 @@ Test.@testset "Long Read Metagenomic Assembly" begin
         Test.@testset "Long Read Metagenomic Assembly - metamdbg ONT" begin
             # Test metamdbg with ONT reads - create ONT-specific reads
             # Simulate nanopore reads for ONT test
-            ont_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=meta_long_ref_fasta, quantity="10x")
+            ont_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=meta_long_ref_fasta, quantity="10x", quiet=true)
             ont_fastq = joinpath(dir, "meta_ont_reads.fq")
             run(pipeline(`gunzip -c $(ont_simulated_reads)`, ont_fastq))
             

@@ -143,7 +143,7 @@ biosequence_graph = kmer_graph_to_biosequence_graph(kmer_graph)
 ```
 """
 function kmer_graph_to_biosequence_graph(kmer_graph::MetaGraphsNext.MetaGraph; 
-                                        min_path_length::Int=2)
+                                        min_path_length::Int=1)
     
     # Determine sequence type from k-mer graph
     kmer_labels = collect(MetaGraphsNext.labels(kmer_graph))
