@@ -1672,44 +1672,400 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+Stream a (plain or gzipped) MMSeqs2 easy-search tab-delimited output file and
+return a DataFrame containing exactly one (top) hit per query.
 
-Parse MMseqs2 tophit alignment output file into a structured DataFrame.
+Operation Modes
+- Grouped mode (assume_grouped=true):
+  All hits for a query are contiguous (block per query, blocks may appear in any order).
+  The first row of each block is assumed to be the top hit; subsequent rows in the block
+  are skipped (unless needed for validation checks).
+- Unsorted mode (assume_grouped=false):
+  Queries may interleave; every row is examined and the best row per query retained
+  according to ranking rules.
 
-# Arguments
-- `tophit_aln::AbstractString`: Path to tab-delimited MMseqs2 alignment output file
+Ranking
+- rank_by = :bits   (higher bits better; tie-break by lower evalue if present).
+- rank_by = :evalue (lower evalue better; tie-break by higher bits if present).
 
-# Returns
-DataFrame with columns:
-- `query`: Query sequence/profile identifier
-- `target`: Target sequence/profile identifier  
-- `percent identity`: Sequence identity percentage
-- `alignment length`: Length of alignment
-- `number of mismatches`: Count of mismatched positions
-- `number of gaps`: Count of gap openings
-- `query start`: Start position in query sequence
-- `query end`: End position in query sequence
-- `target start`: Start position in target sequence
-- `target end`: End position in target sequence
-- `evalue`: E-value of alignment
-- `bit score`: Bit score of alignment
+Validation (only in grouped mode)
+- validation = :none disables all checks.
+- validation = :fast or :full (currently identical) performs:
+  1. Interleaving detection (query reappears after its block ended).
+  2. Intra-block ordering check (later hit outranks the first).
+
+Column Typing
+- A default schema of known MMSeqs2 columns is provided (can be overridden via schema).
+- Unknown columns default to String.
+- keep_columns restricts output to a specified ordered subset; otherwise the full header order is kept.
+- Numeric parse failures become missing if allow_parse_fail=true (columns will then have a Union element type).
+- String columns can be pooled if pool_strings=true.
+- When narrow_types=true a post-pass removes Missing from column types when no missings are present.
+
+Arguments
+- mmseqs_file::String: Input path (optionally .gz).
+- assume_grouped::Bool=true: Whether hits for each query are contiguous.
+- validation::Symbol=:fast: One of :none, :fast, :full.
+- rank_by::Symbol=:bits: One of :bits or :evalue.
+- keep_columns::Union{Nothing,Vector{String}}=nothing: Subset of columns to keep (ordered).
+- schema::Union{Nothing,Dict{String,DataType}}=nothing: Override default column types.
+- pool_strings::Bool=true: Pool string columns for memory savings.
+- allow_parse_fail::Bool=true: If true, failed numeric parses become missing; otherwise errors are thrown.
+- narrow_types::Bool=true: Post-pass type narrowing when no missings are present.
+
+Returns
+- DataFrames.DataFrame: One row per query (top hit), columns in original or requested order with concrete element types.
+
+Remarks
+- In grouped mode memory is O(#queries).
+- In unsorted mode memory is also O(#queries) since only best rows are stored.
 """
-function parse_mmseqs_tophit_aln(tophit_aln)
-    data, header = uCSV.read(tophit_aln, delim='\t')
-    # (1,2) identifiers for query and target sequences/profiles, (3) sequence identity, (4) alignment length, (5) number of mismatches, (6) number of gap openings, (7-8, 9-10) domain start and end-position in query and in target, (11) E-value, and (12) bit score.
-    # query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits
-    header = [
-        "query",
-        "target",
-        "percent identity",
-        "alignment length",
-        "number of mismatches",
-        "number of gaps",
-        "query start",
-        "query end",
-        "target start",
-        "target end",
-        "evalue",
-        "bit score"
-    ]
-    DataFrames.DataFrame(data, header)
+function top_hits_mmseqs(
+    mmseqs_file::String;
+    assume_grouped::Bool = true,
+    validation::Symbol = :fast,
+    rank_by::Symbol = :bits,
+    keep_columns::Union{Nothing,Vector{String}} = nothing,
+    schema::Union{Nothing,Dict{String,DataType}} = nothing,
+    pool_strings::Bool = true,
+    allow_parse_fail::Bool = true,
+    narrow_types::Bool = true
+) :: DataFrames.DataFrame
+    if !(rank_by in (:bits, :evalue))
+        throw(ArgumentError("rank_by must be :bits or :evalue"))
+    end
+    if !(validation in (:none, :fast, :full))
+        throw(ArgumentError("validation must be :none, :fast, or :full"))
+    end
+
+    selected_cols::Vector{String} = String[]
+    selected_idx::Vector{Int} = Int[]
+    # Allow union types by using Any for values
+    col_types = Dict{String,Any}()
+    stored_cols = Dict{String,AbstractVector}()
+
+    io = endswith(lowercase(mmseqs_file), ".gz") ?
+        CodecZlib.GzipDecompressorStream(open(mmseqs_file, "r")) :
+        open(mmseqs_file, "r")
+
+    try
+        if eof(io)
+            return DataFrames.DataFrame()
+        end
+        header_line = readline(io)
+        if isempty(header_line)
+            return DataFrames.DataFrame()
+        end
+
+        cols = split(header_line, '\t', keepempty=true)
+        col_index = Dict{String,Int}(c => i for (i, c) in enumerate(cols))
+
+        if !haskey(col_index, "query")
+            throw(ArgumentError("Missing required column 'query'"))
+        end
+        if rank_by == :bits && !haskey(col_index, "bits")
+            throw(ArgumentError("Missing column 'bits' required for rank_by=:bits"))
+        elseif rank_by == :evalue && !haskey(col_index, "evalue")
+            throw(ArgumentError("Missing column 'evalue' required for rank_by=:evalue"))
+        end
+
+        default_schema = Dict(
+            "query"    => String,
+            "qheader"  => String,
+            "qlen"     => Int,
+            "target"   => String,
+            "theader"  => String,
+            "tlen"     => Int,
+            "nident"   => Int,
+            "fident"   => Float64,
+            "pident"   => Float64,
+            "alnlen"   => Int,
+            "mismatch" => Int,
+            "gapopen"  => Int,
+            "qstart"   => Int,
+            "qend"     => Int,
+            "tstart"   => Int,
+            "tend"     => Int,
+            "evalue"   => Float64,
+            "bits"     => Float64,
+            "taxid"    => Int,
+            "taxname"  => String
+        )
+        if schema !== nothing
+            for (k,v) in schema
+                default_schema[k] = v
+            end
+        end
+
+        if keep_columns === nothing
+            selected_cols = copy(cols)
+        else
+            missing = setdiff(keep_columns, collect(keys(col_index)))
+            if !isempty(missing)
+                throw(ArgumentError("Requested keep_columns not found: $(missing)"))
+            end
+            selected_cols = keep_columns
+        end
+        selected_idx = map(c -> col_index[c], selected_cols)
+
+        for c in selected_cols
+            T = get(default_schema, c, String)
+            if T === Int
+                col_types[c] = allow_parse_fail ? Union{Int,Missing} : Int
+            elseif T === Float64
+                col_types[c] = allow_parse_fail ? Union{Float64,Missing} : Float64
+            elseif T === String
+                col_types[c] = String
+            else
+                col_types[c] = T
+            end
+        end
+
+        if assume_grouped
+            for c in selected_cols
+                T = col_types[c]
+                stored_cols[c] = Vector{T}()
+            end
+        end
+
+        @inline function parse_cell(T, raw::AbstractString)
+            if T === String
+                return raw  # Will auto-convert SubString -> String on push if needed
+            elseif T === Int
+                return parse(Int, raw)
+            elseif T === Float64
+                return parse(Float64, raw)
+            elseif T === Union{Int,Missing}
+                raw == "" && return missing
+                v = tryparse(Int, raw)
+                return v === nothing ? missing : v
+            elseif T === Union{Float64,Missing}
+                raw == "" && return missing
+                v = tryparse(Float64, raw)
+                return v === nothing ? missing : v
+            else
+                return raw
+            end
+        end
+
+        @inline function extract_rank(fields::Vector{SubString{String}})
+            if rank_by == :bits
+                bits_val = begin
+                    b = tryparse(Float64, fields[col_index["bits"]]); b === nothing && (b = -Inf); b
+                end
+                if haskey(col_index, "evalue")
+                    e_val = begin
+                        e = tryparse(Float64, fields[col_index["evalue"]]); e === nothing && (e = Inf); e
+                    end
+                    return (bits_val, e_val)
+                else
+                    return (bits_val, Inf)
+                end
+            else
+                e_val = begin
+                    e = tryparse(Float64, fields[col_index["evalue"]]); e === nothing && (e = Inf); e
+                end
+                if haskey(col_index, "bits")
+                    b_val = begin
+                        b = tryparse(Float64, fields[col_index["bits"]]); b === nothing && (b = -Inf); b
+                    end
+                    return (e_val, -b_val)
+                else
+                    return (e_val, 0.0)
+                end
+            end
+        end
+
+        @inline function better_rank(a, b)
+            if rank_by == :bits
+                return (a[1] > b[1]) || (a[1] == b[1] && a[2] < b[2])
+            else
+                return (a[1] < b[1]) || (a[1] == b[1] && a[2] < b[2])
+            end
+        end
+
+        current_query::Union{Nothing,String} = nothing
+        current_first_rank = nothing
+        closed_queries = validation == :none ? nothing : Set{String}()
+        interleave_violation = false
+        intra_rank_violation = false
+
+        best_hits = Dict{String, Tuple{Any, Vector{Any}}}()
+
+        function append_grouped!(fields)
+            @inbounds for (j, c) in enumerate(selected_cols)
+                raw = fields[selected_idx[j]]
+                T = col_types[c]
+                vec = stored_cols[c]
+                push!(vec, parse_cell(T, raw))
+            end
+        end
+
+        function build_row(fields)::Vector{Any}
+            row = Vector{Any}(undef, length(selected_cols))
+            @inbounds for (j, c) in enumerate(selected_cols)
+                raw = fields[selected_idx[j]]
+                T = col_types[c]
+                row[j] = parse_cell(T, raw)
+            end
+            return row
+        end
+
+        for line in eachline(io)
+            isempty(line) && continue
+            fields = split(line, '\t', keepempty=true)
+            length(fields) < length(cols) && continue
+            q = fields[col_index["query"]]
+
+            if assume_grouped
+                if current_query === nothing
+                    current_query = q
+                    current_first_rank = extract_rank(fields)
+                    append_grouped!(fields)
+                elseif q == current_query
+                    if validation != :none
+                        rtuple = extract_rank(fields)
+                        if better_rank(rtuple, current_first_rank)
+                            intra_rank_violation = true
+                        end
+                    end
+                    continue
+                else
+                    if validation != :none && closed_queries !== nothing
+                        if in(q, closed_queries)
+                            interleave_violation = true
+                        end
+                        push!(closed_queries, current_query)
+                    end
+                    current_query = q
+                    current_first_rank = extract_rank(fields)
+                    append_grouped!(fields)
+                end
+            else
+                rtuple = extract_rank(fields)
+                if haskey(best_hits, q)
+                    old_rank, _ = best_hits[q]
+                    if better_rank(rtuple, old_rank)
+                        best_hits[q] = (rtuple, build_row(fields))
+                    end
+                else
+                    best_hits[q] = (rtuple, build_row(fields))
+                end
+            end
+        end
+
+        if !assume_grouped
+            n = length(best_hits)
+            for c in selected_cols
+                T = col_types[c]
+                stored_cols[c] = Vector{T}(undef, n)
+            end
+            i = 1
+            for (_, tup) in best_hits
+                row = tup[2]
+                @inbounds for (j, c) in enumerate(selected_cols)
+                    stored_cols[c][i] = row[j]
+                end
+                i += 1
+            end
+        end
+
+        if assume_grouped && validation != :none
+            if interleave_violation
+                @warn "Validation: Detected interleaving (a query block reappeared)."
+            end
+            if intra_rank_violation
+                @warn "Validation: Detected a later hit within a block that outranks the first."
+            end
+        end
+
+        df_cols = Vector{AbstractVector}(undef, length(selected_cols))
+        @inbounds for (j, c) in enumerate(selected_cols)
+            df_cols[j] = stored_cols[c]
+        end
+        df = DataFrames.DataFrame(df_cols, Symbol.(selected_cols))
+
+        if narrow_types
+            narrow_column_types!(df)
+        end
+
+        if pool_strings
+            for c in names(df)
+                if eltype(df[!, c]) <: AbstractString
+                    df[!, c] = PooledArrays.PooledArray(df[!, c])
+                end
+            end
+        end
+
+        return df
+    finally
+        close(io)
+    end
 end
+
+# Internal utility: narrow Union{T,Missing} columns without missings down to Vector{T}.
+function narrow_column_types!(df::DataFrames.DataFrame)
+    for c in names(df)
+        T = eltype(df[!, c])
+        if T isa Union
+            nm = Base.nonmissingtype(T)
+            if (nm !== Missing) && (nm !== T)
+                has_missing = false
+                @inbounds for v in df[!, c]
+                    if v === missing
+                        has_missing = true
+                        break
+                    end
+                end
+                if !has_missing
+                    df[!, c] = convert(Vector{nm}, df[!, c])
+                end
+            end
+        end
+    end
+    return df
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Parse MMseqs2 tophit alignment output file into a structured DataFrame.
+
+# # Arguments
+# - `tophit_aln::AbstractString`: Path to tab-delimited MMseqs2 alignment output file
+
+# # Returns
+# DataFrame with columns:
+# - `query`: Query sequence/profile identifier
+# - `target`: Target sequence/profile identifier  
+# - `percent identity`: Sequence identity percentage
+# - `alignment length`: Length of alignment
+# - `number of mismatches`: Count of mismatched positions
+# - `number of gaps`: Count of gap openings
+# - `query start`: Start position in query sequence
+# - `query end`: End position in query sequence
+# - `target start`: Start position in target sequence
+# - `target end`: End position in target sequence
+# - `evalue`: E-value of alignment
+# - `bit score`: Bit score of alignment
+# """
+# function parse_mmseqs_tophit_aln(tophit_aln)
+#     data, header = uCSV.read(tophit_aln, delim='\t')
+#     # (1,2) identifiers for query and target sequences/profiles, (3) sequence identity, (4) alignment length, (5) number of mismatches, (6) number of gap openings, (7-8, 9-10) domain start and end-position in query and in target, (11) E-value, and (12) bit score.
+#     # query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits
+#     header = [
+#         "query",
+#         "target",
+#         "percent identity",
+#         "alignment length",
+#         "number of mismatches",
+#         "number of gaps",
+#         "query start",
+#         "query end",
+#         "target start",
+#         "target end",
+#         "evalue",
+#         "bit score"
+#     ]
+#     DataFrames.DataFrame(data, header)
+# end

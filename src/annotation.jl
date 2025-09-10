@@ -1,183 +1,201 @@
+# """
+#     build_exact_match_table(uniref_df::DataFrames.DataFrame,
+#                             observed_df::DataFrames.DataFrame;
+#                             taxonomy_level::Symbol = :cluster,
+#                             compute_bits::Bool = false)
+
+# Constructs a DataFrame mimicking MMseqs2 easy-search output for exact (hash-based) matches.
+
+# Inputs must both contain a `seq_hash` column. `observed_df` must contain at least
+# `query` and `qheader`. If `compute_bits=true`, a `sequence` column in `observed_df`
+# is preferred; otherwise representative sequence from UniRef is used.
+
+# taxonomy_level:
+#   :cluster        -> taxid = common_taxon_id, taxname = common_taxon
+#   :representative -> taxid = rep_ncbi_taxonomy, taxname = common_taxon (fallback) or rep_protein_name
+
+# The output columns are:
+# query qheader target theader pident fident nident alnlen mismatch gapopen qstart qend qlen tstart tend tlen evalue bits taxid taxname
+
+# Column `theader` is the full FASTA header for the target (target ID plus description),
+# matching MMseqs2 style, e.g.:
+# UniRef100_P99999 Cytochrome c n=5 Tax=Hominidae TaxID=9604 RepID=CYC_HUMAN
+# """
+# function build_exact_match_table(uniref_df::DataFrames.DataFrame,
+#                                  observed_df::DataFrames.DataFrame;
+#                                  taxonomy_level::Symbol = :cluster,
+#                                  compute_bits::Bool = false)
+
+#     @assert :seq_hash in propertynames(uniref_df) "uniref_df lacks seq_hash"
+#     @assert :seq_hash in propertynames(observed_df) "observed_df lacks seq_hash"
+#     @assert :query in propertynames(observed_df) "observed_df lacks query"
+#     @assert :qheader in propertynames(observed_df) "observed_df lacks qheader"
+
+#     joined = DataFrames.innerjoin(
+#         observed_df,
+#         uniref_df,
+#         on = :seq_hash,
+#         makeunique = true
+#     )
+
+#     has_obs_seq = :sequence in propertynames(observed_df)
+#     rep_len_col = similar(joined.seq_hash, Int)
+#     for (i, _) in enumerate(rep_len_col)
+#         len_entry = joined.rep_sequence_length_attr[i]
+#         rep_len = if len_entry !== missing
+#             Int(len_entry)
+#         elseif joined.rep_sequence[i] !== missing
+#             length(joined.rep_sequence[i])
+#         elseif has_obs_seq && joined.sequence[i] !== missing
+#             length(joined.sequence[i])
+#         else
+#             0
+#         end
+#         rep_len_col[i] = rep_len
+#     end
+
+#     # Build full FASTA header (theader) including target ID at start
+#     theader_col = Vector{String}(undef, DataFrames.nrow(joined))
+#     for i in eachindex(theader_col)
+#         cluster_name = joined.name[i] === missing ? "" : String(joined.name[i])
+#         cluster_name = replace(cluster_name, r"^Cluster:\s*" => "")
+#         parts = String[]
+#         if !isempty(cluster_name)
+#             push!(parts, cluster_name)
+#         end
+#         mc = joined.member_count[i]
+#         if mc !== missing
+#             push!(parts, "n=$(mc)")
+#         end
+#         taxname_cluster = joined.common_taxon[i]
+#         if taxname_cluster !== missing
+#             push!(parts, "Tax=$(taxname_cluster)")
+#         end
+#         taxid_cluster = joined.common_taxon_id[i]
+#         if taxid_cluster !== missing
+#             push!(parts, "TaxID=$(taxid_cluster)")
+#         end
+#         repid = joined.rep_db_id[i]
+#         if repid !== missing
+#             push!(parts, "RepID=$(repid)")
+#         end
+#         desc = join(parts, " ")
+#         theader_col[i] = isempty(desc) ? String(joined.entry_id[i]) :
+#             (String(joined.entry_id[i]) * " " * desc)
+#     end
+
+#     taxid_col = Vector{Union{Missing,String}}(undef, DataFrames.nrow(joined))
+#     taxname_col = Vector{Union{Missing,String}}(undef, DataFrames.nrow(joined))
+#     for i in eachindex(taxid_col)
+#         if taxonomy_level == :cluster
+#             taxid_col[i] = joined.common_taxon_id[i]
+#             taxname_col[i] = joined.common_taxon[i]
+#         elseif taxonomy_level == :representative
+#             taxid_col[i] = joined.rep_ncbi_taxonomy[i]
+#             taxname_col[i] = joined.common_taxon[i] !== missing ? joined.common_taxon[i] : joined.rep_protein_name[i]
+#         else
+#             error("taxonomy_level must be :cluster or :representative")
+#         end
+#     end
+
+#     n = DataFrames.nrow(joined)
+#     pident = fill(100.0, n)
+#     fident = fill(1.0, n)
+#     nident = rep_len_col
+#     alnlen = rep_len_col
+#     mismatch = fill(0, n)
+#     gapopen = fill(0, n)
+#     qstart = fill(1, n)
+#     qend = rep_len_col
+#     qlen = rep_len_col
+#     tstart = fill(1, n)
+#     tend = rep_len_col
+#     tlen = rep_len_col
+#     evalue = fill(0.0, n)
+
+#     bits = Vector{Union{Missing,Float64}}(undef, n)
+#     if compute_bits
+#         for i in 1:n
+#             seq = if has_obs_seq && joined.sequence[i] !== missing
+#                 String(joined.sequence[i])
+#             elseif joined.rep_sequence[i] !== missing
+#                 String(joined.rep_sequence[i])
+#             else
+#                 ""
+#             end
+#             bits[i] = isempty(seq) ? missing : _compute_bits(seq)
+#         end
+#     else
+#         fill!(bits, missing)
+#     end
+
+#     result = DataFrames.DataFrame(
+#         query = joined.query,
+#         qheader = joined.qheader,
+#         target = joined.entry_id,
+#         theader = theader_col,
+#         pident = pident,
+#         fident = fident,
+#         nident = nident,
+#         alnlen = alnlen,
+#         mismatch = mismatch,
+#         gapopen = gapopen,
+#         qstart = qstart,
+#         qend = qend,
+#         qlen = qlen,
+#         tstart = tstart,
+#         tend = tend,
+#         tlen = tlen,
+#         evalue = evalue,
+#         bits = bits,
+#         taxid = taxid_col,
+#         taxname = taxname_col
+#     )
+
+#     return result
+# end
+
+# function _compute_bits(seq::AbstractString)
+#     raw = 0
+#     for c in seq
+#         raw += get(BLOSUM62_DIAG, c, 0)
+#     end
+#     return (BLAST_LAMBDA * raw - log(BLAST_K)) / log(2)
+# end
+
 """
-    build_exact_match_table(uniref_df::DataFrames.DataFrame,
-                            observed_df::DataFrames.DataFrame;
-                            taxonomy_level::Symbol = :cluster,
-                            compute_bits::Bool = false)
+    parse_uniref100_to_dataframe(xml_path::String;
+                                 limit::Union{Nothing,Int}=nothing,
+                                 store_sequence::Bool=true,
+                                 compression::Symbol=:auto)
 
-Constructs a DataFrame mimicking MMseqs2 easy-search output for exact (hash-based) matches.
+Parses a UniRef100 XML file into an in-memory DataFrame.
 
-Inputs must both contain a `seq_hash` column. `observed_df` must contain at least
-`query` and `qheader`. If `compute_bits=true`, a `sequence` column in `observed_df`
-is preferred; otherwise representative sequence from UniRef is used.
+Compression handling:
+  compression = :auto       -> Use extension heuristic ('.gz' / '.gzip' / '.tgz') then validate magic bytes;
+                               if no gzip extension but magic bytes indicate gzip, still decompress.
+  compression = :extension  -> Decide solely by extension; validate magic bytes; error on mismatch.
+  compression = :magic      -> Ignore extension and decide by magic bytes only.
+  compression = :gzip       -> Force gzip (error if magic bytes do not match).
+  compression = :plain      -> Force plain text (error if magic bytes indicate gzip).
 
-taxonomy_level:
-  :cluster        -> taxid = common_taxon_id, taxname = common_taxon
-  :representative -> taxid = rep_ncbi_taxonomy, taxname = common_taxon (fallback) or rep_protein_name
-
-The output columns are:
-query qheader target theader pident fident nident alnlen mismatch gapopen qstart qend qlen tstart tend tlen evalue bits taxid taxname
-
-Column `theader` is the full FASTA header for the target (target ID plus description),
-matching MMseqs2 style, e.g.:
-UniRef100_P99999 Cytochrome c n=5 Tax=Hominidae TaxID=9604 RepID=CYC_HUMAN
-"""
-function build_exact_match_table(uniref_df::DataFrames.DataFrame,
-                                 observed_df::DataFrames.DataFrame;
-                                 taxonomy_level::Symbol = :cluster,
-                                 compute_bits::Bool = false)
-
-    @assert :seq_hash in propertynames(uniref_df) "uniref_df lacks seq_hash"
-    @assert :seq_hash in propertynames(observed_df) "observed_df lacks seq_hash"
-    @assert :query in propertynames(observed_df) "observed_df lacks query"
-    @assert :qheader in propertynames(observed_df) "observed_df lacks qheader"
-
-    joined = DataFrames.innerjoin(
-        observed_df,
-        uniref_df,
-        on = :seq_hash,
-        makeunique = true
-    )
-
-    has_obs_seq = :sequence in propertynames(observed_df)
-    rep_len_col = similar(joined.seq_hash, Int)
-    for (i, _) in enumerate(rep_len_col)
-        len_entry = joined.rep_sequence_length_attr[i]
-        rep_len = if len_entry !== missing
-            Int(len_entry)
-        elseif joined.rep_sequence[i] !== missing
-            length(joined.rep_sequence[i])
-        elseif has_obs_seq && joined.sequence[i] !== missing
-            length(joined.sequence[i])
-        else
-            0
-        end
-        rep_len_col[i] = rep_len
-    end
-
-    # Build full FASTA header (theader) including target ID at start
-    theader_col = Vector{String}(undef, DataFrames.nrow(joined))
-    for i in eachindex(theader_col)
-        cluster_name = joined.name[i] === missing ? "" : String(joined.name[i])
-        cluster_name = replace(cluster_name, r"^Cluster:\s*" => "")
-        parts = String[]
-        if !isempty(cluster_name)
-            push!(parts, cluster_name)
-        end
-        mc = joined.member_count[i]
-        if mc !== missing
-            push!(parts, "n=$(mc)")
-        end
-        taxname_cluster = joined.common_taxon[i]
-        if taxname_cluster !== missing
-            push!(parts, "Tax=$(taxname_cluster)")
-        end
-        taxid_cluster = joined.common_taxon_id[i]
-        if taxid_cluster !== missing
-            push!(parts, "TaxID=$(taxid_cluster)")
-        end
-        repid = joined.rep_db_id[i]
-        if repid !== missing
-            push!(parts, "RepID=$(repid)")
-        end
-        desc = join(parts, " ")
-        theader_col[i] = isempty(desc) ? String(joined.entry_id[i]) :
-            (String(joined.entry_id[i]) * " " * desc)
-    end
-
-    taxid_col = Vector{Union{Missing,String}}(undef, DataFrames.nrow(joined))
-    taxname_col = Vector{Union{Missing,String}}(undef, DataFrames.nrow(joined))
-    for i in eachindex(taxid_col)
-        if taxonomy_level == :cluster
-            taxid_col[i] = joined.common_taxon_id[i]
-            taxname_col[i] = joined.common_taxon[i]
-        elseif taxonomy_level == :representative
-            taxid_col[i] = joined.rep_ncbi_taxonomy[i]
-            taxname_col[i] = joined.common_taxon[i] !== missing ? joined.common_taxon[i] : joined.rep_protein_name[i]
-        else
-            error("taxonomy_level must be :cluster or :representative")
-        end
-    end
-
-    n = DataFrames.nrow(joined)
-    pident = fill(100.0, n)
-    fident = fill(1.0, n)
-    nident = rep_len_col
-    alnlen = rep_len_col
-    mismatch = fill(0, n)
-    gapopen = fill(0, n)
-    qstart = fill(1, n)
-    qend = rep_len_col
-    qlen = rep_len_col
-    tstart = fill(1, n)
-    tend = rep_len_col
-    tlen = rep_len_col
-    evalue = fill(0.0, n)
-
-    bits = Vector{Union{Missing,Float64}}(undef, n)
-    if compute_bits
-        for i in 1:n
-            seq = if has_obs_seq && joined.sequence[i] !== missing
-                String(joined.sequence[i])
-            elseif joined.rep_sequence[i] !== missing
-                String(joined.rep_sequence[i])
-            else
-                ""
-            end
-            bits[i] = isempty(seq) ? missing : _compute_bits(seq)
-        end
-    else
-        fill!(bits, missing)
-    end
-
-    result = DataFrames.DataFrame(
-        query = joined.query,
-        qheader = joined.qheader,
-        target = joined.entry_id,
-        theader = theader_col,
-        pident = pident,
-        fident = fident,
-        nident = nident,
-        alnlen = alnlen,
-        mismatch = mismatch,
-        gapopen = gapopen,
-        qstart = qstart,
-        qend = qend,
-        qlen = qlen,
-        tstart = tstart,
-        tend = tend,
-        tlen = tlen,
-        evalue = evalue,
-        bits = bits,
-        taxid = taxid_col,
-        taxname = taxname_col
-    )
-
-    return result
-end
-
-function _compute_bits(seq::AbstractString)
-    raw = 0
-    for c in seq
-        raw += get(BLOSUM62_DIAG, c, 0)
-    end
-    return (BLAST_LAMBDA * raw - log(BLAST_K)) / log(2)
-end
-
-"""
-    parse_uniref100_to_dataframe(xml_path::String; limit::Union{Nothing,Int}=nothing)
-
-Iteratively parses a UniRef100 XML (optionally gzipped) into a single in-memory DataFrame.
-If `limit` is provided, stops after that many entries (useful for testing).
+If `store_sequence` is false, the representative sequence text is omitted (length/checksum retained).
+If `limit` is provided, stops after that many <entry> elements.
 Absent fields are recorded as `missing`.
 """
-function parse_uniref100_to_dataframe(xml_path::String; limit::Union{Nothing,Int}=nothing)
+function parse_uniref100_to_dataframe(xml_path::String;
+                                      limit::Union{Nothing,Int}=nothing,
+                                      store_sequence::Bool=true,
+                                      compression::Symbol=:auto)
 
-    # Core scalar columns
+    compression in (:auto, :extension, :magic, :gzip, :plain) ||
+        error("compression must be one of :auto, :extension, :magic, :gzip, :plain")
+
+    # Allocate column arrays
     entry_id = String[]
     updated = Vector{Union{Missing,String}}()
     name = Vector{Union{Missing,String}}()
 
-    # Representative dbReference attributes & selected properties
     rep_db_type = Vector{Union{Missing,String}}()
     rep_db_id = Vector{Union{Missing,String}}()
     rep_uniprotkb_accession = Vector{Union{Missing,String}}()
@@ -188,109 +206,194 @@ function parse_uniref100_to_dataframe(xml_path::String; limit::Union{Nothing,Int
     rep_ncbi_taxonomy = Vector{Union{Missing,String}}()
     rep_source_organism = Vector{Union{Missing,String}}()
     rep_is_seed = Vector{Union{Missing,Bool}}()
-    rep_length_reported = Vector{Union{Missing,Int}}()  # 'length' property at rep dbReference level (if present)
+    rep_length_reported = Vector{Union{Missing,Int}}()
 
-    # Representative sequence
-    rep_sequence = Vector{Union{Missing,String}}()
+    rep_sequence = store_sequence ? Vector{Union{Missing,String}}() : nothing
     rep_sequence_length_attr = Vector{Union{Missing,Int}}()
     rep_sequence_checksum = Vector{Union{Missing,String}}()
 
-    # Entry-level properties
     member_count = Vector{Union{Missing,Int}}()
     common_taxon = Vector{Union{Missing,String}}()
     common_taxon_id = Vector{Union{Missing,String}}()
 
-    # Full property capture (parallel arrays of property types/values per entry)
     entry_property_types = Vector{Vector{String}}()
     entry_property_values = Vector{Vector{String}}()
     rep_property_types = Vector{Vector{String}}()
     rep_property_values = Vector{Vector{String}}()
 
-    # Member aggregated columns (vectors of strings per entry)
     member_db_ids = Vector{Vector{String}}()
     member_uniprotkb_accessions = Vector{Vector{String}}()
     member_uniparc_ids = Vector{Vector{String}}()
 
-    # Sequence hash placeholder (user will fill)
-    seq_hash = Vector{Union{Missing,String}}()
-
-    io = open(xml_path, "r")
-    stream = occursin(r"\.gz$"i, xml_path) ? CodecZlib.GzipDecompressorStream(io) : io
-    reader = EzXML.Reader(stream)
-
-    count = 0
+    # Open file and detect compression strategy
+    raw_io = open(xml_path, "r")
+    stream = raw_io
+    is_gzip_stream = false
+    gzip_by_ext = false
     try
-        while EzXML.read(reader)
-            if EzXML.nodetype(reader) == EzXML.READER_TYPE_ELEMENT && EzXML.localname(reader) == "entry"
-                node = EzXML.read_current(reader)
-                try
-                    _process_entry!(
-                        node,
-                        entry_id, updated, name,
-                        rep_db_type, rep_db_id,
-                        rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
-                        rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
-                        rep_length_reported,
-                        rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
-                        member_count, common_taxon, common_taxon_id,
-                        entry_property_types, entry_property_values,
-                        rep_property_types, rep_property_values,
-                        member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
-                        seq_hash
-                    )
-                    count += 1
-                    if limit !== nothing && count >= limit
-                        break
-                    end
-                    if count % 100_000 == 0
-                        println("Parsed entries: ", count)
-                    end
-                finally
-                    EzXML.free(node)
+        # Extension heuristic
+        lower_name = lowercase(xml_path)
+        if endswith(lower_name, ".gz") || endswith(lower_name, ".gzip") || endswith(lower_name, ".tgz")
+            gzip_by_ext = true
+        end
+
+        # Read magic bytes (two bytes enough for gzip signature 1f 8b)
+        magic = read(raw_io, UInt8, min(2, filesize(raw_io)))
+        seekstart(raw_io)
+        magic_indicates_gzip = (length(magic) == 2 && magic[1] == 0x1f && magic[2] == 0x8b)
+
+        use_gzip = false
+        if compression == :auto
+            if gzip_by_ext
+                if !magic_indicates_gzip
+                    error("File extension suggests gzip but magic bytes do not match gzip signature.")
+                end
+                use_gzip = true
+            else
+                use_gzip = magic_indicates_gzip
+            end
+        elseif compression == :extension
+            if gzip_by_ext
+                if !magic_indicates_gzip
+                    error("Extension-based gzip expected but magic bytes do not indicate gzip.")
+                end
+                use_gzip = true
+            else
+                if magic_indicates_gzip
+                    # Accept anyway (we could warn; raising error would be stricter)
+                    use_gzip = true
+                else
+                    use_gzip = false
                 end
             end
+        elseif compression == :magic
+            use_gzip = magic_indicates_gzip
+        elseif compression == :gzip
+            if !magic_indicates_gzip
+                error("Forced gzip mode but magic bytes do not indicate gzip file.")
+            end
+            use_gzip = true
+        elseif compression == :plain
+            if magic_indicates_gzip
+                error("Forced plain mode but magic bytes indicate gzip.")
+            end
+            use_gzip = false
         end
+
+        if use_gzip
+            stream = CodecZlib.GzipDecompressorStream(raw_io)
+            is_gzip_stream = true
+        else
+            stream = raw_io
+        end
+
+        reader = EzXML.Reader(stream)
+        count = 0
+        try
+            while EzXML.read(reader)
+                if EzXML.nodetype(reader) == EzXML.READER_TYPE_ELEMENT && EzXML.localname(reader) == "entry"
+                    node = EzXML.read_current(reader)
+                    try
+                        _process_entry!(
+                            node,
+                            entry_id, updated, name,
+                            rep_db_type, rep_db_id,
+                            rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
+                            rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
+                            rep_length_reported,
+                            rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
+                            member_count, common_taxon, common_taxon_id,
+                            entry_property_types, entry_property_values,
+                            rep_property_types, rep_property_values,
+                            member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
+                            store_sequence
+                        )
+                        count += 1
+                        if limit !== nothing && count >= limit
+                            break
+                        end
+                        if count % 100_000 == 0
+                            println("Parsed entries: ", count)
+                        end
+                    finally
+                        EzXML.free(node)
+                    end
+                end
+            end
+        finally
+            EzXML.free(reader)
+        end
+        println("Finished parsing entries: ", count)
     finally
-        close(reader)
-        close(stream)
-        close(io)
+        if is_gzip_stream
+            try close(stream) catch end
+        end
+        close(raw_io)
     end
 
-    println("Finished parsing entries: ", count)
-
-    df = DataFrames.DataFrame(
-        entry_id = entry_id,
-        updated = updated,
-        name = name,
-        rep_db_type = rep_db_type,
-        rep_db_id = rep_db_id,
-        rep_uniprotkb_accession = rep_uniprotkb_accession,
-        rep_uniparc_id = rep_uniparc_id,
-        rep_uniref90_id = rep_uniref90_id,
-        rep_uniref50_id = rep_uniref50_id,
-        rep_protein_name = rep_protein_name,
-        rep_ncbi_taxonomy = rep_ncbi_taxonomy,
-        rep_source_organism = rep_source_organism,
-        rep_is_seed = rep_is_seed,
-        rep_length_reported = rep_length_reported,
-        rep_sequence = rep_sequence,
-        rep_sequence_length_attr = rep_sequence_length_attr,
-        rep_sequence_checksum = rep_sequence_checksum,
-        member_count = member_count,
-        common_taxon = common_taxon,
-        common_taxon_id = common_taxon_id,
-        entry_property_types = entry_property_types,
-        entry_property_values = entry_property_values,
-        rep_property_types = rep_property_types,
-        rep_property_values = rep_property_values,
-        member_db_ids = member_db_ids,
-        member_uniprotkb_accessions = member_uniprotkb_accessions,
-        member_uniparc_ids = member_uniparc_ids,
-        seq_hash = seq_hash,
-    )
-
-    return df
+    if store_sequence
+        return DataFrames.DataFrame(
+            entry_id = entry_id,
+            updated = updated,
+            name = name,
+            rep_db_type = rep_db_type,
+            rep_db_id = rep_db_id,
+            rep_uniprotkb_accession = rep_uniprotkb_accession,
+            rep_uniparc_id = rep_uniparc_id,
+            rep_uniref90_id = rep_uniref90_id,
+            rep_uniref50_id = rep_uniref50_id,
+            rep_protein_name = rep_protein_name,
+            rep_ncbi_taxonomy = rep_ncbi_taxonomy,
+            rep_source_organism = rep_source_organism,
+            rep_is_seed = rep_is_seed,
+            rep_length_reported = rep_length_reported,
+            rep_sequence = rep_sequence,
+            rep_sequence_length_attr = rep_sequence_length_attr,
+            rep_sequence_checksum = rep_sequence_checksum,
+            member_count = member_count,
+            common_taxon = common_taxon,
+            common_taxon_id = common_taxon_id,
+            entry_property_types = entry_property_types,
+            entry_property_values = entry_property_values,
+            rep_property_types = rep_property_types,
+            rep_property_values = rep_property_values,
+            member_db_ids = member_db_ids,
+            member_uniprotkb_accessions = member_uniprotkb_accessions,
+            member_uniparc_ids = member_uniparc_ids,
+        )
+    else
+        return DataFrames.DataFrame(
+            entry_id = entry_id,
+            updated = updated,
+            name = name,
+            rep_db_type = rep_db_type,
+            rep_db_id = rep_db_id,
+            rep_uniprotkb_accession = rep_uniprotkb_accession,
+            rep_uniparc_id = rep_uniparc_id,
+            rep_uniref90_id = rep_uniref90_id,
+            rep_uniref50_id = rep_uniref50_id,
+            rep_protein_name = rep_protein_name,
+            rep_ncbi_taxonomy = rep_ncbi_taxonomy,
+            rep_source_organism = rep_source_organism,
+            rep_is_seed = rep_is_seed,
+            rep_length_reported = rep_length_reported,
+            rep_sequence_length_attr = rep_sequence_length_attr,
+            rep_sequence_checksum = rep_sequence_checksum,
+            member_count = member_count,
+            common_taxon = common_taxon,
+            common_taxon_id = common_taxon_id,
+            entry_property_types = entry_property_types,
+            entry_property_values = entry_property_values,
+            rep_property_types = rep_property_types,
+            rep_property_values = rep_property_values,
+            member_db_ids = member_db_ids,
+            member_uniprotkb_accessions = member_uniprotkb_accessions,
+            member_uniparc_ids = member_uniparc_ids,
+        )
+    end
 end
+
+# ---------------- Internal: per-entry extraction ----------------
 
 function _process_entry!(
     entry_node::EzXML.Node,
@@ -308,7 +411,7 @@ function _process_entry!(
     rep_source_organism_col,
     rep_is_seed_col,
     rep_length_reported_col,
-    rep_sequence_col,
+    rep_sequence_col::Union{Nothing,Vector{Union{Missing,String}}},
     rep_sequence_length_attr_col,
     rep_sequence_checksum_col,
     member_count_col,
@@ -321,7 +424,7 @@ function _process_entry!(
     member_db_ids_col,
     member_uniprotkb_accessions_col,
     member_uniparc_ids_col,
-    seq_hash_col
+    store_sequence::Bool
 )
     eid_attr = EzXML.getattr(entry_node, "id")
     updated_attr = EzXML.getattr(entry_node, "updated")
@@ -347,15 +450,15 @@ function _process_entry!(
             t = EzXML.getattr(child, "type")
             v = EzXML.getattr(child, "value")
             if t !== nothing && v !== nothing
-                push!(e_prop_types, String(t))
-                push!(e_prop_values, String(v))
-                st = String(t)
-                if st == "member count"
-                    local_member_count = something(tryparse(Int, String(v)), missing)
-                elseif st == "common taxon"
-                    local_common_taxon = String(v)
-                elseif st == "common taxon ID"
-                    local_common_taxon_id = String(v)
+                ts = String(t); vs = String(v)
+                push!(e_prop_types, ts)
+                push!(e_prop_values, vs)
+                if ts == "member count"
+                    local_member_count = something(tryparse(Int, vs), missing)
+                elseif ts == "common taxon"
+                    local_common_taxon = vs
+                elseif ts == "common taxon ID"
+                    local_common_taxon_id = vs
                 end
             end
         end
@@ -366,13 +469,13 @@ function _process_entry!(
     rep_props_types = String[]
     rep_props_values = String[]
     rep_uniprotkb_acc = missing
-    rep_uniparc_id = missing
-    rep_uniref90_id = missing
-    rep_uniref50_id = missing
-    rep_protein_name = missing
-    rep_ncbi_taxonomy = missing
-    rep_source_organism = missing
-    rep_is_seed = missing
+    rep_uniparc_id_val = missing
+    rep_uniref90_id_val = missing
+    rep_uniref50_id_val = missing
+    rep_protein_name_val = missing
+    rep_ncbi_taxonomy_val = missing
+    rep_source_organism_val = missing
+    rep_is_seed_val = missing
     rep_length_prop = missing
 
     rep_sequence_text = missing
@@ -393,26 +496,25 @@ function _process_entry!(
                             pt = EzXML.getattr(p, "type")
                             pv = EzXML.getattr(p, "value")
                             if pt !== nothing && pv !== nothing
-                                pt_str = String(pt)
-                                pv_str = String(pv)
+                                pt_str = String(pt); pv_str = String(pv)
                                 push!(rep_props_types, pt_str)
                                 push!(rep_props_values, pv_str)
                                 if pt_str == "UniProtKB accession"
                                     rep_uniprotkb_acc = pv_str
                                 elseif pt_str == "UniParc ID"
-                                    rep_uniparc_id = pv_str
+                                    rep_uniparc_id_val = pv_str
                                 elseif pt_str == "UniRef90 ID"
-                                    rep_uniref90_id = pv_str
+                                    rep_uniref90_id_val = pv_str
                                 elseif pt_str == "UniRef50 ID"
-                                    rep_uniref50_id = pv_str
+                                    rep_uniref50_id_val = pv_str
                                 elseif pt_str == "protein name"
-                                    rep_protein_name = pv_str
+                                    rep_protein_name_val = pv_str
                                 elseif pt_str == "NCBI taxonomy"
-                                    rep_ncbi_taxonomy = pv_str
+                                    rep_ncbi_taxonomy_val = pv_str
                                 elseif pt_str == "source organism"
-                                    rep_source_organism = pv_str
+                                    rep_source_organism_val = pv_str
                                 elseif pt_str == "isSeed"
-                                    rep_is_seed = lowercase(pv_str) == "true" ? true : false
+                                    rep_is_seed_val = lowercase(pv_str) == "true" ? true : false
                                 elseif pt_str == "length"
                                     rep_length_prop = something(tryparse(Int, pv_str), missing)
                                 end
@@ -433,7 +535,6 @@ function _process_entry!(
     member_ids = String[]
     member_uniprot_accs = String[]
     member_uniparc_ids_local = String[]
-
     for child in EzXML.eachelement(entry_node)
         if EzXML.localname(child) == "member"
             dbref = nothing
@@ -453,8 +554,7 @@ function _process_entry!(
                         pt = EzXML.getattr(p, "type")
                         pv = EzXML.getattr(p, "value")
                         if pt !== nothing && pv !== nothing
-                            pts = String(pt)
-                            pvs = String(pv)
+                            pts = String(pt); pvs = String(pv)
                             if pts == "UniProtKB accession"
                                 local_member_uniprot = pvs
                             elseif pts == "UniParc ID"
@@ -482,29 +582,23 @@ function _process_entry!(
         rep_seq_len_attr = length(rep_sequence_text)
     end
 
-    # seq_hash_value = Mycelia.hash_sequence(String(rep_sequence_text))
-    
-    if rep_sequence_text !== missing
-        Mycelia.create_sequence_hash(String(rep_sequence_text))
-    else
-        seq_hash_value = missing
-    end
-
     push!(entry_id_col, eid)
     push!(updated_col, updated_val)
     push!(name_col, entry_name)
     push!(rep_db_type_col, rep_db_type)
     push!(rep_db_id_col, rep_db_id)
     push!(rep_uniprotkb_accession_col, rep_uniprotkb_acc)
-    push!(rep_uniparc_id_col, rep_uniparc_id)
-    push!(rep_uniref90_id_col, rep_uniref90_id)
-    push!(rep_uniref50_id_col, rep_uniref50_id)
-    push!(rep_protein_name_col, rep_protein_name)
-    push!(rep_ncbi_taxonomy_col, rep_ncbi_taxonomy)
-    push!(rep_source_organism_col, rep_source_organism)
-    push!(rep_is_seed_col, rep_is_seed)
+    push!(rep_uniparc_id_col, rep_uniparc_id_val)
+    push!(rep_uniref90_id_col, rep_uniref90_id_val)
+    push!(rep_uniref50_id_col, rep_uniref50_id_val)
+    push!(rep_protein_name_col, rep_protein_name_val)
+    push!(rep_ncbi_taxonomy_col, rep_ncbi_taxonomy_val)
+    push!(rep_source_organism_col, rep_source_organism_val)
+    push!(rep_is_seed_col, rep_is_seed_val)
     push!(rep_length_reported_col, rep_length_prop)
-    push!(rep_sequence_col, rep_sequence_text)
+    if store_sequence
+        push!(rep_sequence_col, rep_sequence_text)
+    end
     push!(rep_sequence_length_attr_col, rep_seq_len_attr)
     push!(rep_sequence_checksum_col, rep_seq_checksum)
     push!(member_count_col, local_member_count)
@@ -517,7 +611,6 @@ function _process_entry!(
     push!(member_db_ids_col, member_ids)
     push!(member_uniprotkb_accessions_col, member_uniprot_accs)
     push!(member_uniparc_ids_col, member_uniparc_ids_local)
-    push!(seq_hash_col, seq_hash_value)
 
     return nothing
 end

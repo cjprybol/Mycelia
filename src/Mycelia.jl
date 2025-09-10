@@ -66,6 +66,7 @@ import MultivariateStats
 # - graph-algorithms-next.jl (Eulerian paths, bubble detection, repeat resolution)
 import OrderedCollections
 import Plots
+import PooledArrays
 import POMDPs
 import Primes
 import Printf
