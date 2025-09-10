@@ -821,4 +821,195 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
         
         println("✅ Test suite cleanup verification passed - no lingering files found")
     end
+
+    Test.@testset "biological sequence hashing functions" begin
+        Test.@testset "create_sequence_hash unified interface" begin
+            test_seq = "ATCGATCGATCG"
+            
+            # Test default behavior (Blake3 + Base58)
+            default_hash = Mycelia.create_sequence_hash(test_seq)
+            Test.@test isa(default_hash, String)
+            Test.@test length(default_hash) == 64  # Default Blake3 length for tree-of-life scale
+            
+            # Test different hash algorithms
+            blake3_hash = Mycelia.create_sequence_hash(test_seq, hash_function=:blake3, encoded_length=32)
+            sha256_hash = Mycelia.create_sequence_hash(test_seq, hash_function=:sha256, encoded_length=32, allow_truncation=true)
+            md5_hash = Mycelia.create_sequence_hash(test_seq, hash_function=:md5, encoded_length=20, allow_truncation=true)  # MD5 is 16 bytes, produces ~22 Base58 chars
+            
+            Test.@test length(blake3_hash) == 32
+            Test.@test length(sha256_hash) == 32
+            Test.@test length(md5_hash) == 20
+            
+            # All should be different
+            Test.@test length(Set([blake3_hash, sha256_hash, md5_hash])) == 3
+            
+            # Test different encodings
+            hex_hash = Mycelia.create_sequence_hash(test_seq, encoding=:hex, encoded_length=32)
+            base58_hash = Mycelia.create_sequence_hash(test_seq, encoding=:base58, encoded_length=32)
+            base64_hash = Mycelia.create_sequence_hash(test_seq, encoding=:base64, encoded_length=32)
+            
+            Test.@test length(hex_hash) == 32
+            Test.@test length(base58_hash) == 32
+            Test.@test length(base64_hash) == 32
+            
+            # All encodings should be different
+            Test.@test length(Set([hex_hash, base58_hash, base64_hash])) == 3
+        end
+        
+        Test.@testset "create_base58_hash backwards compatibility" begin
+            test_seq = "ATCGATCGATCG"
+            
+            # Test backwards compatibility with existing function
+            old_style_hash = Mycelia.create_base58_hash(test_seq, encoded_length=32)
+            new_style_hash = Mycelia.create_sequence_hash(test_seq, hash_function=:blake3, encoding=:base58, encoded_length=32)
+            
+            Test.@test length(old_style_hash) == 32
+            Test.@test length(new_style_hash) == 32
+            
+            # Should produce the same result (both use Blake3 + Base58)
+            Test.@test old_style_hash == new_style_hash
+            
+            # Test case normalization in backwards compatibility
+            upper_hash = Mycelia.create_base58_hash("ATCG", encoded_length=16)
+            lower_hash = Mycelia.create_base58_hash("atcg", encoded_length=16)
+            Test.@test upper_hash == lower_hash  # Case normalization should be enabled by default
+        end
+        
+        Test.@testset "generate_joint_sequence_hash with full parameter control" begin
+            sequences = ["ATCG", "GCTA", "TTAA", "CCGG"]
+            
+            # Test order independence (core feature)
+            joint_hash1 = Mycelia.generate_joint_sequence_hash(sequences, encoded_length=32)
+            joint_hash2 = Mycelia.generate_joint_sequence_hash(reverse(sequences), encoded_length=32)
+            Test.@test joint_hash1 == joint_hash2
+            
+            # Test with different hash functions
+            blake3_joint = Mycelia.generate_joint_sequence_hash(sequences, hash_function=:blake3, encoded_length=32)
+            sha256_joint = Mycelia.generate_joint_sequence_hash(sequences, hash_function=:sha256, encoded_length=32, allow_truncation=true)
+            
+            Test.@test length(blake3_joint) == 32
+            Test.@test length(sha256_joint) == 32
+            Test.@test blake3_joint != sha256_joint  # Different algorithms should produce different hashes
+            
+            # Test with different encodings
+            base58_joint = Mycelia.generate_joint_sequence_hash(sequences, encoding=:base58, encoded_length=32)
+            hex_joint = Mycelia.generate_joint_sequence_hash(sequences, encoding=:hex, encoded_length=32, allow_truncation=true)
+            
+            Test.@test length(base58_joint) == 32
+            Test.@test length(hex_joint) == 32
+            Test.@test base58_joint != hex_joint  # Different encodings should produce different representations
+            
+            # Test case normalization in joint hashing
+            mixed_case_seqs = ["atcg", "GCTA", "TtAa"]
+            upper_case_seqs = ["ATCG", "GCTA", "TTAA"]
+            
+            mixed_joint = Mycelia.generate_joint_sequence_hash(mixed_case_seqs, encoded_length=24)
+            upper_joint = Mycelia.generate_joint_sequence_hash(upper_case_seqs, encoded_length=24)
+            Test.@test mixed_joint == upper_joint  # Case normalization should work
+            
+            # Test with case normalization disabled
+            mixed_joint_no_norm = Mycelia.generate_joint_sequence_hash(mixed_case_seqs, encoded_length=24, normalize_case=false)
+            upper_joint_no_norm = Mycelia.generate_joint_sequence_hash(upper_case_seqs, encoded_length=24, normalize_case=false)
+            Test.@test mixed_joint_no_norm != upper_joint_no_norm  # Should be different without case normalization
+        end
+        
+        Test.@testset "sequence hash integration with fastx2normalized_table" begin
+            mktempdir() do dir
+                # Create test FASTA file
+                fasta_path = joinpath(dir, "hash_test.fasta")
+                open(fasta_path, "w") do io
+                    println(io, ">seq1")
+                    println(io, "ATCGATCGATCG")
+                    println(io, ">seq2")
+                    println(io, "GGGGCCCCAAAA")
+                end
+                
+                # Test that fastx2normalized_table produces consistent hashes
+                table1 = Mycelia.fastx2normalized_table(fasta_path; human_readable_id="test_sample1")
+                table2 = Mycelia.fastx2normalized_table(fasta_path; human_readable_id="test_sample2")
+                
+                # Sequence hashes should be identical (same sequences)
+                Test.@test table1.sequence_hash == table2.sequence_hash
+                
+                # Dataset hashes should be identical (same sequence content enables deduplication)
+                Test.@test table1.dataset_hash == table2.dataset_hash
+                
+                # Verify hash lengths are correct (16 characters for preprocessing functions)
+                Test.@test all(length.(table1.sequence_hash) .== 16)
+                Test.@test all(length.(table1.dataset_hash) .== 16)
+                
+                # Test that identical sequences produce identical hashes
+                Test.@test length(unique(table1.sequence_hash)) == 2  # Two unique sequences
+                
+                # Test case normalization integration
+                # Create mixed case version
+                fasta_mixed_path = joinpath(dir, "hash_test_mixed.fasta")
+                open(fasta_mixed_path, "w") do io
+                    println(io, ">seq1")
+                    println(io, "atcgatcgatcg")  # lowercase
+                    println(io, ">seq2")  
+                    println(io, "GGGGCCCCAAAA")  # uppercase
+                end
+                
+                table_mixed = Mycelia.fastx2normalized_table(fasta_mixed_path; human_readable_id="test_sample1")
+                
+                # Sequence hashes should be identical due to case normalization
+                Test.@test table1.sequence_hash == table_mixed.sequence_hash
+            end
+        end
+        
+        Test.@testset "hash function edge cases and validation" begin
+            # Test empty sequence handling
+            Test.@test_throws ErrorException Mycelia.create_sequence_hash("")  # Should handle empty sequences gracefully
+            
+            # Test very short sequences
+            short_hash = Mycelia.create_sequence_hash("A", encoded_length=16)
+            Test.@test length(short_hash) == 16
+            
+            # Test sequences with non-standard characters (should still hash)
+            nonstandard_hash = Mycelia.create_sequence_hash("ATCGN", encoded_length=16)
+            Test.@test length(nonstandard_hash) == 16
+            
+            # Test that different sequences produce different hashes
+            hash_a = Mycelia.create_sequence_hash("AAAA", encoded_length=16)
+            hash_t = Mycelia.create_sequence_hash("TTTT", encoded_length=16)
+            hash_g = Mycelia.create_sequence_hash("GGGG", encoded_length=16)
+            hash_c = Mycelia.create_sequence_hash("CCCC", encoded_length=16)
+            
+            Test.@test length(Set([hash_a, hash_t, hash_g, hash_c])) == 4  # All unique
+            
+            # Test joint hashing with edge cases
+            Test.@test_throws ErrorException Mycelia.generate_joint_sequence_hash(String[])  # Empty vector
+            
+            single_seq_joint = Mycelia.generate_joint_sequence_hash(["ATCG"], encoded_length=16)
+            Test.@test length(single_seq_joint) == 16
+            
+            # Test that joint hashing with identical sequences is deterministic
+            identical_seqs = ["ATCG", "ATCG", "ATCG"]
+            joint1 = Mycelia.generate_joint_sequence_hash(identical_seqs, encoded_length=16)
+            joint2 = Mycelia.generate_joint_sequence_hash(identical_seqs, encoded_length=16)
+            Test.@test joint1 == joint2
+        end
+        
+        Test.@testset "tree-of-life scale hash defaults" begin
+            test_seq = "ATCGATCGATCG"
+            
+            # Test that default lengths are suitable for tree-of-life applications
+            default_sequence_hash = Mycelia.create_sequence_hash(test_seq)
+            Test.@test length(default_sequence_hash) == 64  # 64 characters provides ~380 bits entropy
+            
+            default_base58_hash = Mycelia.create_base58_hash(test_seq)
+            Test.@test length(default_base58_hash) == 64  # Should match sequence hash default
+            
+            # Test that joint sequence hashing also defaults appropriately
+            sequences = ["ATCG", "GCTA"]
+            default_joint_hash = Mycelia.generate_joint_sequence_hash(sequences)
+            Test.@test length(default_joint_hash) == 64  # Should use same default
+            
+            # Verify collision resistance by testing many sequences
+            many_sequences = ["A" * string(i) * "T" * string(i) for i in 1:100]
+            many_hashes = [Mycelia.create_sequence_hash(seq, encoded_length=32) for seq in many_sequences]
+            Test.@test length(Set(many_hashes)) == 100  # All should be unique
+        end
+    end
 end

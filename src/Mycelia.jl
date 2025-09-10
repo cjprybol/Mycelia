@@ -6,6 +6,7 @@ __precompile__(false)  # Disabled for testing framework fix
 import AlgebraOfGraphics
 import Arrow
 import Base58
+import Base64
 import BioAlignments
 import BioSequences
 import BioSymbols
@@ -17,6 +18,7 @@ import Clustering
 import CodecZlib
 import Colors
 import ColorSchemes
+import CRC32c
 import Conda
 import CSV
 import DataFrames
@@ -49,6 +51,7 @@ import LinearAlgebra
 import LsqFit
 import Luxor
 import Makie
+import MD5
 import MetaGraphs
 import MetaGraphsNext
 import Mmap

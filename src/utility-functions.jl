@@ -2455,3 +2455,187 @@ function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{FAST
     
     return (total_gc / total_bases) * 100.0
 end
+
+# =============================================================================
+# Comprehensive Sequence Hashing Functions
+# =============================================================================
+
+"""
+    _calculate_required_bytes(encoding::Symbol, encoded_length::Int) -> Int
+
+Calculate minimum bytes needed to produce desired encoded length.
+"""
+function _calculate_required_bytes(encoding::Symbol, encoded_length::Int)::Int
+    if encoding == :hex
+        return ceil(Int, encoded_length / 2)
+    elseif encoding == :base58
+        # Base58 uses log2(58) ≈ 5.86 bits per character
+        bits_needed = encoded_length * log2(58)
+        return ceil(Int, bits_needed / 8)
+    elseif encoding == :base64
+        # Base64 uses 6 bits per character, but has padding
+        return ceil(Int, encoded_length * 3 / 4)
+    else
+        error("Unsupported encoding: $encoding")
+    end
+end
+
+"""
+    _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded_length::Union{Int,Missing}, allow_truncation::Bool) -> String
+
+Internal function to encode hash bytes with specified encoding and length handling.
+"""
+function _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded_length::Union{Int,Missing}, allow_truncation::Bool)::String
+    if encoding == :hex
+        encoded = bytes2hex(hash_bytes)
+    elseif encoding == :base58
+        encoded = String(Base58.base58encode(hash_bytes))
+    elseif encoding == :base64
+        encoded = Base64.base64encode(hash_bytes)
+    else
+        error("Unsupported encoding: $encoding. Supported: :hex, :base58, :base64")
+    end
+    
+    # Handle length requirements
+    if ismissing(encoded_length)
+        return encoded
+    elseif length(encoded) == encoded_length
+        return encoded
+    elseif length(encoded) > encoded_length
+        # Special case: Base58 commonly produces exactly +1 character due to logarithmic calculation
+        # Automatically handle this common case without requiring allow_truncation=true
+        if encoding == :base58 && length(encoded) == encoded_length + 1
+            return encoded[1:encoded_length]
+        elseif allow_truncation
+            return encoded[1:encoded_length]
+        else
+            error("Encoded hash length ($(length(encoded))) exceeds requested length ($encoded_length). Set allow_truncation=true to truncate.")
+        end
+    else
+        error("Cannot generate encoded hash of length $encoded_length from $(length(hash_bytes)) bytes with $encoding encoding (produces $(length(encoded)) characters)")
+    end
+end
+
+"""
+    crc32_checksum(data_to_hash::AbstractString; normalize_case::Bool=true) -> UInt32
+
+Simple CRC32 checksum function returning raw checksum value.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input data to checksum
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+
+# Returns
+- `UInt32`: Raw CRC32 checksum value
+"""
+function crc32_checksum(data_to_hash::AbstractString; normalize_case::Bool=true)::UInt32
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    return CRC32c.crc32c(Vector{UInt8}(normalized_data))
+end
+
+"""
+    create_md5_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate MD5 hash with configurable encoding and length.
+"""
+function create_md5_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = Vector{UInt8}(MD5.md5(Vector{UInt8}(normalized_data)))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha1_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-1 hash with configurable encoding and length.
+"""
+function create_sha1_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha1(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-256 hash with configurable encoding and length.
+"""
+function create_sha256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha256(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-512 hash with configurable encoding and length.
+"""
+function create_sha512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha512(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha3_256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-3 256-bit hash with configurable encoding and length.
+"""
+function create_sha3_256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha3_256(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha3_512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-3 512-bit hash with configurable encoding and length.
+"""
+function create_sha3_512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha3_512(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_crc32_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate CRC32 checksum with configurable encoding and length.
+"""
+function create_crc32_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    crc_val = CRC32c.crc32c(Vector{UInt8}(normalized_data))
+    # Convert to 4 bytes (32 bits) in little-endian format
+    hash_bytes = Vector{UInt8}(reinterpret(UInt8, [crc_val]))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false, hash_bytes::Union{Int,Missing}=missing) -> String
+
+Generate BLAKE3 hash with configurable encoding and length.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input data to hash
+- `encoding::Symbol=:hex`: Output encoding (:hex, :base58, :base64)
+- `encoded_length::Int=64`: Desired output length (optimized for tree-of-life scale)
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+- `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
+- `hash_bytes::Union{Int,Missing}=missing`: Raw bytes to generate (auto-calculated if missing)
+"""
+function create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false, hash_bytes::Union{Int,Missing}=missing)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    
+    # Calculate required bytes if not specified
+    bytes_needed = ismissing(hash_bytes) ? _calculate_required_bytes(encoding, encoded_length) : hash_bytes
+    
+    hasher = Blake3Hash.Blake3Ctx()
+    Blake3Hash.update!(hasher, Vector{UInt8}(normalized_data))
+    
+    output_buffer = Vector{UInt8}(undef, bytes_needed)
+    Blake3Hash.digest(hasher, output_buffer)
+    
+    return _encode_hash_bytes(output_buffer, encoding, encoded_length, allow_truncation)
+end
