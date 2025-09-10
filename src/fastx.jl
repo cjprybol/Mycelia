@@ -459,38 +459,31 @@ function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id:
 end
 
 """
-    create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=32) -> String
+    create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=64, normalize_case::Bool=true) -> String
 
 Hashes a string using BLAKE3 and returns a Base58 encoded string of a
 specified *exact* length.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input data to hash
+- `encoded_length::Int=64`: Length of the Base58 encoded output (default 64 provides ~380 bits entropy for tree-of-life scale applications)
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+
+# Details
+By default, sequences are normalized to uppercase before hashing to ensure
+case-insensitive hashing for biological sequences where case differences
+are typically not meaningful. The default 64-character length provides
+collision resistance suitable for massive multi-omics applications spanning
+the sequence diversity of the tree of life.
+
+This function now calls the comprehensive create_blake3_hash function.
 """
-function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=32)::String
-    if encoded_length <= 0
-        error("Invalid hash length: $encoded_length. It must be positive.")
-    end
-
-    bits_needed = encoded_length * log2(58)
-    raw_bytes_needed = ceil(Int, bits_needed / 8)
-
-    if raw_bytes_needed == 0
-        error("Cannot generate a hash for an encoded length of $encoded_length. It is too short.")
-    end
-    
-    hasher = Blake3Hash.Blake3Ctx()
-    data_as_bytes = Vector{UInt8}(data_to_hash)
-    Blake3Hash.update!(hasher, data_as_bytes)
-    
-    output_buffer = Vector{UInt8}(undef, raw_bytes_needed)
-    Blake3Hash.digest(hasher, output_buffer)
-
-    # FIX: Changed `Base58.encode` to the correct function name `Base58.base58encode`
-    encoded_hash = Base58.base58encode(output_buffer)
-
-    return String(first(encoded_hash, encoded_length))
+function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=64, normalize_case::Bool=true)::String
+    return create_blake3_hash(data_to_hash; encoding=:base58, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=true)
 end
 
 """
-    generate_joint_sequence_hash(sequences::Vector{String}; encoded_length::Int=32) -> String
+    generate_joint_sequence_hash(sequences::Vector{String}; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
 
 Computes a single, order-independent hash for a collection of sequences.
 
@@ -501,28 +494,25 @@ different order.
 
 # Arguments
 - `sequences::Vector{String}`: A vector of strings, where each string is a biological sequence.
-- `encoded_length::Int=32`: The desired length for the final Base58 encoded hash.
+- `hash_function::Symbol=:blake3`: Hash algorithm to use (:blake3, :sha256, :sha512, :md5, :sha1, :sha3_256, :sha3_512, :crc32)
+- `encoding::Symbol=:base58`: Output encoding (:hex, :base58, :base64)
+- `encoded_length::Int=64`: The desired length for the final encoded hash (default 64 provides ~380 bits entropy)
+- `normalize_case::Bool=true`: If true, converts sequences to uppercase before hashing
+- `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
 
 # Returns
-- `String`: A single, stable Base58 hash representing the joint set of sequences.
+- `String`: A single, stable hash representing the joint set of sequences.
 """
-function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; encoded_length::Int=32)::String
+function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false)::String
     if isempty(sequences)
         error("Input sequence vector cannot be empty.")
     end
 
-    # 1. Hash each sequence individually and collect their hex representations
-    # We use hex here because it's a standard, sortable text format for hashes.
+    # 1. Hash each sequence individually using create_sequence_hash for consistency
     individual_hashes = Vector{String}(undef, length(sequences))
     for i in 1:length(sequences)
-        # Get the standard 32-byte (256-bit) raw hash for maximum uniqueness
-        
-        # --- EDIT 1: Replaced the single problematic line with the robust 3-step hash ---
-        hasher = Blake3Hash.Blake3Ctx()
-        Blake3Hash.update!(hasher, Vector{UInt8}(sequences[i])) # Also converts String to bytes
-        raw_hash = Blake3Hash.digest(hasher)
-        
-        individual_hashes[i] = bytes2hex(raw_hash)
+        # Use create_sequence_hash with user-specified hash function and encoding
+        individual_hashes[i] = create_sequence_hash(sequences[i], hash_function=hash_function, encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
     end
 
     # 2. Sort the list of hashes. This is the key to making it order-independent!
@@ -531,13 +521,64 @@ function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; encod
     # 3. Combine the sorted hashes into a single string
     combined_data = join(individual_hashes)
 
-    # 4. Hash the combined string to get the final joint sequence hash
-    # We can use the function from our previous discussion for this final step.
-    
-    # --- EDIT 2: Corrected the keyword argument name to match the function signature ---
-    final_joint_sequence_hash = create_base58_hash(combined_data, encoded_length=encoded_length)
+    # 4. Hash the combined string to get the final joint sequence hash with same encoding length
+    # Use normalize_case=false here because we're hashing encoded strings, not biological sequences
+    final_joint_sequence_hash = create_sequence_hash(combined_data, hash_function=hash_function, encoding=encoding, encoded_length=encoded_length, normalize_case=false, allow_truncation=allow_truncation)
 
     return final_joint_sequence_hash
+end
+
+"""
+    create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Unified biological sequence hashing function with selectable algorithms.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input sequence data to hash
+- `hash_function::Symbol=:blake3`: Hash algorithm (:blake3, :sha256, :sha512, :md5, :sha1, :sha3_256, :sha3_512, :crc32)
+- `encoding::Symbol=:base58`: Output encoding (:hex, :base58, :base64)
+- `encoded_length::Union{Int,Missing}=missing`: Desired output length (uses function defaults if missing)
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+- `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
+
+# Returns
+- `String`: Hash in specified encoding and length
+
+# Details
+This is the recommended function for biological sequence hashing, defaulting to
+BLAKE3 with Base58 encoding for optimal collision resistance and compactness.
+When encoded_length=missing, each hash function uses its optimal default length.
+"""
+function create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    # Validate input - empty sequences are not valid in biological context
+    if isempty(data_to_hash)
+        error("Empty sequences are not valid for biological sequence hashing")
+    end
+    if hash_function == :blake3
+        # For Blake3, pass through encoded_length (will use 64 as default if missing)
+        if ismissing(encoded_length)
+            # return create_blake3_hash(data_to_hash; encoding=encoding, encoded_length=64, normalize_case=normalize_case, allow_truncation=allow_truncation)
+            return create_blake3_hash(data_to_hash; encoding=encoding, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        else
+            return create_blake3_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        end
+    elseif hash_function == :sha256
+        return create_sha256_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha512
+        return create_sha512_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :md5
+        return create_md5_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha1
+        return create_sha1_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha3_256
+        return create_sha3_256_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha3_512
+        return create_sha3_512_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :crc32
+        return create_crc32_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    else
+        error("Unsupported hash function: $hash_function")
+    end
 end
 
 """
