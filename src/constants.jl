@@ -77,4 +77,14 @@ const VCF_REGEX = r"\.vcf(\.gz)?$"
 # denominator = 10 was only 56% efficient for NT on NERSC
 const DEFAULT_MINIMAP_DENOMINATOR=10
 
+# BLOSUM62 diagonal self-scores (others default to 0)
+const BLOSUM62_DIAG = Dict(
+    'A'=>4, 'R'=>5, 'N'=>6, 'D'=>6, 'C'=>9, 'Q'=>5, 'E'=>5, 'G'=>6,
+    'H'=>8, 'I'=>4, 'L'=>4, 'K'=>5, 'M'=>5, 'F'=>6, 'P'=>7, 'S'=>4,
+    'T'=>5, 'W'=>11,'Y'=>7, 'V'=>4
+)
+
+const BLAST_LAMBDA = 0.318    # Approximate BLAST (BLOSUM62) parameter
+const BLAST_K = 0.134
+
 ProgressMeter.ijulia_behavior(:clear)

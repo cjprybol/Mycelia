@@ -28,6 +28,7 @@ import Distributions
 import DocStringExtensions
 import Downloads
 import ExpFamilyPCA
+import EzXML
 import FASTX
 import FileIO
 import GenomicAnnotations
