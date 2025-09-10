@@ -989,58 +989,210 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Runs the MMseqs2 easy-search command on the given query FASTA file against the target database.
 
-# Arguments
-- `query_fasta::String`: Path to the query FASTA file.
-- `target_database::String`: Path to the target database.
-- `out_dir::String`: Directory to store the output file. Defaults to the directory of the query FASTA file.
-- `outfile::String`: Name of the output file. Defaults to a combination of the query FASTA and target database filenames.
-- `format_output::String`: Format of the output. Defaults to a predefined set of fields.
-- `threads::Int`: Number of CPU threads to use. Defaults to the number of CPU threads available.
-- `force::Bool`: If true, forces the re-generation of the output file even if it already exists. Defaults to false.
+Arguments
+- query_fasta::String: Path to the query FASTA file.
+- target_database::String: Path to the target database.
+- out_dir::String: Directory to store the output file. Defaults to the directory of the query FASTA file.
+- outfile::String: Base name of the output file (may include .gz). Defaults to a combination of the query FASTA and target database filenames with a .txt extension (and .gz automatically added if gzip=true).
+- format_output::String: Format of the output. Defaults to a predefined set of fields.
+- threads::Int: Number of CPU threads to use. Defaults to the number of CPU threads available.
+- force::Bool: If true, forces re-generation of the (uncompressed) output even if it or a compressed variant already exists.
+- gzip::Bool: If true (default), compress the final output with pigz. If true and the given outfile lacks a .gz suffix, it is appended. If false and the provided outfile ends with .gz, an error is raised.
+- validate_compression::Bool: If true (default) and gzip=true, performs a pigz -t integrity test before deleting the uncompressed file. Validation reads the entire compressed file and verifies CRC32 and size modulo 2^32.
+- keep_uncompressed::Bool: If true, retains the uncompressed file even after successful compression/validation. If validate_compression=true and keep_uncompressed=false, the uncompressed file is removed only after a successful pigz -t test.
 
-# Returns
-- `outfile_path::String`: Path to the generated output file.
+Behavior Notes
+- If gzip=true and the compressed file is missing but the corresponding uncompressed file exists (from a prior run or failed compression) and force=false, the function reuses the uncompressed file and (re)attempts compression instead of re-running MMseqs2.
+- If force=true, MMseqs2 is always re-run and existing output artifacts are removed first.
+- If a zero-byte compressed file exists, it is treated as corrupt, removed, and regeneration proceeds.
+- Validation (pigz -t) is only run during the compression step (i.e., not re-run on an already existing compressed file being returned early).
+- Compression uses pigz with the same thread count as MMseqs2.
+- No staleness check is performed to confirm the uncompressed file matches current inputs.
 
-# Notes
-- Adds the `mmseqs2` environment using Bioconda if not already present.
-- Removes temporary files created during the process.
+Returns
+- outfile_path::String: Path to the final (compressed or uncompressed) output file.
+
+Integrity Caveats
+- pigz -t validates internal integrity (CRC32 and length modulo 2^32) of the compressed file; it does not compare against a preserved checksum of the original unless you add such a mechanism externally.
 """
 function run_mmseqs_easy_search(;
-        query_fasta,
-        target_database,
-        out_dir=dirname(query_fasta),
-        outfile=basename(query_fasta) * ".mmseqs_easy_search." * basename(target_database) * ".txt",
-        format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-        threads = Sys.CPU_THREADS,
-        force=false)
-    
-    add_bioconda_env("mmseqs2")
-    outfile_path = joinpath(out_dir, outfile)
-    tmp_dir = joinpath(out_dir, "tmp")
-    if force || (!force && !isfile(outfile_path))
-        cmd = 
-        `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
-            easy-search
-            $(query_fasta)
-            $(target_database)
-            $(outfile_path)
-            $(tmp_dir)
-            --threads $(threads)
-            --format-mode 4
-            --format-output $(format_output)
-            --start-sens 1 -s 7 --sens-steps 7
-            --sort-results 1
-            --remove-tmp-files 1
-        `
-        @time run(pipeline(cmd))
+    query_fasta,
+    target_database,
+    out_dir = dirname(query_fasta),
+    outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." * basename(target_database) * ".txt",
+    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
+    threads = Sys.CPU_THREADS,
+    force::Bool = false,
+    gzip::Bool = true,
+    validate_compression::Bool = true,
+    keep_uncompressed::Bool = false,
+)
+    # Validate interaction of flags
+    if !gzip && validate_compression
+        @warn "validate_compression requested but gzip=false; validation will be skipped."
+    end
+    if !gzip && keep_uncompressed
+        @warn "keep_uncompressed is irrelevant because gzip=false."
+    end
+
+    # Normalize outfile names and semantics
+    if gzip
+        if endswith(outfile, ".gz")
+            compressed_name = outfile
+            uncompressed_name = replace(outfile, r"\.gz$" => "")
+        else
+            uncompressed_name = outfile
+            compressed_name = outfile * ".gz"
+        end
     else
-        @info "target outfile $(outfile_path) already exists, remove it or set force=true to re-generate"
+        if endswith(outfile, ".gz")
+            error("gzip was set to false but the provided outfile ends with .gz: $(outfile)")
+        else
+            uncompressed_name = outfile
+            compressed_name = nothing
+        end
     end
-    # we set remote tmp files = 1 above, but it still doesn't seem to work?
+
+    final_outfile_name = gzip ? compressed_name :: String : uncompressed_name
+    final_outfile_path = joinpath(out_dir, final_outfile_name)
+    work_outfile_path  = gzip ? joinpath(out_dir, uncompressed_name) : final_outfile_path
+    tmp_dir = joinpath(out_dir, "tmp")
+
+    # Ensure required environments (pigz only if needed)
+    add_bioconda_env("mmseqs2")
+    if gzip
+        add_bioconda_env("pigz")
+    end
+
+    # Helper: compress (optionally validate) with pigz
+    function _compress_with_pigz(uncompressed_path::String, final_path::String, threads::Int;
+                                 validate::Bool,
+                                 keep_uncompressed::Bool)
+        if !isfile(uncompressed_path)
+            error("Cannot compress: uncompressed file $(uncompressed_path) does not exist.")
+        end
+
+        # Remove zero-byte or clearly invalid existing compressed file artifact if present
+        if isfile(final_path) && filesize(final_path) == 0
+            @warn "Existing compressed file $(final_path) is zero bytes; removing before retry."
+            rm(final_path; force=true)
+        end
+
+        # Skip if final already exists (rare race case)
+        if !isfile(final_path)
+            # Construct pigz command flags
+            # -k if we must keep original either for validation or explicit retention
+            keep_flag = (validate || keep_uncompressed) ? "-k" : ""
+            cmd_pigz = `$(CONDA_RUNNER) run --no-capture-output -n pigz pigz $keep_flag -p $(threads) -f $(uncompressed_path)`
+            @info "Compressing with pigz (threads=$(threads), validate=$(validate), keep_uncompressed=$(keep_uncompressed))"
+            @time run(cmd_pigz)
+        end
+
+        if !isfile(final_path)
+            error("Compression failed: expected compressed file $(final_path) was not created.")
+        end
+
+        if validate
+            # Integrity test
+            cmd_test = `$(CONDA_RUNNER) run --no-capture-output -n pigz pigz -t $(final_path)`
+            @info "Validating compressed file integrity with pigz -t: $(final_path)"
+            try
+                @time run(cmd_test)
+            catch err
+                @error "pigz -t integrity test failed; retaining uncompressed file $(uncompressed_path)" error=err
+                # Remove corrupted compressed file to avoid confusion
+                try
+                    rm(final_path; force=true)
+                catch
+                end
+                error("Validation failed for compressed file $(final_path): $(err)")
+            end
+
+            # Remove uncompressed only if we do not want to keep it
+            if !keep_uncompressed && isfile(uncompressed_path)
+                try
+                    rm(uncompressed_path; force=true)
+                catch err
+                    @warn "Failed to remove uncompressed file after successful validation: $(uncompressed_path)" error=err
+                end
+            end
+        else
+            # If not validating and not keeping, pigz (without -k) already removed uncompressed.
+            # If keeping (keep_uncompressed=true), pigz was invoked with -k above.
+            nothing
+        end
+
+        return final_path
+    end
+
+    # Handle zero-byte final compressed artifact early (force regeneration path)
+    if gzip && isfile(final_outfile_path) && filesize(final_outfile_path) == 0
+        @warn "Existing compressed file $(final_outfile_path) is zero bytes; removing for regeneration."
+        rm(final_outfile_path; force=true)
+    end
+
+    # Early return if final artifact already exists and not forcing
+    if !force && isfile(final_outfile_path)
+        @info "Target outfile $(final_outfile_path) already exists; returning existing file."
+        return final_outfile_path
+    end
+
+    # Determine if we can reuse an existing uncompressed file (avoid re-running MMseqs2)
+    reused_uncompressed = false
+    if gzip && !force && !isfile(final_outfile_path) && isfile(work_outfile_path)
+        @info "Found existing uncompressed file $(work_outfile_path); will skip MMseqs2 run and proceed to compression."
+        reused_uncompressed = true
+    end
+
+    # Force cleanup if required
+    if force
+        if isfile(final_outfile_path)
+            rm(final_outfile_path; force=true)
+        end
+        if gzip && isfile(work_outfile_path)
+            rm(work_outfile_path; force=true)
+        end
+    end
+
+    # Run MMseqs2 only if we do not reuse an existing uncompressed result
+    if !(gzip && reused_uncompressed)
+        cmd_search =
+            `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
+                easy-search
+                $(query_fasta)
+                $(target_database)
+                $(work_outfile_path)
+                $(tmp_dir)
+                --threads $(threads)
+                --format-mode 4
+                --format-output $(format_output)
+                --start-sens 1 -s 7 --sens-steps 7
+                --sort-results 1
+                --remove-tmp-files 1
+            `
+        @info "Running MMseqs2 easy-search -> $(work_outfile_path)"
+        @time run(cmd_search)
+    end
+
+    # Compression (and optional validation)
+    if gzip
+        if !isfile(final_outfile_path)
+            _compress_with_pigz(work_outfile_path, final_outfile_path, threads;
+                                validate = validate_compression,
+                                keep_uncompressed = keep_uncompressed)
+        else
+            @info "Compressed file already present after generation: $(final_outfile_path)"
+            # If user requested validation but file already existed, we skip re-validation to avoid a full read.
+            # A custom flag could be added later to force re-validation of existing compressed outputs.
+        end
+    end
+
+    # Cleanup tmp directory if present
     if isdir(tmp_dir)
-        rm(tmp_dir, recursive=true)
+        rm(tmp_dir; recursive=true)
     end
-    return outfile_path
+
+    return final_outfile_path
 end
 
 """
