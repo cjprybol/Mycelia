@@ -582,6 +582,57 @@ function create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbo
 end
 
 """
+    create_sequence_hash(seq::BioSequences.LongSequence; kwargs...) -> String
+
+Convenience wrapper for hashing BioSequence objects directly.
+Converts the BioSequence to string and passes all keyword arguments to create_sequence_hash.
+
+# Arguments
+- `seq::BioSequences.LongSequence`: BioSequence object (DNA, RNA, or amino acid)
+- `kwargs...`: All keyword arguments supported by create_sequence_hash
+
+# Examples
+```julia
+dna_seq = BioSequences.dna"ATCGATCGATCG"
+hash = create_sequence_hash(dna_seq, encoded_length=32)
+
+rna_seq = BioSequences.rna"AUCGAUCGAUCG" 
+hash = create_sequence_hash(rna_seq, hash_function=:sha256)
+
+aa_seq = BioSequences.aa"MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWERVMGDGERQFSTLKSTVEAIWAGIKATEAAVSEEFGLAPFLPDQIHFVHSQELLSRYPDLDAKGRERAIAKDLGAVFLVGIGGKLSDGHRHDVRAPDYDDWUAFGVLLWEIACDESGLAGGWEKGQEGAVDASAEVFRHHVMDSSEQGGGGLLAEGWQQQQQQQQQDQDQSQSSQGWQQQQQQGGWAWQGWQSQQAEGQGWAGSAQAEGQAAEGQAAGWAGSAQAEGQAAGSAQWAGGGGWAGAGGWAGSAQWAGGGGWAGAGMGWAGAGGWAGSAQWAGGGGWAGAGMGWAGAGGWAGSQQQWAQGQQMVAEPGFVGQE"
+hash = create_sequence_hash(aa_seq, encoded_length=64)
+```
+"""
+function create_sequence_hash(seq::BioSequences.LongSequence; kwargs...)::String
+    return create_sequence_hash(string(seq); kwargs...)
+end
+
+"""
+    create_sequence_hash(kmer::Kmers.Kmer; kwargs...) -> String
+
+Convenience wrapper for hashing k-mer objects directly.
+Converts the k-mer to string and passes all keyword arguments to create_sequence_hash.
+
+# Arguments  
+- `kmer::Kmers.Kmer`: k-mer object (DNAKmer, RNAKmer, AAKmer)
+- `kwargs...`: All keyword arguments supported by create_sequence_hash
+
+# Examples
+```julia
+import Kmers, BioSequences
+dna_seq = BioSequences.LongDNA{4}("ATCGATCG")
+kmer = Kmers.DNAKmer{8}(dna_seq)
+hash = create_sequence_hash(kmer, encoded_length=16)
+
+# With different parameters
+hash = create_sequence_hash(kmer, hash_function=:md5, encoding=:hex)
+```
+"""
+function create_sequence_hash(kmer::Kmers.Kmer; kwargs...)::String
+    return create_sequence_hash(string(kmer); kwargs...)
+end
+
+"""
     find_fasta_files(input_path::String) -> Vector{String}
 
 Find all FASTA files in a directory or return single file if path is a file.

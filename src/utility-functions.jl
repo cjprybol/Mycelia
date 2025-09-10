@@ -2470,8 +2470,11 @@ function _calculate_required_bytes(encoding::Symbol, encoded_length::Int)::Int
         return ceil(Int, encoded_length / 2)
     elseif encoding == :base58
         # Base58 uses log2(58) ≈ 5.86 bits per character
+        # Add safety margin to account for encoding variability
         bits_needed = encoded_length * log2(58)
-        return ceil(Int, bits_needed / 8)
+        bytes_needed = ceil(Int, bits_needed / 8)
+        # Add 1 extra byte as safety margin for Base58 encoding variability
+        return bytes_needed + 1
     elseif encoding == :base64
         # Base64 uses 6 bits per character, but has padding
         return ceil(Int, encoded_length * 3 / 4)
@@ -2502,9 +2505,10 @@ function _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded
     elseif length(encoded) == encoded_length
         return encoded
     elseif length(encoded) > encoded_length
-        # Special case: Base58 commonly produces exactly +1 character due to logarithmic calculation
-        # Automatically handle this common case without requiring allow_truncation=true
-        if encoding == :base58 && length(encoded) == encoded_length + 1
+        # Auto-truncation for encodings with padding/safety margins
+        # Our calculations in _calculate_required_bytes prevent "too short" errors
+        # but may produce excess characters. Auto-truncate to requested length.
+        if encoding == :base58 || encoding == :base64
             return encoded[1:encoded_length]
         elseif allow_truncation
             return encoded[1:encoded_length]
