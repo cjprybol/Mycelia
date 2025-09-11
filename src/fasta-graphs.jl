@@ -11,12 +11,6 @@ Key features:
 - Created by simplification of k-mer graphs
 """
 
-import MetaGraphsNext
-import Graphs
-import BioSequences
-import FASTX
-import DocStringExtensions
-
 """
 Vertex data for variable-length BioSequence graphs.
 """

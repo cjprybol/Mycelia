@@ -5,12 +5,6 @@ This file contains the next-generation implementation of sequence graphs using M
 with type-stable metadata structures, replacing the deprecated MetaGraphs.jl implementation.
 """
 
-import MetaGraphsNext
-import Graphs
-import BioSequences
-import FASTX
-import DocStringExtensions
-
 # TODO: https://juliagraphs.org/Graphs.jl/stable/algorithms/traversals/#Graphs.eulerian
 
 # Type-stable metadata structures for vertices and edges

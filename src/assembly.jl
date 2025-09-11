@@ -2461,27 +2461,3 @@ function run_strainy(assembly_file::String, long_reads::String; outdir::String="
     
     return (;outdir, strain_assemblies)
 end
-
-"""
-Determine appropriate k-mer type from observations.
-"""
-function _determine_kmer_type(observations, k)
-    # Examine first observation to determine sequence type
-    if !isempty(observations)
-        sample_seq = string(FASTX.FASTA.sequence(observations[1]))
-        
-        # Check if it's protein sequence (contains amino acids)
-        if occursin(r"[ARNDCQEGHILKMFPSTWYV]", uppercase(sample_seq))
-            return Kmers.AAKmer{k}
-        # Check if it's RNA (contains U)
-        elseif occursin('U', uppercase(sample_seq))
-            return Kmers.RNAKmer{k}
-        # Default to DNA
-        else
-            return Kmers.DNAKmer{k}
-        end
-    end
-    
-    # Default to DNA k-mer
-    return Kmers.DNAKmer{k}
-end

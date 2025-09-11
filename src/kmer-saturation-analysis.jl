@@ -317,18 +317,6 @@ function find_optimal_assembly_threshold(kmer_counts::Dict{T, Int}, k::Int;
     )
 end
 
-## Helper function for canonical k-mer representation
-function _get_canonical_kmer(kmer::String)
-    reverse_complement = _reverse_complement(kmer)
-    return kmer <= reverse_complement ? kmer : reverse_complement
-end
-
-## Helper function for reverse complement
-function _reverse_complement(seq::String)
-    complement_map = Dict('A' => 'T', 'T' => 'A', 'C' => 'G', 'G' => 'C')
-    return reverse(String([complement_map[c] for c in seq]))
-end
-
 ## Helper function for Michaelis-Menten curve fitting
 function _fit_michaelis_menten(x::Vector{Int}, y::Vector{Int})
     ## Convert to Float64 for numerical stability

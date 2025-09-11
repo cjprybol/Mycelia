@@ -615,40 +615,41 @@ function _process_entry!(
     return nothing
 end
 
-function run_phage_annotation(;
-    fasta::AbstractString,
-    pharroka_dbdir = joinpath(homedir(), "workspace", "pharroka"),
-    phold_dbdir = joinpath(homedir(), "workspace", "phold"),
-    phynteny_dbdir = joinpath(homedir(), "workspace", "phynteny"),
-    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
-    pharroka_outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pharroka"),
-    phold_outdir = joinpath(pharroka_outdir, "phold"),
-    phynteny_outdir = joinpath(phold_outdir, "phynteny"),
-    threads = Sys.CPU_THREADS
-)
-    Mycelia.add_bioconda_env("pharokka")
-    Mycelia.add_bioconda_env("phold")
-    Mycelia.add_bioconda_env("phynteny_transformer")
-    if !isdir(pharroka_dbdir) || isempty(readdir(pharroka_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka install_databases.py -o $(pharroka_dbdir)`)
-    end
-    if !isdir(pharroka_outdir) || isempty(readdir(pharroka_outdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka  pharokka.py -i $(fasta) -o $(pharroka_outdir) -d $(pharroka_dbdir) -t $(threads)  -m  -g prodigal-gv --force`)
-    end
-    if !isdir(phold_dbdir) || isempty(readdir(phold_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold install --database $(phold_dbdir)`)
-    end
-    pharroko_gbk = joinpath(pharroka_outdir, prefix * ".gbk")
-    @assert isfile(pharroko_gbk)
-    if !isdir(phold_outdir) || isempty(readdir(phold_outdir))
-        # skip GPU integration at the moment
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold run --input $(pharroko_gbk) --prefix $(prefix) --output $(phold_outdir) --database $(phold_dbdir) --threads $(threads) --cpu --force`)
-    end
-    if !isdir(phynteny_dbdir) || isempty(readddir(phynteny_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer install_models -o $(phynteny_dbdir)`)
-    end
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer  phynteny_transformer --help --advanced`)
-end
+# # not working
+# function run_phage_annotation(;
+#     fasta::AbstractString,
+#     pharroka_dbdir = joinpath(homedir(), "workspace", "pharroka"),
+#     phold_dbdir = joinpath(homedir(), "workspace", "phold"),
+#     phynteny_dbdir = joinpath(homedir(), "workspace", "phynteny"),
+#     prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+#     pharroka_outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pharroka"),
+#     phold_outdir = joinpath(pharroka_outdir, "phold"),
+#     phynteny_outdir = joinpath(phold_outdir, "phynteny"),
+#     threads = Sys.CPU_THREADS
+# )
+#     Mycelia.add_bioconda_env("pharokka")
+#     Mycelia.add_bioconda_env("phold")
+#     Mycelia.add_bioconda_env("phynteny_transformer")
+#     if !isdir(pharroka_dbdir) || isempty(readdir(pharroka_dbdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka install_databases.py -o $(pharroka_dbdir)`)
+#     end
+#     if !isdir(pharroka_outdir) || isempty(readdir(pharroka_outdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka  pharokka.py -i $(fasta) -o $(pharroka_outdir) -d $(pharroka_dbdir) -t $(threads)  -m  -g prodigal-gv --force`)
+#     end
+#     if !isdir(phold_dbdir) || isempty(readdir(phold_dbdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold install --database $(phold_dbdir)`)
+#     end
+#     pharroko_gbk = joinpath(pharroka_outdir, prefix * ".gbk")
+#     @assert isfile(pharroko_gbk)
+#     if !isdir(phold_outdir) || isempty(readdir(phold_outdir))
+#         # skip GPU integration at the moment
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold run --input $(pharroko_gbk) --prefix $(prefix) --output $(phold_outdir) --database $(phold_dbdir) --threads $(threads) --cpu --force`)
+#     end
+#     if !isdir(phynteny_dbdir) || isempty(readddir(phynteny_dbdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer install_models -o $(phynteny_dbdir)`)
+#     end
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer  phynteny_transformer --help --advanced`)
+# end
 
 """
     run_pgap(;
