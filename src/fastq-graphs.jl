@@ -12,13 +12,6 @@ Key features:
 - Created by simplification of Qualmer graphs
 """
 
-import MetaGraphsNext
-import Graphs
-import BioSequences
-import FASTX
-import DocStringExtensions
-import Statistics
-
 """
 Quality-aware BioSequence vertex data.
 """
