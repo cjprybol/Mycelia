@@ -163,238 +163,8 @@
 #     return (BLAST_LAMBDA * raw - log(BLAST_K)) / log(2)
 # end
 
-"""
-    parse_uniref100_to_dataframe(xml_path::String;
-                                 limit::Union{Nothing,Int}=nothing,
-                                 store_sequence::Bool=true,
-                                 compression::Symbol=:auto)
-
-Parses a UniRef100 XML file into an in-memory DataFrame.
-
-Compression handling:
-  compression = :auto       -> Use extension heuristic ('.gz' / '.gzip' / '.tgz') then validate magic bytes;
-                               if no gzip extension but magic bytes indicate gzip, still decompress.
-  compression = :extension  -> Decide solely by extension; validate magic bytes; error on mismatch.
-  compression = :magic      -> Ignore extension and decide by magic bytes only.
-  compression = :gzip       -> Force gzip (error if magic bytes do not match).
-  compression = :plain      -> Force plain text (error if magic bytes indicate gzip).
-
-If `store_sequence` is false, the representative sequence text is omitted (length/checksum retained).
-If `limit` is provided, stops after that many <entry> elements.
-Absent fields are recorded as `missing`.
-"""
-function parse_uniref100_to_dataframe(xml_path::String;
-                                      limit::Union{Nothing,Int}=nothing,
-                                      store_sequence::Bool=true,
-                                      compression::Symbol=:auto)
-
-    compression in (:auto, :extension, :magic, :gzip, :plain) ||
-        error("compression must be one of :auto, :extension, :magic, :gzip, :plain")
-
-    # Allocate column arrays
-    entry_id = String[]
-    updated = Vector{Union{Missing,String}}()
-    name = Vector{Union{Missing,String}}()
-
-    rep_db_type = Vector{Union{Missing,String}}()
-    rep_db_id = Vector{Union{Missing,String}}()
-    rep_uniprotkb_accession = Vector{Union{Missing,String}}()
-    rep_uniparc_id = Vector{Union{Missing,String}}()
-    rep_uniref90_id = Vector{Union{Missing,String}}()
-    rep_uniref50_id = Vector{Union{Missing,String}}()
-    rep_protein_name = Vector{Union{Missing,String}}()
-    rep_ncbi_taxonomy = Vector{Union{Missing,String}}()
-    rep_source_organism = Vector{Union{Missing,String}}()
-    rep_is_seed = Vector{Union{Missing,Bool}}()
-    rep_length_reported = Vector{Union{Missing,Int}}()
-
-    rep_sequence = store_sequence ? Vector{Union{Missing,String}}() : nothing
-    rep_sequence_length_attr = Vector{Union{Missing,Int}}()
-    rep_sequence_checksum = Vector{Union{Missing,String}}()
-
-    member_count = Vector{Union{Missing,Int}}()
-    common_taxon = Vector{Union{Missing,String}}()
-    common_taxon_id = Vector{Union{Missing,String}}()
-
-    entry_property_types = Vector{Vector{String}}()
-    entry_property_values = Vector{Vector{String}}()
-    rep_property_types = Vector{Vector{String}}()
-    rep_property_values = Vector{Vector{String}}()
-
-    member_db_ids = Vector{Vector{String}}()
-    member_uniprotkb_accessions = Vector{Vector{String}}()
-    member_uniparc_ids = Vector{Vector{String}}()
-
-    # Open file and detect compression strategy
-    raw_io = open(xml_path, "r")
-    stream = raw_io
-    is_gzip_stream = false
-    gzip_by_ext = false
-    try
-        # Extension heuristic
-        lower_name = lowercase(xml_path)
-        if endswith(lower_name, ".gz") || endswith(lower_name, ".gzip") || endswith(lower_name, ".tgz")
-            gzip_by_ext = true
-        end
-
-        # Read magic bytes (two bytes enough for gzip signature 1f 8b)
-        magic = read(raw_io, UInt8, min(2, filesize(raw_io)))
-        seekstart(raw_io)
-        magic_indicates_gzip = (length(magic) == 2 && magic[1] == 0x1f && magic[2] == 0x8b)
-
-        use_gzip = false
-        if compression == :auto
-            if gzip_by_ext
-                if !magic_indicates_gzip
-                    error("File extension suggests gzip but magic bytes do not match gzip signature.")
-                end
-                use_gzip = true
-            else
-                use_gzip = magic_indicates_gzip
-            end
-        elseif compression == :extension
-            if gzip_by_ext
-                if !magic_indicates_gzip
-                    error("Extension-based gzip expected but magic bytes do not indicate gzip.")
-                end
-                use_gzip = true
-            else
-                if magic_indicates_gzip
-                    # Accept anyway (we could warn; raising error would be stricter)
-                    use_gzip = true
-                else
-                    use_gzip = false
-                end
-            end
-        elseif compression == :magic
-            use_gzip = magic_indicates_gzip
-        elseif compression == :gzip
-            if !magic_indicates_gzip
-                error("Forced gzip mode but magic bytes do not indicate gzip file.")
-            end
-            use_gzip = true
-        elseif compression == :plain
-            if magic_indicates_gzip
-                error("Forced plain mode but magic bytes indicate gzip.")
-            end
-            use_gzip = false
-        end
-
-        if use_gzip
-            stream = CodecZlib.GzipDecompressorStream(raw_io)
-            is_gzip_stream = true
-        else
-            stream = raw_io
-        end
-
-        reader = EzXML.Reader(stream)
-        count = 0
-        try
-            while EzXML.read(reader)
-                if EzXML.nodetype(reader) == EzXML.READER_TYPE_ELEMENT && EzXML.localname(reader) == "entry"
-                    node = EzXML.read_current(reader)
-                    try
-                        _process_entry!(
-                            node,
-                            entry_id, updated, name,
-                            rep_db_type, rep_db_id,
-                            rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
-                            rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
-                            rep_length_reported,
-                            rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
-                            member_count, common_taxon, common_taxon_id,
-                            entry_property_types, entry_property_values,
-                            rep_property_types, rep_property_values,
-                            member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
-                            store_sequence
-                        )
-                        count += 1
-                        if limit !== nothing && count >= limit
-                            break
-                        end
-                        if count % 100_000 == 0
-                            println("Parsed entries: ", count)
-                        end
-                    finally
-                        EzXML.free(node)
-                    end
-                end
-            end
-        finally
-            EzXML.free(reader)
-        end
-        println("Finished parsing entries: ", count)
-    finally
-        if is_gzip_stream
-            try close(stream) catch end
-        end
-        close(raw_io)
-    end
-
-    if store_sequence
-        return DataFrames.DataFrame(
-            entry_id = entry_id,
-            updated = updated,
-            name = name,
-            rep_db_type = rep_db_type,
-            rep_db_id = rep_db_id,
-            rep_uniprotkb_accession = rep_uniprotkb_accession,
-            rep_uniparc_id = rep_uniparc_id,
-            rep_uniref90_id = rep_uniref90_id,
-            rep_uniref50_id = rep_uniref50_id,
-            rep_protein_name = rep_protein_name,
-            rep_ncbi_taxonomy = rep_ncbi_taxonomy,
-            rep_source_organism = rep_source_organism,
-            rep_is_seed = rep_is_seed,
-            rep_length_reported = rep_length_reported,
-            rep_sequence = rep_sequence,
-            rep_sequence_length_attr = rep_sequence_length_attr,
-            rep_sequence_checksum = rep_sequence_checksum,
-            member_count = member_count,
-            common_taxon = common_taxon,
-            common_taxon_id = common_taxon_id,
-            entry_property_types = entry_property_types,
-            entry_property_values = entry_property_values,
-            rep_property_types = rep_property_types,
-            rep_property_values = rep_property_values,
-            member_db_ids = member_db_ids,
-            member_uniprotkb_accessions = member_uniprotkb_accessions,
-            member_uniparc_ids = member_uniparc_ids,
-        )
-    else
-        return DataFrames.DataFrame(
-            entry_id = entry_id,
-            updated = updated,
-            name = name,
-            rep_db_type = rep_db_type,
-            rep_db_id = rep_db_id,
-            rep_uniprotkb_accession = rep_uniprotkb_accession,
-            rep_uniparc_id = rep_uniparc_id,
-            rep_uniref90_id = rep_uniref90_id,
-            rep_uniref50_id = rep_uniref50_id,
-            rep_protein_name = rep_protein_name,
-            rep_ncbi_taxonomy = rep_ncbi_taxonomy,
-            rep_source_organism = rep_source_organism,
-            rep_is_seed = rep_is_seed,
-            rep_length_reported = rep_length_reported,
-            rep_sequence_length_attr = rep_sequence_length_attr,
-            rep_sequence_checksum = rep_sequence_checksum,
-            member_count = member_count,
-            common_taxon = common_taxon,
-            common_taxon_id = common_taxon_id,
-            entry_property_types = entry_property_types,
-            entry_property_values = entry_property_values,
-            rep_property_types = rep_property_types,
-            rep_property_values = rep_property_values,
-            member_db_ids = member_db_ids,
-            member_uniprotkb_accessions = member_uniprotkb_accessions,
-            member_uniparc_ids = member_uniparc_ids,
-        )
-    end
-end
-
-# ---------------- Internal: per-entry extraction ----------------
-
+# --------------- Internal per-entry processing ----------------
+# This function remains the same as the previous working version.
 function _process_entry!(
     entry_node::EzXML.Node,
     entry_id_col,
@@ -426,19 +196,15 @@ function _process_entry!(
     member_uniparc_ids_col,
     store_sequence::Bool
 )
-    eid_attr = EzXML.getattr(entry_node, "id")
-    updated_attr = EzXML.getattr(entry_node, "updated")
-    eid = eid_attr === nothing ? "" : String(eid_attr)
-    updated_val = updated_attr === nothing ? missing : String(updated_attr)
+    # Attributes
+    eid_attr = EzXML.haskey(entry_node, "id") ? entry_node["id"] : ""
+    updated_attr = EzXML.haskey(entry_node, "updated") ? entry_node["updated"] : missing
 
-    entry_name = missing
-    for child in EzXML.eachelement(entry_node)
-        if EzXML.localname(child) == "name"
-            entry_name = strip(EzXML.text(child))
-            break
-        end
-    end
+    # <name>
+    entry_name_node = EzXML.findfirst("name", entry_node)
+    entry_name = entry_name_node === nothing ? missing : strip(EzXML.nodecontent(entry_name_node))
 
+    # Entry-level properties
     e_prop_types = String[]
     e_prop_values = String[]
     local_member_count = missing
@@ -446,144 +212,105 @@ function _process_entry!(
     local_common_taxon_id = missing
 
     for child in EzXML.eachelement(entry_node)
-        if EzXML.localname(child) == "property"
-            t = EzXML.getattr(child, "type")
-            v = EzXML.getattr(child, "value")
+        if EzXML.nodename(child) == "property"
+            t = EzXML.haskey(child, "type") ? child["type"] : nothing
+            v = EzXML.haskey(child, "value") ? child["value"] : nothing
             if t !== nothing && v !== nothing
-                ts = String(t); vs = String(v)
-                push!(e_prop_types, ts)
-                push!(e_prop_values, vs)
-                if ts == "member count"
-                    local_member_count = something(tryparse(Int, vs), missing)
-                elseif ts == "common taxon"
-                    local_common_taxon = vs
-                elseif ts == "common taxon ID"
-                    local_common_taxon_id = vs
+                push!(e_prop_types, t)
+                push!(e_prop_values, v)
+                if t == "member count"
+                    local_member_count = something(tryparse(Int, v), missing)
+                elseif t == "common taxon"
+                    local_common_taxon = v
+                elseif t == "common taxon ID"
+                    local_common_taxon_id = v
                 end
             end
         end
     end
 
-    rep_db_type = missing
-    rep_db_id = missing
-    rep_props_types = String[]
-    rep_props_values = String[]
-    rep_uniprotkb_acc = missing
-    rep_uniparc_id_val = missing
-    rep_uniref90_id_val = missing
-    rep_uniref50_id_val = missing
-    rep_protein_name_val = missing
-    rep_ncbi_taxonomy_val = missing
-    rep_source_organism_val = missing
-    rep_is_seed_val = missing
-    rep_length_prop = missing
+    # Representative member
+    rep_db_type, rep_db_id = missing, missing
+    rep_props_types, rep_props_values = String[], String[]
+    rep_uniprotkb_acc, rep_uniparc_id_val, rep_uniref90_id_val, rep_uniref50_id_val = missing, missing, missing, missing
+    rep_protein_name_val, rep_ncbi_taxonomy_val, rep_source_organism_val = missing, missing, missing
+    rep_is_seed_val, rep_length_prop = missing, missing
+    rep_sequence_text, rep_seq_len_attr, rep_seq_checksum = missing, missing, missing
 
-    rep_sequence_text = missing
-    rep_seq_len_attr = missing
-    rep_seq_checksum = missing
+    rep_member_node = EzXML.findfirst("representativeMember", entry_node)
+    if rep_member_node !== nothing
+        db_ref_node = EzXML.findfirst("dbReference", rep_member_node)
+        if db_ref_node !== nothing
+            rep_db_type = EzXML.haskey(db_ref_node, "type") ? db_ref_node["type"] : missing
+            rep_db_id = EzXML.haskey(db_ref_node, "id") ? db_ref_node["id"] : missing
 
-    for child in EzXML.eachelement(entry_node)
-        if EzXML.localname(child) == "representativeMember"
-            for rep_child in EzXML.eachelement(child)
-                lname = EzXML.localname(rep_child)
-                if lname == "dbReference"
-                    t = EzXML.getattr(rep_child, "type")
-                    i = EzXML.getattr(rep_child, "id")
-                    rep_db_type = t === nothing ? missing : String(t)
-                    rep_db_id = i === nothing ? missing : String(i)
-                    for p in EzXML.eachelement(rep_child)
-                        if EzXML.localname(p) == "property"
-                            pt = EzXML.getattr(p, "type")
-                            pv = EzXML.getattr(p, "value")
-                            if pt !== nothing && pv !== nothing
-                                pt_str = String(pt); pv_str = String(pv)
-                                push!(rep_props_types, pt_str)
-                                push!(rep_props_values, pv_str)
-                                if pt_str == "UniProtKB accession"
-                                    rep_uniprotkb_acc = pv_str
-                                elseif pt_str == "UniParc ID"
-                                    rep_uniparc_id_val = pv_str
-                                elseif pt_str == "UniRef90 ID"
-                                    rep_uniref90_id_val = pv_str
-                                elseif pt_str == "UniRef50 ID"
-                                    rep_uniref50_id_val = pv_str
-                                elseif pt_str == "protein name"
-                                    rep_protein_name_val = pv_str
-                                elseif pt_str == "NCBI taxonomy"
-                                    rep_ncbi_taxonomy_val = pv_str
-                                elseif pt_str == "source organism"
-                                    rep_source_organism_val = pv_str
-                                elseif pt_str == "isSeed"
-                                    rep_is_seed_val = lowercase(pv_str) == "true" ? true : false
-                                elseif pt_str == "length"
-                                    rep_length_prop = something(tryparse(Int, pv_str), missing)
-                                end
-                            end
+            for p in EzXML.eachelement(db_ref_node)
+                if EzXML.nodename(p) == "property"
+                    pt = EzXML.haskey(p, "type") ? p["type"] : nothing
+                    pv = EzXML.haskey(p, "value") ? p["value"] : nothing
+                    if pt !== nothing && pv !== nothing
+                        push!(rep_props_types, pt)
+                        push!(rep_props_values, pv)
+                        if pt == "UniProtKB accession"; rep_uniprotkb_acc = pv
+                        elseif pt == "UniParc ID"; rep_uniparc_id_val = pv
+                        elseif pt == "UniRef90 ID"; rep_uniref90_id_val = pv
+                        elseif pt == "UniRef50 ID"; rep_uniref50_id_val = pv
+                        elseif pt == "protein name"; rep_protein_name_val = pv
+                        elseif pt == "NCBI taxonomy"; rep_ncbi_taxonomy_val = pv
+                        elseif pt == "source organism"; rep_source_organism_val = pv
+                        elseif pt == "isSeed"; rep_is_seed_val = lowercase(pv) == "true"
+                        elseif pt == "length"; rep_length_prop = something(tryparse(Int, pv), missing)
                         end
                     end
-                elseif lname == "sequence"
-                    rep_sequence_text = replace(EzXML.text(rep_child), r"\s+" => "")
-                    len_attr = EzXML.getattr(rep_child, "length")
-                    rep_seq_len_attr = len_attr === nothing ? missing : something(tryparse(Int, String(len_attr)), missing)
-                    cks = EzXML.getattr(rep_child, "checksum")
-                    rep_seq_checksum = cks === nothing ? missing : String(cks)
                 end
             end
         end
+
+        seq_node = EzXML.findfirst("sequence", rep_member_node)
+        if seq_node !== nothing
+            rep_sequence_text = replace(EzXML.nodecontent(seq_node), r"\s+" => "")
+            len_attr = EzXML.haskey(seq_node, "length") ? seq_node["length"] : nothing
+            rep_seq_len_attr = len_attr === nothing ? missing : something(tryparse(Int, len_attr), missing)
+            cks = EzXML.haskey(seq_node, "checksum") ? seq_node["checksum"] : nothing
+            rep_seq_checksum = cks === nothing ? missing : cks
+        end
     end
 
-    member_ids = String[]
-    member_uniprot_accs = String[]
-    member_uniparc_ids_local = String[]
+    # Other Members
+    member_ids_local, member_uniprot_accs, member_uniparc_ids_local = String[], String[], String[]
     for child in EzXML.eachelement(entry_node)
-        if EzXML.localname(child) == "member"
-            dbref = nothing
-            for d in EzXML.eachelement(child)
-                if EzXML.localname(d) == "dbReference"
-                    dbref = d
-                    break
-                end
-            end
+        if EzXML.nodename(child) == "member"
+            dbref = EzXML.findfirst("dbReference", child)
             if dbref !== nothing
-                mid = EzXML.getattr(dbref, "id")
-                push!(member_ids, mid === nothing ? "" : String(mid))
-                local_member_uniprot = nothing
-                local_member_uniparc = nothing
+                mid = EzXML.haskey(dbref, "id") ? dbref["id"] : ""
+                push!(member_ids_local, mid)
+                local_up, local_upc = nothing, nothing
                 for p in EzXML.eachelement(dbref)
-                    if EzXML.localname(p) == "property"
-                        pt = EzXML.getattr(p, "type")
-                        pv = EzXML.getattr(p, "value")
-                        if pt !== nothing && pv !== nothing
-                            pts = String(pt); pvs = String(pv)
-                            if pts == "UniProtKB accession"
-                                local_member_uniprot = pvs
-                            elseif pts == "UniParc ID"
-                                local_member_uniparc = pvs
-                            end
+                    if EzXML.nodename(p) == "property"
+                        pt = EzXML.haskey(p, "type") ? p["type"] : nothing
+                        pv = EzXML.haskey(p, "value") ? p["value"] : nothing
+                        if pt == "UniProtKB accession"; local_up = pv
+                        elseif pt == "UniParc ID"; local_upc = pv
                         end
                     end
                 end
-                if local_member_uniprot !== nothing
-                    push!(member_uniprot_accs, local_member_uniprot)
-                end
-                if local_member_uniparc !== nothing
-                    push!(member_uniparc_ids_local, local_member_uniparc)
-                end
+                if local_up !== nothing; push!(member_uniprot_accs, local_up); end
+                if local_upc !== nothing; push!(member_uniparc_ids_local, local_upc); end
             end
         end
     end
 
-    if rep_sequence_text !== missing && rep_seq_len_attr !== missing
+    # Normalize sequence length
+    if rep_sequence_text !== missing
         actual_len = length(rep_sequence_text)
-        if rep_seq_len_attr != actual_len
+        if rep_seq_len_attr !== actual_len
             rep_seq_len_attr = actual_len
         end
-    elseif rep_sequence_text !== missing && rep_seq_len_attr === missing
-        rep_seq_len_attr = length(rep_sequence_text)
     end
 
-    push!(entry_id_col, eid)
-    push!(updated_col, updated_val)
+    # Push data to columns
+    push!(entry_id_col, eid_attr)
+    push!(updated_col, updated_attr)
     push!(name_col, entry_name)
     push!(rep_db_type_col, rep_db_type)
     push!(rep_db_id_col, rep_db_id)
@@ -596,9 +323,7 @@ function _process_entry!(
     push!(rep_source_organism_col, rep_source_organism_val)
     push!(rep_is_seed_col, rep_is_seed_val)
     push!(rep_length_reported_col, rep_length_prop)
-    if store_sequence
-        push!(rep_sequence_col, rep_sequence_text)
-    end
+    if store_sequence; push!(rep_sequence_col, rep_sequence_text); end
     push!(rep_sequence_length_attr_col, rep_seq_len_attr)
     push!(rep_sequence_checksum_col, rep_seq_checksum)
     push!(member_count_col, local_member_count)
@@ -608,11 +333,164 @@ function _process_entry!(
     push!(entry_property_values_col, e_prop_values)
     push!(rep_property_types_col, rep_props_types)
     push!(rep_property_values_col, rep_props_values)
-    push!(member_db_ids_col, member_ids)
+    push!(member_db_ids_col, member_ids_local)
     push!(member_uniprotkb_accessions_col, member_uniprot_accs)
     push!(member_uniparc_ids_col, member_uniparc_ids_local)
 
     return nothing
+end
+
+
+"""
+    parse_uniref100_to_dataframe(xml_path::String;
+                                 limit::Union{Nothing,Int}=nothing,
+                                 store_sequence::Bool=true,
+                                 include_ids::Union{Nothing, Set{String}}=nothing)
+
+Parses a UniRef100 XML file into a DataFrame, with options for filtering and memory management.
+"""
+function parse_uniref100_to_dataframe(xml_path::String;
+                                      limit::Union{Nothing,Int}=nothing,
+                                      store_sequence::Bool=true,
+                                      include_ids::Union{Nothing, Set{String}}=nothing)
+
+    # ---------------- Column storage ----------------
+    entry_id = String[]
+    updated = Vector{Union{Missing,String}}()
+    name = Vector{Union{Missing,String}}()
+    rep_db_type = Vector{Union{Missing,String}}()
+    rep_db_id = Vector{Union{Missing,String}}()
+    rep_uniprotkb_accession = Vector{Union{Missing,String}}()
+    rep_uniparc_id = Vector{Union{Missing,String}}()
+    rep_uniref90_id = Vector{Union{Missing,String}}()
+    rep_uniref50_id = Vector{Union{Missing,String}}()
+    rep_protein_name = Vector{Union{Missing,String}}()
+    rep_ncbi_taxonomy = Vector{Union{Missing,String}}()
+    rep_source_organism = Vector{Union{Missing,String}}()
+    rep_is_seed = Vector{Union{Missing,Bool}}()
+    rep_length_reported = Vector{Union{Missing,Int}}()
+    rep_sequence = store_sequence ? Vector{Union{Missing,String}}() : nothing
+    rep_sequence_length_attr = Vector{Union{Missing,Int}}()
+    rep_sequence_checksum = Vector{Union{Missing,String}}()
+    member_count = Vector{Union{Missing,Int}}()
+    common_taxon = Vector{Union{Missing,String}}()
+    common_taxon_id = Vector{Union{Missing,String}}()
+    entry_property_types = Vector{Vector{String}}()
+    entry_property_values = Vector{Vector{String}}()
+    rep_property_types = Vector{Vector{String}}()
+    rep_property_values = Vector{Vector{String}}()
+    member_db_ids = Vector{Vector{String}}()
+    member_uniprotkb_accessions = Vector{Vector{String}}()
+    member_uniparc_ids = Vector{Vector{String}}()
+
+    # ---------------- Open & detect gzip ----------------
+    raw_io = open(xml_path, "r")
+    stream = raw_io
+    try
+        if endswith(lowercase(xml_path), ".gz")
+            stream = CodecZlib.GzipDecompressorStream(raw_io)
+        end
+
+        # ---------------- Line-based entry extraction ----------------
+        buf = IOBuffer()
+        in_entry = false
+        records_read = 0
+        records_kept = 0
+
+        while !eof(stream)
+            line = readline(stream)
+
+            if !in_entry && occursin("<entry", line)
+                in_entry = true
+                truncate(buf, 0)
+            end
+
+            if in_entry
+                write(buf, line)
+                if occursin("</entry>", line)
+                    in_entry = false
+                    records_read += 1
+                    
+                    entry_xml_string = String(take!(buf))
+                    doc = EzXML.parsexml(entry_xml_string)
+                    root = EzXML.root(doc)
+
+                    # --- MODIFICATION: Filter by ID before full processing ---
+                    if include_ids !== nothing
+                        entry_id_val = EzXML.haskey(root, "id") ? root["id"] : ""
+                        if entry_id_val ∉ include_ids
+                            continue # Skip this entry
+                        end
+                    end
+                    
+                    _process_entry!(
+                        root,
+                        entry_id, updated, name,
+                        rep_db_type, rep_db_id,
+                        rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
+                        rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
+                        rep_length_reported,
+                        rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
+                        member_count, common_taxon, common_taxon_id,
+                        entry_property_types, entry_property_values,
+                        rep_property_types, rep_property_values,
+                        member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
+                        store_sequence
+                    )
+                    records_kept += 1
+
+                    # --- MODIFICATION: Update progress meter ---
+                    if records_read % 1_000_000 == 0
+                        println("Records read from file: ", records_read)
+                    end
+
+                    if limit !== nothing && records_kept >= limit
+                        break
+                    end
+                end
+            end
+        end
+
+        println("Finished parsing. Total records read: ", records_read, ". Total records kept: ", records_kept)
+    finally
+        close(raw_io)
+    end
+
+    # ---------------- Build DataFrame ----------------
+    df_cols = Dict{Symbol, Any}(
+        :entry_id => entry_id,
+        :updated => updated,
+        :name => name,
+        :rep_db_type => rep_db_type,
+        :rep_db_id => rep_db_id,
+        :rep_uniprotkb_accession => rep_uniprotkb_accession,
+        :rep_uniparc_id => rep_uniparc_id,
+        :rep_uniref90_id => rep_uniref90_id,
+        :rep_uniref50_id => rep_uniref50_id,
+        :rep_protein_name => rep_protein_name,
+        :rep_ncbi_taxonomy => rep_ncbi_taxonomy,
+        :rep_source_organism => rep_source_organism,
+        :rep_is_seed => rep_is_seed,
+        :rep_length_reported => rep_length_reported,
+        :rep_sequence_length_attr => rep_sequence_length_attr,
+        :rep_sequence_checksum => rep_sequence_checksum,
+        :member_count => member_count,
+        :common_taxon => common_taxon,
+        :common_taxon_id => common_taxon_id,
+        :entry_property_types => entry_property_types,
+        :entry_property_values => entry_property_values,
+        :rep_property_types => rep_property_types,
+        :rep_property_values => rep_property_values,
+        :member_db_ids => member_db_ids,
+        :member_uniprotkb_accessions => member_uniprotkb_accessions,
+        :member_uniparc_ids => member_uniparc_ids,
+    )
+
+    if store_sequence
+        df_cols[:rep_sequence] = rep_sequence
+    end
+
+    return DataFrames.DataFrame(df_cols)
 end
 
 function run_phage_annotation(;
@@ -2488,39 +2366,75 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run TransTermHP to predict rho-independent transcription terminators in DNA sequences.
 
 # Arguments
-- `fasta`: Path to input FASTA file containing DNA sequences
+- `fasta`: Path to input FASTA file containing DNA sequences. Can be gzip compressed.
 - `gff`: Optional path to GFF annotation file. If provided, improves prediction accuracy
 
 # Returns
 - `String`: Path to output file containing TransTermHP predictions
 
 # Details
-- Uses Conda environment 'transtermhp' for execution
-- Automatically generates coordinate file from FASTA or GFF input
-- Removes temporary coordinate file after completion
-- Requires Mycelia's Conda setup
+- If the input `fasta` is gzip compressed, a temporary uncompressed copy will be used only when necessary.
+- Uses Conda environment 'transtermhp' for execution.
+- Automatically generates coordinate file from FASTA or GFF input.
+- Removes temporary files after completion.
+- Requires Mycelia's Conda setup.
 """
 function run_transterm(;fasta, gff="")
-    # note in my one test with phage genomes, calling without gff yeilds more hits but average confidence is a bit lower
-    if isempty(gff)
-        coordinates = generate_transterm_coordinates_from_fasta(fasta)
-    else
-        coordinates = generate_transterm_coordinates_from_gff(gff)
+    # Determine the base path for output files, removing .gz if present.
+    base_path_for_outputs = isempty(gff) ? fasta : gff
+    if endswith(lowercase(base_path_for_outputs), ".gz")
+        base_path_for_outputs = base_path_for_outputs[1:end-3]
     end
-    transterm_calls_file = replace(coordinates, ".coords" => ".transterm.txt")
-    Mycelia.add_bioconda_env("transtermhp")
 
-    conda_base = dirname(dirname(Mycelia.CONDA_RUNNER))
-    dat_file = "$(conda_base)/envs/transtermhp/data/expterm.dat"
-    # @show isfile(dat_file)
-    # @assert = first(readlines(`find $(conda_base) -name "expterm.dat"`))
-    # @show dat_file
-    @assert isfile(dat_file)
-    # conda_base = chomp(read(`$(Mycelia.CONDA_RUNNER) info --base`, String))
-    # dat_file = "$(conda_base)/envs/transtermhp/data/expterm.dat"
-    # @assert isfile(dat_file)
-    run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta) $(coordinates)`, transterm_calls_file))    
-    rm(coordinates)
+    # Determine the final output file path from the base path.
+    # The logic assumes coordinate files from GFFs will also follow a predictable pattern
+    # that can be replicated to determine the final output name.
+    transterm_calls_file = replace(base_path_for_outputs, r"\.(gff|gff3|fasta|fna|faa|fa)$" => ".transterm.txt")
+
+    if isfile(transterm_calls_file)
+        return transterm_calls_file
+    end
+
+    fasta_to_use = fasta
+    temp_fasta_path = ""
+    coordinates = ""
+
+    try
+        # Only decompress fasta if it's gzipped AND we are not using a GFF file.
+        # generate_transterm_coordinates_from_fasta requires an uncompressed file.
+        # The `transterm` binary itself needs the fasta, but it may handle compression,
+        # so we only decompress when our Julia functions require it.
+        if isempty(gff) && endswith(lowercase(fasta), ".gz")
+            fasta_to_use = write_fasta(records=collect(open_fastx(fasta)), gzip=false)
+        end
+
+        if isempty(gff)
+            coordinates = generate_transterm_coordinates_from_fasta(fasta_to_use)
+        else
+            coordinates = generate_transterm_coordinates_from_gff(gff)
+        end
+        
+        Mycelia.add_bioconda_env("transtermhp")
+
+        conda_base = dirname(dirname(Mycelia.CONDA_RUNNER))
+        dat_file = joinpath(conda_base, "envs", "transtermhp", "data", "expterm.dat")
+
+        @assert isfile(dat_file) "expterm.dat not found in Conda environment"
+
+        # Note: We pass the original `fasta` path to the command, assuming `transterm`
+        # can handle it (even if compressed). We only needed `fasta_to_use` for the
+        # Julia-side coordinate generation.
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta_to_use) $(coordinates)`, transterm_calls_file))
+    finally
+        # Cleanup temporary files
+        if !isempty(coordinates) && isfile(coordinates)
+            rm(coordinates)
+        end
+        if !isempty(temp_fasta_path) && isfile(temp_fasta_path)
+            rm(temp_fasta_path)
+        end
+    end
+    
     return transterm_calls_file
 end
 
@@ -2693,84 +2607,129 @@ end
 #     return phispy_dir
 # end
 
-# function run_trnascan(ID, out_dir, normalized_fasta_file)
-#     trnascan_dir = "$(out_dir)/trnascan"
-#     # trnascan doesn't like to overwrite existing things
-#     if !isdir(trnascan_dir)
-#         mkdir(trnascan_dir)
-#     end
-#     if isempty(readdir(trnascan_dir))
-
-#         #     -B for using Bacterial
-#         trnascan_cmd = 
-#         `tRNAscan-SE 
-#             -B 
-#             --output $(trnascan_dir)/$(ID).trnascan.out 
-#             --bed $(trnascan_dir)/$(ID).trnascan.bed 
-#             --fasta $(trnascan_dir)/$(ID).trnascan.fasta 
-#             --struct $(trnascan_dir)/$(ID).trnascan.struct
-#             --stats $(trnascan_dir)/$(ID).trnascan.stats 
-#             --log $(trnascan_dir)/$(ID).trnascan.log
-#             $(normalized_fasta_file)`
-#         run(pipeline(trnascan_cmd, stdout="$(trnascan_dir)/trnascan.out", stderr="$(trnascan_dir)/trnascan.out"))
-#     end
-#     return trnascan_dir
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run tRNAscan-SE to identify and annotate transfer RNA genes in the provided sequence file.
+Handles gzip-compressed input files by decompressing them to a temporary location.
 
 # Arguments
-- `fna_file::String`: Path to input FASTA nucleotide file
-- `outdir::String`: Output directory path (default: input_file_path + "_trnascan")
+- `fna_file::String`: Path to the input FASTA nucleotide file. Can be gzip-compressed.
+- `outdir::String`: Path to the output directory (default: `replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan"`).
+- `model::String`: The tRNA model to use. Defaults to `"G"`.
+    - `"G"`: General model (all three domains).
+    - `"E"`: Eukaryotic.
+    - `"B"`: Bacterial.
+    - `"A"`: Archaeal.
+    - `"O"`: Other organellar.
+    - `"M mammal"` or `"M vert"`: Mitochondrial models.
+- `force::Bool`: If true, forces a rerun even if all output files already exist. Defaults to `false`.
 
 # Returns
-- `String`: Path to the output directory containing tRNAscan-SE results
+- `NamedTuple`: A named tuple containing the paths to all generated files and the output directory: `(out, bed, fasta, structure, stats, log, outdir)`.
 
 # Output Files
 Creates the following files in `outdir`:
-- `*.trnascan.out`: Main output with tRNA predictions
-- `*.trnascan.bed`: BED format coordinates
-- `*.trnascan.fasta`: FASTA sequences of predicted tRNAs
-- `*.trnascan.struct`: Secondary structure predictions
-- `*.trnascan.stats`: Summary statistics
-- `*.trnascan.log`: Program execution log
+- `*.trnascan.out`: Main output with tRNA predictions.
+- `*.trnascan.bed`: BED format coordinates of tRNAs.
+- `*.trnascan.fasta`: FASTA sequences of predicted tRNAs.
+- `*.trnascan.struct`: Secondary structure predictions.
+- `*.trnascan.stats`: Summary statistics.
+- `*.trnascan.log`: Program execution log.
 
 # Notes
-- Uses the general tRNA model (-G flag) suitable for all domains of life
-- Automatically sets up tRNAscan-SE via Bioconda
-- Skips processing if output directory contains files
+- Automatically sets up the tRNAscan-SE Conda environment via `Mycelia.add_bioconda_env`.
+- Checks for the existence of expected output files to determine if the process should be skipped.
+- Cleans up partially generated files if the `tRNAscan-SE` command fails.
 """
-function run_trnascan(;fna_file, outdir=fna_file * "_trnascan")
+function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan", model::String="G", force::Bool=false)
     Mycelia.add_bioconda_env("trnascan-se")
-    # trnascan doesn't like to overwrite existing things
-    if !isdir(outdir)
-        mkdir(outdir)
-    else
-        @info "$(outdir) already exists"
+
+    if !ispath(outdir)
+        mkpath(outdir)
     end
-    ID = basename(fna_file)
-    if isempty(readdir(outdir))
-        # -G : use general tRNA model (cytoslic tRNAs from all 3 domains included)
-        #     -B for using Bacterial
-        trnascan_cmd =
-        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n trnascan-se tRNAscan-SE
-            -G
-            --output $(outdir)/$(ID).trnascan.out
-            --bed $(outdir)/$(ID).trnascan.bed
-            --fasta $(outdir)/$(ID).trnascan.fasta
-            --struct $(outdir)/$(ID).trnascan.struct
-            --stats $(outdir)/$(ID).trnascan.stats
-            --log $(outdir)/$(ID).trnascan.log
-            --prefix
-            --progress
-            $(fna_file)`
-        # run(pipeline(trnascan_cmd, stdout="$(outdir)/$(ID).trnascan.out", stderr="$(outdir)/$(ID).trnascan.out"))
-        run(trnascan_cmd)
+
+    ID = replace(basename(fna_file), Mycelia.FASTA_REGEX => "")
+    
+    output_files = (
+        out       = joinpath(outdir, "$(ID).trnascan.out"),
+        bed       = joinpath(outdir, "$(ID).trnascan.bed"),
+        fasta     = joinpath(outdir, "$(ID).trnascan.fasta"),
+        structure = joinpath(outdir, "$(ID).trnascan.struct"),
+        stats     = joinpath(outdir, "$(ID).trnascan.stats"),
+        log       = joinpath(outdir, "$(ID).trnascan.log"),
+    )
+
+    all_files_exist = all(ispath, values(output_files))
+
+    if all_files_exist && !force
+        @info "All output files already exist in $(outdir). Skipping tRNAscan-SE run. Use `force=true` to rerun."
+        return (; output_files..., outdir=outdir)
     end
-    return outdir
+    
+    input_to_process = fna_file
+    temp_fna_path = ""
+
+    try
+        # Handle compressed input file
+        if endswith(fna_file, ".gz")
+            @info "Input file is gzipped. Decompressing to a temporary file."
+            temp_fna_path, temp_io = mktemp()
+            close(temp_io) # Immediately close the stream from mktemp
+
+            open(CodecZlib.GzipDecompressorStream, fna_file, "r") do f_in
+                open(temp_fna_path, "w") do f_out
+                    write(f_out, read(f_in))
+                end
+            end
+            input_to_process = temp_fna_path
+        end
+
+        model_parts = split(model)
+        model_flag = "-" * model_parts[1]
+        
+        cmd_parts = [
+            "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "trnascan-se", "tRNAscan-SE",
+            model_flag
+        ]
+        if length(model_parts) > 1
+            push!(cmd_parts, model_parts[2])
+        end
+
+        append!(cmd_parts, [
+            "--output", output_files.out,
+            "--bed", output_files.bed,
+            "--fasta", output_files.fasta,
+            "--struct", output_files.structure,
+            "--stats", output_files.stats,
+            "--log", output_files.log,
+            input_to_process
+        ])
+
+        trnascan_cmd = Cmd(cmd_parts)
+        @info "Running tRNAscan-SE command:" trnascan_cmd
+
+        try
+            run(trnascan_cmd)
+        catch e
+            @error "tRNAscan-SE failed. Cleaning up partial results."
+            for file_path in values(output_files)
+                if ispath(file_path)
+                    rm(file_path)
+                end
+            end
+            rethrow(e)
+        end
+
+    finally
+        # Cleanup the temporary file if it was created
+        if !isempty(temp_fna_path) && ispath(temp_fna_path)
+            @info "Cleaning up temporary file: $(temp_fna_path)"
+            rm(temp_fna_path)
+        end
+    end
+
+    return (; output_files..., outdir=outdir)
 end
 
 # function run_counterselection_spacer_detection(strain, out_dir, normalized_fasta_file)
@@ -3254,4 +3213,63 @@ function count_predicted_genes(gff_file)
     end
     
     return gene_count
+end
+
+"""
+    add_trna_attributes!(gff_df::DataFrames.DataFrame)
+
+Modifies a GFF `DataFrame` in-place to add informative `label` and `product`
+attributes for tRNA features.
+
+This function parses the tRNA type from the `ID` attribute, constructs
+`label` and `product` fields, and appends them to the `attributes` column.
+It is designed to work with attribute formats generated by tRNAscan-SE,
+for example: `ID=...tRNA13-fMetCAT`.
+
+# Arguments
+- `gff_df::DataFrames.DataFrame`: A DataFrame containing GFF data, which will be modified.
+
+# Returns
+- `DataFrames.DataFrame`: The modified DataFrame with updated attributes.
+"""
+function add_trna_attributes(gff_df::DataFrames.DataFrame)
+    # This helper function will be applied to each row of the DataFrame.
+    function format_attributes(id_string::AbstractString)
+        # 1. Extract the tRNA type string from the end of the ID.
+        # Example: from "ID=...tRNA13-fMetCAT", get "fMetCAT".
+        local trna_type
+        try
+            # Split the ID by the hyphen to isolate the type.
+            trna_type = last(split(id_string, '-'))
+        catch e
+            # If split fails (e.g., no hyphen), return the original string.
+            return id_string
+        end
+
+        # 2. Parse the amino acid and anticodon from the type string.
+        local amino_acid, anticodon
+        if startswith(trna_type, "fMet")
+            amino_acid = "fMet"
+            anticodon = trna_type[5:end] # The rest of the string after "fMet"
+        elseif startswith(trna_type, "Undet")
+            amino_acid = "Undet"
+            anticodon = trna_type[6:end]
+        else
+            # Standard case: first 3 letters are the amino acid.
+            amino_acid = trna_type[1:3]
+            anticodon = trna_type[4:end]
+        end
+
+        # 3. Create the new label and product strings.
+        # This format is descriptive in genome browsers.
+        label = "tRNA-$(amino_acid)"
+        product = "tRNA-$(amino_acid) ($(anticodon))"
+
+        # 4. Construct the final attributes string and return it.
+        return "label=\"$(label)\";product=\"$(product)\";$(id_string);"
+    end
+
+    # Apply the helper function to the 'attributes' column of the DataFrame.
+    # `ByRow` ensures the function is applied to each element individually.
+    return DataFrames.transform(gff_df, :attributes => DataFrames.ByRow(format_attributes) => :attributes)
 end

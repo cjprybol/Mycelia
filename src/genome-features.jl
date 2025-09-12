@@ -57,41 +57,115 @@
 #     return table
 # end
 
+import DocStringExtensions
+import DataFrames
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Update GFF annotations with protein descriptions from MMseqs2 search results.
+Update GFF annotations using a pre-loaded DataFrame of MMseqs2 results.
+
+# Keyword Arguments
+- `gff_file::String`: Path to input GFF3 format file.
+- `mmseqs_results::DataFrames.DataFrame`: DataFrame of MMseqs2 easy-search results.
+- `id_map::Union{Dict{String, String}, Nothing}=nothing`: Optional dictionary mapping original GFF IDs to normalized IDs.
+
+# Returns
+- `DataFrame`: Modified GFF table with updated attribute columns.
+
+# Details
+This function takes sequence matches from a `DataFrame` of MMseqs2 results and adds their
+descriptions as 'label' and 'product' attributes in the GFF file.
+
+The 'product' attribute is always set to the full 'theader' value. The 'label' is a
+normalized version derived by parsing the cluster name from the 'theader' field.
+
+If an `id_map` is provided, it links GFF protein IDs to normalized IDs in the `mmseqs_results`.
+"""
+function update_gff_with_mmseqs(
+    ;
+    gff_file::String,
+    mmseqs_results::DataFrames.DataFrame,
+    id_map::Union{Dict{String, String}, Nothing}=nothing
+)
+
+    # This inner function extracts the cluster name and normalizes it for the 'label'
+    function get_normalized_label(theader::String)
+        # Extract the part of the header before the sequence count (e.g., "n=5")
+        match_result = Base.match(r"^(\S+\s+.*?)\s+n=\d+", theader)
+        label_base = match_result !== nothing ? Base.String(match_result[1]) : theader
+        
+        # Split the base, take all words from the second onward, and join with an underscore
+        parts = Base.split(label_base, ' ')
+        # This check handles cases where there might be fewer than two words
+        return Base.length(parts) > 1 ? Base.join(parts[2:end], "_") : ""
+    end
+
+    # Create a dictionary mapping each query to its full 'theader' (for product)
+    # and the generated normalized label
+    query_to_info = Dict{String, Tuple{String, String}}(
+        row.query => (row.theader, get_normalized_label(row.theader)) for row in DataFrames.eachrow(mmseqs_results)
+    )
+
+    gff_table = Mycelia.read_gff(gff_file)
+    for i in 1:DataFrames.nrow(gff_table)
+        row = gff_table[i, :]
+        attributes_dict = Dict(a => b for (a,b) in Base.split.(Base.filter(!Base.isempty, Base.split(row.attributes, ';')), '='))
+        original_id = Base.get(attributes_dict, "ID", "")
+
+        # Use the id_map if provided, otherwise use the original ID for lookup
+        lookup_key = if id_map !== nothing
+            Base.get(id_map, original_id, nothing)
+        else
+            original_id
+        end
+
+        info = if lookup_key !== nothing
+            Base.get(query_to_info, lookup_key, nothing)
+        else
+            nothing
+        end
+        
+        if info !== nothing
+            product, normalized_label = info
+            
+            # Prepend the new label and product attributes to the existing attributes
+            gff_table[i, "attributes"] = "label=\"$(normalized_label)\";product=\"$(product)\";" * row.attributes
+        end
+    end
+    return gff_table
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Update GFF annotations with protein descriptions from an MMseqs2 search results file.
 
 # Arguments
 - `gff_file::String`: Path to input GFF3 format file
 - `mmseqs_file::String`: Path to MMseqs2 easy-search output file
 
+# Keyword Arguments
+- `id_map::Union{Dict{String, String}, Nothing}=nothing`: Optional dictionary mapping original GFF IDs to normalized IDs.
+- `extract_cluster_name::Bool=false`: If true, parse the `theader` column to extract only the cluster name.
+
 # Returns
 - `DataFrame`: Modified GFF table with updated attribute columns containing protein descriptions
-
-# Details
-Takes sequence matches from MMseqs2 and adds their descriptions as 'label' and 'product' 
-attributes in the GFF file. Only considers top hits from MMseqs2 results. Preserves existing 
-GFF attributes while prepending new annotations.
 """
-function update_gff_with_mmseqs(gff_file, mmseqs_file)
-    mmseqs_results = read_mmseqs_easy_search(mmseqs_file)
-    top_hits = DataFrames.combine(DataFrames.groupby(mmseqs_results, "query"), group -> group[Base.argmax(group.bits), :])
-    # id_to_product = Dict{String, String}()
-    # for row in DataFrames.eachrow(top_hits)
-    #     id = Dict(a => b for (a, b) in split.(split(last(split(row["qheader"], " # ")), ';'), '='))["ID"]
-    #     product = replace(row["theader"], " " => "__")
-    #     id_to_product[id] = product
-    # end
-    id_to_product = Dict{String, String}(row["query"] => replace(row["theader"], " " => "__") for row in DataFrames.eachrow(top_hits))
-
-    gff_table = Mycelia.read_gff(gff_file)
-    for (i, row) in enumerate(DataFrames.eachrow(gff_table))
-        id = Dict(a => b for (a,b) in split.(filter(!isempty, split(row["attributes"], ';')), '='))["ID"]
-        product = get(id_to_product, id, "")
-        gff_table[i, "attributes"] = "label=\"$(product)\";product=\"$(product)\";" * row["attributes"]
-    end
-    return gff_table
+function update_gff_with_mmseqs(
+    gff_file::String,
+    mmseqs_file::String;
+    id_map::Union{Dict{String, String}, Nothing}=nothing,
+    extract_cluster_name::Bool=false
+)
+    mmseqs_results = Mycelia.read_mmseqs_easy_search(mmseqs_file)
+    # Pass keywords through to the next call
+    return update_gff_with_mmseqs(
+        gff_file,
+        mmseqs_results;
+        id_map=id_map,
+        extract_cluster_name=extract_cluster_name
+    )
 end
 
 """
@@ -287,15 +361,17 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Convert FASTA sequence and GFF annotation files to GenBank format using EMBOSS seqret.
 
 # Arguments
-- `fasta::String`: Path to input FASTA file containing sequence data
-- `gff::String`: Path to input GFF file containing genomic features
-- `genbank::String`: Path for output GenBank file
+- `fasta::String`: Path to input FASTA file containing sequence data. Can be gzipped.
+- `gff::String`: Path to input GFF file containing genomic features.
+- `genbank::String`: Path for output GenBank file.
 
 # Details
 Requires EMBOSS toolkit (installed via Bioconda). The function will:
-1. Create necessary output directories
-2. Run seqret to combine sequence and features
-3. Generate a GenBank format file at the specified location
+1. Create necessary output directories.
+2. If the FASTA file is gzipped, create a temporary uncompressed version.
+3. Run `seqret` to combine sequence and features.
+4. Generate a GenBank format file at the specified location.
+5. Clean up any temporary files.
 """
 function fasta_and_gff_to_genbank(;fasta, gff, genbank=gff * ".genbank")
     add_bioconda_env("emboss")
@@ -303,13 +379,24 @@ function fasta_and_gff_to_genbank(;fasta, gff, genbank=gff * ".genbank")
     genbank_directory = dirname(genbank)
     genbank_basename = basename(genbank)
     genbank_prefix = replace(genbank, r"\.(genbank|gb|gbk|gbff)$" => "")
-    # genbank_extension = "genbank"
-    # https://bioinformatics.stackexchange.com/a/11140
-    # https://www.biostars.org/p/72220/#72272
-    # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
-#     -osname
-    # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
-    run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
+    
+    # Handle gzipped fasta
+    if endswith(fasta, ".gz")
+        temp_fasta = Mycelia.write_fasta(records = collect(Mycelia.open_fastx(fasta)))
+        try
+            run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret -sequence $(temp_fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
+        finally
+            rm(temp_fasta)
+        end
+    else
+        # https://bioinformatics.stackexchange.com/a/11140
+        # https://www.biostars.org/p/72220/#72272
+        # seqret -sequence aj242600.fasta -feature -fformat gff -fopenfile aj242600.gff -osformat genbank -auto
+        # -osname
+        # seqret -sequence {genome file} -feature -fformat gff -fopenfile {gff file} -osformat genbank -osname_outseq {output prefix} -ofdirectory_outseq gbk_file -auto
+        run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret -sequence $(fasta) -feature -fformat gff -fopenfile $(gff) -osformat genbank -osname_outseq $(genbank_prefix) -ofdirectory_outseq gbk_file -auto`)
+    end
+    
     return genbank
 end
 
@@ -345,4 +432,113 @@ Opens and parses a GenBank format file containing genomic sequence and annotatio
 """
 function open_genbank(genbank_file)
     return GenomicAnnotations.readgbk(genbank_file)
+end
+
+"""
+    read_bed(file_path::String)
+
+Reads a BED file from `file_path` into a `DataFrame`.
+
+This function reads a standard BED file, which is a tab-delimited format without a header.
+It assigns the standard BED column names and converts the appropriate columns to their
+correct integer types for numerical analysis.
+
+# Arguments
+- `file_path::String`: The path to the BED file.
+
+# Returns
+- `DataFrames.DataFrame`: A DataFrame containing the BED file data with correctly typed columns.
+"""
+function read_bed(file_path::String)
+    # Define column names for all possible 12 columns in a BED file.
+    bed_column_names = [
+        :chrom, :chromStart, :chromEnd, :name, :score, :strand,
+        :thickStart, :thickEnd, :itemRgb, :blockCount, :blockSizes, :blockStarts
+    ]
+
+    # Read the raw data. We let CSV.jl detect types initially.
+    # This is more efficient than reading everything as a string first.
+    df = CSV.read(file_path, DataFrames.DataFrame, header=false, delim='\t', comment="#")
+
+    # Rename the columns of the DataFrame based on how many were read.
+    DataFrames.rename!(df, bed_column_names[1:size(df, 2)])
+
+    # List of columns that should be converted to integers.
+    # We will check for their existence before attempting conversion.
+    int_columns = [:chromStart, :chromEnd, :score, :thickStart, :thickEnd, :blockCount]
+
+    # Use a single `transform!` call for all type conversions.
+    # This is more idiomatic and robust. It modifies the DataFrame in-place.
+    # `ByRow` ensures the parsing function is applied to each element.
+    # `AsTable` and `=>` are used to select and transform multiple columns.
+    transform_pairs = []
+    for col_name in int_columns
+        if DataFrames.hasproperty(df, col_name)
+            # Ensure the column is not already an integer type
+            if eltype(df[!, col_name]) != Int
+                push!(transform_pairs, col_name => DataFrames.ByRow(x -> parse(Int, string(x))) => col_name)
+            end
+        end
+    end
+
+    if !isempty(transform_pairs)
+        DataFrames.transform!(df, transform_pairs...)
+    end
+
+    return df
+end
+
+"""
+    bed_to_gff(bed_df::DataFrames.DataFrame; source::String="bed_to_gff", feature_type::String="feature")
+
+Converts a BED `DataFrame` to a GFF3-compatible `DataFrame`.
+
+This function creates a new DataFrame with columns corresponding to the GFF3 specification.
+It converts coordinates from BED's 0-based system to GFF's 1-based system.
+The 'attributes' column is constructed using the 'name' column from the BED data if available.
+
+# Arguments
+- `bed_df::DataFrames.DataFrame`: A DataFrame with BED data, typically from `read_bed`.
+- `source::String`: The source value to use in the second column of the GFF DataFrame.
+- `feature_type::String`: The feature type to use in the third column of the GFF DataFrame.
+
+# Returns
+- `DataFrames.DataFrame`: A new DataFrame representing the data in GFF format.
+"""
+function bed_to_gff(bed_df::DataFrames.DataFrame; source::String="bed_to_gff", feature_type::String="feature")
+    # Initialize the GFF DataFrame with required columns, using Symbols for special names
+    gff_df = DataFrames.DataFrame(
+        Symbol("#seqid") => bed_df.chrom,
+        :source => source,
+        :type => feature_type,
+        :start => bed_df.chromStart .+ 1, # Convert from 0-based (BED) to 1-based (GFF)
+        :end => bed_df.chromEnd,          # Use :end as the column name for the stop coordinate
+        :score => ".",
+        :strand => ".",
+        :phase => ".",
+        :attributes => ""
+    )
+
+    # Populate optional columns if they exist in the source BED DataFrame
+    if DataFrames.hasproperty(bed_df, :score)
+        # Ensure score is a string or "."
+        gff_df.score = [s === missing ? "." : string(s) for s in bed_df.score]
+    end
+
+    if DataFrames.hasproperty(bed_df, :strand)
+        # Ensure strand is a string or "."
+        gff_df.strand = [s === missing ? "." : s for s in bed_df.strand]
+    end
+
+    # Construct the attributes column (9th column)
+    # GFF attributes are a semicolon-separated list of tag=value pairs.
+    if DataFrames.hasproperty(bed_df, :name)
+        # Use the 'name' column for the feature ID if it exists
+        gff_df.attributes = "ID=" .* bed_df.name
+    else
+        # Otherwise, create a unique ID from the feature's coordinates
+        gff_df.attributes = "ID=" .* gff_df[!, Symbol("#seqid")] .* ":" .* string.(gff_df.start) .* "-" .* string.(gff_df[!, :end])
+    end
+    
+    return gff_df
 end
