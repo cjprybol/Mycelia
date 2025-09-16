@@ -86,6 +86,7 @@ Tar = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
 UMAP = "c4f8c510-2410-5be4-91d7-4fbaeb39457e"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 XAM = "d759349c-bcba-11e9-07c2-5b90f8f05f7c"
+XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
 XMLDict = "228000da-037f-5747-90a9-8195ccbf91a5"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 

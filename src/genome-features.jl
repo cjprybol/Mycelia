@@ -57,9 +57,6 @@
 #     return table
 # end
 
-import DocStringExtensions
-import DataFrames
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -69,6 +66,7 @@ Update GFF annotations using a pre-loaded DataFrame of MMseqs2 results.
 - `gff_file::String`: Path to input GFF3 format file.
 - `mmseqs_results::DataFrames.DataFrame`: DataFrame of MMseqs2 easy-search results.
 - `id_map::Union{Dict{String, String}, Nothing}=nothing`: Optional dictionary mapping original GFF IDs to normalized IDs.
+- `no_hit_label::String="No Hit"`: Label to apply to annotations with no matching result in the mmseqs_results
 
 # Returns
 - `DataFrame`: Modified GFF table with updated attribute columns.
@@ -86,7 +84,8 @@ function update_gff_with_mmseqs(
     ;
     gff_file::String,
     mmseqs_results::DataFrames.DataFrame,
-    id_map::Union{Dict{String, String}, Nothing}=nothing
+    id_map::Union{Dict{String, String}, Nothing}=nothing,
+    no_hit_label::String="No Hit"
 )
 
     # This inner function extracts the cluster name and normalizes it for the 'label'
@@ -128,10 +127,12 @@ function update_gff_with_mmseqs(
         
         if info !== nothing
             product, normalized_label = info
-            
-            # Prepend the new label and product attributes to the existing attributes
-            gff_table[i, "attributes"] = "label=\"$(normalized_label)\";product=\"$(product)\";" * row.attributes
+        else
+            product = no_hit_label
+            normalized_label = no_hit_label
         end
+        # Prepend the new label and product attributes to the existing attributes
+        gff_table[i, "attributes"] = "label=\"$(normalized_label)\";product=\"$(product)\";" * row.attributes
     end
     return gff_table
 end

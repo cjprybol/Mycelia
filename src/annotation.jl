@@ -2231,18 +2231,22 @@ Parameters:
 - threads: Number of CPU threads for padloc.
 - cleanup_on_failure::Bool: If true, and the output directory did not exist prior to this call, it will be removed on failure.
 - return_error::Bool: If true, errors are captured and returned; if false, the error is rethrown after cleanup.
+- verbose::Bool: If false (default), suppress stdout/stderr from the padloc command unless it fails.
 """
 function run_padloc(; fasta_file,
                      outdir = replace(fasta_file, Mycelia.FASTA_REGEX => "") * "_padloc",
                      threads = Sys.CPU_THREADS,
                      cleanup_on_failure::Bool = true,
-                     return_error::Bool = true)
+                     return_error::Bool = true,
+                     verbose::Bool = false)
 
     padloc_outfile = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "") * "_padloc.csv")
     pre_existing_outdir = isdir(outdir)
 
     if isfile(padloc_outfile)
-        @info "$(padloc_outfile) already present"
+        if verbose
+            @info "$(padloc_outfile) already present"
+        end
         padloc_faa = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa"))
         padloc_gff = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff"))
         padloc_domtblout = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout"))
@@ -2270,7 +2274,9 @@ function run_padloc(; fasta_file,
         temp_dir = mktempdir()
         temp_fname = replace(basename(fasta_file), compressed_ext_regex => "")
         temp_fasta = joinpath(temp_dir, temp_fname)
-        @info "Detected compressed FASTA; creating temporary uncompressed copy at $(temp_fasta)"
+        if verbose
+            @info "Detected compressed FASTA; creating temporary uncompressed copy at $(temp_fasta)"
+        end
 
         open(temp_fasta, "w") do io
             lf = lowercase(fasta_file)
@@ -2292,15 +2298,48 @@ function run_padloc(; fasta_file,
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(input_fasta) --outdir $(outdir) --cpu $(threads)`
     run_error = nothing
 
+    stdout_str = ""
+    stderr_str = ""
+
     try
-        run(cmd)
+        if verbose
+            run(cmd)
+        else
+            out_pipe = Pipe()
+            err_pipe = Pipe()
+
+            process = run(pipeline(cmd, stdout=out_pipe, stderr=err_pipe), wait=false)
+            close(out_pipe.in)
+            close(err_pipe.in)
+
+            stdout_task = @async read(out_pipe, String)
+            stderr_task = @async read(err_pipe, String)
+            
+            wait(process) # Throws ProcessFailedException on non-zero exit
+
+            stdout_str = fetch(stdout_task)
+            stderr_str = fetch(stderr_task)
+        end
     catch err
         run_error = err
-        @error "padloc command failed" fasta_file=fasta_file outdir=outdir cmd=string(cmd) error=err
+        
+        # If we were capturing output, fetch it for the log.
+        # This check is needed because tasks might not be defined if `verbose=true`.
+        if @isdefined(stdout_task)
+            stdout_str = fetch(stdout_task)
+        end
+        if @isdefined(stderr_task)
+            stderr_str = fetch(stderr_task)
+        end
+
+        @error "padloc command failed" fasta_file=fasta_file outdir=outdir cmd=string(cmd) error=err stdout=stdout_str stderr=stderr_str
+
         if cleanup_on_failure && !pre_existing_outdir && isdir(outdir)
             try
                 rm(outdir; force=true, recursive=true)
-                @info "Removed output directory after failure: $(outdir)"
+                if verbose
+                    @info "Removed output directory after failure: $(outdir)"
+                end
             catch cleanup_err
                 @warn "Failed to remove output directory after failure" outdir=outdir cleanup_error=cleanup_err
             end
@@ -2312,7 +2351,9 @@ function run_padloc(; fasta_file,
         if is_compressed && temp_dir != ""
             try
                 rm(temp_dir; force=true, recursive=true)
-                @info "Removed temporary directory $(temp_dir)"
+                if verbose
+                    @info "Removed temporary directory $(temp_dir)"
+                end
             catch err
                 @warn "Failed to remove temporary files at $(temp_dir)" error=err
             end

@@ -13,8 +13,6 @@ and the value is the corresponding DataFrame.
 - `NamedTuple`: Named tuple with sheet names as keys and DataFrames as values
 """
 function read_xlsx(filename::AbstractString)
-    import XLSX
-    import DataFrames
     
     # Ensure filename ends with .xlsx
     filename = _ensure_xlsx_extension(filename)
@@ -49,8 +47,6 @@ Write one or more DataFrames to an XLSX file with multiple sheets.
 - `dataframes...`: Variable number of arguments that can be DataFrames or Pairs of sheet_name => dataframe
 """
 function write_xlsx(filename::AbstractString, dataframes...)
-    import XLSX
-    import DataFrames
     
     # Ensure filename ends with .xlsx
     filename = _ensure_xlsx_extension(filename)
@@ -150,7 +146,6 @@ end
 Internal function to process variable arguments for write_xlsx function.
 """
 function _process_dataframe_args(dataframes...)
-    import DataFrames
     
     sheets = Pair{String, DataFrames.DataFrame}[]
     auto_sheet_counter = 1
