@@ -356,6 +356,72 @@ function get_gff(;db=""::String, accession=""::String, ftp=""::String)
 end
 
 """
+    append_suffix_to_gff_id_final(gff_df::DataFrames.DataFrame; suffix::Union{String, Nothing}=nothing)
+
+Correctly parses a GFF attributes column by splitting it into key-value pairs
+before appending a suffix to the primary ID tag. This is robust against ID-like
+substrings appearing inside quoted values.
+
+# Arguments
+- `gff_df::DataFrames.DataFrame`: DataFrame with GFF data, must have an "attributes" column.
+
+# Keyword Arguments
+- `suffix::Union{String, Nothing}=nothing`: Suffix to append. Defaults to row number if nothing.
+
+# Returns
+- `DataFrames.DataFrame`: A new DataFrame with correctly modified IDs.
+"""
+function append_suffix_to_gff_id(gff_df::DataFrames.DataFrame; suffix::Union{String, Nothing}=nothing)
+    modified_df = deepcopy(gff_df)
+
+    if !("attributes" in DataFrames.names(modified_df))
+        error("Input DataFrame must contain a column named 'attributes'.")
+    end
+
+    for i in 1:DataFrames.nrow(modified_df)
+        attributes_str = modified_df[i, :attributes]
+        
+        # Step 1: Split the string into individual "key=value" parts. This is the key fix.
+        parts = split(attributes_str, ';')
+        
+        id_found_and_modified = false
+        # Step 2: Iterate through the parts to find the correct ID tag.
+        for (j, part) in enumerate(parts)
+            # Use strip() to handle any potential whitespace around the key=value pair
+            # Use startswith() to reliably find the primary ID tag for the feature.
+            if startswith(strip(part), "ID=")
+                
+                # Determine the suffix to use
+                current_suffix = suffix === nothing ? "_$(i)" : suffix
+                
+                # Step 3: Modify only this part of the array
+                parts[j] = part * current_suffix
+                
+                id_found_and_modified = true
+                
+                # Once we find and modify the ID, we can stop searching this row's attributes.
+                break 
+            end
+        end
+        
+        # Step 4: If we made a change, join the parts back together.
+        if id_found_and_modified
+            modified_df[i, :attributes] = join(parts, ';')
+        else
+            # Optional warning if a row that should have an ID doesn't
+            if "type" in DataFrames.names(modified_df)
+                row_type = modified_df[i, :type]
+                if row_type in ["gene", "Gene", "CDS", "mRNA"]
+                    @warn "Row $i (type: $row_type) did not contain a parsable 'ID=' tag."
+                end
+            end
+        end
+    end
+
+    return modified_df
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert FASTA sequence and GFF annotation files to GenBank format using EMBOSS seqret.

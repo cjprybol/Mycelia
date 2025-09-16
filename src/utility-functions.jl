@@ -1,4 +1,187 @@
 """
+    read_xlsx(filename::AbstractString) -> NamedTuple
+
+Read all sheets from an XLSX file into a NamedTuple of DataFrames.
+
+Each sheet becomes a field in the NamedTuple where the field name is the sheet name
+and the value is the corresponding DataFrame.
+
+# Arguments
+- `filename::AbstractString`: Path to the XLSX file
+
+# Returns
+- `NamedTuple`: Named tuple with sheet names as keys and DataFrames as values
+"""
+function read_xlsx(filename::AbstractString)
+    import XLSX
+    import DataFrames
+    
+    # Ensure filename ends with .xlsx
+    filename = _ensure_xlsx_extension(filename)
+    
+    # Open the XLSX file
+    xf = XLSX.readxlsx(filename)
+    
+    # Get all sheet names
+    sheet_names = XLSX.sheetnames(xf)
+    
+    # Read each sheet into a DataFrame
+    dataframes = []
+    symbols = Symbol[]
+    
+    for sheet_name in sheet_names
+        df = DataFrames.DataFrame(XLSX.readtable(filename, sheet_name)...)
+        push!(dataframes, df)
+        push!(symbols, Symbol(sheet_name))
+    end
+    
+    # Create and return named tuple
+    return NamedTuple{Tuple(symbols)}(dataframes)
+end
+
+"""
+    write_xlsx(filename::AbstractString, dataframes...)
+
+Write one or more DataFrames to an XLSX file with multiple sheets.
+
+# Arguments
+- `filename::AbstractString`: Path for the output XLSX file
+- `dataframes...`: Variable number of arguments that can be DataFrames or Pairs of sheet_name => dataframe
+"""
+function write_xlsx(filename::AbstractString, dataframes...)
+    import XLSX
+    import DataFrames
+    
+    # Ensure filename ends with .xlsx
+    filename = _ensure_xlsx_extension(filename)
+    
+    # Process arguments to extract sheet names and dataframes
+    sheets = _process_dataframe_args(dataframes...)
+    
+    # Create new XLSX file
+    XLSX.openxlsx(filename, mode="w") do xf
+        # Remove default sheet if it exists
+        if "Sheet1" in XLSX.sheetnames(xf)
+            XLSX.delete!(xf, "Sheet1")
+        end
+        
+        for (sheet_name, df) in sheets
+            sheet = XLSX.addsheet!(xf, sheet_name)
+            
+            # Write headers
+            col_names = DataFrames.names(df)
+            for (col_idx, col_name) in enumerate(col_names)
+                sheet[1, col_idx] = string(col_name)
+            end
+            
+            # Write data
+            for row_idx in 1:DataFrames.nrow(df)
+                for (col_idx, col_name) in enumerate(col_names)
+                    value = df[row_idx, col_name]
+                    # Handle missing values
+                    if DataFrames.ismissing(value)
+                        sheet[row_idx + 1, col_idx] = ""
+                    else
+                        sheet[row_idx + 1, col_idx] = value
+                    end
+                end
+            end
+        end
+    end
+    
+    println("Successfully wrote $(length(sheets)) sheet(s) to $filename")
+end
+
+"""
+    write_xlsx_single(filename::AbstractString, dataframe; sheet_name::AbstractString="Sheet1")
+
+Convenience function to write a single DataFrame to an XLSX file.
+
+# Arguments
+- `filename::AbstractString`: Path for the output XLSX file
+- `dataframe`: DataFrame to write
+- `sheet_name::AbstractString`: Name for the sheet (default: "Sheet1")
+"""
+function write_xlsx_single(filename::AbstractString, dataframe; sheet_name::AbstractString="Sheet1")
+    write_xlsx(filename, sheet_name => dataframe)
+end
+
+"""
+    write_xlsx_single(filename::AbstractString, sheet_pair::Pair)
+
+Convenience function to write a single DataFrame with custom sheet name using pair syntax.
+
+# Arguments
+- `filename::AbstractString`: Path for the output XLSX file
+- `sheet_pair::Pair`: Pair of sheet_name => dataframe
+"""
+function write_xlsx_single(filename::AbstractString, sheet_pair::Pair)
+    write_xlsx(filename, sheet_pair)
+end
+
+# Helper functions
+
+"""
+Internal function to ensure filename has .xlsx extension and warn about other extensions.
+"""
+function _ensure_xlsx_extension(filename::AbstractString)
+    # Check for other common tabular data extensions
+    other_extensions = [".csv", ".tsv", ".txt", ".tab"]
+    filename_lower = lowercase(filename)
+    
+    for ext in other_extensions
+        if endswith(filename_lower, ext)
+            @warn "File extension '$ext' detected. This function works with Excel files (.xlsx). " *
+                  "Converting extension to .xlsx"
+            filename = filename[1:end-length(ext)] * ".xlsx"
+            return filename
+        end
+    end
+    
+    # Add .xlsx if not present
+    if !endswith(filename_lower, ".xlsx")
+        filename = filename * ".xlsx"
+    end
+    
+    return filename
+end
+
+"""
+Internal function to process variable arguments for write_xlsx function.
+"""
+function _process_dataframe_args(dataframes...)
+    import DataFrames
+    
+    sheets = Pair{String, DataFrames.DataFrame}[]
+    auto_sheet_counter = 1
+    
+    for arg in dataframes
+        if isa(arg, DataFrames.DataFrame)
+            # Auto-generate sheet name
+            sheet_name = "Sheet$auto_sheet_counter"
+            push!(sheets, sheet_name => arg)
+            auto_sheet_counter += 1
+        elseif isa(arg, Pair)
+            # Custom sheet name provided
+            sheet_name, df = arg
+            if !isa(df, DataFrames.DataFrame)
+                error("Value in pair must be a DataFrame, got $(typeof(df))")
+            end
+            push!(sheets, string(sheet_name) => df)
+        else
+            error("Arguments must be DataFrames or Pairs of sheet_name => dataframe, got $(typeof(arg))")
+        end
+    end
+    
+    if isempty(sheets)
+        error("At least one DataFrame must be provided")
+    end
+    
+    return sheets
+end
+
+
+"""
     sanitize_for_arrow(df::DataFrames.DataFrame) -> DataFrames.DataFrame
 
 Creates a new DataFrame with columns sanitized for Arrow compatibility.

@@ -2440,7 +2440,8 @@ function run_transterm(;fasta, gff="")
         # The `transterm` binary itself needs the fasta, but it may handle compression,
         # so we only decompress when our Julia functions require it.
         if isempty(gff) && endswith(lowercase(fasta), ".gz")
-            fasta_to_use = write_fasta(records=collect(open_fastx(fasta)), gzip=false)
+            temp_fasta_path = write_fasta(records=collect(open_fastx(fasta)), gzip=false)
+            fasta_to_use = temp_fasta_path
         end
 
         if isempty(gff)
@@ -2459,7 +2460,18 @@ function run_transterm(;fasta, gff="")
         # Note: We pass the original `fasta` path to the command, assuming `transterm`
         # can handle it (even if compressed). We only needed `fasta_to_use` for the
         # Julia-side coordinate generation.
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta_to_use) $(coordinates)`, transterm_calls_file))
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta_to_use) $(coordinates)`
+        stderr_buffer = IOBuffer()
+        
+        # The stdout of the process is redirected to `transterm_calls_file`.
+        # The stderr is captured in `stderr_buffer`.
+        process = run(pipeline(cmd, stdout=transterm_calls_file, stderr=stderr_buffer), wait=false)
+        wait(process)
+
+        if !success(process)
+            stderr_output = String(take!(stderr_buffer))
+            error("TransTermHP failed with exit code $(process.exitcode):\n$stderr_output")
+        end
     finally
         # Cleanup temporary files
         if !isempty(coordinates) && isfile(coordinates)
@@ -2659,6 +2671,7 @@ Handles gzip-compressed input files by decompressing them to a temporary locatio
     - `"O"`: Other organellar.
     - `"M mammal"` or `"M vert"`: Mitochondrial models.
 - `force::Bool`: If true, forces a rerun even if all output files already exist. Defaults to `false`.
+- `verbose::Bool`: If true, prints info messages and command output. Defaults to `false`.
 
 # Returns
 - `NamedTuple`: A named tuple containing the paths to all generated files and the output directory: `(out, bed, fasta, structure, stats, log, outdir)`.
@@ -2677,7 +2690,7 @@ Creates the following files in `outdir`:
 - Checks for the existence of expected output files to determine if the process should be skipped.
 - Cleans up partially generated files if the `tRNAscan-SE` command fails.
 """
-function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan", model::String="G", force::Bool=false)
+function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan", model::String="G", force::Bool=false, verbose::Bool=false)
     Mycelia.add_bioconda_env("trnascan-se")
 
     if !ispath(outdir)
@@ -2698,7 +2711,9 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
     all_files_exist = all(ispath, values(output_files))
 
     if all_files_exist && !force
-        @info "All output files already exist in $(outdir). Skipping tRNAscan-SE run. Use `force=true` to rerun."
+        if verbose
+            @info "All output files already exist in $(outdir). Skipping tRNAscan-SE run. Use `force=true` to rerun."
+        end
         return (; output_files..., outdir=outdir)
     end
     
@@ -2708,7 +2723,9 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
     try
         # Handle compressed input file
         if endswith(fna_file, ".gz")
-            @info "Input file is gzipped. Decompressing to a temporary file."
+            if verbose
+                @info "Input file is gzipped. Decompressing to a temporary file."
+            end
             temp_fna_path, temp_io = mktemp()
             close(temp_io) # Immediately close the stream from mktemp
 
@@ -2742,10 +2759,25 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
         ])
 
         trnascan_cmd = Cmd(cmd_parts)
-        @info "Running tRNAscan-SE command:" trnascan_cmd
+        if verbose
+            @info "Running tRNAscan-SE command:" trnascan_cmd
+        end
 
         try
-            run(trnascan_cmd)
+            if verbose
+                run(trnascan_cmd)
+            else
+                stderr_buffer = IOBuffer()
+                # Redirect stdout to devnull and capture stderr
+                process = run(pipeline(trnascan_cmd, stdout=devnull, stderr=stderr_buffer), wait=false)
+                wait(process)
+                
+                if !success(process)
+                    stderr_output = String(take!(stderr_buffer))
+                    # Throw a more informative error including stderr
+                    error("tRNAscan-SE failed with exit code $(process.exitcode). Stderr:\n$stderr_output")
+                end
+            end
         catch e
             @error "tRNAscan-SE failed. Cleaning up partial results."
             for file_path in values(output_files)
@@ -2759,7 +2791,9 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
     finally
         # Cleanup the temporary file if it was created
         if !isempty(temp_fna_path) && ispath(temp_fna_path)
-            @info "Cleaning up temporary file: $(temp_fna_path)"
+            if verbose
+                @info "Cleaning up temporary file: $(temp_fna_path)"
+            end
             rm(temp_fna_path)
         end
     end
@@ -3176,20 +3210,41 @@ Parses TransTerm output and generates a standardized GFF3 file with the followin
 """
 function transterm_output_to_gff(transterm_output)
     transterm_table = parse_transterm_output(transterm_output)
-    transterm_table[!, "source"] .= "transterm"
-    transterm_table[!, "type"] .= "terminator"
-    transterm_table[!, "phase"] .= "."
-    transterm_table[!, "attributes"] = map(x -> "label=" * replace(x, " " => "_"), transterm_table[!, "term_id"])
-    DataFrames.rename!(transterm_table,
-        ["chromosome" => "#seqid",
+    
+    final_gff_table = if DataFrames.nrow(transterm_table) == 0
+        # If the input table is empty, create an empty DataFrame with the correct GFF columns and types.
+        DataFrames.DataFrame(
+            "#seqid" => String[],
+            "source" => String[],
+            "type" => String[],
+            "start" => Int[],
+            "end" => Int[],
+            "score" => Float64[],
+            "strand" => String[],
+            "phase" => String[],
+            "attributes" => String[]
+        )
+    else
+        # If there is data, process it as before.
+        transterm_table[!, "source"] .= "transterm"
+        transterm_table[!, "type"] .= "terminator"
+        transterm_table[!, "phase"] .= "."
+        transterm_table[!, "attributes"] = map(x -> "label=" * replace(x, " " => "_"), transterm_table[!, "term_id"])
+        DataFrames.rename!(transterm_table,
+            "chromosome" => "#seqid",
             "stop" => "end",
             "confidence" => "score",
-        ]
-    )
-    transterm_table = transterm_table[!, ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]]
-    transterm_gff = write_gff(gff=transterm_table, outfile=transterm_output * ".gff")
-    uCSV.write(transterm_gff, transterm_table, delim='\t')
-    return transterm_gff
+        )
+        # Select and reorder columns for the final GFF structure.
+        transterm_table[!, ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]]
+    end
+
+    transterm_gff_path = transterm_output * ".gff"
+    # Write the resulting DataFrame (either with data or empty with correct columns) to a GFF file.
+    # uCSV will correctly write just the header if the DataFrame is empty.
+    uCSV.write(transterm_gff_path, final_gff_table, delim='\t')
+    
+    return transterm_gff_path
 end
 
 """
