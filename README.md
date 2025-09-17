@@ -16,21 +16,9 @@ Mycelia is a Julia package for bioinformatics and computational biology that imp
 ## Quick Start
 
 ```julia
-# Install Mycelia
 import Pkg
 Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
-
-# Run your first analysis
 import Mycelia
-
-# Download a reference genome (phiX174 bacteriophage)
-genome_file = Mycelia.download_genome_by_accession(accession="NC_001422.1")
-
-# Generate test reads from the reference
-reads_file = Mycelia.simulate_pacbio_reads(fasta=genome_file, quantity="50x")
-
-# Assemble the genome
-assembly = Mycelia.assemble_genome(reads_file)
 ```
 
 ## Key Features
