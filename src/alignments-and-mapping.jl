@@ -597,40 +597,124 @@ function minimap_map(;
         as_string=false,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
         threads=Sys.CPU_THREADS,
-        denominator=DEFAULT_MINIMAP_DENOMINATOR
+        denominator=DEFAULT_MINIMAP_DENOMINATOR,
+        output_format="bam",
+        sorted=true,
+        quiet=true
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    @assert output_format in ["sam", "sam.gz", "bam"] "output_format must be 'sam', 'sam.gz', or 'bam'"
+
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    # temp_sam_outfile = fastq * "." * basename(fasta) * "." * "minimap2.sam"
-    # outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-    outfile = fastq * "." * basename(fasta) * ".minimap2.sorted.bam"
+
+    # Construct output filename based on format
+    base_name = fastq * "." * basename(fasta) * ".minimap2"
+    if sorted
+        base_name *= ".sorted"
+    end
+    outfile = base_name * "." * output_format
+
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
-    # Mycelia.add_bioconda_env("pigz")
-    # if as_string
-    #     cmd =
-    #     """
-    #     $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-    #     && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-    #     """
-    # else
-    #     map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-    #     compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-    #     cmd = pipeline(map, compress)
-    # end
-    if as_string
-        cmd =
-        """
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
-        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
-        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
-        """
-    else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
-        sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -`
-        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
-        cmd = pipeline(map, sort_cmd, compress)
+
+    # Build command based on output format
+    if output_format == "sam"
+        # Direct SAM output
+        if as_string
+            if sorted
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
+                """
+            else
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)
+                """
+            end
+        else
+            if sorted
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
+                cmd = pipeline(map_cmd, sort_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            else
+                if quiet
+                    cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)`, stdout=devnull, stderr=devnull)
+                else
+                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)`
+                end
+            end
+        end
+
+    elseif output_format == "sam.gz"
+        # Gzipped SAM output using samtools for proper BGZF compression
+        if as_string
+            if sorted
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -
+                """
+            else
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -
+                """
+            end
+        else
+            if sorted
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -`
+                cmd = pipeline(map_cmd, sort_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            else
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -`
+                cmd = pipeline(map_cmd, view_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            end
+        end
+
+    else  # output_format == "bam"
+        # BAM output (default behavior)
+        if as_string
+            if sorted
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                """
+            else
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                """
+            end
+        else
+            if sorted
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -`
+                compress_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
+                cmd = pipeline(map_cmd, sort_cmd, compress_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            else
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                compress_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
+                cmd = pipeline(map_cmd, compress_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            end
+        end
     end
+
     return (;cmd, outfile)
 end
 

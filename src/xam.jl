@@ -10,6 +10,38 @@ Returns:
 - A DataFrame containing all record data in a structured format
 """
 function xam_to_dataframe(reader::XAM.SAM.Reader)::DataFrames.DataFrame
+    return _xam_to_dataframe_common(reader, XAM.SAM)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert SAM/BAM records from a XAM.BAM.Reader into a DataFrame.
+
+Parameters:
+- `reader`: A XAM.BAM.Reader object for iterating over records
+
+Returns:
+- A DataFrame containing all record data in a structured format
+"""
+function xam_to_dataframe(reader::XAM.BAM.Reader)::DataFrames.DataFrame
+    return _xam_to_dataframe_common(reader, XAM.BAM)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Common implementation for converting XAM records to DataFrame.
+Handles both SAM and BAM readers using the appropriate module.
+
+Parameters:
+- `reader`: A XAM reader object (SAM or BAM)
+- `MODULE`: XAM.SAM or XAM.BAM module to use for record parsing
+
+Returns:
+- A DataFrame containing all record data in a structured format
+"""
+function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
     # Define empty vectors for each column
     templates = String[]
     ismapped = Bool[]
@@ -22,7 +54,6 @@ function xam_to_dataframe(reader::XAM.SAM.Reader)::DataFrames.DataFrame
     rnexts = Union{String, Missing}[]
     pnexts = Union{Int, Missing}[]
     tlens = Union{Int, Missing}[]
-    seqs = String[]
     seqs = Union{Nothing, BioSequences.LongSequence{BioSequences.DNAAlphabet{4}}}[]
     quals = Union{Missing, Vector{UInt8}}[]
     alignlengths = Union{Int, Missing}[]
@@ -33,112 +64,112 @@ function xam_to_dataframe(reader::XAM.SAM.Reader)::DataFrames.DataFrame
     # Process each record
     for record in reader
         try
-            push!(templates, XAM.SAM.tempname(record))
+            push!(templates, MODULE.tempname(record))
         catch err
             println("Error extracting tempname from record: ", record)
             rethrow(err)
         end
-        
+
         try
-            push!(ismapped, XAM.SAM.ismapped(record))
+            push!(ismapped, MODULE.ismapped(record))
         catch err
             println("Error extracting ismapped from record: ", record)
             rethrow(err)
         end
-        
+
         try
-            push!(isprimary, XAM.SAM.isprimary(record))
+            push!(isprimary, MODULE.isprimary(record))
         catch err
             println("Error extracting isprimary from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(flags, XAM.SAM.flag(record))
+            push!(flags, MODULE.flag(record))
         catch err
             println("Error extracting flag from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(references, XAM.SAM.ismapped(record) ? XAM.SAM.refname(record) : missing)
+            push!(references, MODULE.ismapped(record) ? MODULE.refname(record) : missing)
         catch err
             println("Error extracting refname from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(positions, XAM.SAM.position(record):XAM.SAM.rightposition(record))
+            push!(positions, MODULE.position(record):MODULE.rightposition(record))
         catch err
             println("Error extracting positions from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(mappingqualities, XAM.SAM.mappingquality(record))
+            push!(mappingqualities, MODULE.mappingquality(record))
         catch err
             println("Error extracting mappingquality from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(cigars, XAM.SAM.cigar(record))
+            push!(cigars, MODULE.cigar(record))
         catch err
             println("Error extracting cigar from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(rnexts, XAM.SAM.nextposition(record) == 0 ? missing : XAM.SAM.nextrefname(record))
+            push!(rnexts, MODULE.nextposition(record) == 0 ? missing : MODULE.nextrefname(record))
         catch err
             println("Error extracting rnext from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(pnexts, XAM.SAM.nextposition(record))
+            push!(pnexts, MODULE.nextposition(record))
         catch err
             println("Error extracting pnext from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(tlens, XAM.SAM.templength(record))
+            push!(tlens, MODULE.templength(record))
         catch err
             println("Error extracting templength from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(seqs, XAM.SAM.sequence(record))
+            push!(seqs, MODULE.sequence(record))
         catch err
             println("Error extracting sequence from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(quals, XAM.SAM.isprimary(record) ? XAM.SAM.quality(record) : missing)
+            push!(quals, MODULE.isprimary(record) ? MODULE.quality(record) : missing)
         catch err
             println("Error extracting quality from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(alignlengths, XAM.SAM.alignlength(record))
+            push!(alignlengths, MODULE.alignlength(record))
         catch err
             println("Error extracting alignlength from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(alignment_score, XAM.SAM.ismapped(record) ? record["AS"] : missing)
+            push!(alignment_score, MODULE.ismapped(record) ? record["AS"] : missing)
         catch err
             println("Error extracting alignment_score from record: ", record)
             rethrow(err)
         end
 
         try
-            push!(mismatches,  XAM.SAM.ismapped(record) ? record["NM"] : missing)
+            push!(mismatches,  MODULE.ismapped(record) ? record["NM"] : missing)
         catch err
             println("Error extracting mismatches from record: ", record)
             rethrow(err)
@@ -225,17 +256,187 @@ Returns:
 - A DataFrame containing the parsed data
 """
 function xam_to_dataframe(xam_path::String)::DataFrames.DataFrame
-    return xam_to_dataframe(open_xam(xam_path))    
+    reader = open_xam(xam_path)
+    try
+        return xam_to_dataframe(reader)
+    finally
+        close(reader)
+    end
 end
 
-function open_xam(xam; header=false)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Open a XAM (SAM/BAM/CRAM) file with the specified parser.
+
+# Arguments
+- `xam`: Path to the XAM file
+- `header::Bool=false`: Whether to include header information
+- `parser::Symbol=:auto`: Parser to use (:auto, :xamjl, :samtools)
+  - `:auto`: Automatically choose parser based on file format detection
+  - `:xamjl`: Use XAM.jl direct parsing (supports SAM, SAM.gz, BAM)
+  - `:samtools`: Use samtools view (supports SAM, BAM, CRAM)
+
+# Returns
+- XAM.SAM.Reader or XAM.BAM.Reader object for reading records
+
+# Details
+- `:auto` detects file format by examining file headers and chooses appropriate parser
+- XAM.jl parser is faster for direct file access and supports SAM, SAM.gz, and BAM
+- samtools parser handles all formats including CRAM and provides additional validation
+- samtools parser always returns XAM.SAM.Reader regardless of input format
+"""
+function open_xam(xam; header=false, parser=:auto)
+    if !isfile(xam)
+        error("File not found: ", xam)
+    end
+    if filesize(xam) == 0
+        error("File is empty: ", xam)
+    end
+
+    # Determine parser to use - samtools is more robust and handles all formats
+    if parser == :auto
+        parser = :samtools
+    end
+
+    if parser == :xamjl
+        return open_xam_xamjl(xam; header=header)
+    elseif parser == :samtools
+        return open_xam_samtools(xam; header=header)
+    else
+        error("Invalid parser: $parser. Use :auto, :xamjl, or :samtools")
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Detect the format of a XAM file by examining its header bytes.
+
+# Arguments
+- `xam`: Path to the XAM file
+
+# Returns
+- Symbol indicating format: :sam, :sam_gz, :bam, :cram, or :unknown
+"""
+function detect_xam_format(xam)
+    # First check file extension for disambiguation of BGZF formats
+    ext = lowercase(splitext(xam)[2])
+    filename_lower = lowercase(xam)
+
+    # Check for compressed SAM formats by extension first
+    if endswith(filename_lower, ".sam.gz") || endswith(filename_lower, ".sam.bgz") || ext == ".bgz"
+        return :sam_gz
+    elseif ext == ".bam"
+        return :bam
+    elseif ext == ".cram"
+        return :cram
+    elseif ext == ".sam"
+        return :sam
+    end
+
+    # If extension is ambiguous, check magic bytes
+    open(xam, "r") do io
+        # Read first few bytes to identify format
+        header = read(io, min(8, filesize(xam)))
+
+        if length(header) >= 4
+            # CRAM format: starts with "CRAM"
+            if length(header) >= 4 && String(header[1:4]) == "CRAM"
+                return :cram
+            # BGZF compressed formats: starts with specific magic bytes
+            elseif header[1:4] == UInt8[0x1f, 0x8b, 0x08, 0x04]
+                # BGZF format - could be BAM or compressed SAM
+                # Without extension context, assume BAM (more common)
+                return :bam
+            # Standard gzip: starts with gzip magic bytes
+            elseif header[1:2] == UInt8[0x1f, 0x8b]
+                return :sam_gz
+            # SAM format: typically starts with '@' (header) or read name
+            elseif header[1] == UInt8('@')
+                return :sam
+            end
+        end
+
+        return :unknown
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Open a XAM file using XAM.jl direct parsing.
+Supports SAM, SAM.gz, and BAM files.
+Returns appropriate XAM.SAM.Reader or XAM.BAM.Reader.
+"""
+function open_xam_xamjl(xam; header=false)
+    format = detect_xam_format(xam)
+
+    try
+        if format == :sam
+            return XAM.SAM.Reader(open(xam))
+        elseif format == :sam_gz
+            ## For BGZF-compressed SAM files, use external samtools for reliable decompression
+            ## since concatenated BGZF blocks from samtools are complex to parse directly
+            try
+                Mycelia.add_bioconda_env("samtools")
+                # Create a command that pipes samtools view output to XAM.SAM.Reader
+                cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -h $(xam)`
+                return XAM.SAM.Reader(cmd)
+            catch e
+                ## If samtools approach fails, try CodecBGZF as backup
+                file_io = open(xam, "r")
+                try
+                    bgzf_io = CodecBGZF.BGZFDecompressorStream(file_io)
+                    return XAM.SAM.Reader(bgzf_io)
+                catch e2
+                    close(file_io)
+                    ## Final fallback to standard gzip
+                    file_io = open(xam, "r")
+                    gz_io = CodecZlib.GzipDecompressorStream(file_io)
+                    return XAM.SAM.Reader(gz_io)
+                end
+            end
+        elseif format == :bam
+            return XAM.BAM.Reader(open(xam))
+        else
+            error("XAM.jl parser does not support format: $format for file: $xam")
+        end
+    catch e
+        error("Invalid XAM file for XAM.jl parser: ", xam, " - ", string(e))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Open a XAM file using samtools view.
+Supports SAM, BAM, and CRAM files with validation.
+Always returns XAM.SAM.Reader regardless of input format.
+"""
+function open_xam_samtools(xam; header=false)
     Mycelia.add_bioconda_env("samtools")
+
+    # First validate the file by testing samtools can read the header
+    test_cmd = `$(Mycelia.CONDA_RUNNER) run -n samtools samtools view -H $(xam)`
+    try
+        # This will fail immediately for malformed files
+        run(test_cmd, devnull, devnull, devnull)
+    catch e
+        error("Invalid or malformed SAM/BAM/CRAM file: $(xam) - samtools cannot parse the file")
+    end
+
+    # If validation passed, create the reader
     if header
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -h $(xam)`
     else
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view $(xam)`
     end
-    return XAM.SAM.Reader(open(cmd))
+    try
+        return XAM.SAM.Reader(open(cmd))
+    catch e
+        error("Invalid SAM/BAM/CRAM file for samtools parser: ", xam, " - ", string(e))
+    end
 end
 
 """
@@ -379,12 +580,11 @@ Calculate per-base genomic coverage from a BAM file using bedtools.
 - `bam::String`: Path to input BAM file
 
 # Returns
-- `String`: Path to the generated coverage file (`.coverage.txt`)
+- `DataFrames.DataFrame`: DataFrame with columns: chromosome, position, coverage_depth
 
 # Details
-Uses bedtools genomecov to compute per-base coverage. Creates a coverage file 
-with the format: <chromosome> <position> <coverage_depth>. 
-If the coverage file already exists, returns the existing file path.
+Uses bedtools genomecov to compute per-base coverage. Creates a coverage file
+with the format: <chromosome> <position> <coverage_depth> and then reads it into a DataFrame.
 
 # Dependencies
 Requires bedtools (automatically installed in conda environment)
@@ -395,7 +595,15 @@ function determine_fasta_coverage_from_bam(bam)
     if !isfile(genome_coverage_file)
         run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
     end
-    return genome_coverage_file
+    # Read the coverage file into a DataFrame
+    if isfile(genome_coverage_file) && filesize(genome_coverage_file) > 0
+        coverage_df = CSV.read(genome_coverage_file, DataFrames.DataFrame;
+                              header=[:chromosome, :position, :coverage_depth], delim='\t')
+        return coverage_df
+    else
+        # Return empty DataFrame with expected columns if no coverage data
+        return DataFrames.DataFrame(chromosome=String[], position=Int[], coverage_depth=Int[])
+    end
 end
 
 """
