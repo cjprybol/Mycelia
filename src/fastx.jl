@@ -244,7 +244,18 @@ function normalized_table2fastx(
     end
     
     # --- 2. Determine Final Output Path ---
-    basename = isnothing(output_basename) ? table.fastx_identifier[1] : output_basename
+    local basename
+    if isnothing(output_basename)
+        if hasproperty(table, :fastx_identifier)
+            basename = table.fastx_identifier[1]
+        elseif hasproperty(table, :genome_identifier)
+            basename = table.genome_identifier[1]
+        else
+            error("Neither 'fastx_identifier' nor 'genome_identifier' columns found in the table.")
+        end
+    else
+        basename = output_basename
+    end
     final_outfile = joinpath(output_dir, basename * file_extension)
 
     if !isfile(final_outfile) || force
@@ -439,18 +450,18 @@ function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id:
 
     # --- Add New Hierarchical Identifier Columns ---
     current_columns = names(normalized_table)
-    dataset_hash = generate_joint_sequence_hash(normalized_table.sequence_hash, encoded_length=16)
+    fastx_hash = generate_joint_sequence_hash(normalized_table.sequence_hash, encoded_length=16)
 
     normalized_table[!, "human_readable_id"] .= human_readable_id
-    normalized_table[!, "dataset_hash"] .= dataset_hash
-    normalized_table[!, "dataset_identifier"] .= human_readable_id .* "_" .* dataset_hash
-    normalized_table[!, "sequence_identifier"] .= normalized_table.dataset_identifier .* "_" .* normalized_table.sequence_hash
+    normalized_table[!, "fastx_hash"] .= fastx_hash
+    normalized_table[!, "fastx_identifier"] .= human_readable_id .* "_" .* fastx_hash
+    normalized_table[!, "sequence_identifier"] .= normalized_table.fastx_identifier .* "_" .* normalized_table.sequence_hash
     @assert all(length.(normalized_table[!, "sequence_identifier"]) .<= 50) "NCBI identifier length limit of 50 characters exceeded."
     normalized_table[!, "fastx_path"] .= Base.basename(fastx_path)
 
     final_order = [
-        "fastx_path", "human_readable_id", "dataset_hash", "sequence_hash",
-        "dataset_identifier", "sequence_identifier", "record_identifier",
+        "fastx_path", "human_readable_id", "fastx_hash", "sequence_hash",
+        "fastx_identifier", "sequence_identifier", "record_identifier",
         "record_description", "record_length", "record_alphabet", "record_type",
         "mean_record_quality", "median_record_quality", "record_quality",
         "record_sequence"
