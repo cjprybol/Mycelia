@@ -188,7 +188,7 @@ function simulate_illumina_reads(;fasta::String,
     errfree::Bool = true,
     paired::Bool = true,
     rndSeed::Int = current_unix_datetime(),
-    quiet::Bool = false
+    quiet::Bool = true
     )
 
     # Ensure ART is available via Bioconda

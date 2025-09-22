@@ -80,11 +80,6 @@ function write_xlsx(filename::AbstractString, dataframes...)
     
     # Create new XLSX file
     XLSX.openxlsx(filename, mode="w") do xf
-        # Remove default sheet if it exists
-        if "Sheet1" in XLSX.sheetnames(xf)
-            XLSX.delete!(xf, "Sheet1")
-        end
-        
         for (sheet_name, df) in sheets
             sheet = XLSX.addsheet!(xf, sheet_name)
             
@@ -1776,7 +1771,7 @@ function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
     if !isfile(filepath)
         error("parse_jsonl: file not found: $filepath")
     end
-    file_stat = stat(filepath)
+    file_stat = Base.Filesystem.stat(filepath)
     if file_stat.size == 0
         error("parse_jsonl: file is empty: $filepath")
     end

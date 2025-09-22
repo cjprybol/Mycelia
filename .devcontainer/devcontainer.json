@@ -50,12 +50,12 @@
                 "GitHub.copilot",
                 "tamasfe.even-better-toml",
                 "ms-azuretools.vscode-docker",
-                "vadimcn.vscode-lldb",
-                "ms-python.autopep8",
-                "ms-python.debugpy",
-                "ms-python.vscode-pylance",
                 "google.gemini-cli-vscode-ide-companion",
-                "Anthropic.claude-code"
+                "Anthropic.claude-code",
+                "kilocode.kilo-code",
+                "ms-azuretools.vscode-containers",
+                "vscodevim.vim",
+                "DavidAnson.vscode-markdownlint"
             ]
         }
     },

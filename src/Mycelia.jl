@@ -15,11 +15,12 @@ import CairoMakie
 import Clustering
 # import CodecBase
 # import CodecBzip2
+import CodecBGZF
 import CodecZlib
 import Colors
 import ColorSchemes
-import CRC32c
 import Conda
+import CRC32c
 import CSV
 import DataFrames
 import DataStructures
@@ -34,12 +35,12 @@ import EzXML
 import FASTX
 import FileIO
 import GenomicAnnotations
-# import GeoMakie
 import GFF3
+# import GeoMakie
 import GLM
 import GraphMakie
-import Graphs
 import GraphPlot
+import Graphs
 # import HDF5
 import Hungarian
 import HTTP
@@ -56,18 +57,11 @@ import MetaGraphs
 import MetaGraphsNext
 import Mmap
 import MultivariateStats
-
-# Auto-include all Julia files in src directory
-# This ensures our next-generation modules are automatically loaded:
-# - sequence-graphs-next.jl (strand-aware k-mer graphs)
-# - gfa-io-next.jl (MetaGraphsNext GFA I/O)
-# - probabilistic-algorithms-next.jl (probabilistic walks, shortest paths)
-# - viterbi-next.jl (enhanced Viterbi with batch processing)
-# - graph-algorithms-next.jl (Eulerian paths, bubble detection, repeat resolution)
 import OrderedCollections
+import Pkg
 import Plots
-import PooledArrays
 import POMDPs
+import PooledArrays
 import Primes
 import Printf
 import ProgressMeter
@@ -87,14 +81,8 @@ import uCSV
 import UMAP
 import UUIDs
 import XAM
-import XMLDict
 import XLSX
-
-
-
-import Pkg
-# TODO remove this import and update function call usage
-import Base.Filesystem: stat
+import XMLDict
 
 # preserve definitions between code jldoctest code blocks
 # https://juliadocs.github.io/Documenter.jl/stable/man/doctests/#Preserving-Definitions-Between-Blocks
