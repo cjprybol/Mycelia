@@ -1,3 +1,27 @@
+function recursively_list_directories(dir::AbstractString)
+    directories_list = String[]
+    for (root, directories, files) in Base.walkdir(dir)
+        for d in directories
+            directory_path = joinpath(root, d)
+            # @assert isdir(directory_path)
+            push!(directories_list, directory_path)
+        end
+    end
+    return directories_list
+end
+
+function recursively_list_files(dir::AbstractString)
+    files_list = String[]
+    for (root, directories, files) in Base.walkdir(dir)
+        for f in files
+            file_path = joinpath(root, f)
+            # @assert isfile(file_path)
+            push!(files_list, file_path)
+        end
+    end
+    return files_list
+end
+
 """
     read_xlsx(filename::AbstractString) -> NamedTuple
 

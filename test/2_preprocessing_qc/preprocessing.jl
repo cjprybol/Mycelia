@@ -59,8 +59,8 @@ Test.@testset "Preprocessing" begin
         
         ## Test that we get expected columns
         expected_cols = [
-            "fastx_path", "human_readable_id", "dataset_hash", "sequence_hash",
-            "dataset_identifier", "sequence_identifier", "record_identifier",
+            "fastx_path", "human_readable_id", "fastx_hash", "sequence_hash",
+            "fastx_identifier", "sequence_identifier", "record_identifier",
             "record_description", "record_length", "record_alphabet", "record_type",
             "mean_record_quality", "median_record_quality", "record_quality",
             "record_sequence"
@@ -544,7 +544,7 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                     ## Test automatic ID extraction
                     table = Mycelia.fastx2normalized_table(filepath)
                     Test.@test table.human_readable_id[1] == expected_id
-                    Test.@test startswith(table.dataset_identifier[1], expected_id * "_")
+                    Test.@test startswith(table.fastx_identifier[1], expected_id * "_")
                     Test.@test startswith(table.sequence_identifier[1], expected_id * "_")
                 end
             end
@@ -559,7 +559,7 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 
                 table = Mycelia.fastx2normalized_table(filepath; human_readable_id="custom_id")
                 Test.@test table.human_readable_id[1] == "custom_id"
-                Test.@test startswith(table.dataset_identifier[1], "custom_id_")
+                Test.@test startswith(table.fastx_identifier[1], "custom_id_")
             end
             
             ## Test force_truncate functionality
@@ -617,18 +617,18 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 
                 ## Check that all identifiers have proper hierarchy
                 Test.@test all(table.human_readable_id .== "test_genome")
-                Test.@test all(length.(table.dataset_hash) .== 16)  ## Base58 encoded, 16 chars
+                Test.@test all(length.(table.fastx_hash) .== 16)  ## Base58 encoded, 16 chars
                 Test.@test all(length.(table.sequence_hash) .== 16)  ## Base58 encoded, 16 chars
                 
-                ## dataset_identifier = human_readable_id + "_" + dataset_hash
+                ## fastx_identifier = human_readable_id + "_" + fastx_hash
                 for row in DataFrames.eachrow(table)
-                    Test.@test row.dataset_identifier == "test_genome_" * row.dataset_hash
-                    Test.@test row.sequence_identifier == row.dataset_identifier * "_" * row.sequence_hash
+                    Test.@test row.fastx_identifier == "test_genome_" * row.fastx_hash
+                    Test.@test row.sequence_identifier == row.fastx_identifier * "_" * row.sequence_hash
                     Test.@test length(row.sequence_identifier) <= 50  ## NCBI limit
                 end
                 
-                ## All sequences should have the same dataset_identifier but different sequence_identifier
-                Test.@test length(unique(table.dataset_identifier)) == 1
+                ## All sequences should have the same fastx_identifier but different sequence_identifier
+                Test.@test length(unique(table.fastx_identifier)) == 1
                 Test.@test length(unique(table.sequence_identifier)) == 2
             end
         end
@@ -773,8 +773,8 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
             ## Updated column names for fastx2normalized_table
             norm_cols = [
-                "fastx_path", "human_readable_id", "dataset_hash", "sequence_hash",
-                "dataset_identifier", "sequence_identifier", "record_identifier",
+                "fastx_path", "human_readable_id", "fastx_hash", "sequence_hash",
+                "fastx_identifier", "sequence_identifier", "record_identifier",
                 "record_description", "record_length", "record_alphabet", "record_type",
                 "mean_record_quality", "median_record_quality", "record_quality",
                 "record_sequence"
@@ -931,12 +931,12 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 # Sequence hashes should be identical (same sequences)
                 Test.@test table1.sequence_hash == table2.sequence_hash
                 
-                # Dataset hashes should be identical (same sequence content enables deduplication)
-                Test.@test table1.dataset_hash == table2.dataset_hash
+                # fastx hashes should be identical (same sequence content enables deduplication)
+                Test.@test table1.fastx_hash == table2.fastx_hash
                 
                 # Verify hash lengths are correct (16 characters for preprocessing functions)
                 Test.@test all(length.(table1.sequence_hash) .== 16)
-                Test.@test all(length.(table1.dataset_hash) .== 16)
+                Test.@test all(length.(table1.fastx_hash) .== 16)
                 
                 # Test that identical sequences produce identical hashes
                 Test.@test length(unique(table1.sequence_hash)) == 2  # Two unique sequences
