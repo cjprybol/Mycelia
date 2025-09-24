@@ -33,7 +33,4 @@ include("4_assembly/basic_graph_tests.jl")
 # include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 
-# include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
-include("8_tool_integration/bioconda.jl")
-include("8_tool_integration/utility_functions.jl")
-include("8_tool_integration/xam.jl")
+include_all_tests(joinpath(@__DIR__, "8_tool_integration"))

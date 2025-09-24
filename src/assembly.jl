@@ -211,7 +211,7 @@ Run Flye assembler for long read assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "flye_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
 
 # Returns
@@ -225,12 +225,16 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_flye(;fastq, outdir="flye_output", genome_size, read_type="pacbio-hifi")
+function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi")
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye flye --$(read_type) $(fastq) --out-dir $(outdir) --genome-size $(genome_size) --threads $(Sys.CPU_THREADS)`)
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
     return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
 end
@@ -243,7 +247,7 @@ Run metaFlye assembler for long-read metagenomic assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "metaflye_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
 - `meta::Bool`: Enable metagenome mode (default: true)
 - `min_overlap::Int`: Minimum overlap between reads (default: auto-selected)
@@ -261,17 +265,21 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_metaflye(;fastq, outdir="metaflye_output", genome_size, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
+function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--genome-size", genome_size, "--threads", string(Sys.CPU_THREADS)]
-        
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
+
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+
         if meta
             push!(cmd_args, "--meta")
         end
-        
+
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
         end
@@ -289,7 +297,7 @@ Run Canu assembler for long read assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "canu_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio", "nanopore")
 - `stopOnLowCoverage::Integer`: Minimum coverage required to continue assembly (default: 10)
 
@@ -330,6 +338,7 @@ Run the hifiasm genome assembler on PacBio HiFi reads.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing HiFi reads
 - `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm")
+- `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
 
 # Returns
 Named tuple containing:
@@ -341,8 +350,9 @@ Named tuple containing:
 - Uses primary assembly mode (--primary) optimized for inbred samples
 - Skips assembly if output files already exist at the specified prefix
 - Utilizes all available CPU threads
+- Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
 """
-function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
+function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm", bloom_filter=-1)
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
     # Check if output directory exists before trying to read it
@@ -350,47 +360,63 @@ function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
     if isempty(hifiasm_outputs)
         mkpath(outdir)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm --primary -l0 -o $(hifiasm_outprefix) -t $(Sys.CPU_THREADS) $(fastq)`)
+        # Build command with optional bloom filter flag
+        cmd_args = ["hifiasm", "--primary", "-l0", "-o", hifiasm_outprefix, "-t", string(Sys.CPU_THREADS)]
+        if bloom_filter >= 0
+            push!(cmd_args, "-f$(bloom_filter)")
+        end
+        push!(cmd_args, fastq)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm $(cmd_args)`)
     end
     return (;outdir, hifiasm_outprefix)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# disabled due to poor performance relative to other long read metagenomic assemblers in tests
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run hifiasm-meta assembler for metagenomic PacBio HiFi assembly.
+# Run hifiasm-meta assembler for metagenomic PacBio HiFi assembly.
 
-# Arguments
-- `fastq::String`: Path to input FASTQ file containing HiFi reads
-- `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm_meta")
-- `similarity::Float64`: Similarity threshold for strain resolution (default: 0.85)
-- `purge_level::Int`: Purge level for strain variants (default: 2)
+# # Arguments
+# - `fastq::String`: Path to input FASTQ file containing HiFi reads
+# - `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm_meta")
+# - `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
+# - `read_selection::Bool`: Enable read selection for mock/small datasets (default: false)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
 
-# Details
-- Uses hifiasm-meta's string graph approach for metagenomic strain resolution
-- Implements SNV-based read phasing to separate closely related strains
-- Optimized for low-abundance species and strain-level diversity
-- Automatically creates and uses a conda environment with hifiasm
-- Skips assembly if output files already exist at the specified prefix
-- Utilizes all available CPU threads
-"""
-function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", similarity=0.85, purge_level=2)
-    Mycelia.add_bioconda_env("hifiasm")
-    hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
-    # Check if output directory exists before trying to read it
-    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
+# # Details
+# - Uses hifiasm-meta's string graph approach for metagenomic strain resolution
+# - Automatically creates and uses a conda environment with hifiasm_meta
+# - Skips assembly if output files already exist at the specified prefix
+# - Utilizes all available CPU threads
+# - Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
+# - Read selection (-S) can be enabled for mock/small datasets to handle low complexity data
+# """
+# function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloom_filter=-1, read_selection=false)
+#     Mycelia.add_bioconda_env("hifiasm_meta")
+#     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
+#     # Check if output directory exists before trying to read it
+#     hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
     
-    if isempty(hifiasm_outputs)
-        mkpath(outdir)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm-meta -t $(Sys.CPU_THREADS) -o $(hifiasm_outprefix) --purge-cov $(purge_level) --similarity $(similarity) $(fastq)`)
-    end
-    return (;outdir, hifiasm_outprefix)
-end
+#     if isempty(hifiasm_outputs)
+#         mkpath(outdir)
+#         # Build command with optional flags
+#         cmd_args = ["hifiasm_meta", "-t", string(Sys.CPU_THREADS), "-o", hifiasm_outprefix]
+#         if bloom_filter >= 0
+#             push!(cmd_args, "-f$(bloom_filter)")
+#         end
+#         if read_selection
+#             push!(cmd_args, "-S")
+#         end
+#         push!(cmd_args, fastq)
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`)
+#     end
+#     return (;outdir, hifiasm_outprefix)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

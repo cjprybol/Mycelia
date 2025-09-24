@@ -57,25 +57,26 @@ Test.@testset "Short Read Isolate Assembly" begin
                 # Clean up after test
                 rm(spades_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    SPAdes assembly failed due to resource constraints.
-                    Current test: 5kb genome, 15x coverage, ~75kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     SPAdes assembly failed due to resource constraints.
+                #     Current test: 5kb genome, 15x coverage, ~75kb total sequence data
                     
-                    Required resources for SPAdes:
-                    - Memory: ~2-4GB RAM minimum
-                    - CPU: 1-8 cores recommended
-                    - Disk: ~500MB temporary space
-                    - Note: SPAdes is designed for single isolate genome assembly
+                #     Required resources for SPAdes:
+                #     - Memory: ~2-4GB RAM minimum
+                #     - CPU: 1-8 cores recommended
+                #     - Disk: ~500MB temporary space
+                #     - Note: SPAdes is designed for single isolate genome assembly
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "SPAdes test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "SPAdes test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(spades_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -93,24 +94,25 @@ Test.@testset "Short Read Isolate Assembly" begin
                 # Clean up after test
                 rm(skesa_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    SKESA assembly failed due to resource constraints.
-                    Current test: 5kb genome, 15x coverage, ~75kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     SKESA assembly failed due to resource constraints.
+                #     Current test: 5kb genome, 15x coverage, ~75kb total sequence data
                     
-                    Required resources for SKESA:
-                    - Memory: ~500MB-1GB RAM minimum
-                    - CPU: 1-4 cores recommended
-                    - Disk: ~50MB temporary space
+                #     Required resources for SKESA:
+                #     - Memory: ~500MB-1GB RAM minimum
+                #     - CPU: 1-4 cores recommended
+                #     - Disk: ~50MB temporary space
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "SKESA test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "SKESA test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(skesa_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -204,25 +206,26 @@ Test.@testset "Short Read Isolate Assembly" begin
                 # Clean up after test
                 rm(velvet_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    Velvet assembly failed due to resource constraints.
-                    Current test: 5kb genome, 15x coverage, ~75kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     Velvet assembly failed due to resource constraints.
+                #     Current test: 5kb genome, 15x coverage, ~75kb total sequence data
                     
-                    Required resources for Velvet:
-                    - Memory: ~500MB-2GB RAM minimum
-                    - CPU: 1-4 cores recommended
-                    - Disk: ~100MB temporary space
-                    - Note: Velvet uses classic de Bruijn graph approach with velveth+velvetg
+                #     Required resources for Velvet:
+                #     - Memory: ~500MB-2GB RAM minimum
+                #     - CPU: 1-4 cores recommended
+                #     - Disk: ~100MB temporary space
+                #     - Note: Velvet uses classic de Bruijn graph approach with velveth+velvetg
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "Velvet test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "Velvet test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(velvet_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
     end
@@ -263,24 +266,25 @@ Test.@testset "Short Read Metagenomic Assembly" begin
                 # Clean up after test
                 rm(megahit_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    MEGAHIT assembly failed due to resource constraints.
-                    Current test: 5kb genome, 15x coverage, ~75kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     MEGAHIT assembly failed due to resource constraints.
+                #     Current test: 5kb genome, 15x coverage, ~75kb total sequence data
                     
-                    Required resources for MEGAHIT:
-                    - Memory: ~1-2GB RAM minimum
-                    - CPU: 1-4 cores recommended
-                    - Disk: ~100MB temporary space
+                #     Required resources for MEGAHIT:
+                #     - Memory: ~1-2GB RAM minimum
+                #     - CPU: 1-4 cores recommended
+                #     - Disk: ~100MB temporary space
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "MEGAHIT test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "MEGAHIT test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(megahit_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -301,24 +305,25 @@ Test.@testset "Short Read Metagenomic Assembly" begin
                 # Clean up after test
                 rm(spades_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    metaSPAdes assembly failed due to resource constraints.
-                    Current test: 5kb genome, 15x coverage, ~75kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     metaSPAdes assembly failed due to resource constraints.
+                #     Current test: 5kb genome, 15x coverage, ~75kb total sequence data
                     
-                    Required resources for metaSPAdes:
-                    - Memory: ~2-4GB RAM minimum
-                    - CPU: 1-4 cores recommended
-                    - Disk: ~200MB temporary space
+                #     Required resources for metaSPAdes:
+                #     - Memory: ~2-4GB RAM minimum
+                #     - CPU: 1-4 cores recommended
+                #     - Disk: ~200MB temporary space
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "metaSPAdes test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "metaSPAdes test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(spades_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
         
@@ -406,17 +411,17 @@ end
 Test.@testset "Long Read Isolate Assembly" begin
     mktempdir() do dir
         Test.@testset "Long Read Isolate Assembly - Flye" begin
-            # Test Flye - create reference genome and simulate ONT reads  
+            # Test Flye - create reference genome and simulate ONT reads
             flye_ref_fasta = joinpath(dir, "flye_isolate_ref.fasta")
             rng_flye = StableRNGs.StableRNG(456)
-            flye_genome = BioSequences.randdnaseq(rng_flye, 10000)  # 10kb genome for memory efficiency
+            flye_genome = BioSequences.randdnaseq(rng_flye, 50000)  # 50kb genome for better assembly success
             
             # Create FASTA record and write using Mycelia.write_fasta
             flye_fasta_record = FASTX.FASTA.Record("flye_isolate_genome", flye_genome)
             Mycelia.write_fasta(outfile=flye_ref_fasta, records=[flye_fasta_record])
             
-            # Simulate nanopore reads with 12x coverage (minimum for Flye)
-            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="12x", quiet=true)
+            # Simulate nanopore reads with 20x coverage (higher coverage for better assembly success)
+            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="20x", quiet=true)
             
             # Decompress for flye
             flye_fastq = joinpath(dir, "flye_reads.fq")
@@ -428,31 +433,41 @@ Test.@testset "Long Read Isolate Assembly" begin
                 rm(flye_outdir, recursive=true)
             end
             try
-                result = Mycelia.run_flye(fastq=flye_fastq, outdir=flye_outdir, genome_size="10k", read_type="nano-raw")
+                result = Mycelia.run_flye(fastq=flye_fastq, outdir=flye_outdir, read_type="nano-raw")
                 Test.@test result.outdir == flye_outdir
                 Test.@test result.assembly == joinpath(flye_outdir, "assembly.fasta")
                 Test.@test isfile(result.assembly)
                 # Clean up after test
                 rm(flye_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    Flye assembly failed due to resource constraints.
-                    Current test: 10kb genome, 12x coverage, ~120kb total sequence data
-                    
-                    Required resources for Flye:
-                    - Memory: ~1-3GB RAM minimum
-                    - CPU: 1-4 cores recommended  
-                    - Disk: ~500MB temporary space
-                    
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "Flye test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     Flye assembly failed due to resource constraints.
+                #     Current test: 50kb genome, 20x coverage, ~1MB total sequence data
+
+                #     Required resources for Flye:
+                #     - Memory: ~1-3GB RAM minimum
+                #     - CPU: 1-4 cores recommended
+                #     - Disk: ~500MB temporary space
+
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "Flye test skipped - insufficient resources"
+                # elseif contains(string(e), "No contigs were assembled") || contains(string(e), "Pipeline aborted") || contains(string(e), "assembly failed")
+                #     @warn """
+                #     Flye assembly failed to generate contigs despite increased parameters.
+                #     Current test: 50kb genome, 20x coverage, ~1MB total sequence data
+
+                #     This suggests the simulated reads may not be suitable for assembly.
+                #     Consider adjusting read simulation parameters or using different test data.
+                #     """
+                #     Test.@test_skip "Flye test skipped - assembly failed to generate contigs"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(flye_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -488,25 +503,26 @@ Test.@testset "Long Read Isolate Assembly" begin
                 # Clean up after test
                 rm(canu_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "coverage")
-                    @warn """
-                    Canu assembly failed due to resource constraints or insufficient coverage.
-                    Current test: 25kb genome, 15x coverage, ~375kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "coverage")
+                #     @warn """
+                #     Canu assembly failed due to resource constraints or insufficient coverage.
+                #     Current test: 25kb genome, 15x coverage, ~375kb total sequence data
                     
-                    Required resources for Canu:
-                    - Memory: ~4-8GB RAM minimum  
-                    - CPU: 4-8 cores recommended
-                    - Disk: ~1GB temporary space
-                    - Coverage: minimum 10x, prefer 20x+
+                #     Required resources for Canu:
+                #     - Memory: ~4-8GB RAM minimum  
+                #     - CPU: 4-8 cores recommended
+                #     - Disk: ~1GB temporary space
+                #     - Coverage: minimum 10x, prefer 20x+
                     
-                    To fix: Increase available memory/CPU or use smaller genome with higher coverage.
-                    """
-                    Test.@test_skip "Canu test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory/CPU or use smaller genome with higher coverage.
+                #     """
+                #     Test.@test_skip "Canu test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(canu_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -557,31 +573,32 @@ Test.@testset "Long Read Isolate Assembly" begin
                     rm(hifiasm_outdir, recursive=true)
                 end
                 try
-                    result = Mycelia.run_hifiasm(fastq=hifiasm_fastq, outdir=hifiasm_outdir)
+                    result = Mycelia.run_hifiasm(fastq=hifiasm_fastq, outdir=hifiasm_outdir, bloom_filter=0)
                     Test.@test result.outdir == hifiasm_outdir
                     expected_prefix = joinpath(hifiasm_outdir, basename(hifiasm_fastq) * ".hifiasm")
                     Test.@test result.hifiasm_outprefix == expected_prefix
                     # Clean up after test
                     rm(hifiasm_outdir, recursive=true, force=true)
                 catch e
-                    if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                        @warn """
-                        hifiasm assembly failed due to resource constraints.
-                        Current test: 15kb genome, 10x coverage, ~150kb total sequence data
+                    # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                    #     @warn """
+                    #     hifiasm assembly failed due to resource constraints.
+                    #     Current test: 15kb genome, 10x coverage, ~150kb total sequence data
                         
-                        Required resources for hifiasm:
-                        - Memory: ~2-4GB RAM minimum
-                        - CPU: 1-4 cores recommended
-                        - Disk: ~500MB temporary space
+                    #     Required resources for hifiasm:
+                    #     - Memory: ~2-4GB RAM minimum
+                    #     - CPU: 1-4 cores recommended
+                    #     - Disk: ~500MB temporary space
                         
-                        To fix: Increase available memory or reduce test genome size further.
-                        """
-                        Test.@test_skip "hifiasm test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
+                    #     To fix: Increase available memory or reduce test genome size further.
+                    #     """
+                    #     Test.@test_skip "hifiasm test skipped - insufficient resources"
+                    # else
+                    #     rethrow(e)
+                    # end
                     # Clean up on failure
                     rm(hifiasm_outdir, recursive=true, force=true)
+                    rethrow(e)
                 end
             end
         end
@@ -590,85 +607,93 @@ end
         
 Test.@testset "Long Read Metagenomic Assembly" begin
     mktempdir() do dir
-        # Create reference genomes for long read metagenomic assembly
+        # Create reference genomes for long read metagenomic assembly (larger, more complex metagenome)
         meta_long_ref_fasta = joinpath(dir, "metagenomic_long_ref.fasta")
+
+        # Create 3 diverse genomes of moderate sizes to balance complexity with memory usage
         rng_meta_long1 = StableRNGs.StableRNG(789)
         rng_meta_long2 = StableRNGs.StableRNG(790)
-        meta_long_genome1 = BioSequences.randdnaseq(rng_meta_long1, 8000)  # 8kb genome
-        meta_long_genome2 = BioSequences.randdnaseq(rng_meta_long2, 6000)  # 6kb genome
-        
+        rng_meta_long3 = StableRNGs.StableRNG(791)
+
+        meta_long_genome1 = BioSequences.randdnaseq(rng_meta_long1, 35000)  # 35kb genome
+        meta_long_genome2 = BioSequences.randdnaseq(rng_meta_long2, 30000)  # 30kb genome
+        meta_long_genome3 = BioSequences.randdnaseq(rng_meta_long3, 25000)  # 25kb genome
+
         # Create FASTA records and write using Mycelia.write_fasta
         meta_long_fasta_record1 = FASTX.FASTA.Record("test_metagenomic_long_genome_1", meta_long_genome1)
         meta_long_fasta_record2 = FASTX.FASTA.Record("test_metagenomic_long_genome_2", meta_long_genome2)
-        Mycelia.write_fasta(outfile=meta_long_ref_fasta, records=[meta_long_fasta_record1, meta_long_fasta_record2])
+        meta_long_fasta_record3 = FASTX.FASTA.Record("test_metagenomic_long_genome_3", meta_long_genome3)
+        Mycelia.write_fasta(outfile=meta_long_ref_fasta, records=[meta_long_fasta_record1, meta_long_fasta_record2, meta_long_fasta_record3])
         
         # Simulate PacBio reads for metagenomic assembly (reuse for all metagenomic tests)
-        meta_long_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=meta_long_ref_fasta, quantity="12x", quiet=true)
+        meta_long_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=meta_long_ref_fasta, quantity="20x", quiet=true)
         
         # Decompress for assemblers
         meta_long_fastq = joinpath(dir, "meta_long_reads.fq")
         run(pipeline(`gunzip -c $(meta_long_simulated_reads)`, meta_long_fastq))
             
-        Test.@testset "Long Read Metagenomic Assembly - hifiasm-meta" begin
-            # Check if running in CI environment with resource constraints
-            is_ci = haskey(ENV, "CI") || haskey(ENV, "GITHUB_ACTIONS") || haskey(ENV, "TRAVIS") || haskey(ENV, "CIRCLECI")
+        # takes too long to run relative to other tools
+        # Test.@testset "Long Read Metagenomic Assembly - hifiasm-meta" begin
+        #     # Check if running in CI environment with resource constraints
+        #     is_ci = haskey(ENV, "CI") || haskey(ENV, "GITHUB_ACTIONS") || haskey(ENV, "TRAVIS") || haskey(ENV, "CIRCLECI")
             
-            if is_ci
-                # Skip hifiasm-meta tests in CI due to memory requirements
-                @warn """
-                Hifiasm-meta test skipped in CI environment due to resource constraints.
+        #     # if is_ci
+        #     #     # Skip hifiasm-meta tests in CI due to memory requirements
+        #     #     @warn """
+        #     #     Hifiasm-meta test skipped in CI environment due to resource constraints.
                 
-                Hifiasm-meta memory requirements:
-                - Minimum: ~3-6GB RAM for even small test genomes
-                - GitHub CI runners: 16GB total RAM but shared with system processes
-                - Risk: Metagenomic assembly algorithms have higher memory overhead
+        #     #     Hifiasm-meta memory requirements:
+        #     #     - Minimum: ~3-6GB RAM for even small test genomes
+        #     #     - GitHub CI runners: 16GB total RAM but shared with system processes
+        #     #     - Risk: Metagenomic assembly algorithms have higher memory overhead
                 
-                This test runs locally but is automatically disabled in CI/CD environments
-                to ensure reliable builds. To test hifiasm-meta functionality:
+        #     #     This test runs locally but is automatically disabled in CI/CD environments
+        #     #     to ensure reliable builds. To test hifiasm-meta functionality:
                 
-                Local testing:
-                julia --project=. -e 'include("test/4_assembly/third_party_assemblers.jl")'
+        #     #     Local testing:
+        #     #     julia --project=. -e 'include("test/4_assembly/third_party_assemblers.jl")'
                 
-                Extended testing:
-                julia --project=. run_extended_tests.jl tutorials
-                """
-                Test.@test_skip "hifiasm-meta test skipped in CI environment - resource constraints"
-            else
-                # Test hifiasm-meta - metagenomic assembly
-                hifiasm_meta_outdir = joinpath(dir, "hifiasm_meta_assembly")
-                if isdir(hifiasm_meta_outdir)
-                    rm(hifiasm_meta_outdir, recursive=true)
-                end
-                try
-                    result = Mycelia.run_hifiasm_meta(fastq=meta_long_fastq, outdir=hifiasm_meta_outdir, similarity=0.90, purge_level=1)
-                    Test.@test result.outdir == hifiasm_meta_outdir
-                    expected_prefix = joinpath(hifiasm_meta_outdir, basename(meta_long_fastq) * ".hifiasm_meta")
-                    Test.@test result.hifiasm_outprefix == expected_prefix
-                    # Clean up after test
-                    rm(hifiasm_meta_outdir, recursive=true, force=true)
-                catch e
-                    if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                        @warn """
-                        hifiasm-meta assembly failed due to resource constraints.
-                        Current test: 8kb genome, 12x coverage, ~96kb total sequence data
-                        
-                        Required resources for hifiasm-meta:
-                        - Memory: ~3-6GB RAM minimum (higher than regular hifiasm)
-                        - CPU: 1-4 cores recommended
-                        - Disk: ~1GB temporary space
-                        - Note: hifiasm-meta is optimized for metagenomic strain resolution
-                        
-                        To fix: Increase available memory or reduce test genome size further.
-                        """
-                        Test.@test_skip "hifiasm-meta test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
-                    # Clean up on failure
-                    rm(hifiasm_meta_outdir, recursive=true, force=true)
-                end
-            end
-        end
+        #     #     Extended testing:
+        #     #     julia --project=. run_extended_tests.jl tutorials
+        #     #     """
+        #     #     Test.@test_skip "hifiasm-meta test skipped in CI environment - resource constraints"
+        #     # else
+        #     # Test hifiasm-meta - metagenomic assembly
+        #     hifiasm_meta_outdir = joinpath(dir, "hifiasm_meta_assembly")
+        #     if isdir(hifiasm_meta_outdir)
+        #         rm(hifiasm_meta_outdir, recursive=true)
+        #     end
+        #     try
+        #         result = Mycelia.run_hifiasm_meta(fastq=meta_long_fastq, outdir=hifiasm_meta_outdir, bloom_filter=0, read_selection=true)
+        #         Test.@test result.outdir == hifiasm_meta_outdir
+        #         expected_prefix = joinpath(hifiasm_meta_outdir, basename(meta_long_fastq) * ".hifiasm_meta")
+        #         Test.@test result.hifiasm_outprefix == expected_prefix
+        #         # Clean up after test
+        #         rm(hifiasm_meta_outdir, recursive=true, force=true)
+        #     catch e
+        #         # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "Segmentation fault")
+        #         #     @warn """
+        #         #     hifiasm-meta assembly failed due to resource constraints.
+        #         #     Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data
+                    
+        #         #     Required resources for hifiasm-meta:
+        #         #     - Memory: ~3-6GB RAM minimum (higher than regular hifiasm)
+        #         #     - CPU: 1-4 cores recommended
+        #         #     - Disk: ~1GB temporary space
+        #         #     - Note: hifiasm-meta is optimized for metagenomic strain resolution
+                    
+        #         #     To fix: Increase available memory or reduce test genome size further.
+        #         #     """
+        #         #     Test.@test_skip "hifiasm-meta test skipped - insufficient resources"
+        #         # else
+        #         #     rethrow(e)
+        #         # end
+        #         # Clean up on failure
+        #         rm(hifiasm_meta_outdir, recursive=true, force=true)
+        #         rethrow(e)
+        #     end
+        # end
+        # # end
 
         Test.@testset "Long Read Metagenomic Assembly - metaFlye" begin
             
@@ -678,32 +703,42 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 rm(metaflye_outdir, recursive=true)
             end
             try
-                result = Mycelia.run_metaflye(fastq=meta_long_fastq, outdir=metaflye_outdir, genome_size="8k", read_type="pacbio-raw")
+                result = Mycelia.run_metaflye(fastq=meta_long_fastq, outdir=metaflye_outdir, read_type="pacbio-raw")
                 Test.@test result.outdir == metaflye_outdir
                 Test.@test result.assembly == joinpath(metaflye_outdir, "assembly.fasta")
                 Test.@test isfile(result.assembly)
                 # Clean up after test
                 rm(metaflye_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    metaFlye assembly failed due to resource constraints.
-                    Current test: 8kb genome, 12x coverage, ~96kb total sequence data
-                    
-                    Required resources for metaFlye:
-                    - Memory: ~2-4GB RAM minimum (higher than regular Flye)
-                    - CPU: 1-4 cores recommended  
-                    - Disk: ~1GB temporary space
-                    - Note: metaFlye is designed for metagenomic data with uneven coverage
-                    
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "metaFlye test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     metaFlye assembly failed due to resource constraints.
+                #     Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data
+
+                #     Required resources for metaFlye:
+                #     - Memory: ~2-4GB RAM minimum (higher than regular Flye)
+                #     - CPU: 1-4 cores recommended
+                #     - Disk: ~1GB temporary space
+                #     - Note: metaFlye is designed for metagenomic data with uneven coverage
+
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "metaFlye test skipped - insufficient resources"
+                # elseif contains(string(e), "No contigs were assembled") || contains(string(e), "Pipeline aborted") || contains(string(e), "assembly failed")
+                #     @warn """
+                #     metaFlye assembly failed to generate contigs despite increased parameters.
+                #     Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data
+
+                #     This suggests the simulated reads may not be suitable for metagenomic assembly.
+                #     Consider adjusting read simulation parameters or using different test data.
+                #     """
+                #     Test.@test_skip "metaFlye test skipped - assembly failed to generate contigs"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(metaflye_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -722,25 +757,26 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 # Clean up after test
                 rm(metamdbg_hifi_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    metamdbg HiFi assembly failed due to resource constraints.
-                    Current test: 14kb genomes (8kb + 6kb), 12x coverage, ~168kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     metamdbg HiFi assembly failed due to resource constraints.
+                #     Current test: 14kb genomes (8kb + 6kb), 12x coverage, ~168kb total sequence data
                     
-                    Required resources for metamdbg:
-                    - Memory: ~2-4GB RAM minimum
-                    - CPU: 1-8 cores recommended
-                    - Disk: ~500MB temporary space
-                    - Note: metamdbg specializes in metagenomic long-read assembly with minimizers
+                #     Required resources for metamdbg:
+                #     - Memory: ~2-4GB RAM minimum
+                #     - CPU: 1-8 cores recommended
+                #     - Disk: ~500MB temporary space
+                #     - Note: metamdbg specializes in metagenomic long-read assembly with minimizers
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "metamdbg HiFi test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "metamdbg HiFi test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(metamdbg_hifi_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
 
@@ -764,25 +800,26 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 # Clean up after test
                 rm(metamdbg_ont_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                    @warn """
-                    metamdbg ONT assembly failed due to resource constraints.
-                    Current test: 14kb genomes (8kb + 6kb), 10x coverage, ~140kb total sequence data
+                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
+                #     @warn """
+                #     metamdbg ONT assembly failed due to resource constraints.
+                #     Current test: 14kb genomes (8kb + 6kb), 10x coverage, ~140kb total sequence data
                     
-                    Required resources for metamdbg:
-                    - Memory: ~2-4GB RAM minimum
-                    - CPU: 1-8 cores recommended
-                    - Disk: ~500MB temporary space
-                    - Note: metamdbg specializes in metagenomic long-read assembly with minimizers
+                #     Required resources for metamdbg:
+                #     - Memory: ~2-4GB RAM minimum
+                #     - CPU: 1-8 cores recommended
+                #     - Disk: ~500MB temporary space
+                #     - Note: metamdbg specializes in metagenomic long-read assembly with minimizers
                     
-                    To fix: Increase available memory or reduce test genome size further.
-                    """
-                    Test.@test_skip "metamdbg ONT test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                #     To fix: Increase available memory or reduce test genome size further.
+                #     """
+                #     Test.@test_skip "metamdbg ONT test skipped - insufficient resources"
+                # else
+                #     rethrow(e)
+                # end
                 # Clean up on failure
                 rm(metamdbg_ont_outdir, recursive=true, force=true)
+                rethrow(e)
             end
         end
     end
