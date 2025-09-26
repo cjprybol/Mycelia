@@ -62,7 +62,7 @@
             ]
         }
     },
-    "postCreateCommand": "apt-get update && apt-get install -y vim && git config --global commit.gpgsign false && bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile()'"
+    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y vim && bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile()'"
     // "postStartCommand": "",
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],

@@ -1,22 +1,20 @@
-"""
-End-to-End Assembly Tests for All 6 Graph Types
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/end_to_end_graph_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/end_to_end_graph_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
-This test suite validates the complete workflow for each graph type:
-1. N-gram Graphs
-2. K-mer Graphs (DNA, RNA, Amino Acid)
-3. Qualmer Graphs (DNA, RNA, Amino Acid)
-4. String Graphs
-5. FASTA Graphs
-6. FASTQ Graphs
-
-Each test follows the pattern:
-- Input data -> Graph construction -> Assembly -> Validation
-"""
-
-if isinteractive()
-    Pkg.activate("..")
-end
-
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import FASTX
@@ -39,7 +37,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
         test_string = "HELLO WORLD HELLO"
         
         # Test N-gram graph construction
-        graph = Mycelia.string_to_ngram_graph(test_string, 3)
+        graph = Mycelia.string_to_ngram_graph(s=test_string, n=3)
         Test.@test !isempty(graph.vertex_labels)
         Test.@test length(graph.vertex_labels) > 0
         
@@ -177,7 +175,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
         test_string = "ABCDEFGHIJKLMNOP"
         
         # Test string graph construction from N-gram graph
-        ngram_graph = Mycelia.string_to_ngram_graph(test_string, 3)
+        ngram_graph = Mycelia.string_to_ngram_graph(s=test_string, n=3)
         Test.@test !isempty(ngram_graph.vertex_labels)
         
         # Test path collapsing (string graph simplification)
@@ -197,7 +195,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             records = [FASTX.FASTA.Record("test", dna_seq)]
             
             # Test direct BioSequence graph construction
-            graph = Mycelia.build_biosequence_graph(records, k=5)
+            graph = Mycelia.build_biosequence_graph(records, min_overlap=5)
             Test.@test !isempty(graph.vertex_labels)
             
             # Test vertex data
@@ -245,7 +243,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             records = [FASTX.FASTQ.Record("test", dna_seq, high_quality)]
             
             # Test direct quality BioSequence graph construction
-            graph = Mycelia.build_quality_biosequence_graph(records, k=5)
+            graph = Mycelia.build_quality_biosequence_graph(records, min_overlap=5)
             Test.@test !isempty(graph.vertex_labels)
             
             # Test vertex data with quality information
@@ -287,7 +285,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             records = [original_record]
             
             # Build quality graph
-            graph = Mycelia.build_quality_biosequence_graph(records, k=5)
+            graph = Mycelia.build_quality_biosequence_graph(records, min_overlap=5)
             Test.@test !isempty(graph.vertex_labels)
             
             # Convert back to FASTQ

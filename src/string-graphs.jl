@@ -21,11 +21,13 @@ ngrams("abcd", 2)   # Returns ["ab", "bc", "cd"]
 ```
 """
 function ngrams(s::AbstractString, n::Int)
-    len = lastindex(s)
+    # Convert to character array to handle Unicode properly
+    chars = collect(s)
+    len = length(chars)
     count = max(len - n + 1, 0)
     result = Vector{String}(undef, count)
     for i in 1:count
-        result[i] = s[i:(i + n - 1)]
+        result[i] = String(chars[i:(i + n - 1)])
     end
     return result
 end
@@ -37,11 +39,101 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Build a directed graph from a collection of string n-grams with edge and vertex weights.
+Creates a MetaGraph where vertices represent unique n-grams and edges represent
+transitions between consecutive n-grams across all input strings.
+
+# Arguments
+- `strings`: Collection of input strings to build graph from (Vector{String} or similar)
+- `n`: N-gram size (length of each substring)
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: Directed graph with:
+  - Vertex labels: String n-grams
+  - Vertex data: Occurrence counts across all strings
+  - Edge data: Transition counts between consecutive n-grams
+  - Weight function: Uses edge counts as weights
+
+# Details
+This function processes multiple strings simultaneously, building a unified graph
+that captures n-gram patterns and transitions from the entire collection. This is
+particularly useful for:
+- Multi-sequence assembly where reads come from the same underlying sequence
+- Comparative analysis of related sequences
+- Building consensus graphs from multiple observations
+
+# Examples
+```julia
+strings = ["ATCGATCG", "TCGATCGA", "CGATCGAT"]
+graph = strings_to_ngram_graph(strings=strings, n=3)
+
+# Single string (backward compatibility)
+graph = strings_to_ngram_graph(strings=["ATCGATCG"], n=3)
+```
+"""
+function strings_to_ngram_graph(; strings::AbstractVector{<:AbstractString}, n::Int)
+    if isempty(strings)
+        # Return empty graph
+        return MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph(),
+            label_type=String,
+            vertex_data_type=Int,
+            edge_data_type=Int,
+            weight_function=identity,
+            default_weight=0
+        )
+    end
+
+    # Collect all n-grams from all strings
+    all_observed_ngrams = String[]
+    for s in strings
+        append!(all_observed_ngrams, ngrams(s, n))
+    end
+
+    # Create base graph
+    mg = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=String,
+        vertex_data_type=Int,
+        edge_data_type=Int,
+        weight_function=identity,
+        default_weight=0
+    )
+
+    # Set vertex properties (n-gram labels and counts)
+    ngram_counts = sort(StatsBase.countmap(all_observed_ngrams))
+    for (ngram, count) in ngram_counts
+        mg[ngram] = count
+    end
+
+    # Collect all edges from all strings
+    all_edges = Tuple{String, String}[]
+    for s in strings
+        string_ngrams = ngrams(s, n)
+        if length(string_ngrams) > 1
+            string_edges = collect(zip(string_ngrams[1:end-1], string_ngrams[2:end]))
+            append!(all_edges, string_edges)
+        end
+    end
+
+    # Set edge properties (transition counts)
+    edge_counts = StatsBase.countmap(all_edges)
+    for (edge, count) in edge_counts
+        src, dst = edge
+        mg[src, dst] = count
+    end
+
+    return mg
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Build a directed graph from string n-grams with edge and vertex weights.
 Creates a MetaGraph where vertices represent unique n-grams and edges represent
 transitions between consecutive n-grams in the original string.
 
-# Arguments  
+# Arguments
 - `s`: Input string to build graph from
 - `n`: N-gram size (length of each substring)
 
@@ -52,6 +144,7 @@ transitions between consecutive n-grams in the original string.
   - Edge data: Integer counts of n-gram transitions
 
 # Details
+Backward compatibility function - now delegates to the multi-string version.
 The graph construction process:
 1. Extract all n-grams from the string
 2. Count occurrences of each unique n-gram (stored as vertex data)
@@ -65,36 +158,7 @@ graph = string_to_ngram_graph(s="abcabc", n=2)
 ```
 """
 function string_to_ngram_graph(; s, n)
-    observed_ngrams = ngrams(s, n)
-    unique_ngrams = sort(collect(Set(observed_ngrams)))
-    # ngram_to_vertex = Dict(ng => i for (i, ng) in enumerate(unique_ngrams))
-
-    # Create base graph and metagraph
-    # g = Graphs.SimpleDiGraph(length(unique_ngrams))
-    mg = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=Int,
-        edge_data_type=Int,
-        weight_function=identity,
-        default_weight=0
-    )
-
-    # Set node properties (label and count)
-    ngram_counts = sort(StatsBase.countmap(observed_ngrams))
-    for (ngram, count) in ngram_counts
-        # display(count)
-        mg[ngram] = count
-    end
-
-    ngram_edges = zip(observed_ngrams[1:end-1], observed_ngrams[2:end])
-    edge_counts = StatsBase.countmap(ngram_edges)
-    for (edge, count) in edge_counts
-        src, dst = edge
-        mg[src, dst] = count
-    end
-
-    return mg
+    return strings_to_ngram_graph(strings=[s], n=n)
 end
 
 """
@@ -253,6 +317,35 @@ sequences = assemble_strings(graph)
 This function is useful for reconstructing original sequences from n-gram decompositions
 and for string-based genome assembly approaches.
 """
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Assemble string sequences from an n-gram graph returning ALL contigs.
+Returns all assembled sequences as a vector for comprehensive assembly results.
+
+# Arguments
+- `graph`: MetaGraph containing n-gram data (typically from `strings_to_ngram_graph`)
+
+# Returns
+- `Vector{String}`: All assembled sequences from the graph
+
+# Details
+This function returns ALL assembly results, not just the first one. This is the
+proper behavior for bioinformatics assembly where multiple contigs are expected.
+Use this instead of selecting just the first result for comprehensive assembly.
+
+# Examples
+```julia
+strings = ["ATCGATCG", "TCGATCGA"]
+graph = strings_to_ngram_graph(strings=strings, n=3)
+all_contigs = assemble_string_graph(graph)  # Returns all contigs, not just first
+```
+"""
+function assemble_string_graph(graph::MetaGraphsNext.MetaGraph)
+    return assemble_strings(graph)  # Return ALL contigs, not just first
+end
+
 function assemble_strings(graph::MetaGraphsNext.MetaGraph)
     assemblies = String[]
     @show find_connected_components(graph)

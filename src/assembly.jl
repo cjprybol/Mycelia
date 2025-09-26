@@ -520,14 +520,18 @@ Assembly result structure containing contigs and metadata.
 struct AssemblyResult
     contigs::Vector{String}             # Final assembled contigs
     contig_names::Vector{String}        # Contig identifiers
-    graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Final assembly graph (optional)
+    graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Complete assembly graph (optional)
+    simplified_graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Simplified graph with collapsed paths
+    paths::Dict{String, Vector}         # Path mappings for GFA P-lines (path_id -> vertex_sequence)
     assembly_stats::Dict{String, Any}   # Assembly statistics and metrics
     fastq_contigs::Vector{FASTX.FASTQ.Record}  # Quality-aware contigs (FASTQ format)
-    
-    function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String}; 
-                          graph=nothing, assembly_stats=Dict{String, Any}(),
-                          fastq_contigs=FASTX.FASTQ.Record[])
-        new(contigs, contig_names, graph, assembly_stats, fastq_contigs)
+    gfa_compatible::Bool                # Whether graph structure is valid for GFA export
+
+    function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String};
+                          graph=nothing, simplified_graph=nothing, paths=Dict{String, Vector}(),
+                          assembly_stats=Dict{String, Any}(), fastq_contigs=FASTX.FASTQ.Record[],
+                          gfa_compatible=true)
+        new(contigs, contig_names, graph, simplified_graph, paths, assembly_stats, fastq_contigs, gfa_compatible)
     end
 end
 
@@ -568,6 +572,142 @@ function write_fastq_contigs(result::AssemblyResult, output_file::String)
     
     @info "Quality-aware contigs written to $(output_file)"
     return output_file
+end
+
+"""
+    write_gfa(result::AssemblyResult, output_file::String)
+
+Write assembly result to GFA (Graphical Fragment Assembly) format.
+Exports both graph topology and path information leveraging existing infrastructure.
+"""
+function write_gfa(result::AssemblyResult, output_file::String)
+    if isnothing(result.graph)
+        error("AssemblyResult contains no graph - cannot write GFA format")
+    end
+
+    if !result.gfa_compatible
+        @warn "AssemblyResult is marked as not GFA compatible - output may be invalid"
+    end
+
+    # Use the simplified graph if available, otherwise the full graph
+    graph_to_write = isnothing(result.simplified_graph) ? result.graph : result.simplified_graph
+
+    # Write base GFA structure using existing function
+    write_gfa_next(graph_to_write, output_file)
+
+    # Append path information if available
+    if !isempty(result.paths)
+        _append_gfa_paths(output_file, result.paths, result.contigs, result.contig_names)
+    end
+
+    @info "Assembly written to GFA format: $(output_file)"
+    return output_file
+end
+
+"""
+    save_assembly(result::AssemblyResult, output_file::String)
+
+Save complete assembly result using robust JLD2 serialization.
+"""
+function save_assembly(result::AssemblyResult, output_file::String)
+    JLD2.save(output_file, "assembly_result", result)
+    @info "Assembly saved to $(output_file)"
+    return output_file
+end
+
+"""
+    load_assembly(input_file::String) -> AssemblyResult
+
+Load complete assembly result from JLD2 file.
+"""
+function load_assembly(input_file::String)
+    return JLD2.load(input_file, "assembly_result")
+end
+
+"""
+    has_graph_structure(result::AssemblyResult) -> Bool
+
+Check if assembly result contains graph structure information.
+"""
+has_graph_structure(result::AssemblyResult) = !isnothing(result.graph)
+
+"""
+    has_simplified_graph(result::AssemblyResult) -> Bool
+
+Check if assembly result contains simplified graph with collapsed paths.
+"""
+has_simplified_graph(result::AssemblyResult) = !isnothing(result.simplified_graph)
+
+"""
+    has_paths(result::AssemblyResult) -> Bool
+
+Check if assembly result contains path mapping information.
+"""
+has_paths(result::AssemblyResult) = !isempty(result.paths)
+
+"""
+    validate_assembly_structure(result::AssemblyResult) -> Dict{String, Any}
+
+Validate the internal consistency of an AssemblyResult structure.
+Returns validation report complementing the existing validate_assembly function.
+"""
+function validate_assembly_structure(result::AssemblyResult)
+    report = Dict{String, Any}(
+        "valid" => true,
+        "issues" => String[],
+        "warnings" => String[]
+    )
+
+    # Check contig/name consistency
+    if length(result.contigs) != length(result.contig_names)
+        push!(report["issues"], "Contigs and contig_names have different lengths")
+        report["valid"] = false
+    end
+
+    # Check graph consistency if present
+    if !isnothing(result.graph) && !isnothing(result.simplified_graph)
+        if typeof(result.graph) != typeof(result.simplified_graph)
+            push!(report["warnings"], "Graph and simplified_graph have different types")
+        end
+    end
+
+    # Check path consistency
+    if !isempty(result.paths) && isnothing(result.graph)
+        push!(report["warnings"], "Paths provided but no graph structure available")
+    end
+
+    # Check GFA compatibility
+    if result.gfa_compatible && isnothing(result.graph)
+        push!(report["issues"], "Marked as GFA compatible but no graph structure")
+        report["valid"] = false
+    end
+
+    return report
+end
+
+"""
+    _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector}, contigs::Vector{String}, contig_names::Vector{String})
+
+Append path information to an existing GFA file.
+Adds GFA P-lines (path lines) that describe walks through the graph corresponding to assembled contigs.
+"""
+function _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector},
+                          contigs::Vector{String}, contig_names::Vector{String})
+    open(gfa_file, "a") do io
+        println(io, "# Path information for assembled contigs")
+
+        for (i, contig_name) in enumerate(contig_names)
+            if haskey(paths, contig_name) && i <= length(contigs)
+                path_vertices = paths[contig_name]
+                if !isempty(path_vertices)
+                    # Format: P <path_name> <vertex_list> <overlaps>
+                    vertex_list = join(string.(path_vertices) .* "+", ",")
+                    overlaps = repeat("*,", length(path_vertices) - 1) * "*"  # Default overlaps
+                    println(io, "P\t$(contig_name)\t$(vertex_list)\t$(overlaps)")
+                end
+            end
+        end
+    end
 end
 
 """

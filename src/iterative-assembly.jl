@@ -838,53 +838,6 @@ function iterative_assembly_summary(result::Dict)::String
     return report
 end
 
-"""
-Test function for iterative assembly with sample data.
-"""
-function test_iterative_assembly()
-    try
-        println("Testing Mycelia Iterative Assembly")
-        
-        # Create temporary test FASTQ file
-        temp_dir = mktempdir()
-        test_fastq = joinpath(temp_dir, "test_reads.fastq")
-        
-        # Generate test sequences
-        sequences = [
-            "ATCGATCGATCGATCGATCGATCG",
-            "CGATCGATCGATCGATCGATCGAT",
-            "GATCGATCGATCGATCGATCGATC",
-            "ATCGATCGATCGATCGTTCGATCG"  # Contains variation
-        ]
-        
-        test_records = [
-            FASTX.FASTQ.Record("read$i", seq, repeat("I", length(seq)))
-            for (i, seq) in enumerate(sequences)
-        ]
-        
-        # Write test FASTQ
-        write_fastq(records=test_records, filename=test_fastq)
-        
-        # Test iterative assembly with small limits
-        output_dir = joinpath(temp_dir, "test_output")
-        result = mycelia_iterative_assemble(test_fastq, 
-                                          max_k=23, 
-                                          output_dir=output_dir,
-                                          max_iterations_per_k=3,
-                                          verbose=false)
-        
-        # Cleanup
-        rm(temp_dir, recursive=true)
-        
-        println("Iterative assembly test completed successfully!")
-        return merge(result, Dict(:status => :success))
-        
-    catch e
-        println("Iterative assembly test failed: $e")
-        return Dict(:status => :error, :error => string(e))
-    end
-end
-
 # =============================================================================
 # Enhanced Statistical Path Improvement (Phase 5.2b)
 # Integration with Viterbi algorithms and statistical path resampling
