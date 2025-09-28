@@ -420,8 +420,9 @@ Test.@testset "Long Read Isolate Assembly" begin
             flye_fasta_record = FASTX.FASTA.Record("flye_isolate_genome", flye_genome)
             Mycelia.write_fasta(outfile=flye_ref_fasta, records=[flye_fasta_record])
 
-            # Simulate nanopore reads with 15x coverage (higher coverage for better assembly success)
-            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="15x", quiet=true)
+            # Simulate nanopore reads with 30x coverage (higher coverage for better assembly success)
+            # flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="15x", quiet=true)
+            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="30x")
             
             # Decompress for flye
             flye_fastq = joinpath(dir, "flye_reads.fq")

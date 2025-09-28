@@ -756,23 +756,23 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
     segment_lengths = [length(seq) for seq in values(segments)]
     all_same_length = !isempty(segment_lengths) && all(l -> l == segment_lengths[1], segment_lengths)
     k_value = isempty(segment_lengths) ? 0 : segment_lengths[1]
+    first_seq = first(values(segments))
+    seq_type = detect_alphabet(first_seq)
     
     # Auto-detect graph type unless forced
     if !force_biosequence_graph && all_same_length && k_value > 0
         @info "Auto-detected fixed-length sequences (k=$k_value), creating k-mer graph"
-        
         # Determine k-mer type from first segment
-        first_seq = first(values(segments))
-        if all(c -> c in "ACGT", uppercase(first_seq))
-            # Use the actual type that k-mers have when created
+        if seq_type == :DNA
             sample_bio_seq = BioSequences.LongDNA{4}(first_seq)
             sample_kmer = Kmers.DNAKmer{k_value}(sample_bio_seq)
             kmer_type = typeof(sample_kmer)
-        elseif all(c -> c in "ACGU", uppercase(first_seq))
+        elseif seq_type == :RNA
             sample_bio_seq = BioSequences.LongRNA{4}(first_seq)
             sample_kmer = Kmers.RNAKmer{k_value}(sample_bio_seq)
             kmer_type = typeof(sample_kmer)
         else
+            @assert seq_type == :AA "Unknown sequence type for k-mer graph"
             sample_bio_seq = BioSequences.LongAA(first_seq)
             sample_kmer = Kmers.AAKmer{k_value}(sample_bio_seq)
             kmer_type = typeof(sample_kmer)
@@ -786,12 +786,12 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
     biosequence_type = if isempty(segments)
         BioSequences.LongDNA{4}  # Default to DNA
     else
-        first_seq = first(values(segments))
-        if all(c -> c in "ACGT", uppercase(first_seq))
+        if seq_type == :DNA
             BioSequences.LongDNA{4}
-        elseif all(c -> c in "ACGU", uppercase(first_seq))
+        elseif seq_type == :RNA
             BioSequences.LongRNA{4}
         else
+            @assert seq_type == :AA "Unknown sequence type for BioSequence graph"
             BioSequences.LongAA
         end
     end
