@@ -82,11 +82,18 @@ function create_test_aa_reads(reference_sequence::Union{String, BioSequences.Lon
         # Use the observe function to introduce errors
         bio_seq = reference_sequence isa String ? BioSequences.LongAA(reference_sequence) : reference_sequence
         observed_seq, quality_scores = Mycelia.observe(bio_seq, error_rate=error_rate)
-        
+
+        ## Validate that no termination characters (*) are present in amino acid sequences
+        ## This ensures compatibility with FASTQ format
+        observed_seq_str = string(observed_seq)
+        if occursin('*', observed_seq_str)
+            error("Amino acid sequence contains termination character '*' which is invalid for FASTQ format: $observed_seq_str")
+        end
+
         # Convert quality scores to string format
         quality_string = String([Char(q + 33) for q in quality_scores])
-        
-        record = FASTX.FASTQ.Record("read_$i", string(observed_seq), quality_string)
+
+        record = FASTX.FASTQ.Record("read_$i", observed_seq_str, quality_string)
         push!(records, record)
     end
     
@@ -181,7 +188,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                     vertex_data = graph[label]
                     Test.@test vertex_data isa Mycelia.KmerVertexData
                     # Check that all characters are valid amino acids
-                    Test.@test all(c in "ACDEFGHIKLMNPQRSTVWY" for c in vertex_data.canonical_kmer)
+                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_SYMBOLS for c in string(vertex_data.canonical_kmer))
                 end
             end
         end
@@ -742,9 +749,80 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
                 # Higher coverage should generally result in more robust graphs
-                total_coverage = sum(length(vertex_data.coverage) for vertex_data in values(graph.vertex_data))
+                total_coverage = sum(length(graph[label].coverage) for label in MetaGraphsNext.labels(graph))
                 Test.@test total_coverage > 0
             end
+        end
+    end
+
+    Test.@testset "K-mer Canonicalization Consistency Tests" begin
+        ## Test that validates the fix for canonical k-mer consistency between
+        ## graph construction and path extraction (the main issue we resolved)
+
+        Test.@testset "DoubleStrand DNA Canonicalization Consistency" begin
+            # Create a DNA sequence that will have different canonical forms
+            # if lexicographic vs BioSequences.canonical() are used
+            reference_seq = BioSequences.dna"ATCGTTTT"  # Forward
+            reverse_comp = BioSequences.reverse_complement(reference_seq)  # AAAACGAT
+
+            # Test with both forward and reverse complement sequences
+            reads = [
+                FASTX.FASTA.Record("forward", reference_seq),
+                FASTX.FASTA.Record("reverse", reverse_comp)
+            ]
+
+            kmer_type = Kmers.DNAKmer{5}
+            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.DoubleStrand)
+
+            Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+            # Test that we have proper coverage and strand orientations
+            # This validates the canonicalization consistency fix
+            total_coverage_entries = 0
+            has_both_orientations = false
+
+            for label in MetaGraphsNext.labels(graph)
+                vertex_data = graph[label]
+                strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
+                total_coverage_entries += length(strand_orientations)
+
+                # Check if we see both orientations (should happen with reverse complements)
+                if Mycelia.Forward in strand_orientations && Mycelia.Reverse in strand_orientations
+                    has_both_orientations = true
+                end
+            end
+
+            Test.@test total_coverage_entries > 0
+            Test.@test has_both_orientations  # Should see both orientations with forward and reverse sequences
+        end
+
+        Test.@testset "SingleStrand RNA Non-Canonicalization Consistency" begin
+            # Test that SingleStrand mode uses k-mers as-is without canonicalization
+            reference_seq = BioSequences.rna"AUCGUUUU"
+            reads = [FASTX.FASTA.Record("rna", reference_seq)]
+
+            kmer_type = Kmers.RNAKmer{5}
+            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.SingleStrand)
+
+            Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+            # Test that all coverage entries use Forward orientation in SingleStrand mode
+            # This validates the SingleStrand non-canonicalization fix
+            total_coverage_entries = 0
+            all_forward = true
+
+            for label in MetaGraphsNext.labels(graph)
+                vertex_data = graph[label]
+                for (obs_id, pos, strand) in vertex_data.coverage
+                    total_coverage_entries += 1
+                    if strand != Mycelia.Forward
+                        all_forward = false
+                    end
+                end
+            end
+
+            Test.@test total_coverage_entries > 0
+            Test.@test all_forward  # All orientations should be Forward in SingleStrand mode
         end
     end
 end

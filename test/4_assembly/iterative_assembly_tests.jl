@@ -1,18 +1,20 @@
-"""
-Tests for iterative maximum likelihood assembly algorithms (Phase 5.2a)
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/iterative_assembly_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/iterative_assembly_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
-This module tests the iterative assembly system that implements:
-- Complete FASTQ I/O processing per iteration
-- Statistical path resampling with likelihood calculations
-- Viterbi algorithm integration for optimal path finding
-- Timestamped output files for tracking read evolution
-- Memory-efficient read set processing
-"""
-
-if isinteractive()
-    Pkg.activate("..")
-end
-
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import BioSequences

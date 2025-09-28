@@ -676,3 +676,63 @@ end
 # end
 
 
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a string n-gram graph from FASTA records using existing string graph infrastructure.
+
+This is a wrapper around `strings_to_ngram_graph` that takes FASTA records as input,
+compatible with the comprehensive graph construction API.
+"""
+function build_string_ngram_graph_next(fasta_records::Vector{FASTX.FASTA.Record}, ngram_length::Int;
+                                      graph_mode::GraphMode=SingleStrand)
+
+    if isempty(fasta_records)
+        throw(ArgumentError("Cannot build graph from empty FASTA records"))
+    end
+
+    # Extract strings from FASTA records
+    strings = [FASTX.sequence(String, record) for record in fasta_records]
+
+    # Use existing strings_to_ngram_graph function
+    return strings_to_ngram_graph(strings=strings, n=ngram_length)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a string BioSequence-like graph from FASTA records.
+
+This treats strings as sequence-like entities for graph construction,
+creating a graph where each entire string sequence becomes a vertex.
+"""
+function build_string_biosequence_graph_next(fasta_records::Vector{FASTX.FASTA.Record};
+                                            graph_mode::GraphMode=SingleStrand)
+
+    if isempty(fasta_records)
+        throw(ArgumentError("Cannot build graph from empty FASTA records"))
+    end
+
+    # Create MetaGraphsNext graph for string sequences
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=String,
+        vertex_data_type=StringVertexData,
+        edge_data_type=StringEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0
+    )
+
+    # Add vertices for each string sequence
+    for record in fasta_records
+        sequence_str = FASTX.sequence(String, record)
+
+        if !haskey(graph, sequence_str)
+            graph[sequence_str] = StringVertexData(sequence_str, Int[])
+        end
+    end
+
+    return graph
+end

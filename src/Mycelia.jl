@@ -53,7 +53,6 @@ import LsqFit
 import Luxor
 import Makie
 import MD5
-import MetaGraphs
 import MetaGraphsNext
 import Mmap
 import MultivariateStats

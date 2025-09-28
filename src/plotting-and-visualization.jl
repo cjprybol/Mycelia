@@ -1327,7 +1327,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Draw a dendrogram visualization of hierarchical clustering results stored in a MetaDiGraph.
 
 # Arguments
-- `mg::MetaGraphs.MetaDiGraph`: Graph containing hierarchical clustering results. Must have
+- `mg::MetaGraphsNext.MetaGraph`: Graph containing hierarchical clustering results. Must have
   `:hcl` in graph properties with clustering data and vertex properties containing `:x`, `:y` coordinates.
 
 # Keywords
@@ -1343,7 +1343,7 @@ Draw a dendrogram visualization of hierarchical clustering results stored in a M
 Nothing, but saves dendrogram image to disk and displays preview.
 """
 function draw_dendrogram_tree(
-        mg::MetaGraphs.MetaDiGraph;
+        mg::MetaGraphsNext.MetaGraph;
         width=500,
         height=500,
         fontsize=12,
@@ -1412,7 +1412,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Draw a radial hierarchical clustering tree visualization and save it as an image file.
 
 # Arguments
-- `mg::MetaGraphs.MetaDiGraph`: A meta directed graph containing hierarchical clustering data
+- `mg::MetaGraphsNext.MetaGraph`: A meta directed graph containing hierarchical clustering data
   with required graph properties `:hcl` containing clustering information.
 
 # Keywords
@@ -1441,7 +1441,7 @@ The input graph must have:
 - `mg.vprops[v][:y]`: Y coordinate for each vertex
 """
 function draw_radial_tree(
-        mg::MetaGraphs.MetaDiGraph;
+        mg::MetaGraphsNext.MetaGraph;
         width=500,
         height=500,
         fontsize=12,
@@ -2600,9 +2600,9 @@ Creates a visualization of a kmer graph where nodes represent kmers and their si
 """
 function plot_graph(graph)
     
-#     kmer_counts = MetaGraphs.get_prop(graph, :kmer_counts)
-    kmers = [MetaGraphs.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)]
-    counts = [MetaGraphs.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
+#     kmer_counts = MetaGraphsNext.get_prop(graph, :kmer_counts)
+    kmers = [MetaGraphsNext.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)]
+    counts = [MetaGraphsNext.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
     scale = 150
     
     n = Graphs.nv(graph)

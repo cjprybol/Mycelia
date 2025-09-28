@@ -16,11 +16,12 @@ const NERSC_CPU=240
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU
 const AA_ALPHABET = filter(
-    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
+    x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
+# Old version that included termination characters (not valid for FASTQ):
 # const AA_ALPHABET = filter(
-#     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x) || BioSymbols.isterm(x)),
+#     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
 #     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
 

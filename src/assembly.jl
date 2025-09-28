@@ -486,31 +486,125 @@ Assembly method enumeration for unified interface.
 end
 
 """
-Assembly configuration structure.
+Detect sequence type from input records using existing robust functions.
+"""
+function _detect_sequence_type(reads)
+    if isempty(reads)
+        return BioSequences.LongDNA{4}  # Default to DNA
+    end
+
+    # Get first sequence
+    first_seq = if reads[1] isa FASTX.FASTA.Record
+        FASTX.FASTA.sequence(reads[1])
+    elseif reads[1] isa FASTX.FASTQ.Record
+        FASTX.FASTQ.sequence(reads[1])
+    elseif reads[1] isa String
+        return String
+    else
+        error("Unsupported input type: $(typeof(reads[1]))")
+    end
+
+    # Use existing robust convert_sequence function which handles detection internally
+    biosequence = convert_sequence(first_seq)
+    return typeof(biosequence)
+end
+
+"""
+Determine k-mer type from observations and k value.
+"""
+function _determine_kmer_type(observations, k::Int)
+    if isempty(observations)
+        return Kmers.DNAKmer{k}  # Default to DNA k-mers
+    end
+
+    # Extract first sequence to determine type
+    first_seq = if observations[1] isa FASTX.FASTA.Record
+        FASTX.FASTA.sequence(observations[1])
+    elseif observations[1] isa FASTX.FASTQ.Record
+        FASTX.FASTQ.sequence(observations[1])
+    else
+        error("Unsupported observation type: $(typeof(observations[1]))")
+    end
+
+    # Use existing robust convert_sequence function for type detection
+    biosequence = convert_sequence(first_seq)
+
+    # Determine appropriate k-mer type based on sequence type
+    if biosequence isa BioSequences.LongDNA
+        return Kmers.DNAKmer{k}
+    elseif biosequence isa BioSequences.LongRNA
+        return Kmers.RNAKmer{k}
+    elseif biosequence isa BioSequences.LongAA
+        return Kmers.AAKmer{k}
+    else
+        error("Unsupported sequence type for k-mer graph: $(typeof(biosequence))")
+    end
+end
+
+"""
+Enhanced assembly configuration structure with input validation.
 """
 struct AssemblyConfig
-    k::Int                          # Primary k-mer size
-    error_rate::Float64             # Expected sequencing error rate
-    min_coverage::Int               # Minimum coverage for k-mer inclusion  
-    graph_mode::GraphMode           # SingleStrand or DoubleStrand
-    use_quality_scores::Bool        # Whether to use FASTQ quality scores
-    polish_iterations::Int          # Number of polishing iterations
-    bubble_resolution::Bool         # Whether to resolve bubble structures
-    repeat_resolution::Bool         # Whether to resolve repeat regions
-    
-    # Constructor with sensible defaults
+    # Core parameters - exactly one of these should be specified
+    k::Union{Int, Nothing}                                              # k-mer size (Nothing for overlap-based)
+    min_overlap::Union{Int, Nothing}                                    # Min overlap (Nothing for k-mer based)
+
+    # Input constraints
+    sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}}  # Type of input sequences
+    graph_mode::GraphMode                                               # SingleStrand or DoubleStrand
+
+    # Assembly parameters
+    error_rate::Float64                     # Expected sequencing error rate
+    min_coverage::Int                       # Minimum coverage for k-mer inclusion
+    use_quality_scores::Bool                # Whether to use FASTQ quality scores
+    polish_iterations::Int                  # Number of polishing iterations
+    bubble_resolution::Bool                 # Whether to resolve bubble structures
+    repeat_resolution::Bool                 # Whether to resolve repeat regions
+
+    # Constructor with validation
     function AssemblyConfig(;
-        k::Int = 31,
+        k::Union{Int, Nothing} = nothing,
+        min_overlap::Union{Int, Nothing} = nothing,
+        sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}} = BioSequences.LongDNA{4},
+        graph_mode::GraphMode = DoubleStrand,
         error_rate::Float64 = 0.01,
         min_coverage::Int = 3,
-        graph_mode::GraphMode = DoubleStrand,
         use_quality_scores::Bool = true,
         polish_iterations::Int = 3,
         bubble_resolution::Bool = true,
         repeat_resolution::Bool = true
     )
-        new(k, error_rate, min_coverage, graph_mode, use_quality_scores, 
-            polish_iterations, bubble_resolution, repeat_resolution)
+        # Validation: Must specify exactly one of k or min_overlap
+        if k === nothing && min_overlap === nothing
+            k = 31  # Default to k-mer mode with k=31
+        elseif k !== nothing && min_overlap !== nothing
+            error("Cannot specify both k ($(k)) and min_overlap ($(min_overlap)). Choose one approach.")
+        end
+
+        # Validation: Check strand compatibility with sequence types
+        if sequence_type <: BioSequences.LongAA && graph_mode == DoubleStrand
+            error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
+        end
+        if sequence_type == String && graph_mode == DoubleStrand
+            error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
+        end
+
+        # Validation: Parameter ranges
+        if k !== nothing && (k < 1 || k > 64)
+            error("k-mer size must be between 1 and 64, got k=$(k)")
+        end
+        if min_overlap !== nothing && min_overlap < 1
+            error("min_overlap must be positive, got min_overlap=$(min_overlap)")
+        end
+        if !(0.0 <= error_rate <= 1.0)
+            error("error_rate must be between 0.0 and 1.0, got error_rate=$(error_rate)")
+        end
+        if min_coverage < 1
+            error("min_coverage must be positive, got min_coverage=$(min_coverage)")
+        end
+
+        new(k, min_overlap, sequence_type, graph_mode, error_rate, min_coverage,
+            use_quality_scores, polish_iterations, bubble_resolution, repeat_resolution)
     end
 end
 
@@ -711,67 +805,130 @@ function _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector},
 end
 
 """
-    assemble_genome(reads; method=StringGraph, config=AssemblyConfig()) -> AssemblyResult
+Auto-configure assembly based on input type and parameters.
+"""
+function _auto_configure_assembly(reads; k=nothing, min_overlap=nothing, graph_mode=nothing, kwargs...)
+    # Detect input format and sequence type
+    sequence_type = _detect_sequence_type(reads)
 
-Unified genome assembly interface using Phase 2 next-generation algorithms.
+    # Determine if quality scores are available
+    use_quality_scores = all(r -> r isa FASTX.FASTQ.Record, reads)
+
+    # Auto-detect graph mode if not specified
+    if graph_mode === nothing
+        graph_mode = if sequence_type <: BioSequences.LongAA || sequence_type == String
+            SingleStrand  # AA and strings can only be single strand
+        else
+            DoubleStrand  # DNA/RNA default to double strand
+        end
+    end
+
+    # Create config with detected parameters
+    return AssemblyConfig(;
+        k=k,
+        min_overlap=min_overlap,
+        sequence_type=sequence_type,
+        graph_mode=graph_mode,
+        use_quality_scores=use_quality_scores,
+        kwargs...
+    )
+end
+
+"""
+    assemble_genome(reads; k=31, kwargs...) -> AssemblyResult
+    assemble_genome(reads, config::AssemblyConfig) -> AssemblyResult
+
+Unified genome assembly interface with auto-detection and type-stable dispatch.
+
+# Auto-Detection Convenience Method
+```julia
+# Auto-detect sequence type and format, use k-mer approach
+result = assemble_genome(fasta_records; k=25)
+
+# Auto-detect sequence type and format, use overlap approach
+result = assemble_genome(fasta_records; min_overlap=100)
+
+# Override auto-detected parameters
+result = assemble_genome(reads; k=31, graph_mode=SingleStrand, error_rate=0.005)
+```
+
+# Type-Stable Direct Method
+```julia
+# Explicit configuration for maximum performance
+config = AssemblyConfig(k=25, sequence_type=BioSequences.LongDNA{4},
+                       graph_mode=DoubleStrand, use_quality_scores=true)
+result = assemble_genome(reads, config)
+```
 
 # Arguments
 - `reads`: Vector of FASTA/FASTQ records or file paths
-- `method`: Assembly strategy (StringGraph, KmerGraph, HybridOLC, MultiK)
-- `config`: Assembly configuration parameters
+- `config`: Assembly configuration (for type-stable version)
+
+# Keyword Arguments (auto-detection version)
+- `k`: k-mer size (mutually exclusive with min_overlap)
+- `min_overlap`: Minimum overlap length (mutually exclusive with k)
+- `graph_mode`: SingleStrand or DoubleStrand (auto-detected if not specified)
+- `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
 - `AssemblyResult`: Structure containing contigs, names, and assembly metadata
 
 # Details
-This is the main entry point for the unified assembly pipeline, leveraging:
-- Phase 1: MetaGraphsNext strand-aware graph construction  
-- Phase 2: Probabilistic algorithms, enhanced Viterbi, and graph algorithms
-- Phase 3: Integrated workflow with polishing and validation
+This interface automatically:
+1. **Detects sequence type**: DNA, RNA, AA, or String from input
+2. **Chooses assembly method**: k-mer vs overlap-based on parameters
+3. **Validates compatibility**: AA/String sequences → SingleStrand only
+4. **Dispatches optimally**: Based on input type and quality scores
 
-# Examples
-```julia
-# Basic assembly with default parameters
-reads = load_fastq_records("reads.fastq")
-result = assemble_genome(reads)
-
-# Custom assembly with specific k-mer size and error rate
-config = AssemblyConfig(k=25, error_rate=0.005, polish_iterations=5)
-result = assemble_genome(reads; method=KmerGraph, config=config)
-
-# Access results
-contigs = result.contigs
-stats = result.assembly_stats
-```
+**Method Selection Logic:**
+- String input + k → N-gram graph
+- String input + min_overlap → String graph
+- BioSequence input + k + quality → Qualmer graph
+- BioSequence input + k → K-mer graph
+- BioSequence input + min_overlap + quality → Quality BioSequence graph
+- BioSequence input + min_overlap → BioSequence graph
 """
-function assemble_genome(reads; method::AssemblyMethod=QualmerGraph, config::AssemblyConfig=AssemblyConfig())
-    @info "Starting unified genome assembly" method config.k config.error_rate
-    
+function assemble_genome(reads; kwargs...)
+    # Auto-detect configuration and dispatch to type-stable version
+    config = _auto_configure_assembly(reads; kwargs...)
+    return assemble_genome(reads, config)
+end
+
+"""
+Type-stable main assembly function that dispatches based on configuration.
+"""
+function assemble_genome(reads, config::AssemblyConfig)
+    @info "Starting unified genome assembly" config.sequence_type config.graph_mode config.k config.min_overlap
+
     # Phase 1: Load and validate input
     observations = _prepare_observations(reads)
     @info "Loaded $(length(observations)) sequence observations"
-    
-    # Phase 2: Assembly strategy dispatch following 6-graph hierarchy
-    if method == NgramGraph
-        result = _assemble_ngram_graph(observations, config)
-    elseif method == KmerGraph  
-        result = _assemble_kmer_graph(observations, config)
-    elseif method == QualmerGraph
-        result = _assemble_qualmer_graph(observations, config)
-    elseif method == StringGraph
-        result = _assemble_string_graph(observations, config)
-    elseif method == BioSequenceGraph
-        result = _assemble_biosequence_graph(observations, config)
-    elseif method == QualityBioSequenceGraph
-        result = _assemble_quality_biosequence_graph(observations, config)
-    elseif method == HybridOLC
-        result = _assemble_hybrid_olc(observations, config)
-    elseif method == MultiK
-        result = _assemble_multi_k(observations, config)
+
+    # Phase 2: Type-stable dispatch based on config parameters
+    result = if config.sequence_type == String
+        if config.k !== nothing
+            _assemble_ngram_graph(observations, config)  # N-gram
+        else
+            _assemble_string_graph(observations, config)  # String graph (overlap-based)
+        end
+    elseif config.sequence_type <: BioSequences.BioSequence
+        if config.use_quality_scores
+            if config.k !== nothing
+                _assemble_qualmer_graph(observations, config)  # Qualmer
+            else
+                _assemble_quality_biosequence_graph(observations, config)  # Quality overlap-based
+            end
+        else
+            if config.k !== nothing
+                _assemble_kmer_graph(observations, config)  # K-mer
+            else
+                _assemble_biosequence_graph(observations, config)  # BioSequence overlap-based
+            end
+        end
     else
-        throw(ArgumentError("Unknown assembly method: $method"))
+        throw(ArgumentError("Unsupported sequence type: $(config.sequence_type)"))
     end
-    
+
     @info "Assembly completed: $(length(result.contigs)) contigs generated"
     return result
 end

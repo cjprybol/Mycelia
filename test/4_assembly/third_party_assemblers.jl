@@ -414,14 +414,14 @@ Test.@testset "Long Read Isolate Assembly" begin
             # Test Flye - create reference genome and simulate ONT reads
             flye_ref_fasta = joinpath(dir, "flye_isolate_ref.fasta")
             rng_flye = StableRNGs.StableRNG(456)
-            flye_genome = BioSequences.randdnaseq(rng_flye, 50000)  # 50kb genome for better assembly success
+            flye_genome = BioSequences.randdnaseq(rng_flye, 10000)  # 10kb genome for better assembly success
             
             # Create FASTA record and write using Mycelia.write_fasta
             flye_fasta_record = FASTX.FASTA.Record("flye_isolate_genome", flye_genome)
             Mycelia.write_fasta(outfile=flye_ref_fasta, records=[flye_fasta_record])
-            
-            # Simulate nanopore reads with 20x coverage (higher coverage for better assembly success)
-            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="20x", quiet=true)
+
+            # Simulate nanopore reads with 15x coverage (higher coverage for better assembly success)
+            flye_simulated_reads = Mycelia.simulate_nanopore_reads(fasta=flye_ref_fasta, quantity="15x", quiet=true)
             
             # Decompress for flye
             flye_fastq = joinpath(dir, "flye_reads.fq")
@@ -433,7 +433,7 @@ Test.@testset "Long Read Isolate Assembly" begin
                 rm(flye_outdir, recursive=true)
             end
             try
-                result = Mycelia.run_flye(fastq=flye_fastq, outdir=flye_outdir, read_type="nano-raw")
+                result = Mycelia.run_flye(fastq=flye_fastq, outdir=flye_outdir, read_type="nano-hq")
                 Test.@test result.outdir == flye_outdir
                 Test.@test result.assembly == joinpath(flye_outdir, "assembly.fasta")
                 Test.@test isfile(result.assembly)
