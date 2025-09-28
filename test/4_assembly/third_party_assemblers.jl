@@ -696,47 +696,35 @@ Test.@testset "Long Read Metagenomic Assembly" begin
         # # end
 
         Test.@testset "Long Read Metagenomic Assembly - metaFlye" begin
-            
+            # Create a smaller, specific dataset for metaFlye to manage memory usage
+            metaflye_ref_fasta = joinpath(dir, "metaflye_specific_ref.fasta")
+            rng_meta_flye1 = StableRNGs.StableRNG(800)
+            rng_meta_flye2 = StableRNGs.StableRNG(801)
+            meta_flye_genome1 = BioSequences.randdnaseq(rng_meta_flye1, 4000) # 4kb
+            meta_flye_genome2 = BioSequences.randdnaseq(rng_meta_flye2, 3000) # 3kb
+            meta_flye_record1 = FASTX.FASTA.Record("meta_flye_genome_1", meta_flye_genome1)
+            meta_flye_record2 = FASTX.FASTA.Record("meta_flye_genome_2", meta_flye_genome2)
+            Mycelia.write_fasta(outfile=metaflye_ref_fasta, records=[meta_flye_record1, meta_flye_record2])
+
+            # Simulate reads with lower coverage for this specific test
+            meta_flye_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=metaflye_ref_fasta, quantity="10x", quiet=true)
+            meta_flye_fastq = joinpath(dir, "meta_flye_reads.fq")
+            run(pipeline(`gunzip -c $(meta_flye_simulated_reads)`, meta_flye_fastq))
+
             # Test metaFlye - clean up any existing directory first
             metaflye_outdir = joinpath(dir, "metaflye_assembly")
             if isdir(metaflye_outdir)
                 rm(metaflye_outdir, recursive=true)
             end
             try
-                result = Mycelia.run_metaflye(fastq=meta_long_fastq, outdir=metaflye_outdir, read_type="pacbio-raw")
+                result = Mycelia.run_metaflye(fastq=meta_flye_fastq, outdir=metaflye_outdir, read_type="pacbio-hifi")
                 Test.@test result.outdir == metaflye_outdir
                 Test.@test result.assembly == joinpath(metaflye_outdir, "assembly.fasta")
                 Test.@test isfile(result.assembly)
                 # Clean up after test
                 rm(metaflye_outdir, recursive=true, force=true)
             catch e
-                # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed")
-                #     @warn """
-                #     metaFlye assembly failed due to resource constraints.
-                #     Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data
-
-                #     Required resources for metaFlye:
-                #     - Memory: ~2-4GB RAM minimum (higher than regular Flye)
-                #     - CPU: 1-4 cores recommended
-                #     - Disk: ~1GB temporary space
-                #     - Note: metaFlye is designed for metagenomic data with uneven coverage
-
-                #     To fix: Increase available memory or reduce test genome size further.
-                #     """
-                #     Test.@test_skip "metaFlye test skipped - insufficient resources"
-                # elseif contains(string(e), "No contigs were assembled") || contains(string(e), "Pipeline aborted") || contains(string(e), "assembly failed")
-                #     @warn """
-                #     metaFlye assembly failed to generate contigs despite increased parameters.
-                #     Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data
-
-                #     This suggests the simulated reads may not be suitable for metagenomic assembly.
-                #     Consider adjusting read simulation parameters or using different test data.
-                #     """
-                #     Test.@test_skip "metaFlye test skipped - assembly failed to generate contigs"
-                # else
-                #     rethrow(e)
-                # end
-                # Clean up on failure
+                # ... (error handling)
                 rm(metaflye_outdir, recursive=true, force=true)
                 rethrow(e)
             end
