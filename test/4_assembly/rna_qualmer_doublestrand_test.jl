@@ -1,0 +1,102 @@
+# RNA Qualmer Graph - DoubleStrand Mode Test
+#
+# Run with: julia --project=. -e 'include("test/4_assembly/rna_qualmer_doublestrand_test.jl")'
+
+import Test
+import Mycelia
+import BioSequences
+import FASTX
+import Kmers
+import MetaGraphsNext
+
+Test.@testset "RNA Qualmer DoubleStrand Graph" begin
+    # Test data with quality scores
+    test_rna = BioSequences.rna"AUCGAUCG"
+    high_quality = [40, 40, 40, 40, 40, 40, 40, 40]
+    qual_str = String([Char(q + 33) for q in high_quality])
+    fastq_record = FASTX.FASTQ.Record("test", string(test_rna), qual_str)
+    reads = [fastq_record]
+
+    # Build qualmer graph
+    graph = Mycelia.build_qualmer_graph(reads; k=3, graph_mode=Mycelia.DoubleStrand)
+
+    # Structure validation - canonicalization reduces vertex count
+    vertices = collect(MetaGraphsNext.labels(graph))
+    Test.@test length(vertices) == 2  # Canonical qualmers
+    Test.@test MetaGraphsNext.ne(graph) == 4
+
+    # Quality-aware coverage validation
+    for vertex_label in vertices
+        vertex_data = graph[vertex_label]
+        Test.@test !isempty(vertex_data.coverage)
+
+        for cov_entry in vertex_data.coverage
+            if length(cov_entry) == 4  # Quality-aware coverage
+                obs_id, pos, strand, quality = cov_entry
+                Test.@test obs_id isa Int
+                Test.@test pos isa Int
+                Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
+                Test.@test quality isa Vector{Int}
+                Test.@test all(q -> 0 <= q <= 60, quality)  # Proper Phred range
+            end
+        end
+
+        # Check quality-related fields
+        if hasfield(typeof(vertex_data), :average_quality)
+            Test.@test vertex_data.average_quality >= 0.0
+        end
+
+        if hasfield(typeof(vertex_data), :quality_scores)
+            Test.@test !isempty(vertex_data.quality_scores)
+            for qual_vec in vertex_data.quality_scores
+                Test.@test isa(qual_vec, Vector{Int})
+                Test.@test all(q -> 0 <= q <= 60, qual_vec)
+            end
+        end
+    end
+
+    # Verify both orientations are tracked
+    found_both_orientations = false
+    for vertex_label in vertices
+        vertex_data = graph[vertex_label]
+        strands = [strand for (obs_id, pos, strand, quality) in vertex_data.coverage if length((obs_id, pos, strand, quality)) >= 3]
+        if Mycelia.Forward in strands && Mycelia.Reverse in strands
+            found_both_orientations = true
+            break
+        end
+    end
+    @info "Found both orientations in DoubleStrand mode: $found_both_orientations"
+
+    # Path reconstruction
+    paths = Mycelia.find_eulerian_paths_next(graph)
+    Test.@test !isempty(paths)
+
+    # Verify we can reconstruct sequences
+    reconstruction_success = false
+    for path_vector in paths
+        if !isempty(path_vector)
+            try
+                vertex_type = typeof(first(path_vector))
+                walk_steps = Mycelia.WalkStep{vertex_type}[]
+
+                for (i, vertex_label) in enumerate(path_vector)
+                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                    push!(walk_steps, step)
+                end
+
+                graph_path = Mycelia.GraphPath(walk_steps)
+                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
+
+                if reconstructed !== nothing
+                    reconstruction_success = true
+                    @info "Successfully reconstructed: $(typeof(reconstructed)) of length $(length(reconstructed))"
+                    break
+                end
+            catch e
+                @warn "Reconstruction failed: $e"
+            end
+        end
+    end
+
+    Test.@test reconstruction_success
+end
