@@ -9,19 +9,19 @@ with type-stable metadata structures, replacing the deprecated MetaGraphs.jl imp
 
 # Type-stable metadata structures for vertices and edges
 
-"""
-Strand orientation for k-mer observations and transitions.
-- `Forward`: k-mer as observed (5' to 3')
-- `Reverse`: reverse complement of k-mer (3' to 5')
-"""
-@enum StrandOrientation Forward=true Reverse=false
+# """
+# Strand orientation for k-mer observations and transitions.
+# - `Forward`: k-mer as observed (5' to 3')
+# - `Reverse`: reverse complement of k-mer (3' to 5')
+# """
+# @enum StrandOrientation Forward=true Reverse=false
 
-"""
-Graph mode for handling strand information.
-- `SingleStrand`: Sequences are single-stranded (RNA, amino acids, or directional DNA)
-- `DoubleStrand`: Sequences are double-stranded DNA/RNA with canonical representation
-"""
-@enum GraphMode SingleStrand DoubleStrand
+# """
+# Graph mode for handling strand information.
+# - `SingleStrand`: Sequences are single-stranded (RNA, amino acids, or directional DNA)
+# - `DoubleStrand`: Sequences are double-stranded DNA/RNA with canonical representation
+# """
+# @enum GraphMode SingleStrand DoubleStrand
 
 """
 Type-stable metadata for k-mer graph vertices.
@@ -33,13 +33,14 @@ Fields:
 - `coverage`: Vector of observation coverage data as (observation_id, position, strand_orientation) tuples
 - `canonical_kmer`: The canonical k-mer (BioSequence type - NO string conversion)
 """
-struct KmerVertexData{KmerT}
-    coverage::Vector{Tuple{Int, Int, StrandOrientation}}  # (observation_id, position, strand_orientation)
-    canonical_kmer::KmerT  # Actual k-mer type (DNAKmer, RNAKmer, AAKmer)
-    
-    # Constructor with default empty coverage
-    KmerVertexData(canonical_kmer::KmerT) where {KmerT} = new{KmerT}(Vector{Tuple{Int, Int, StrandOrientation}}(), canonical_kmer)
-end
+# >>> moved to src/kmer-graphs.jl (implementation commented below)
+# struct KmerVertexData{KmerT}
+#     coverage::Vector{Tuple{Int, Int, StrandOrientation}}  # (observation_id, position, strand_orientation)
+#     canonical_kmer::KmerT  # Actual k-mer type (DNAKmer, RNAKmer, AAKmer)
+#     
+#     # Constructor with default empty coverage
+#     KmerVertexData(canonical_kmer::KmerT) where {KmerT} = new{KmerT}(Vector{Tuple{Int, Int, StrandOrientation}}(), canonical_kmer)
+# end
 
 """
 Type-stable metadata for k-mer graph edges.
@@ -53,76 +54,80 @@ Fields:
 - `src_strand`: Required strand orientation of source k-mer for this transition
 - `dst_strand`: Required strand orientation of destination k-mer for this transition
 """
-struct KmerEdgeData
-    coverage::Vector{Tuple{Tuple{Int, Int, StrandOrientation}, Tuple{Int, Int, StrandOrientation}}}
-    weight::Float64
-    src_strand::StrandOrientation  # Required orientation of source k-mer
-    dst_strand::StrandOrientation  # Required orientation of destination k-mer
-    
-    # Constructor with default weight calculation
-    function KmerEdgeData(coverage::Vector{Tuple{Tuple{Int, Int, StrandOrientation}, Tuple{Int, Int, StrandOrientation}}},
-                         src_strand::StrandOrientation, dst_strand::StrandOrientation)
-        new(coverage, Float64(length(coverage)), src_strand, dst_strand)
-    end
-    
-    # Default constructor
-    KmerEdgeData(src_strand::StrandOrientation, dst_strand::StrandOrientation) = 
-        new(Vector{Tuple{Tuple{Int, Int, StrandOrientation}, Tuple{Int, Int, StrandOrientation}}}(), 
-            0.0, src_strand, dst_strand)
-end
+# struct KmerEdgeData
+#     coverage::Vector{Tuple{Tuple{Int, Int, StrandOrientation}, Tuple{Int, Int, StrandOrientation}}}
+#     weight::Float64
+#     src_strand::StrandOrientation  # Required orientation of source k-mer
+#     dst_strand::StrandOrientation  # Required orientation of destination k-mer
+#     
+#     # Constructor with default weight calculation
+#     function KmerEdgeData(coverage::Vector{Tuple{Tuple{Int, Int, StrandOrientation}, Tuple{Int, Int, StrandOrientation}}},
+#                          src_strand::StrandOrientation, dst_strand::StrandOrientation)
+#         new(coverage, Float64(length(coverage)), src_strand, dst_strand)
+#     end
+#     
+#     # Default constructor
+#     KmerEdgeData(src_strand::StrandOrientation, dst_strand::StrandOrientation) = 
+#         new(Vector{Tuple{Tuple{Int, Int, StrandOrientation}, Tuple{Int, Int, StrandOrientation}}}(), 
+#             0.0, src_strand, dst_strand)
+# end
 
 # Additional vertex data structures for string graphs only (others exist in their respective files)
 
-"""
-Vertex data for string graphs.
-"""
-struct StringVertexData
-    string_value::String
-    coverage::Vector{Int}
+# """
+# Vertex data for string graphs.
+# """
+# struct StringVertexData
+#     string_value::String
+#     coverage::Vector{Int}
+# 
+#     function StringVertexData(string_value::String, coverage::Vector{Int}=Int[])
+#         new(string_value, coverage)
+#     end
+# end
+# 
+# """
+# Edge data for string graphs.
+# """
+# struct StringEdgeData
+#     overlap_length::Int
+#     weight::Float64
+# 
+#     function StringEdgeData(overlap_length::Int, weight::Float64=1.0)
+#         new(overlap_length, weight)
+#     end
+# end
 
-    function StringVertexData(string_value::String, coverage::Vector{Int}=Int[])
-        new(string_value, coverage)
-    end
-end
-
-"""
-Edge data for string graphs.
-"""
-struct StringEdgeData
-    overlap_length::Int
-    weight::Float64
-
-    function StringEdgeData(overlap_length::Int, weight::Float64=1.0)
-        new(overlap_length, weight)
-    end
-end
-
-"""
-Vertex data for quality-aware string graphs.
-"""
-struct QualityStringVertexData
-    string_value::String
-    quality_scores::Vector{Vector{Int}}
-    coverage::Vector{Int}
-
-    function QualityStringVertexData(string_value::String, quality_scores::Vector{Vector{Int}}=Vector{Int}[])
-        new(string_value, quality_scores, Int[])
-    end
-end
-
-"""
-Edge data for quality-aware string graphs.
-"""
-struct QualityStringEdgeData
-    overlap_length::Int
-    weight::Float64
-    quality_scores::Vector{Vector{Int}}
-
-    function QualityStringEdgeData(overlap_length::Int, weight::Float64=1.0)
-        new(overlap_length, weight, Vector{Int}[])
-    end
-end
-
+# """
+# Vertex data for quality-aware string graphs.
+# """
+# struct QualityStringVertexData
+#     string_value::String
+#     quality_scores::Vector{Vector{Int}}
+#     coverage::Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}
+# 
+#     function QualityStringVertexData(
+#         string_value::String,
+#         quality_scores::Vector{Vector{Int}}=Vector{Int}[],
+#         coverage::Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}=Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}()
+#     )
+#         new(string_value, quality_scores, coverage)
+#     end
+# end
+# 
+# """
+# Edge data for quality-aware string graphs.
+# """
+# struct QualityStringEdgeData
+#     overlap_length::Int
+#     weight::Float64
+#     quality_scores::Vector{Vector{Int}}
+# 
+#     function QualityStringEdgeData(overlap_length::Int, weight::Float64=1.0)
+#         new(overlap_length, weight, Vector{Int}[])
+#     end
+# end
+# >>> moved to src/kmer-graphs.jl
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -145,47 +150,47 @@ biological transition constraints for both single-strand and double-strand seque
 - **SingleStrand mode**: Only forward-strand transitions allowed
 - **DoubleStrand mode**: Both forward and reverse-complement transitions allowed
 """
-function build_kmer_graph_next(kmer_type, observations::AbstractVector{<:Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}; 
-                                graph_mode::GraphMode=DoubleStrand)
-    
-    # Count k-mers from observations (canonical for DoubleStrand, as-is for SingleStrand)
-    if graph_mode == DoubleStrand
-        kmer_counts = Mycelia.count_canonical_kmers(kmer_type, observations)
-    else  # SingleStrand mode
-        kmer_counts = Mycelia.count_kmers(kmer_type, observations)
-    end
-    graph_kmers = collect(keys(kmer_counts))
-    
-    if isempty(graph_kmers)
-        @warn "No k-mers found in observations"
-        return _create_empty_kmer_graph(kmer_type)
-    end
-
-    # Infer the actual k-mer type with storage parameter from the data
-    actual_kmer_type = eltype(graph_kmers)
-    
-    # Create the MetaGraphsNext graph with type-stable metadata
-    graph = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
-        label_type=actual_kmer_type,
-        vertex_data_type=KmerVertexData{actual_kmer_type},
-        edge_data_type=KmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
-        default_weight=0.0
-    )
-    
-    # Add vertices for each k-mer (canonical in DoubleStrand, as-is in SingleStrand)
-    for kmer in graph_kmers
-        graph[kmer] = KmerVertexData(kmer)
-    end
-
-    # Process observations to build strand-aware edges
-    for (obs_idx, observation) in enumerate(observations)
-        _add_observation_to_graph!(graph, observation, obs_idx, graph_kmers, graph_mode)
-    end
-    
-    return graph
-end
+# function build_kmer_graph_next(kmer_type, observations::AbstractVector{<:Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}; 
+#                                 graph_mode::GraphMode=DoubleStrand)
+#     
+#     # Count k-mers from observations (canonical for DoubleStrand, as-is for SingleStrand)
+#     if graph_mode == DoubleStrand
+#         kmer_counts = Mycelia.count_canonical_kmers(kmer_type, observations)
+#     else  # SingleStrand mode
+#         kmer_counts = Mycelia.count_kmers(kmer_type, observations)
+#     end
+#     graph_kmers = collect(keys(kmer_counts))
+#     
+#     if isempty(graph_kmers)
+#         @warn "No k-mers found in observations"
+#         return _create_empty_kmer_graph(kmer_type)
+#     end
+# 
+#     # Infer the actual k-mer type with storage parameter from the data
+#     actual_kmer_type = eltype(graph_kmers)
+#     
+#     # Create the MetaGraphsNext graph with type-stable metadata
+#     graph = MetaGraphsNext.MetaGraph(
+#         MetaGraphsNext.DiGraph(),
+#        label_type=actual_kmer_type,
+#         vertex_data_type=KmerVertexData{actual_kmer_type},
+#         edge_data_type=KmerEdgeData,
+#         weight_function=edge_data -> edge_data.weight,
+#         default_weight=0.0
+#     )
+#     
+#     # Add vertices for each k-mer (canonical in DoubleStrand, as-is in SingleStrand)
+#     for kmer in graph_kmers
+#         graph[kmer] = KmerVertexData(kmer)
+#     end
+# 
+#     # Process observations to build strand-aware edges
+#     for (obs_idx, observation) in enumerate(observations)
+#         _add_observation_to_graph!(graph, observation, obs_idx, graph_kmers, graph_mode)
+#     end
+#     
+#     return graph
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -199,50 +204,50 @@ Add a sequence observation to an existing k-mer graph with strand-aware edge cre
 - `graph_kmers`: Vector of k-mers in the graph (canonical in DoubleStrand, as-is in SingleStrand)
 - `graph_mode`: SingleStrand or DoubleStrand mode
 """
-function _add_observation_to_graph!(graph, observation, obs_idx, graph_kmers, graph_mode)
-    observed_sequence = FASTX.sequence(observation)
-    k = length(first(graph_kmers))
-    
-    if length(observed_sequence) < k
-        observation_id = FASTX.identifier(observation)
-        @warn "Skipping sequence shorter than k with id $observation_id & length $(length(observed_sequence))"
-        return
-    end
-    
-    # Convert sequence to path through k-mer graph with strand information
-    observed_path = _sequence_to_canonical_path(graph_kmers, observed_sequence, graph_mode)
-    
-    if isempty(observed_path)
-        return
-    end
-    
-    # Add coverage to first vertex
-    first_canonical_kmer, first_strand = observed_path[1]
-    _add_vertex_coverage!(graph, first_canonical_kmer, obs_idx, 1, first_strand)
-    
-    # Add strand-aware edges and vertex coverage for the rest of the path
-    for i in 2:length(observed_path)
-        curr_canonical_kmer, curr_strand = observed_path[i]
-        prev_canonical_kmer, prev_strand = observed_path[i-1]
-        
-        # Add vertex coverage
-        _add_vertex_coverage!(graph, curr_canonical_kmer, obs_idx, i, curr_strand)
-        
-        # Add or update strand-aware edge
-        _add_strand_aware_edge!(graph, prev_canonical_kmer, curr_canonical_kmer, 
-                               prev_strand, curr_strand,
-                               (obs_idx, i-1, prev_strand), (obs_idx, i, curr_strand))
-    end
-end
+# function _add_observation_to_graph!(graph, observation, obs_idx, graph_kmers, graph_mode)
+#     observed_sequence = FASTX.sequence(observation)
+#     k = length(first(graph_kmers))
+#     
+#     if length(observed_sequence) < k
+#         observation_id = FASTX.identifier(observation)
+#         @warn "Skipping sequence shorter than k with id $observation_id & length $(length(observed_sequence))"
+#         return
+#     end
+#     
+#     # Convert sequence to path through k-mer graph with strand information
+#     observed_path = _sequence_to_canonical_path(graph_kmers, observed_sequence, graph_mode)
+#     
+#     if isempty(observed_path)
+#         return
+#     end
+#     
+#     # Add coverage to first vertex
+#     first_canonical_kmer, first_strand = observed_path[1]
+#     _add_vertex_coverage!(graph, first_canonical_kmer, obs_idx, 1, first_strand)
+#     
+#     # Add strand-aware edges and vertex coverage for the rest of the path
+#     for i in 2:length(observed_path)
+#         curr_canonical_kmer, curr_strand = observed_path[i]
+#         prev_canonical_kmer, prev_strand = observed_path[i-1]
+#         
+#         # Add vertex coverage
+#         _add_vertex_coverage!(graph, curr_canonical_kmer, obs_idx, i, curr_strand)
+#         
+#         # Add or update strand-aware edge
+#         _add_strand_aware_edge!(graph, prev_canonical_kmer, curr_canonical_kmer, 
+#                                prev_strand, curr_strand,
+#                                (obs_idx, i-1, prev_strand), (obs_idx, i, curr_strand))
+#     end
+# end
 
 """
 Helper function to add coverage data to a vertex.
 """
-function _add_vertex_coverage!(graph, kmer, obs_idx, position, strand_orientation)
-    vertex_data = graph[kmer]
-    new_coverage = (obs_idx, position, strand_orientation)
-    push!(vertex_data.coverage, new_coverage)
-end
+# function _add_vertex_coverage!(graph, kmer, obs_idx, position, strand_orientation)
+#     vertex_data = graph[kmer]
+#     new_coverage = (obs_idx, position, strand_orientation)
+#     push!(vertex_data.coverage, new_coverage)
+# end
 
 """
 Helper function to add strand-aware coverage data to an edge.
@@ -250,49 +255,49 @@ Helper function to add strand-aware coverage data to an edge.
 This function creates edges that respect strand orientation constraints.
 Each edge represents a biologically valid transition between k-mers.
 """
-function _add_strand_aware_edge!(graph, src_kmer, dst_kmer, src_strand, dst_strand, src_coverage, dst_coverage)
-    # Create edge key that includes strand information
-    edge_exists = false
-    existing_edge_data = nothing
-    
-    # Check if an edge with this strand configuration already exists
-    if haskey(graph, src_kmer, dst_kmer)
-        existing_edge_data = graph[src_kmer, dst_kmer]
-        # Check if this edge represents the same strand transition
-        if existing_edge_data.src_strand == src_strand && existing_edge_data.dst_strand == dst_strand
-            edge_exists = true
-        end
-    end
-    
-    if !edge_exists
-        # Create new strand-aware edge
-        graph[src_kmer, dst_kmer] = KmerEdgeData(src_strand, dst_strand)
-        existing_edge_data = graph[src_kmer, dst_kmer]
-    end
-    
-    # Add coverage to the edge
-    new_coverage = (src_coverage, dst_coverage)
-    push!(existing_edge_data.coverage, new_coverage)
-    
-    # Update weight based on coverage count
-    graph[src_kmer, dst_kmer] = KmerEdgeData(existing_edge_data.coverage, 
-                                            existing_edge_data.src_strand, 
-                                            existing_edge_data.dst_strand)
-end
+# function _add_strand_aware_edge!(graph, src_kmer, dst_kmer, src_strand, dst_strand, src_coverage, dst_coverage)
+#     # Create edge key that includes strand information
+#     edge_exists = false
+#     existing_edge_data = nothing
+#     
+#     # Check if an edge with this strand configuration already exists
+#     if haskey(graph, src_kmer, dst_kmer)
+#         existing_edge_data = graph[src_kmer, dst_kmer]
+#         # Check if this edge represents the same strand transition
+#         if existing_edge_data.src_strand == src_strand && existing_edge_data.dst_strand == dst_strand
+#             edge_exists = true
+#         end
+#     end
+#     
+#     if !edge_exists
+#         # Create new strand-aware edge
+#         graph[src_kmer, dst_kmer] = KmerEdgeData(src_strand, dst_strand)
+#         existing_edge_data = graph[src_kmer, dst_kmer]
+#     end
+#     
+#     # Add coverage to the edge
+#     new_coverage = (src_coverage, dst_coverage)
+#     push!(existing_edge_data.coverage, new_coverage)
+#     
+#     # Update weight based on coverage count
+#     graph[src_kmer, dst_kmer] = KmerEdgeData(existing_edge_data.coverage, 
+#                                             existing_edge_data.src_strand, 
+#                                             existing_edge_data.dst_strand)
+# end
 
 """
 Helper function to create an empty k-mer graph.
 """
-function _create_empty_kmer_graph(kmer_type)
-    return MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
-        label_type=kmer_type,
-        vertex_data_type=KmerVertexData{kmer_type},
-        edge_data_type=KmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
-        default_weight=0.0
-    )
-end
+# function _create_empty_kmer_graph(kmer_type)
+#     return MetaGraphsNext.MetaGraph(
+#         MetaGraphsNext.DiGraph(),
+#         label_type=kmer_type,
+#         vertex_data_type=KmerVertexData{kmer_type},
+#         edge_data_type=KmerEdgeData,
+#         weight_function=edge_data -> edge_data.weight,
+#         default_weight=0.0
+#     )
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -321,53 +326,53 @@ In SingleStrand mode:
 - All strand orientations are Forward
 - Suitable for RNA, amino acids, or directional DNA analysis
 """
-function _sequence_to_canonical_path(graph_kmers, sequence, graph_mode)
-    k = length(first(graph_kmers))
-    path = Vector{Tuple{eltype(graph_kmers), StrandOrientation}}()
-    graph_kmer_set = Set(graph_kmers)
-    
-    # Extract k-mers from sequence
-    for i in 1:(length(sequence) - k + 1)
-        subseq = sequence[i:i+k-1]
-        observed_kmer = typeof(first(graph_kmers))(subseq)
-
-        if graph_mode == SingleStrand
-            # Single-strand mode: use k-mers as-is
-            if observed_kmer in graph_kmer_set
-                push!(path, (observed_kmer, Forward))
-            else
-                @warn "K-mer $observed_kmer not found in graph at position $i (SingleStrand mode)"
-            end
-        else  # DoubleStrand mode
-            # Double-strand mode: find canonical representation
-            # Only valid for nucleic acids, not amino acids
-            if typeof(observed_kmer) <: Kmers.Kmer{<:BioSequences.NucleicAcidAlphabet}
-                rc_kmer = BioSequences.reverse_complement(observed_kmer)
-            else
-                # For amino acids, treat as single-strand even in DoubleStrand mode
-                if observed_kmer in graph_kmer_set
-                    push!(path, (observed_kmer, Forward))
-                    continue
-                else
-                    @warn "K-mer $observed_kmer not found in graph at position $i (amino acid in DoubleStrand mode)"
-                    continue
-                end
-            end
-
-            # Determine canonical k-mer using BioSequences.canonical() to match graph construction
-            canonical_kmer = BioSequences.canonical(observed_kmer)
-            strand_orientation = BioSequences.iscanonical(observed_kmer) ? Forward : Reverse
-
-            if canonical_kmer in graph_kmer_set
-                push!(path, (canonical_kmer, strand_orientation))
-            else
-                @warn "Canonical k-mer $canonical_kmer not found in graph at position $i (DoubleStrand mode)"
-            end
-        end
-    end
-    
-    return path
-end
+# function _sequence_to_canonical_path(graph_kmers, sequence, graph_mode)
+#     k = length(first(graph_kmers))
+#     path = Vector{Tuple{eltype(graph_kmers), StrandOrientation}}()
+#     graph_kmer_set = Set(graph_kmers)
+#     
+#     # Extract k-mers from sequence
+#     for i in 1:(length(sequence) - k + 1)
+#         subseq = sequence[i:i+k-1]
+#         observed_kmer = typeof(first(graph_kmers))(subseq)
+#
+#         if graph_mode == SingleStrand
+#             # Single-strand mode: use k-mers as-is
+#             if observed_kmer in graph_kmer_set
+#                 push!(path, (observed_kmer, Forward))
+#             else
+#                 @warn "K-mer $observed_kmer not found in graph at position $i (SingleStrand mode)"
+#             end
+#         else  # DoubleStrand mode
+#             # Double-strand mode: find canonical representation
+#             # Only valid for nucleic acids, not amino acids
+#             if typeof(observed_kmer) <: Kmers.Kmer{<:BioSequences.NucleicAcidAlphabet}
+#                 rc_kmer = BioSequences.reverse_complement(observed_kmer)
+#             else
+#                 # For amino acids, treat as single-strand even in DoubleStrand mode
+#                 if observed_kmer in graph_kmer_set
+#                     push!(path, (observed_kmer, Forward))
+#                     continue
+#                 else
+#                     @warn "K-mer $observed_kmer not found in graph at position $i (amino acid in DoubleStrand mode)"
+#                     continue
+#                 end
+#             end
+#
+#             # Determine canonical k-mer using BioSequences.canonical() to match graph construction
+#             canonical_kmer = BioSequences.canonical(observed_kmer)
+#             strand_orientation = BioSequences.iscanonical(observed_kmer) ? Forward : Reverse
+#
+#             if canonical_kmer in graph_kmer_set
+#                 push!(path, (canonical_kmer, strand_orientation))
+#             else
+#                 @warn "Canonical k-mer $canonical_kmer not found in graph at position $i (DoubleStrand mode)"
+#             end
+#         end
+#     end
+#     
+#     return path
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -387,18 +392,18 @@ destination k-mer when accounting for strand orientations.
 # Returns
 - `Bool`: true if transition is biologically valid
 """
-function _is_valid_transition(src_kmer, dst_kmer, src_strand, dst_strand, k)
-    # Get the actual k-mer sequences considering strand orientation
-    src_seq = src_strand == Forward ? src_kmer : BioSequences.reverse_complement(src_kmer)
-    dst_seq = dst_strand == Forward ? dst_kmer : BioSequences.reverse_complement(dst_kmer)
-    
-    # Check if suffix of src matches prefix of dst (k-1 overlap)
-    # For BioSequences, we can use slicing directly
-    src_suffix = src_seq[2:end]  # Remove first nucleotide
-    dst_prefix = dst_seq[1:end-1]  # Remove last nucleotide
-    
-    return src_suffix == dst_prefix
-end
+# function _is_valid_transition(src_kmer, dst_kmer, src_strand, dst_strand, k)
+#     # Get the actual k-mer sequences considering strand orientation
+#     src_seq = src_strand == Forward ? src_kmer : BioSequences.reverse_complement(src_kmer)
+#     dst_seq = dst_strand == Forward ? dst_kmer : BioSequences.reverse_complement(dst_kmer)
+#     
+#     # Check if suffix of src matches prefix of dst (k-1 overlap)
+#     # For BioSequences, we can use slicing directly
+#     src_suffix = src_seq[2:end]  # Remove first nucleotide
+#     dst_prefix = dst_seq[1:end-1]  # Remove last nucleotide
+#     
+#     return src_suffix == dst_prefix
+# end
 
 # Compatibility layer for migrating from legacy MetaGraphs implementation
 
@@ -436,84 +441,54 @@ graph = build_kmer_graph_next(DNAKmer{3}, observations)
 write_gfa_next(graph, "assembly.gfa")
 ```
 """
-function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
-    open(outfile, "w") do io
-        # Write GFA header
-        println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Next")
-        
-        # Write segments (vertices) - canonical k-mers
-        vertex_id_map = Dict()  # Generic dict to handle any k-mer type
-        for (i, label) in enumerate(MetaGraphsNext.labels(graph))
-            vertex_id_map[label] = i
-            vertex_data = graph[label]
-            
-            # Calculate depth from coverage
-            depth = length(vertex_data.coverage)
-            
-            # Write segment line: S<tab>id<tab>sequence<tab>optional_fields
-            # Handle KmerVertexData (canonical_kmer), QualmerVertexData (canonical_qualmer), and BioSequenceVertexData (sequence)
-            sequence = if hasfield(typeof(vertex_data), :canonical_kmer)
-                string(vertex_data.canonical_kmer)
-            elseif hasfield(typeof(vertex_data), :canonical_qualmer)
-                string(vertex_data.canonical_qualmer.kmer)
-            elseif hasfield(typeof(vertex_data), :sequence)
-                string(vertex_data.sequence)
-            else
-                error("Unknown vertex data type: $(typeof(vertex_data))")
-            end
-            println(io, "S\t$i\t$(sequence)\tDP:f:$depth")
-        end
-        
-        # Calculate k-mer size for overlap
-        if !isempty(MetaGraphsNext.labels(graph))
-            first_label = first(MetaGraphsNext.labels(graph))
-            first_vertex_data = graph[first_label]
-            # Handle KmerVertexData, QualmerVertexData, and BioSequenceVertexData
-            k = if hasfield(typeof(first_vertex_data), :canonical_kmer)
-                length(first_vertex_data.canonical_kmer)
-            elseif hasfield(typeof(first_vertex_data), :canonical_qualmer)
-                length(first_vertex_data.canonical_qualmer.kmer)
-            elseif hasfield(typeof(first_vertex_data), :sequence)
-                # For BioSequence graphs, use the original k-mer size from constituent k-mers
-                if !isempty(first_vertex_data.constituent_kmers)
-                    length(first_vertex_data.constituent_kmers[1])
-                else
-                    # Fallback: try to get k from graph metadata, otherwise use sequence length
-                    if hasfield(typeof(graph), :graph_data) && !isnothing(graph.graph_data) && haskey(graph.graph_data, :k)
-                        graph.graph_data[:k]
-                    else
-                        length(first_vertex_data.sequence)  # Last resort
-                    end
-                end
-            else
-                error("Unknown vertex data type: $(typeof(first_vertex_data))")
-            end
-            overlap = k - 1
-        else
-            overlap = 0
-        end
-        
-        # Write links (edges) - strand-aware transitions
-        for edge_labels in MetaGraphsNext.edge_labels(graph)
-            if length(edge_labels) == 2
-                src_label, dst_label = edge_labels
-                edge_data = graph[src_label, dst_label]
-                
-                src_id = vertex_id_map[src_label]
-                dst_id = vertex_id_map[dst_label]
-                
-                # Convert strand orientations to GFA format
-                src_orientation = edge_data.src_strand == Forward ? '+' : '-'
-                dst_orientation = edge_data.dst_strand == Forward ? '+' : '-'
-                
-                # Write link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
-                println(io, "L\t$src_id\t$src_orientation\t$dst_id\t$dst_orientation\t$(overlap)M")
-            end
-        end
-    end
-    
-    return outfile
-end
+# function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
+#     open(outfile, "w") do io
+#         println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Next")
+#         vertex_id_map = Dict()
+#         for (i, label) in enumerate(MetaGraphsNext.labels(graph))
+#             vertex_id_map[label] = i
+#             vertex_data = graph[label]
+#             depth = length(vertex_data.coverage)
+#             sequence = if hasfield(typeof(vertex_data), :canonical_kmer)
+#                 string(vertex_data.canonical_kmer)
+#             elseif hasfield(typeof(vertex_data), :canonical_qualmer)
+#                 string(vertex_data.canonical_qualmer.kmer)
+#             elseif hasfield(typeof(vertex_data), :sequence)
+#                 string(vertex_data.sequence)
+#             else
+#                 error("Unknown vertex data type: $(typeof(vertex_data))")
+#             end
+#             println(io, "S\t$i\t$(sequence)\tDP:f:$depth")
+#         end
+# 
+#         overlap = 0
+#         if !isempty(MetaGraphsNext.labels(graph))
+#             first_label = first(MetaGraphsNext.labels(graph))
+#             first_vertex_data = graph[first_label]
+#             if hasfield(typeof(first_vertex_data), :canonical_kmer)
+#                 overlap = length(first_vertex_data.canonical_kmer) - 1
+#             elseif hasfield(typeof(first_vertex_data), :canonical_qualmer)
+#                 overlap = length(first_vertex_data.canonical_qualmer.kmer) - 1
+#             elseif hasfield(typeof(first_vertex_data), :sequence) && !isempty(first_vertex_data.constituent_kmers)
+#                 overlap = length(first_vertex_data.constituent_kmers[1]) - 1
+#             end
+#         end
+# 
+#         for edge_labels in MetaGraphsNext.edge_labels(graph)
+#             if length(edge_labels) == 2
+#                 src_label, dst_label = edge_labels
+#                 edge_data = graph[src_label, dst_label]
+#                 src_id = vertex_id_map[src_label]
+#                 dst_id = vertex_id_map[dst_label]
+#                 src_orientation = edge_data.src_strand == Forward ? '+' : '-'
+#                 dst_orientation = edge_data.dst_strand == Forward ? '+' : '-'
+#                 println(io, "L\t$src_id\t$src_orientation\t$dst_id\t$dst_orientation\t$(overlap)M")
+#             end
+#         end
+#     end
+# 
+#     return outfile
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2781,6 +2756,8 @@ function build_biosequence_graph_next(sequence_type::Type{String},
     return graph
 end
 
+## >>> moved to src/qualmer-graphs.jl
+#= begin_qualmer_graph_next
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2788,7 +2765,6 @@ Build a qualmer graph from FASTQ records with quality scores.
 """
 function build_qualmer_graph_next(kmer_type, fastq_records::Vector{FASTX.FASTQ.Record};
                                  graph_mode::GraphMode=DoubleStrand)
-
     # Count k-mers from FASTQ observations with quality integration
     if graph_mode == DoubleStrand
         kmer_counts = Mycelia.count_canonical_qualmers(kmer_type, fastq_records)
@@ -2826,15 +2802,17 @@ function build_qualmer_graph_next(kmer_type, fastq_records::Vector{FASTX.FASTQ.R
 
     return graph
 end
+=#  # end begin_qualmer_graph_next
 
+#= begin_qualmer_biosequence_graph_next
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Build a quality-aware BioSequence graph from FASTQ records.
 """
-function build_qualmer_biosequence_graph_next(sequence_type::Type{<:BioSequences.BioSequence},
-                                             fastq_records::Vector{FASTX.FASTQ.Record};
-                                             graph_mode::GraphMode=DoubleStrand)
+# function build_qualmer_biosequence_graph_next(sequence_type::Type{<:BioSequences.BioSequence},
+#                                              fastq_records::Vector{FASTX.FASTQ.Record};
+#                                              graph_mode::GraphMode=DoubleStrand)
 
     if isempty(fastq_records)
         throw(ArgumentError("Cannot build graph from empty FASTQ records"))
@@ -2873,15 +2851,17 @@ function build_qualmer_biosequence_graph_next(sequence_type::Type{<:BioSequences
     end
 
     return graph
-end
+# end
+=#
 
+#= begin_string_graph_next
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Build a string n-gram graph using MetaGraphsNext.
 """
-function build_string_graph_next(fasta_records::Vector{FASTX.FASTA.Record}, ngram_length::Int;
-                                graph_mode::GraphMode=SingleStrand)
+# function build_string_graph_next(fasta_records::Vector{FASTX.FASTA.Record}, ngram_length::Int;
+#                                 graph_mode::GraphMode=SingleStrand)
 
     if isempty(fasta_records)
         throw(ArgumentError("Cannot build graph from empty FASTA records"))
@@ -2933,15 +2913,17 @@ function build_string_graph_next(fasta_records::Vector{FASTX.FASTA.Record}, ngra
     end
 
     return graph
-end
+# end
+=#  # end begin_string_graph_next
 
+#= begin_qualmer_string_graph_next
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Build a quality-aware string graph from FASTQ records.
 """
-function build_qualmer_string_graph_next(fastq_records::Vector{FASTX.FASTQ.Record}, ngram_length::Int;
-                                        graph_mode::GraphMode=SingleStrand)
+# function build_qualmer_string_graph_next(fastq_records::Vector{FASTX.FASTQ.Record}, ngram_length::Int;
+#                                         graph_mode::GraphMode=SingleStrand)
 
     if isempty(fastq_records)
         throw(ArgumentError("Cannot build graph from empty FASTQ records"))
@@ -2957,33 +2939,35 @@ function build_qualmer_string_graph_next(fastq_records::Vector{FASTX.FASTQ.Recor
         default_weight=0.0
     )
 
-    # Extract n-grams with quality information
     ngram_quality_data = Dict{String, Vector{Vector{Int}}}()
-    for record in fastq_records
+    ngram_coverage_data = Dict{String, Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}}()
+
+    for (obs_idx, record) in enumerate(fastq_records)
         sequence_str = FASTX.sequence(String, record)
-        quality = FASTX.quality(record)
+        phred_scores = Int.(collect(FASTX.quality_scores(record)))
+        observed_ngrams = ngrams(sequence_str, ngram_length)
 
-        # Generate n-grams with quality
-        for i in 1:(length(sequence_str) - ngram_length + 1)
-            ngram = sequence_str[i:i+ngram_length-1]
-            ngram_quality = quality[i:i+ngram_length-1]
-
-            if !haskey(ngram_quality_data, ngram)
-                ngram_quality_data[ngram] = Vector{Int}[]
-            end
-            push!(ngram_quality_data[ngram], collect(Int, ngram_quality))
+        for (pos, ngram) in enumerate(observed_ngrams)
+            quality_slice = phred_scores[pos:pos + ngram_length - 1]
+            push!(get!(Vector{Vector{Int}}, ngram_quality_data, ngram), quality_slice)
+            push!(
+                get!(Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}, ngram_coverage_data, ngram),
+                (obs_idx, pos, Forward, quality_slice)
+            )
         end
     end
 
-    # Add vertices for each n-gram with quality data
     for (ngram, quality_vectors) in ngram_quality_data
-        graph[ngram] = QualityStringVertexData(ngram, quality_vectors)
+        coverage = get(ngram_coverage_data, ngram, Tuple{Int, Int, StrandOrientation, Vector{Int}}[])
+        graph[ngram] = QualityStringVertexData(ngram, quality_vectors, coverage)
     end
 
     return graph
-end
+# end
+=#  # end begin_qualmer_string_graph_next
 
 # Helper function to create empty qualmer graph
+#= begin_create_empty_qualmer_graph
 function _create_empty_qualmer_graph(kmer_type)
     return MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
@@ -2994,8 +2978,10 @@ function _create_empty_qualmer_graph(kmer_type)
         default_weight=0.0
     )
 end
+=#  # end begin_create_empty_qualmer_graph
 
 # Helper function to add qualmer observation to graph
+#= begin_add_qualmer_observation
 function _add_qualmer_observation_to_graph!(graph, observation, obs_idx, graph_kmers, graph_mode)
     # Similar to _add_observation_to_graph! but with quality score integration
     observed_sequence = FASTX.sequence(observation)
@@ -3026,5 +3012,6 @@ function _add_qualmer_observation_to_graph!(graph, observation, obs_idx, graph_k
         end
     end
 end
+=#  # end begin_add_qualmer_observation
 
 # Note: We don't export specific types/functions - use fully qualified names like Mycelia.probabilistic_walk_next

@@ -284,7 +284,7 @@ with their associated quality scores.
 """
 function qualmers_unambiguous(record::FASTX.FASTQ.Record, k::Int)
     sequence = Mycelia.convert_sequence(FASTX.sequence(record))
-    quality = collect(FASTX.quality_scores(record))
+    quality = collect(UInt8, FASTX.quality_scores(record))
     return qualmers_unambiguous(sequence, quality, Val(k))
 end
 
@@ -308,8 +308,132 @@ Generate unambiguous canonical qualmers from the given FASTQ record.
 """
 function qualmers_unambiguous_canonical(record::FASTX.FASTQ.Record, k::Int)
     sequence = Mycelia.convert_sequence(FASTX.sequence(record))
-    quality = collect(FASTX.quality_scores(record))
+    quality = collect(UInt8, FASTX.quality_scores(record))
     return qualmers_unambiguous_canonical(sequence, quality, Val(k))
+end
+
+"""
+Return the k-mer length encoded in a qualmer-supporting k-mer type.
+"""
+qualmer_kmer_length(::Type{Kmers.Kmer{A, K}}) where {A, K} = K
+
+function _sequence_type_for_kmer(::Type{Kmers.Kmer{A, K}}) where {A, K}
+    if A <: BioSequences.DNAAlphabet
+        return BioSequences.LongDNA{4}
+    elseif A <: BioSequences.RNAAlphabet
+        return BioSequences.LongRNA{4}
+    elseif A <: BioSequences.AminoAcidAlphabet
+        return BioSequences.LongAA
+    else
+        throw(ArgumentError("Unsupported alphabet for qualmer counting: $(A)"))
+    end
+end
+
+function _collect_quality_scores(record::FASTX.FASTQ.Record)
+    return collect(UInt8, FASTX.quality_scores(record))
+end
+
+function _count_qualmers_impl(::Type{KMER_TYPE}, sequence, quality::AbstractVector{<:Integer}; canonical::Bool=false) where {KMER_TYPE<:Kmers.Kmer}
+    k = qualmer_kmer_length(KMER_TYPE)
+    iterator = canonical ? qualmers_unambiguous_canonical(sequence, quality, Val(k)) :
+                           qualmers_unambiguous(sequence, quality, Val(k))
+    return sort(StatsBase.countmap([qmer.kmer for (qmer, _) in iterator]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count qualmers for a single FASTQ record.
+"""
+function count_qualmers(::Type{KMER_TYPE}, record::FASTX.FASTQ.Record) where {KMER_TYPE<:Kmers.Kmer}
+    sequence_type = _sequence_type_for_kmer(KMER_TYPE)
+    sequence = FASTX.sequence(sequence_type, record)
+    quality = _collect_quality_scores(record)
+    return _count_qualmers_impl(KMER_TYPE, sequence, quality; canonical=false)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical qualmers for a single FASTQ record.
+"""
+function count_canonical_qualmers(::Type{KMER_TYPE}, record::FASTX.FASTQ.Record) where {KMER_TYPE<:Kmers.Kmer}
+    sequence_type = _sequence_type_for_kmer(KMER_TYPE)
+    sequence = FASTX.sequence(sequence_type, record)
+    quality = _collect_quality_scores(record)
+    return _count_qualmers_impl(KMER_TYPE, sequence, quality; canonical=true)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count qualmers for a collection of FASTQ records.
+"""
+function count_qualmers(::Type{KMER_TYPE}, records::AbstractVector{<:FASTX.FASTQ.Record}) where {KMER_TYPE<:Kmers.Kmer}
+    combined = Dict{KMER_TYPE, Int}()
+    for record in records
+        for (kmer, count) in count_qualmers(KMER_TYPE, record)
+            combined[kmer] = get(combined, kmer, 0) + count
+        end
+    end
+    return sort(combined)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical qualmers for a collection of FASTQ records.
+"""
+function count_canonical_qualmers(::Type{KMER_TYPE}, records::AbstractVector{<:FASTX.FASTQ.Record}) where {KMER_TYPE<:Kmers.Kmer}
+    combined = Dict{KMER_TYPE, Int}()
+    for record in records
+        for (kmer, count) in count_canonical_qualmers(KMER_TYPE, record)
+            combined[kmer] = get(combined, kmer, 0) + count
+        end
+    end
+    return sort(combined)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count qualmers from a FASTQ reader.
+"""
+function count_qualmers(::Type{KMER_TYPE}, reader::FASTX.FASTQ.Reader) where {KMER_TYPE<:Kmers.Kmer}
+    return count_qualmers(KMER_TYPE, collect(reader))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical qualmers from a FASTQ reader.
+"""
+function count_canonical_qualmers(::Type{KMER_TYPE}, reader::FASTX.FASTQ.Reader) where {KMER_TYPE<:Kmers.Kmer}
+    return count_canonical_qualmers(KMER_TYPE, collect(reader))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count qualmers in a FASTQ file.
+"""
+function count_qualmers(::Type{KMER_TYPE}, fastq_file::AbstractString) where {KMER_TYPE<:Kmers.Kmer}
+    open(fastq_file) do io
+        reader = FASTX.FASTQ.Reader(io)
+        return count_qualmers(KMER_TYPE, reader)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Count canonical qualmers in a FASTQ file.
+"""
+function count_canonical_qualmers(::Type{KMER_TYPE}, fastq_file::AbstractString) where {KMER_TYPE<:Kmers.Kmer}
+    open(fastq_file) do io
+        reader = FASTX.FASTQ.Reader(io)
+        return count_canonical_qualmers(KMER_TYPE, reader)
+    end
 end
 
 # ============================================================================

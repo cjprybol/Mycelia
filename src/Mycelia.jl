@@ -99,9 +99,12 @@ include("constants.jl")
 include("fastx.jl")
 
 # Graph type definitions and enums (foundation layer)
-include("sequence-graphs-next.jl")  # Defines GraphMode, StrandOrientation enums
+include("graph-core.jl")            # Shared graph enums
+include("kmer-graphs.jl")           # K-mer graph construction utilities
+include("sequence-graphs-next.jl")  # Higher-level graph algorithms (depends on enums & k-mer types)
 include("string-graphs.jl")         # N-gram graphs
 include("qualmer-analysis.jl")      # Qualmer types and functions
+include("qualmer-graphs.jl")        # Qualmer graph construction utilities
 
 # Variable-length graph implementations (depend on fixed-length types)
 include("fasta-graphs.jl")          # BioSequence graphs (depends on sequence-graphs-next.jl)

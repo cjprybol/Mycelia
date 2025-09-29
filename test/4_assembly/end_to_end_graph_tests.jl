@@ -725,15 +725,14 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 vertices = collect(MetaGraphsNext.labels(graph))
                 vertex_strings = [string(v) for v in vertices]
 
-                # For "ATCGATCG" with k=3, expect: ATC, TCG, CGA, GAT (unique canonical k-mers)
-                # Note: ATC appears twice but in DoubleStrand mode we get canonical forms
-                expected_unique_kmers = Set(["ATC", "TCG", "CGA", "GAT"])
+                # For "ATCGATCG" with k=3, canonicalization collapses to two unique vertices
+                expected_kmer_strings = ["ATC", "TCG", "CGA", "GAT"]
+                expected_canonical_kmers = Set(string(BioSequences.canonical(Mycelia.Kmers.DNAKmer{k}(s))) for s in expected_kmer_strings)
                 actual_unique_kmers = Set(vertex_strings)
 
-                Test.@test actual_unique_kmers ⊆ expected_unique_kmers  # All actual are expected
-                Test.@test length(vertices) >= 4  # At least the unique k-mers
+                Test.@test actual_unique_kmers == expected_canonical_kmers
 
-                println("✓ DNA K-mer validation: Expected ⊆ $(expected_unique_kmers), Got $(actual_unique_kmers)")
+                println("✓ DNA K-mer validation: Expected $(expected_canonical_kmers), Got $(actual_unique_kmers)")
 
                 # Validate vertex data structure
                 for vertex in vertices
@@ -752,7 +751,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 paths = Mycelia.find_eulerian_paths_next(graph)
                 if !isempty(paths)
                     # At least one path should be able to reconstruct a sequence similar to our input
-                    longest_path = maximum(paths, key=length)
+                    longest_path = argmax(length, paths)
                     Test.@test length(longest_path) >= 3  # Should span multiple k-mers
                     println("✓ DNA K-mer path reconstruction: Found path of length $(length(longest_path))")
                 end
@@ -765,12 +764,12 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
                 vertices = collect(MetaGraphsNext.labels(graph))
                 vertex_strings = [string(v) for v in vertices]
-                expected_unique_kmers = Set(["AUC", "UCG", "CGA", "GAU"])  # RNA alphabet
+                expected_kmer_strings = ["AUC", "UCG", "CGA", "GAU"]  # RNA alphabet
+                expected_canonical_kmers = Set(string(BioSequences.canonical(Mycelia.Kmers.RNAKmer{k}(s))) for s in expected_kmer_strings)
                 actual_unique_kmers = Set(vertex_strings)
 
-                Test.@test actual_unique_kmers ⊆ expected_unique_kmers
-                Test.@test length(vertices) >= 4
-                println("✓ RNA K-mer validation: Expected ⊆ $(expected_unique_kmers), Got $(actual_unique_kmers)")
+                Test.@test actual_unique_kmers == expected_canonical_kmers
+                println("✓ RNA K-mer validation: Expected $(expected_canonical_kmers), Got $(actual_unique_kmers)")
             end
 
             Test.@testset "Protein K-mer Graph Content" begin
@@ -851,17 +850,23 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
             # Validate qualmer vertices have both sequence and quality data
             vertices = collect(MetaGraphsNext.labels(graph))
-            Test.@test length(vertices) >= 4  # Should have multiple qualmers
+            vertex_strings = [string(v) for v in vertices]
+            expected_kmer_strings = ["ATC", "TCG", "CGA", "GAT"]
+            expected_canonical_kmers = Set(string(BioSequences.canonical(Mycelia.Kmers.DNAKmer{k}(s))) for s in expected_kmer_strings)
+
+            Test.@test Set(vertex_strings) == expected_canonical_kmers
 
             for vertex in vertices
                 vertex_data = graph[vertex]
                 Test.@test vertex_data isa Mycelia.QualmerVertexData
-                Test.@test length(vertex_data.sequence) == k
-                Test.@test length(vertex_data.quality_scores) == k
+                Test.@test vertex_data.canonical_qualmer.kmer == vertex
+                Test.@test length(vertex_data.canonical_qualmer.qualities) == k
+                Test.@test vertex_data.coverage >= 1
+                Test.@test !isempty(vertex_data.observations)
                 Test.@test vertex_data.joint_probability > 0.0
                 Test.@test vertex_data.mean_quality > 0.0
             end
-            println("✓ Qualmer validation: Quality data preserved in $(length(vertices)) vertices")
+            println("✓ Qualmer validation: Quality data preserved for $(length(vertices)) canonical vertices")
         end
 
         Test.@testset "Cross-Graph Path Reconstruction" begin
@@ -886,13 +891,11 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
                 # For "ATCGATCGATC" with k=4: expect ATCG, TCGA, CGAT, GATC, ATCG, TCGA, CGAT, ATCG (8 total, fewer unique)
                 expected_kmer_strings = ["ATCG", "TCGA", "CGAT", "GATC"]
+                expected_canonical_kmers = Set(string(BioSequences.canonical(Mycelia.Kmers.DNAKmer{k}(s))) for s in expected_kmer_strings)
 
-                # Verify that the expected k-mers are present in the graph
-                for expected_kmer in expected_kmer_strings
-                    Test.@test expected_kmer in vertex_strings
-                end
+                Test.@test Set(vertex_strings) == expected_canonical_kmers
 
-                println("✓ K-mer decomposition: $(string(original_biosequence)) → $(length(vertices)) unique k-mers in graph")
+                println("✓ K-mer decomposition: $(string(original_biosequence)) → $(length(vertices)) canonical k-mers in graph")
             end
 
             Test.@testset "Graph Walking Validation" begin
@@ -907,10 +910,9 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 vertices = collect(MetaGraphsNext.labels(graph))
                 vertex_strings = [string(v) for v in vertices]
                 expected_vertices = ["AT", "TC", "CG"]
+                expected_canonical_vertices = Set(string(BioSequences.canonical(Mycelia.Kmers.DNAKmer{k}(v))) for v in expected_vertices)
 
-                for expected in expected_vertices
-                    Test.@test expected in vertex_strings
-                end
+                Test.@test Set(vertex_strings) == expected_canonical_vertices
 
                 # Validate connectivity - should be able to find path AT→TC→CG
                 # This tests the core assembly capability

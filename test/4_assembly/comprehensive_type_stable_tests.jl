@@ -34,11 +34,10 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         for path_vector in paths
             if !isempty(path_vector)
                 # Create WalkStep objects from the path labels
-                walk_steps = []
-                for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
-                    push!(walk_steps, step)
-                end
+                walk_steps = [
+                    Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                    for (i, vertex_label) in enumerate(path_vector)
+                ]
 
                 # Create GraphPath from WalkStep objects
                 graph_path = Mycelia.GraphPath(walk_steps)
@@ -103,7 +102,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         Test.@testset "DNA Quality K-mer SingleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
             # Create quality-aware reads
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(dna_reads)
                 seq = FASTX.sequence(BioSequences.LongDNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -119,7 +118,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "DNA Quality K-mer DoubleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(dna_reads)
                 seq = FASTX.sequence(BioSequences.LongDNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -135,7 +134,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "DNA Quality BioSequence SingleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(dna_reads)
                 seq = FASTX.sequence(BioSequences.LongDNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -151,7 +150,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "DNA Quality BioSequence DoubleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(dna_reads)
                 seq = FASTX.sequence(BioSequences.LongDNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -198,7 +197,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         # RNA Quality-aware graphs (SingleStrand + DoubleStrand)
         Test.@testset "RNA Quality K-mer SingleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(rna_reads)
                 seq = FASTX.sequence(BioSequences.LongRNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -214,7 +213,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "RNA Quality K-mer DoubleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(rna_reads)
                 seq = FASTX.sequence(BioSequences.LongRNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -230,7 +229,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "RNA Quality BioSequence SingleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(rna_reads)
                 seq = FASTX.sequence(BioSequences.LongRNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -246,7 +245,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "RNA Quality BioSequence DoubleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(rna_reads)
                 seq = FASTX.sequence(BioSequences.LongRNA{4}, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -280,7 +279,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         # Amino Acid Quality-aware graphs (SingleStrand only)
         Test.@testset "AA Quality K-mer SingleStrand" begin
             aa_reads = [FASTX.FASTA.Record("aa_seq", aa_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(aa_reads)
                 seq = FASTX.sequence(BioSequences.LongAA, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -296,7 +295,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "AA Quality BioSequence SingleStrand" begin
             aa_reads = [FASTX.FASTA.Record("aa_seq", aa_seq)]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(aa_reads)
                 seq = FASTX.sequence(BioSequences.LongAA, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq)]])
@@ -330,7 +329,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         # String Quality-aware graphs (SingleStrand only)
         Test.@testset "String Quality N-gram SingleStrand" begin
             string_reads = [FASTX.FASTA.Record("string_seq", "ABCDEFGHIJKLMNOP")]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(string_reads)
                 seq_str = FASTX.sequence(String, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq_str)]])
@@ -346,7 +345,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
         Test.@testset "String Quality BioSequence SingleStrand" begin
             string_reads = [FASTX.FASTA.Record("string_seq", "ABCDEFGHIJKLMNOP")]
-            quality_reads = []
+            quality_reads = FASTX.FASTQ.Record[]
             for (i, read) in enumerate(string_reads)
                 seq_str = FASTX.sequence(String, read)
                 qual_str = String([Char(q + 33) for q in quality_scores[1:length(seq_str)]])
@@ -355,7 +354,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                string_qual_bio_graph = Mycelia.build_qualmer_biosequence_graph_next(String, quality_reads; graph_mode=Mycelia.SingleStrand)
+                string_qual_bio_graph = Mycelia.build_qualmer_string_graph_next(quality_reads, ngram_length=5; graph_mode=Mycelia.SingleStrand)
                 test_round_trip_reconstruction(string_qual_bio_graph, String)
             end
         end
