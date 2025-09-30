@@ -74,58 +74,65 @@ mkdir -p src/rhizomorph/{core,fixed-length,variable-length,algorithms}
 ```julia
 # Generic coverage entry
 struct CoverageEntry
-    observation_id::Int
+    observation_id::String
     position::Int
     strand::StrandOrientation
 end
 
 struct QualityCoverageEntry
-    observation_id::Int
+    observation_id::String
     position::Int
     strand::StrandOrientation
-    quality_scores::Vector{Int}  # Phred scores 0-60
+    quality_scores::Vector{UInt8}  # Phred scores 0-60
 end
 
 # Fixed-length vertex data
 struct KmerVertexData{T}
     canonical_element::T
-    coverage::Vector{CoverageEntry}
+    coverage::Dict{String, Set{CoverageEntry}}
 end
 
 struct QualmerVertexData{T}
     canonical_element::T
-    coverage::Vector{QualityCoverageEntry}
+    coverage::Dict{String, Set{QualityCoverageEntry}}
     mean_quality::Float64
 end
 
 # Variable-length vertex data
 struct BioSequenceVertexData{T}
     sequence::T
-    coverage::Vector{CoverageEntry}
+    coverage::Dict{String, Set{CoverageEntry}}
 end
 
 struct QualityBioSequenceVertexData{T}
     sequence::T
-    coverage::Vector{QualityCoverageEntry}
+    coverage::Dict{String, Set{QualityCoverageEntry}}
     mean_quality::Float64
 end
 
 struct StringVertexData
     string_value::String
-    coverage::Vector{CoverageEntry}
+    coverage::Dict{String, Set{CoverageEntry}}
 end
 
 struct QualityStringVertexData
     string_value::String
-    coverage::Vector{QualityCoverageEntry}
+    coverage::Dict{String, Set{QualityCoverageEntry}}
     mean_quality::Float64
 end
 ```
 
+---
+**Design Note on Provenance Storage:**
+
+To ensure both uniqueness of evidence and efficient querying, the `coverage` field will be implemented as a `Dict{Int, Set{CoverageEntry}}` where the key is the `dataset_id` and the value is a `Set` of unique `CoverageEntry` tuples for that dataset. This structure is chosen over a simple `Vector` or `Set` to allow for rapid, dataset-specific queries, which is critical for comparative analysis and resolving complex genomic regions. While this introduces a minor memory overhead compared to a flat list, the performance benefits for downstream algorithms are substantial.
+
+---
+
 **`edge-data.jl`** - Consolidate edge structures:
 ```julia
 struct KmerEdgeData
-    coverage::Vector{Tuple{CoverageEntry, CoverageEntry}}
+    coverage::Set{Pair{CoverageEntry, CoverageEntry}}
     weight::Float64
     src_strand::StrandOrientation
     dst_strand::StrandOrientation
@@ -133,13 +140,32 @@ end
 
 struct BioSequenceEdgeData
     overlap_length::Int
-    coverage::Vector{Tuple{CoverageEntry, CoverageEntry}}
+    coverage::Set{Pair{CoverageEntry, CoverageEntry}}
     weight::Float64
 end
 
 struct StringEdgeData
     overlap_length::Int
-    coverage::Vector{Tuple{CoverageEntry, CoverageEntry}}
+    coverage::Set{Pair{CoverageEntry, CoverageEntry}}
+    weight::Float64
+end
+
+struct QualmerEdgeData
+    coverage::Set{Pair{QualityCoverageEntry, QualityCoverageEntry}}
+    weight::Float64
+    src_strand::StrandOrientation
+    dst_strand::StrandOrientation
+end
+
+struct QualityBioSequenceEdgeData
+    overlap_length::Int
+    coverage::Set{Pair{QualityCoverageEntry, QualityCoverageEntry}}
+    weight::Float64
+end
+
+struct QualityStringEdgeData
+    overlap_length::Int
+    coverage::Set{Pair{QualityCoverageEntry, QualityCoverageEntry}}
     weight::Float64
 end
 ```
@@ -279,7 +305,7 @@ end
 **From:** `src/fasta-graphs.jl` + BioSequence sections in `sequence-graphs-next.jl`
 **Actions:**
 1. Move all variable-length BioSequence graph construction
-2. Implement proper alignment-based edge detection
+2. Implement proper alignment-based edge detection using exact matching, alignemnts with BioAlignments, and external tools (e.g. minimap2)
 3. Fix coverage tracking for variable-length vertices
 
 #### 3.2 Consolidate FASTQ Graphs (`src/rhizomorph/variable-length/fastq-graphs.jl`)
@@ -289,13 +315,14 @@ end
 1. **Critical**: Fix Phred score handling throughout
 2. Implement quality aggregation for overlapping sequences
 3. Add provenance tracking for multiple observations
+4. Implement proper alignment-based edge detection using exact matching, alignemnts with BioAlignments, and external tools (e.g. minimap2)
 
 #### 3.3 Consolidate String Graphs (`src/rhizomorph/variable-length/string-graphs.jl`)
 
 **From:** `src/string-graphs.jl` variable-length functions
 **Actions:**
 1. Move variable-length string graph functionality
-2. Implement text-based alignment detection
+2. Implement text-based alignment detection using exact matching, alignments julia tools (TBD) and external tools (TBD)
 3. Add quality-aware variable-length string processing
 
 ---
@@ -328,7 +355,47 @@ function canonicalize_doublestrand_graph!(graph::MetaGraphsNext.MetaGraph)
 end
 ```
 
-#### 4.3 I/O Functions (`src/rhizomorph/algorithms/io.jl`)
+#### 4.4 Graph Simplification Algorithms (`src/rhizomorph/algorithms/simplification.jl`)
+
+**New Implementation:**
+Implement a suite of robust, statistically-grounded graph simplification algorithms. These algorithms will support both graph-centric and read-centric correction models, with a strong emphasis on probabilistic methods inspired by established bioinformatics tools.
+
+##### 4.4.1 Tip Removal (Clipping)
+Prunes short, dead-end paths (tips) that typically result from sequencing errors or coverage drop-off.
+
+*   **Functionality:** The tip clipping function will accept thresholds based on:
+    *   `min_length::Int`: The minimum length of a tip to be retained.
+    *   `min_coverage::Float64`: The minimum average coverage of a tip to be retained.
+    *   `min_confidence::Float64`: For quality-aware graphs, the minimum average vertex confidence to be retained.
+*   **Logic:** Users can specify the relationship between these thresholds using `and`, `or`, or `either` logic to determine which tips are pruned.
+*   **Default Thresholds:**
+    *   **Length:** For fixed-length graphs, the default will be the k-mer/n-gram size. For variable-length graphs, this will not be set by default.
+    *   **Coverage/Confidence:** The default threshold will be calculated statistically from the graph properties. It will be defined as a set number of standard deviations below the mean coverage/confidence of all vertices. An alternative based on the median and coefficient of variation will also be explored for skewed distributions.
+
+##### 4.4.2 Bubble Popping
+Merges simple divergent paths (bubbles) that typically represent SNPs, indels, or sequencing errors.
+
+*   **Approach:** Bubbles will be identified as simple alternative paths that start and end at the same vertices. The decision to "pop" a bubble (i.e., remove the minor path) will be based on a similar set of configurable thresholds as tip clipping (`min_length`, `min_coverage`, `min_confidence`).
+*   **Context-Awareness:** The algorithm will be aware of the expected bubble size based on the graph type. A SNP in a fixed-length graph creates a bubble of length `k`, whereas in a variable-length graph, the bubble's length corresponds to the variant region.
+*   **Probabilistic Popping:** Drawing inspiration from tools like **FreeBayes** and **GATK**, we will implement a Bayesian or maximum-likelihood model. This model will evaluate the evidence (coverage, quality scores, strand bias) for each path in the bubble and calculate the posterior probability that the minor path represents a true biological variant versus a sequencing artifact. Bubbles will be popped if the probability of the alternative path being an error exceeds a user-defined threshold.
+
+##### 4.4.3 Cycle and Repeat Resolution
+Addresses simple cycles and repeats in the graph, which are often the most challenging aspect of genome assembly.
+
+*   **Strategy:** The primary strategy will be to leverage the read-centric correction model (described below). For direct graph-based resolution, simple, short tandem repeats will be identified and resolved based on probabilistic criteria. The algorithm will assess the likelihood of the repeat's copy number given the spanning read evidence and associated quality scores.
+
+##### 4.4.4 Read-Centric Correction Model
+As a powerful alternative to direct graph modification, we will implement a read-centric correction framework.
+
+*   **Workflow:**
+    1.  An initial graph is constructed from the raw reads.
+    2.  Each read is re-aligned to the graph to find its most likely path.
+    3.  During alignment, a probabilistic model evaluates whether mismatches between the read and its path are more likely to be sequencing errors in the read or evidence for a true variant missing from the graph path. This model will heavily rely on the read's quality scores.
+    4.  Based on this evaluation, reads can be "corrected," or low-confidence regions of the graph can be flagged.
+    5.  The graph is then rebuilt using the corrected reads or down-weighted evidence.
+*   **Benefit:** This iterative process of graph construction and read re-alignment can resolve complex errors, tips, and bubbles in a more robust and data-driven manner than graph-centric heuristics alone.
+
+#### 4.5 I/O Functions (`src/rhizomorph/algorithms/io.jl`)
 
 **From:** GFA functions scattered across modules
 **Actions:**
@@ -346,11 +413,6 @@ end
 ```julia
 # Include rhizomorph module
 include("rhizomorph/rhizomorph.jl")
-
-# Export main graph construction functions
-export build_kmer_graph_next, build_qualmer_graph, build_fasta_graph, build_fastq_graph
-export build_string_graph, build_ngram_graph
-export StrandOrientation, GraphMode, Forward, Reverse, SingleStrand, DoubleStrand
 ```
 
 #### 5.2 Update 24 Test Files
@@ -373,7 +435,7 @@ export StrandOrientation, GraphMode, Forward, Reverse, SingleStrand, DoubleStran
 
 ---
 
-## 🚨 Critical Issues to Address
+## Critical Issues to Address
 
 ### 1. **Immediate Phred Score Fix**
 ```julia
@@ -410,7 +472,7 @@ observed_kmers = [kmer for kmer in extract_kmers(sequence)]
 ```julia
 # Standardize across all graph types
 struct CoverageEntry
-    observation_id::Int      # Which input sequence
+    observation_id::String      # Which input sequence
     position::Int           # Position within that sequence
     strand::StrandOrientation  # Forward or Reverse
 end
@@ -431,7 +493,7 @@ end
 
 ---
 
-## 🎉 Expected Outcomes
+## Expected Outcomes
 
 After implementing this plan:
 
@@ -445,7 +507,7 @@ After implementing this plan:
 
 ---
 
-## 📋 Implementation Checklist
+## Implementation Checklist
 
 ### Phase 1: Core Infrastructure
 - [ ] Create rhizomorph module structure
@@ -470,7 +532,10 @@ After implementing this plan:
 - [ ] Move path finding algorithms
 - [ ] Implement canonicalization as post-processing
 - [ ] Consolidate I/O functionality
-- [ ] Add graph simplification algorithms
+- [ ] Implement Tip Removal (Clipping)
+- [ ] Implement Bubble Popping with probabilistic models
+- [ ] Implement Cycle/Repeat Resolution
+- [ ] Implement Read-Centric Correction Model
 
 ### Phase 5: Integration & Testing
 - [ ] Update main module integration
