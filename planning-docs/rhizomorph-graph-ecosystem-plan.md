@@ -72,11 +72,21 @@ mkdir -p src/rhizomorph/{core,fixed-length,variable-length,algorithms}
 
 **`vertex-data.jl`** - Consolidate all vertex data structures:
 ```julia
+
+@enum StrandOrientation Forward=true Reverse=false
+@enum GraphMode SingleStrand DoubleStrand
+
 # Generic coverage entry
 struct CoverageEntry
     observation_id::String
     position::Int
     strand::StrandOrientation
+end
+
+# Fixed-length vertex data
+struct KmerVertexData{T}
+    Kmer::T
+    coverage::Dict{String, Set{CoverageEntry}}
 end
 
 struct QualityCoverageEntry
@@ -86,17 +96,22 @@ struct QualityCoverageEntry
     quality_scores::Vector{UInt8}  # Phred scores 0-60
 end
 
-# Fixed-length vertex data
-struct KmerVertexData{T}
-    canonical_element::T
-    coverage::Dict{String, Set{CoverageEntry}}
+struct QualmerVertexData{T}
+    Kmer::T
+    coverage::Dict{String, Set{QualityCoverageEntry}}
 end
 
-struct QualmerVertexData{T}
-    canonical_element::T
-    coverage::Dict{String, Set{QualityCoverageEntry}}
-    mean_quality::Float64
-end
+# # Fixed-length vertex data
+# struct KmerVertexData{T}
+#     canonical_element::T
+#     coverage::Dict{String, Set{CoverageEntry}}
+# end
+
+# struct QualmerVertexData{T}
+#     canonical_element::T
+#     coverage::Dict{String, Set{QualityCoverageEntry}}
+#     mean_quality::Float64
+# end
 
 # Variable-length vertex data
 struct BioSequenceVertexData{T}
@@ -107,7 +122,6 @@ end
 struct QualityBioSequenceVertexData{T}
     sequence::T
     coverage::Dict{String, Set{QualityCoverageEntry}}
-    mean_quality::Float64
 end
 
 struct StringVertexData
