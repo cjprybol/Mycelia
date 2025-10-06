@@ -1,6 +1,20 @@
-if isinteractive()
-    Pkg.activate("..")
-end
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/2_preprocessing_qc/sequence-complexity.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/sequence-complexity.jl", "test/2_preprocessing_qc", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import BioSequences
 import Mycelia
@@ -11,36 +25,36 @@ Test.@testset "Sequence Comparison Functions" begin
     Test.@testset "shannon_entropy" begin
         Test.@testset "DNA sequences" begin
             # Test basic DNA sequence
-            dna_seq = BioSequences.dna"ATCGATCGATCG"
+            dna_seq = BioSequences.LongDNA{4}("ATCGATCGATCG")
             Test.@test Mycelia.shannon_entropy(dna_seq, k=1) ≈ 2.0  # 4 bases equally distributed
             Test.@test Mycelia.shannon_entropy(dna_seq, k=2) > 0.0
             
             # Test uniform sequence (minimum entropy)
-            uniform_dna = BioSequences.dna"AAAAAAAAAA"
+            uniform_dna = BioSequences.LongDNA{4}("AAAAAAAAAA")
             Test.@test Mycelia.shannon_entropy(uniform_dna, k=1) ≈ 0.0
             
             # Test sequence shorter than k
-            short_dna = BioSequences.dna"AT"
+            short_dna = BioSequences.LongDNA{4}("AT")
             Test.@test Mycelia.shannon_entropy(short_dna, k=3) == 0.0
             
             # Test different bases
-            Test.@test Mycelia.shannon_entropy(BioSequences.dna"ATCG", k=1, base=10) != Mycelia.shannon_entropy(BioSequences.dna"ATCG", k=1, base=2)
+            Test.@test Mycelia.shannon_entropy(BioSequences.LongDNA{4}("ATCG"), k=1, base=10) != Mycelia.shannon_entropy(BioSequences.LongDNA{4}("ATCG"), k=1, base=2)
         end
 
         Test.@testset "RNA sequences" begin
-            rna_seq = BioSequences.rna"AUCGAUCGAUCG"
+            rna_seq = BioSequences.LongRNA{4}("AUCGAUCGAUCG")
             Test.@test Mycelia.shannon_entropy(rna_seq, k=1) ≈ 2.0
             Test.@test Mycelia.shannon_entropy(rna_seq, k=2) > 0.0
             
-            uniform_rna = BioSequences.rna"UUUUUUUUUU"
+            uniform_rna = BioSequences.LongRNA{4}("UUUUUUUUUU")
             Test.@test Mycelia.shannon_entropy(uniform_rna, k=1) ≈ 0.0
         end
 
         Test.@testset "Amino acid sequences" begin
-            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYV"  # All 20 standard amino acids
+            aa_seq = BioSequences.LongAA("ARNDCQEGHILKMFPSTWYV")  # All 20 standard amino acids
             Test.@test Mycelia.shannon_entropy(aa_seq, k=1) > 4.0  # log2(20) ≈ 4.32
             
-            uniform_aa = BioSequences.aa"AAAAAAAAAA"
+            uniform_aa = BioSequences.LongAA("AAAAAAAAAA")
             Test.@test Mycelia.shannon_entropy(uniform_aa, k=1) ≈ 0.0
         end
 
@@ -70,7 +84,7 @@ Test.@testset "Sequence Comparison Functions" begin
 
     Test.@testset "renyi_entropy" begin
         Test.@testset "DNA sequences" begin
-            dna_seq = BioSequences.dna"ATCGATCGATCG"
+            dna_seq = BioSequences.LongDNA{4}("ATCGATCGATCG")
             Test.@test Mycelia.renyi_entropy(dna_seq, k=1, α=2) > 0.0
             Test.@test Mycelia.renyi_entropy(dna_seq, k=2, α=0.5) > 0.0
             
@@ -78,17 +92,17 @@ Test.@testset "Sequence Comparison Functions" begin
             Test.@test_throws AssertionError Mycelia.renyi_entropy(dna_seq, k=1, α=1)
             
             # Test sequence shorter than k
-            Test.@test Mycelia.renyi_entropy(BioSequences.dna"AT", k=3, α=2) == 0.0
+            Test.@test Mycelia.renyi_entropy(BioSequences.LongDNA{4}("AT"), k=3, α=2) == 0.0
         end
 
         Test.@testset "RNA sequences" begin
-            rna_seq = BioSequences.rna"AUCGAUCGAUCG"
+            rna_seq = BioSequences.LongRNA{4}("AUCGAUCGAUCG")
             Test.@test Mycelia.renyi_entropy(rna_seq, k=1, α=2) > 0.0
             Test.@test Mycelia.renyi_entropy(rna_seq, k=2, α=0.5) > 0.0
         end
 
         Test.@testset "Amino acid sequences" begin
-            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYV"
+            aa_seq = BioSequences.LongAA("ARNDCQEGHILKMFPSTWYV")
             Test.@test Mycelia.renyi_entropy(aa_seq, k=1, α=2) > 0.0
             Test.@test Mycelia.renyi_entropy(aa_seq, k=2, α=3) > 0.0
         end
@@ -104,7 +118,7 @@ Test.@testset "Sequence Comparison Functions" begin
         end
 
         Test.@testset "Parameter effects" begin
-            seq = "abcd"
+            seq = "aabbbbcccc"  # Non-uniform distribution: a=2, b=4, c=4
             # Different α values should give different results
             Test.@test Mycelia.renyi_entropy(seq, k=1, α=0.5) != Mycelia.renyi_entropy(seq, k=1, α=2)
             Test.@test Mycelia.renyi_entropy(seq, k=1, α=2) != Mycelia.renyi_entropy(seq, k=1, α=10)
@@ -117,7 +131,7 @@ Test.@testset "Sequence Comparison Functions" begin
     Test.@testset "kmer_richness" begin
         Test.@testset "DNA sequences" begin
             # Perfect richness (all possible k-mers present)
-            dna_seq = BioSequences.dna"ATCGATCGATCGATCG"  # 16 bases
+            dna_seq = BioSequences.LongDNA{4}("ATCGATCGATCGATCG")  # 16 bases
             richness = Mycelia.kmer_richness(dna_seq, 1, normalize=true)
             Test.@test richness ≤ 1.0
             Test.@test richness > 0.0
@@ -128,26 +142,29 @@ Test.@testset "Sequence Comparison Functions" begin
             Test.@test richness_raw > 0
             
             # Test sequence shorter than k
-            Test.@test Mycelia.kmer_richness(BioSequences.dna"AT", 3, normalize=true) == 0.0
-            Test.@test Mycelia.kmer_richness(BioSequences.dna"AT", 3, normalize=false) == 0
+            Test.@test Mycelia.kmer_richness(BioSequences.LongDNA{4}("AT"), 3, normalize=true) == 0.0
+            Test.@test Mycelia.kmer_richness(BioSequences.LongDNA{4}("AT"), 3, normalize=false) == 0
         end
 
         Test.@testset "RNA sequences" begin
-            rna_seq = BioSequences.rna"AUCGAUCGAUCGAUCG"
+            rna_seq = BioSequences.LongRNA{4}("AUCGAUCGAUCGAUCG")
             richness = Mycelia.kmer_richness(rna_seq, 1, normalize=true)
             Test.@test richness ≤ 1.0
             Test.@test richness > 0.0
         end
 
         Test.@testset "Amino acid sequences" begin
-            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYV"
+            aa_seq = BioSequences.LongAA("ARNDCQEGHILKMFPSTWYV")
             richness = Mycelia.kmer_richness(aa_seq, 1, normalize=true)
             Test.@test richness ≤ 1.0
             Test.@test richness > 0.0
             
-            # Test with custom alphabet
-            richness_custom = Mycelia.kmer_richness(aa_seq, 1, alphabet=25, normalize=true)
-            Test.@test richness_custom != richness
+            # Test with custom alphabet - use subset of AA that has < 25 unique residues
+            subset_aa = BioSequences.LongAA("ARNDCQEGHILKMF")  # 14 different AAs
+            many_positions = repeat(subset_aa, 10)  # 140 positions, 14 unique k-mers for k=1  
+            richness_default = Mycelia.kmer_richness(many_positions, 1, normalize=true) # 14/min(140, 20) = 14/20
+            richness_custom = Mycelia.kmer_richness(many_positions, 1, alphabet=25, normalize=true) # 14/min(140, 25) = 14/25
+            Test.@test richness_custom != richness_default
         end
 
         Test.@testset "Generic strings" begin
@@ -156,9 +173,9 @@ Test.@testset "Sequence Comparison Functions" begin
             Test.@test richness ≤ 1.0
             Test.@test richness > 0.0
             
-            # Test repeated characters
+            # Test repeated characters with explicit alphabet size
             repeated_str = "aaabbbccc"
-            richness_repeated = Mycelia.kmer_richness(repeated_str, 1, normalize=true)
+            richness_repeated = Mycelia.kmer_richness(repeated_str, 1, alphabet=10, normalize=true)  # Force larger alphabet
             Test.@test richness_repeated < 1.0
         end
 
@@ -175,7 +192,7 @@ Test.@testset "Sequence Comparison Functions" begin
 
     Test.@testset "linguistic_complexity" begin
         Test.@testset "DNA sequences" begin
-            dna_seq = BioSequences.dna"ATCGATCGATCGATCGATCG"
+            dna_seq = BioSequences.LongDNA{4}("ATCGATCGATCGATCGATCG")
             profile, summary = Mycelia.linguistic_complexity(dna_seq, kmax=5)
             
             Test.@test length(profile) == 5
@@ -189,7 +206,7 @@ Test.@testset "Sequence Comparison Functions" begin
         end
 
         Test.@testset "RNA sequences" begin
-            rna_seq = BioSequences.rna"AUCGAUCGAUCGAUCGAUCG"
+            rna_seq = BioSequences.LongRNA{4}("AUCGAUCGAUCGAUCGAUCG")
             profile, summary = Mycelia.linguistic_complexity(rna_seq, kmax=4)
             
             Test.@test length(profile) == 4
@@ -197,7 +214,7 @@ Test.@testset "Sequence Comparison Functions" begin
         end
 
         Test.@testset "Amino acid sequences" begin
-            aa_seq = BioSequences.aa"ARNDCQEGHILKMFPSTWYVARNDCQ"
+            aa_seq = BioSequences.LongAA("ARNDCQEGHILKMFPSTWYVARNDCQ")
             profile, summary = Mycelia.linguistic_complexity(aa_seq, kmax=3)
             
             Test.@test length(profile) == 3
@@ -222,7 +239,7 @@ Test.@testset "Sequence Comparison Functions" begin
         end
 
         Test.@testset "Parameter effects" begin
-            seq = "abcdefghijklmnop"
+            seq = "ababababababab"  # Repetitive pattern to show k-mer complexity differences
             
             # Default kmax should use full sequence length
             profile_default, _ = Mycelia.linguistic_complexity(seq)
@@ -262,7 +279,7 @@ Test.@testset "Sequence Comparison Functions" begin
     Test.@testset "Integration tests" begin
         Test.@testset "Consistency between functions" begin
             # Test that functions give consistent results for same input
-            dna_seq = BioSequences.dna"ATCGATCGATCGATCG"
+            dna_seq = BioSequences.LongDNA{4}("ATCGATCGATCGATCG")
             
             # Shannon entropy should be related to richness for k=1
             shannon_k1 = Mycelia.shannon_entropy(dna_seq, k=1)

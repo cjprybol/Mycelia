@@ -1,4 +1,113 @@
 """
+    list_gdrive_with_links(remote::AbstractString; link_type::Symbol = :view, link_template::Union{Nothing,String}=nothing, rclone_args::Vector{String}=String[], return_df::Bool=true)
+
+Run `rclone lsjson` on the given Google Drive remote path, parse the returned JSON, add `drive_id` and `drive_link` for each entry, and return either a Vector{Dict{String,Any}} or a DataFrames.DataFrame.
+
+Keyword arguments
+- link_type: one of `:view`, `:uc`, `:open`, or `:custom`.
+  - :view  -> "https://drive.google.com/file/d/<id>/view?usp=sharing"
+  - :uc    -> "https://drive.google.com/uc?id=<id>&export=download"
+  - :open  -> "https://drive.google.com/open?id=<id>"
+  - :custom -> `link_template` must be provided and contain "{id}"
+- link_template: template string for custom links; "{id}" will be replaced with the Drive id.
+- rclone_args: extra command-line arguments to pass to `rclone lsjson`.
+- return_df: if true, return a DataFrames.DataFrame (requires DataFrames.jl); if false, return Vector{Dict{String,Any}}.
+
+Notes
+- When returning a DataFrame, absent values are represented with `missing` (so columns are join-friendly).
+"""
+function list_gdrive_with_links(remote::AbstractString; link_type::Symbol = :view, link_template::Union{Nothing,String}=nothing, rclone_args::Vector{String}=String[], return_df::Bool=true)
+    # Build rclone command
+    cmd_parts = ["rclone", "lsjson", remote]
+    if !isempty(rclone_args)
+        append!(cmd_parts, rclone_args)
+    end
+    cmd = Base.Cmd(cmd_parts)
+
+    # Run rclone and capture stdout
+    output = try
+        read(cmd, String)
+    catch err
+        throw(ErrorException("Failed to run `rclone lsjson`: $(err)"))
+    end
+
+    # Parse JSON
+    parsed = try
+        JSON.parse(output)
+    catch err
+        throw(ErrorException("Failed to parse `rclone lsjson` output as JSON: $(err)"))
+    end
+
+    if !(isa(parsed, Vector))
+        throw(ErrorException("Expected JSON array from `rclone lsjson`, got: $(typeof(parsed))"))
+    end
+
+    # Helper to build link from id
+    function make_link_for_id(id::String)
+        if link_type == :view
+            return "https://drive.google.com/file/d/$(id)/view?usp=sharing"
+        elseif link_type == :uc
+            return "https://drive.google.com/uc?id=$(id)&export=download"
+        elseif link_type == :open
+            return "https://drive.google.com/open?id=$(id)"
+        elseif link_type == :custom
+            if link_template === nothing
+                throw(ArgumentError("link_template must be provided when link_type == :custom"))
+            end
+            return replace(link_template, "{id}" => id)
+        else
+            if link_template !== nothing
+                return replace(link_template, "{id}" => id)
+            end
+            throw(ArgumentError("Unknown link_type: $(link_type). Valid options: :view, :uc, :open, :custom"))
+        end
+    end
+
+    # Common keys that may contain the Drive ID in rclone's lsjson output
+    id_keys = ("ID", "Id", "id", "DriveId", "driveId")
+    # id_keys = ("ID")
+
+    entries = Vector{Dict{String,Any}}()
+    for item in parsed
+        if !isa(item, Dict)
+            throw(ErrorException("Expected each entry from `rclone lsjson` to be an object/dict, found: $(typeof(item))"))
+        end
+
+        # Ensure keys are Strings and we have a mutable Dict
+        entry = Dict{String,Any}(item)
+
+        # Find ID-like key
+        idval = nothing
+        for k in id_keys
+            if haskey(entry, k)
+                v = entry[k]
+                idval = v === nothing ? nothing : string(v)
+                break
+            end
+        end
+
+        # For DataFrame friendliness use `missing` instead of `nothing`
+        drive_id_val = idval === nothing ? missing : idval
+        drive_link_val = idval === nothing ? missing : make_link_for_id(idval)
+
+        entry["drive_id"] = drive_id_val
+        entry["drive_link"] = drive_link_val
+        entry["Path"] = joinpath(remote, entry["Path"])
+
+        push!(entries, entry)
+    end
+
+    if return_df
+        # Convert vector of Dicts into a DataFrame
+        df = DataFrames.DataFrame(entries)
+        return df
+    else
+        return entries
+    end
+end
+
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 List all directories at the specified rclone path.

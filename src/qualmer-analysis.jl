@@ -1,3 +1,28 @@
+"""
+$(DocStringExtensions.TYPEDEF)
+
+A quality-aware k-mer that pairs sequence k-mers with their corresponding quality scores.
+
+# Fields
+$(DocStringExtensions.TYPEDFIELDS)
+
+# Examples
+```julia
+using Mycelia
+using Kmers
+
+# Create a DNA k-mer with quality scores
+kmer = DNAKmer("ATCG")
+qualities = [30, 35, 32, 28]  # Phred quality scores
+qmer = Qualmer(kmer, qualities)
+
+# Access individual bases and qualities
+base, quality = qmer[1]  # Returns ('A', 30)
+```
+
+This structure is essential for quality-aware sequence analysis and assembly algorithms
+that consider both sequence content and sequencing quality information.
+"""
 struct Qualmer{KmerT, K}
     kmer::KmerT
     qualities::NTuple{K,UInt8}
@@ -29,8 +54,38 @@ the quality scores accordingly.
 function canonical(qmer::Qualmer{KmerT}) where {KmerT<:Union{Kmers.DNAKmer, Kmers.RNAKmer}}
     canon_kmer = BioSequences.canonical(qmer.kmer)
     
-    if canon_kmer == BioSequences.reverse_complement(qmer.kmer)
+    # If the canonical form is different from the original, it means we reverse-complemented
+    # In that case, we need to reverse the quality scores
+    if canon_kmer != qmer.kmer
         K = length(qmer.qualities)
+        reversed_quals = ntuple(i -> qmer.qualities[K - i + 1], K)
+        return Qualmer(canon_kmer, reversed_quals)
+    else
+        return Qualmer(canon_kmer, qmer.qualities)
+    end
+end
+
+# Additional method for the Mer types from FwKmers
+function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequences.DNAAlphabet{N}}} where N
+    canon_kmer = BioSequences.canonical(qmer.kmer)
+    
+    # If the canonical form is different from the original, it means we reverse-complemented
+    # In that case, we need to reverse the quality scores
+    if canon_kmer != qmer.kmer
+        reversed_quals = ntuple(i -> qmer.qualities[K - i + 1], K)
+        return Qualmer(canon_kmer, reversed_quals)
+    else
+        return Qualmer(canon_kmer, qmer.qualities)
+    end
+end
+
+# Additional method for RNA Mer types
+function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequences.RNAAlphabet{N}}} where N
+    canon_kmer = BioSequences.canonical(qmer.kmer)
+    
+    # If the canonical form is different from the original, it means we reverse-complemented
+    # In that case, we need to reverse the quality scores
+    if canon_kmer != qmer.kmer
         reversed_quals = ntuple(i -> qmer.qualities[K - i + 1], K)
         return Qualmer(canon_kmer, reversed_quals)
     else
@@ -147,10 +202,10 @@ reverse complement, ensuring consistent representation regardless of strand.
 """
 function qualmers_canonical(sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
     return (
-        (Qualmer(
+        (canonical(Qualmer(
             kmer,
             quality[pos:pos+K-1]
-        ), pos) for (pos, kmer) in enumerate(Kmers.CanonicalKmers{BioSequences.DNAAlphabet{N}, K}(sequence))
+        )), pos) for (pos, kmer) in enumerate(Kmers.FwKmers{BioSequences.DNAAlphabet{N}, K}(sequence))
     )
 end
 
@@ -286,7 +341,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Convert PHRED quality score to error probability.
 """
 function phred_to_error_probability(phred_score::UInt8)
-    return 10.0^(-phred_score / 10.0)
+    return 10.0^(-Float64(phred_score) / 10.0)
 end
 
 """
@@ -426,7 +481,15 @@ struct QualmerObservation{QualmerT<:Qualmer}
 end
 
 """
-Vertex data for quality-aware k-mer graphs.
+$(DocStringExtensions.TYPEDEF)
+
+Vertex data for quality-aware k-mer graphs that stores k-mer observations with quality scores.
+
+# Fields
+$(DocStringExtensions.TYPEDFIELDS)
+
+This structure aggregates multiple observations of the same k-mer and computes quality-based
+statistics for use in quality-aware assembly algorithms.
 """
 struct QualmerVertexData{QualmerT<:Qualmer}
     canonical_qualmer::QualmerT              # Canonical representation
@@ -462,7 +525,15 @@ struct QualmerVertexData{QualmerT<:Qualmer}
 end
 
 """
-Edge data for quality-aware k-mer graphs.
+$(DocStringExtensions.TYPEDEF)
+
+Edge data for quality-aware k-mer graphs that connects k-mer vertices with strand information.
+
+# Fields
+$(DocStringExtensions.TYPEDFIELDS)
+
+This structure represents connections between k-mers in quality-aware graphs, including
+strand orientation and quality-weighted edge weights for assembly algorithms.
 """
 struct QualmerEdgeData
     observations::Vector{Tuple{Int, Int}}   # (sequence_id, position) pairs
@@ -541,18 +612,20 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
             # Check quality threshold
             mean_qual = Statistics.mean(qmer.qualities)
             if mean_qual >= min_quality
-                # Get canonical representation
-                canonical_qmer = graph_mode == DoubleStrand ? qmer : canonical(qmer)
-                canonical_kmer = canonical_qmer.kmer
+                # Get appropriate representation based on graph mode
+                # DoubleStrand: qualmers_unambiguous_canonical already gives us canonical qualmers
+                # SingleStrand: qualmers_unambiguous gives us as-is qualmers
+                graph_qmer = qmer  # Use as-is since iterator already handles canonicalization
+                graph_kmer = graph_qmer.kmer
                 
                 # Create observation
                 observation = QualmerObservation(qmer, seq_id, pos)
                 
                 # Store observation
-                if !haskey(canonical_observations, canonical_kmer)
-                    canonical_observations[canonical_kmer] = QualmerObservation[]
+                if !haskey(canonical_observations, graph_kmer)
+                    canonical_observations[graph_kmer] = QualmerObservation[]
                 end
-                push!(canonical_observations[canonical_kmer], observation)
+                push!(canonical_observations[graph_kmer], observation)
             end
         end
     end
@@ -796,7 +869,7 @@ Identifies fraction of k-mers below confidence threshold as potential error indi
 """
 function calculate_assembly_quality_metrics(qualmer_graph; low_confidence_threshold::Float64=0.95)
     # Get all vertex data
-    vertices = [qualmer_graph[v] for v in Graphs.vertices(qualmer_graph)]
+    vertices = [qualmer_graph[v] for v in MetaGraphsNext.labels(qualmer_graph)]
     
     if isempty(vertices)
         return (
@@ -837,7 +910,7 @@ Identify potential sequencing errors based on quality scores and coverage patter
 - `min_confidence::Float64=0.95`: Minimum joint probability threshold
 
 # Returns
-- `Vector{Int}`: Vertex indices of potential error k-mers
+- `Vector`: K-mer labels of potential error k-mers
 
 # Details
 Identifies k-mers that are likely errors based on:
@@ -849,9 +922,9 @@ function identify_potential_errors(graph;
                                  min_coverage::Int=2, 
                                  min_quality::Float64=20.0, 
                                  min_confidence::Float64=0.95)
-    error_vertices = Int[]
+    error_labels = []
     
-    for v in Graphs.vertices(graph)
+    for v in MetaGraphsNext.labels(graph)
         vdata = graph[v]
         
         # Check if vertex meets error criteria
@@ -861,9 +934,9 @@ function identify_potential_errors(graph;
         
         # Consider it an error if it fails any criterion
         if is_low_coverage || is_low_quality || is_low_confidence
-            push!(error_vertices, v)
+            push!(error_labels, v)
         end
     end
     
-    return error_vertices
+    return error_labels
 end

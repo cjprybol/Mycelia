@@ -1,8 +1,18 @@
-# FASTA simulation and acquisition tests
-# import Pkg
-# if isinteractive()
-#     Pkg.activate("..")
-# end
+# ```bash
+# julia --project=. --color=yes -e 'include("test/1_data_acquisition/simulation_fasta.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/1_data_acquisition/simulation_fasta.jl", "test/1_data_acquisition", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import FASTX
@@ -76,12 +86,15 @@ Test.@testset "FASTA simulation and acquisition" begin
         end
     end
     Test.@testset "virus phiX174" begin
+        phiX174_accession_id = "NC_001422"
+        phiX174_assembly_id = "GCF_000007125.1"
         genome_result = Mycelia.download_genome_by_accession(accession=phiX174_accession_id)
         Test.@test basename(genome_result) == phiX174_accession_id * ".fna.gz"
-        Test.@test Mycelia.get_base_extension(genome_result) == ".fna.gz"
+        Test.@test Mycelia.get_base_extension(genome_result) == ".fna"
         rm(genome_result)
         phiX174_assembly_dataset = Mycelia.ncbi_genome_download_accession(accession=phiX174_assembly_id, include_string="gff3,rna,cds,protein,genome,seq-report")
-        Test.@test basename(phiX174_assembly_dataset.genome) == phiX174_assembly_id * "_ViralProj14015_genomic.fna"
+        # Test.@test basename(phiX174_assembly_dataset.genome) == phiX174_assembly_id * "_ViralProj14015_genomic.fna"
+        Test.@test basename(phiX174_assembly_dataset.genome) == phiX174_assembly_id * "_ASM712v1_genomic.fna"
         Test.@test Mycelia.get_base_extension(phiX174_assembly_dataset.genome) == ".fna"
         Test.@test Mycelia.get_base_extension(phiX174_assembly_dataset.protein) == ".faa"
         rm(phiX174_assembly_id, recursive=true)

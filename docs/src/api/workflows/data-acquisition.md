@@ -126,7 +126,7 @@ genome_with_genes = Mycelia.simulate_genome_with_features(
 ### Sequencing Read Simulation
 
 ```@docs
-Mycelia.simulate_illumina_paired_reads
+Mycelia.simulate_illumina_reads
 Mycelia.simulate_pacbio_reads
 Mycelia.simulate_nanopore_reads
 ```

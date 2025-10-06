@@ -78,9 +78,9 @@ plot_ngram_graph
 ### Graph Simplification
 
 ```@docs
-collapse_unbranching_paths
-find_connected_components
-assemble_strings
+Mycelia.collapse_unbranching_paths
+Mycelia.find_connected_components
+Mycelia.assemble_strings
 ```
 
 ## Sequence I/O
@@ -88,8 +88,7 @@ assemble_strings
 ### File Handling
 
 ```@docs
-open_fastx
-download_genome_by_accession
+Mycelia.open_fastx
 ```
 
 ### Format Conversion
@@ -102,9 +101,7 @@ convert_sequence
 
 ### K-mer Counting
 
-```@docs
-count_canonical_kmers
-```
+For k-mer counting functions, see [Sequence Analysis Workflow](api/workflows/sequence-analysis.md).
 
 ### Distance Metrics
 
@@ -117,10 +114,7 @@ kmer_counts_to_js_divergence
 
 ### Read Simulation
 
-```@docs
-simulate_pacbio_reads
-simulate_nanopore_reads
-```
+See [Data Acquisition Workflow](api/workflows/data-acquisition.md) for read simulation functions.
 
 ### Assembly Testing
 
@@ -133,18 +127,15 @@ test_intelligent_assembly
 ### FASTQ Analysis
 
 ```@docs
-analyze_fastq_quality
-calculate_gc_content
-assess_duplication_rates
+Mycelia.calculate_gc_content
+Mycelia.assess_duplication_rates
 ```
+
+For FASTQ quality analysis functions, see [Quality Control Workflow](api/workflows/quality-control.md).
 
 ### External Tool Integration
 
-```@docs
-qc_filter_short_reads_fastp
-qc_filter_long_reads_filtlong
-trim_galore_paired
-```
+For quality control and filtering functions, see [Quality Control Workflow](api/workflows/quality-control.md).
 
 ## Assembly Validation
 
@@ -190,11 +181,12 @@ build_genome_distance_matrix
 ### Plotting Functions
 
 ```@docs
-plot_kmer_frequency_spectra
-visualize_genome_coverage
-plot_embeddings
-plot_taxa_abundances
+Mycelia.visualize_genome_coverage
+Mycelia.plot_embeddings
+Mycelia.plot_taxa_abundances
 ```
+
+For k-mer frequency plotting, see [Sequence Analysis Workflow](api/workflows/sequence-analysis.md).
 
 ## Utility Functions
 

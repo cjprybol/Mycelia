@@ -1,28 +1,38 @@
-"""
-Basic Graph Type Tests
+## From the Mycelia base directory, run the tests with:
+## 
+## ```bash
+## julia --project=. -e 'include("test/4_assembly/basic_graph_tests.jl")'
+## ```
+##
+## And to turn this file into a jupyter notebook, run:
+## ```bash
+## julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/basic_graph_tests.jl", "test/4_assembly", execute=false)'
+## ```
 
-Simple tests to verify each graph type can be constructed and accessed.
-"""
-
-if isinteractive()
-    Pkg.activate("..")
-end
-
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import FASTX
 import BioSequences
+import MetaGraphsNext
+import Graphs
+import Kmers
 
 Test.@testset "Basic Graph Type Construction Tests" begin
     
-    # Test data
+    ## Test data
     dna_seq = "ATCGATCGATCGATCG"
     rna_seq = "AUCGAUCGAUCGAUCG"
     protein_seq = "ALAVALINEGLUTAMINE"
     high_quality = "HHHHHHHHHHHHHHHH"
     
     Test.@testset "1. N-gram Graphs" begin
-        # Test N-gram graph construction with keyword arguments
+        ## Test N-gram graph construction with keyword arguments
         graph = Mycelia.string_to_ngram_graph(s=dna_seq, n=3)
         Test.@test !isempty(graph.vertex_labels)
         println("✓ N-gram Graph: $(length(graph.vertex_labels)) vertices")
@@ -59,7 +69,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             graph = Mycelia.build_qualmer_graph(records, k=5)
             Test.@test !isempty(graph.vertex_labels)
             
-            # Test vertex data
+            ## Test vertex data
             kmers = collect(values(graph.vertex_labels))
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
@@ -73,7 +83,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             graph = Mycelia.build_qualmer_graph(records, k=4)
             Test.@test !isempty(graph.vertex_labels)
             
-            # Test vertex data
+            ## Test vertex data
             kmers = collect(values(graph.vertex_labels))
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
@@ -86,7 +96,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             graph = Mycelia.build_qualmer_graph(records, k=3)
             Test.@test !isempty(graph.vertex_labels)
             
-            # Test vertex data
+            ## Test vertex data
             kmers = collect(values(graph.vertex_labels))
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
@@ -101,7 +111,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             graph = Mycelia.build_biosequence_graph(records)
             Test.@test !isempty(graph.vertex_labels)
             
-            # Test vertex data
+            ## Test vertex data
             sequences = collect(values(graph.vertex_labels))
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
             println("✓ FASTA Graph: $(length(sequences)) BioSequences")
@@ -110,15 +120,15 @@ Test.@testset "Basic Graph Type Construction Tests" begin
         Test.@testset "K-mer to BioSequence Conversion" begin
             records = [FASTX.FASTA.Record("test", dna_seq)]
             
-            # Create k-mer graph
+            ## Create k-mer graph
             kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.DNAKmer{5}, records)
             Test.@test !isempty(kmer_graph.vertex_labels)
             
-            # Convert to BioSequence graph
+            ## Convert to BioSequence graph
             bio_graph = Mycelia.kmer_graph_to_biosequence_graph(kmer_graph)
             Test.@test !isempty(bio_graph.vertex_labels)
             
-            # Test sequences
+            ## Test sequences
             sequences = collect(values(bio_graph.vertex_labels))
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
             println("✓ K-mer to FASTA: $(length(kmer_graph.vertex_labels)) k-mers -> $(length(sequences)) BioSequences")
@@ -131,7 +141,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             graph = Mycelia.build_quality_biosequence_graph(records)
             Test.@test !isempty(graph.vertex_labels)
             
-            # Test vertex data
+            ## Test vertex data
             sequences = collect(values(graph.vertex_labels))
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
             println("✓ FASTQ Graph: $(length(sequences)) quality BioSequences")
@@ -140,15 +150,15 @@ Test.@testset "Basic Graph Type Construction Tests" begin
         Test.@testset "Qualmer to Quality BioSequence Conversion" begin
             records = [FASTX.FASTQ.Record("test", dna_seq, high_quality)]
             
-            # Create qualmer graph
+            ## Create qualmer graph
             qualmer_graph = Mycelia.build_qualmer_graph(records, k=5)
             Test.@test !isempty(qualmer_graph.vertex_labels)
             
-            # Convert to quality BioSequence graph
+            ## Convert to quality BioSequence graph
             bio_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
             Test.@test !isempty(bio_graph.vertex_labels)
             
-            # Test sequences
+            ## Test sequences
             sequences = collect(values(bio_graph.vertex_labels))
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
             println("✓ Qualmer to FASTQ: $(length(qualmer_graph.vertex_labels)) qualmers -> $(length(sequences)) quality BioSequences")
@@ -157,18 +167,18 @@ Test.@testset "Basic Graph Type Construction Tests" begin
     
     Test.@testset "6. Graph Type Hierarchy" begin
         Test.@testset "Type Stability" begin
-            # Test that all graph types have consistent type signatures
+            ## Test that all graph types have consistent type signatures
             records = [FASTX.FASTA.Record("test", dna_seq)]
             
-            # K-mer graph
+            ## K-mer graph
             kmer_graph = Mycelia.build_kmer_graph_next(Mycelia.Kmers.DNAKmer{5}, records)
             Test.@test !isempty(kmer_graph.vertex_labels)
             
-            # Convert to BioSequence graph
+            ## Convert to BioSequence graph
             bio_graph = Mycelia.kmer_graph_to_biosequence_graph(kmer_graph)
             Test.@test !isempty(bio_graph.vertex_labels)
             
-            # Test types
+            ## Test types
             kmers = collect(values(kmer_graph.vertex_labels))
             sequences = collect(values(bio_graph.vertex_labels))
             Test.@test all(kmer -> kmer isa Mycelia.Kmers.DNAKmer, kmers)
@@ -177,13 +187,51 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             println("✓ Type Hierarchy: Fixed-length k-mers -> Variable-length BioSequences")
         end
     end
-    
-    println("\n" * "="^60)
-    println("BASIC GRAPH TYPE TESTS SUMMARY")
-    println("="^60)
-    println("✓ All 6 graph types can be constructed")
-    println("✓ Type stability maintained throughout")
-    println("✓ Quality-aware functionality working")
-    println("✓ Graph conversions operational")
-    println("="^60)
+
+    Test.@testset "GFA Parsing and Structure" begin
+        lines = [
+            "H\tVN:Z:1.0",
+            "S\t1\tACGT\t*\tDP:i:1",
+            "S\t2\tCGTA\t*\tDP:i:1",
+            "L\t1\t+\t2\t+\t3M",
+        ]
+        gfa = joinpath(tempdir(), "simple.gfa")
+        open(gfa, "w") do io
+            for l in lines
+                println(io, l)
+            end
+        end
+
+        g = Mycelia.read_gfa_next(gfa)
+        Test.@test g isa MetaGraphsNext.MetaGraph
+        Test.@test length(MetaGraphsNext.labels(g)) == 2
+        Test.@test length(collect(MetaGraphsNext.edge_labels(g))) == 1
+
+        ## Re-implementing the structure table logic
+        components = Graphs.connected_components(g)
+        Test.@test length(components) == 1
+        
+        component = first(components)
+        contig_indices = component
+        Test.@test contig_indices == [1, 2]
+        all_labels = collect(MetaGraphsNext.labels(g))
+        Test.@test all_labels == [Kmers.DNAKmer{4}("ACGT"), Kmers.DNAKmer{4}("CGTA")]
+        Test.@test length.(all_labels) == [4, 4]
+
+        g = Mycelia.read_gfa_next(gfa, force_biosequence_graph=true)
+        Test.@test g isa MetaGraphsNext.MetaGraph
+        Test.@test length(MetaGraphsNext.labels(g)) == 2
+        Test.@test length(collect(MetaGraphsNext.edge_labels(g))) == 1
+
+        ## Re-implementing the structure table logic
+        components = Graphs.connected_components(g)
+        Test.@test length(components) == 1
+        
+        component = first(components)
+        contig_indices = component
+        Test.@test contig_indices == [1, 2]
+        all_labels = collect(MetaGraphsNext.labels(g))
+        Test.@test all_labels == [BioSequences.LongDNA{4}("ACGT"), BioSequences.LongDNA{4}("CGTA")]
+        Test.@test length.(all_labels) == [4, 4]
+    end
 end

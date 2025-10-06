@@ -173,6 +173,7 @@ the format "channel::package"
 
 # Keywords
 - `force::Bool=false`: If true, recreates the environment even if it already exists
+- `quiet::Bool=false`: If true, suppress conda output using --quiet flag
 
 # Details
 The function creates a new Conda environment named after the package and installs
@@ -195,23 +196,41 @@ add_bioconda_env("blast", force=true)
 - Uses CONDA_RUNNER global variable to determine whether to use conda or mamba
 - Cleans conda cache after installation
 """
-function add_bioconda_env(pkg; force=false)
-channel = nothing
-if occursin("::", pkg)
-    println("splitting $(pkg)")
-    channel, pkg = split(pkg, "::")
-    println("into channel:$(channel) pkg:$(pkg)")
-end
-already_installed = check_bioconda_env_is_installed(pkg)
-if !already_installed || force
-    @info "installing conda environment $(pkg)"
-    if isnothing(channel)
-        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
-    else
-        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+function add_bioconda_env(pkg; force=false, quiet=false)
+    channel = nothing
+    if occursin("::", pkg)
+        if !quiet
+            println("splitting $(pkg)")
+        end
+        channel, pkg = split(pkg, "::")
+        if !quiet
+            println("into channel:$(channel) pkg:$(pkg)")
+        end
     end
-    run(`$(CONDA_RUNNER) clean --all -y`)
-end
+    already_installed = check_bioconda_env_is_installed(pkg)
+    if !already_installed || force
+        if !quiet
+            @info "installing conda environment $(pkg)"
+        end
+        if isnothing(channel)
+            if quiet
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y --quiet`)
+            else
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+            end
+        else
+            if quiet
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y --quiet`)
+            else
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+            end
+        end
+        if quiet
+            run(`$(CONDA_RUNNER) clean --all -y --quiet`)
+        else
+            run(`$(CONDA_RUNNER) clean --all -y`)
+        end
+    end
 end
 
 """
@@ -223,8 +242,8 @@ Update a package and its dependencies in its dedicated Conda environment.
 - `pkg::String`: Name of the package/environment to update
 """
 function update_bioconda_env(pkg)
-run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
-# conda update --all -n <env_name>
+    run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
+    # conda update --all -n <env_name>
 end
 
 # """

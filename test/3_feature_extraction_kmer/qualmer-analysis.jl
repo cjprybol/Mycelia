@@ -1,13 +1,26 @@
-# test/test_qualmer_analysis.jl
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/3_feature_extraction_kmer/qualmer-analysis.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/3_feature_extraction_kmer/qualmer-analysis.jl", "test/3_feature_extraction_kmer/", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import BioSequences
 import FASTX
 import Kmers
+import MetaGraphsNext
 
 Test.@testset "Qualmer Analysis" begin
     
@@ -92,8 +105,22 @@ Test.@testset "Qualmer Analysis" begin
             
             canon_qmer = Mycelia.canonical(qmer)
             Test.@test canon_qmer.kmer == kmer  # Already canonical
-            Test.@test canon_qmer.qualities !== quals
-            Test.@test canon_qmer.qualities == reverse(quals)
+            Test.@test canon_qmer.qualities == quals  # Qualities should be unchanged for canonical k-mer
+            
+            # Test with a sequence that needs reverse complement
+            rna_seq_rc = BioSequences.LongRNA{4}("UGCC")  # RC would be GGCA, so canonical should be GGCA
+            kmer_rc = Kmers.RNAKmer{4}(rna_seq_rc)
+            quals_rc = (0x30, 0x31, 0x32, 0x33)
+            qmer_rc = Mycelia.Qualmer(kmer_rc, quals_rc)
+            
+            canon_qmer_rc = Mycelia.canonical(qmer_rc)
+            Test.@test canon_qmer_rc.kmer == BioSequences.canonical(kmer_rc)  # Should be canonical
+            # If UGCC gets reverse-complemented to GGCA, qualities should be reversed
+            if canon_qmer_rc.kmer != kmer_rc
+                Test.@test canon_qmer_rc.qualities == (0x33, 0x32, 0x31, 0x30)  # Qualities should be reversed
+            else
+                Test.@test canon_qmer_rc.qualities == quals_rc  # Qualities unchanged if already canonical
+            end
         end
         
         Test.@testset "AA Canonical" begin
@@ -207,8 +234,8 @@ Test.@testset "Qualmer Analysis" begin
 
     Test.@testset "Simple Qualmer Examples" begin
         # Basic Qualmer construction for each alphabet
-        dna_kmer = Kmers.DNAKmer{3}(BioSequences.LongDNA{3}("ACG"))
-        rna_kmer = Kmers.RNAKmer{3}(BioSequences.LongRNA{3}("ACG"))
+        dna_kmer = Kmers.DNAKmer{3}(BioSequences.LongDNA{4}("ACG"))
+        rna_kmer = Kmers.RNAKmer{3}(BioSequences.LongRNA{4}("ACG"))
         aa_kmer  = Kmers.AAKmer{3}(BioSequences.LongAA("ACD"))
         qual = (0x01, 0x02, 0x03)
 
@@ -221,13 +248,13 @@ Test.@testset "Qualmer Analysis" begin
         Test.@test aa_q.kmer  == aa_kmer  && aa_q.qualities  == qual
 
         # Canonical with reverse complement for DNA and RNA
-        rc_dna = Kmers.DNAKmer{3}(BioSequences.LongDNA{3}("GAT"))
+        rc_dna = Kmers.DNAKmer{3}(BioSequences.LongDNA{4}("GAT"))
         rc_q   = (0x10, 0x11, 0x12)
         canon_dna = Mycelia.canonical(Mycelia.Qualmer(rc_dna, rc_q))
         Test.@test canon_dna.kmer == BioSequences.canonical(rc_dna)
         Test.@test canon_dna.qualities == (0x12, 0x11, 0x10)
 
-        rc_rna = Kmers.RNAKmer{3}(BioSequences.LongRNA{3}("GAU"))
+        rc_rna = Kmers.RNAKmer{3}(BioSequences.LongRNA{4}("GAU"))
         canon_rna = Mycelia.canonical(Mycelia.Qualmer(rc_rna, rc_q))
         Test.@test canon_rna.kmer == BioSequences.canonical(rc_rna)
         Test.@test canon_rna.qualities == (0x12, 0x11, 0x10)
@@ -238,14 +265,177 @@ Test.@testset "Qualmer Analysis" begin
 
         fw = collect(Mycelia.qualmers_fw(seq, q, Val(2)))
         Test.@test length(fw) == 3
-        Test.@test fw[1] == (Mycelia.Qualmer(Kmers.DNAKmer{2}(BioSequences.LongDNA{2}("AC")), (0x01,0x02)), 1)
+        # Extract the actual k-mer from the sequence for comparison
+        expected_kmer = first(Kmers.FwKmers{BioSequences.DNAAlphabet{4}, 2}(seq))
+        Test.@test fw[1] == (Mycelia.Qualmer(expected_kmer, (0x01,0x02)), 1)
 
         unambig = collect(Mycelia.qualmers_unambiguous(seq, q, Val(2)))
         Test.@test length(unambig) == 3
-        Test.@test unambig[3] == (Mycelia.Qualmer(Kmers.DNAKmer{2}(BioSequences.LongDNA{2}("GT")), (0x03,0x04)), 3)
+        # UnambiguousDNAMers returns 2-bit k-mers, so create the expected k-mer using that iterator
+        third_unambig_kmer = collect(Kmers.UnambiguousDNAMers{2}(seq))[3][1]  # (kmer, pos) tuple
+        Test.@test unambig[3] == (Mycelia.Qualmer(third_unambig_kmer, (0x03,0x04)), 3)
 
         canon = collect(Mycelia.qualmers_canonical(seq, q, Val(2)))
         Test.@test length(canon) == 3
-        Test.@test canon[3] == (Mycelia.Qualmer(BioSequences.canonical(Kmers.DNAKmer{2}(BioSequences.LongDNA{2}("GT"))), (0x04,0x03)), 3)
+        # The canonical of GT should be AC with reversed qualities
+        third_kmer_fw = collect(Kmers.FwKmers{BioSequences.DNAAlphabet{4}, 2}(seq))[3]
+        canonical_third = BioSequences.canonical(third_kmer_fw)
+        Test.@test canon[3] == (Mycelia.Qualmer(canonical_third, (0x04,0x03)), 3)
+    end
+    
+    Test.@testset "Probability Calculations" begin
+        Test.@testset "PHRED Conversion" begin
+            # Test PHRED to probability conversion
+            Test.@test Mycelia.phred_to_probability(UInt8(10)) ≈ 0.9 atol=0.01  # Q10 = 90% accuracy
+            Test.@test Mycelia.phred_to_probability(UInt8(20)) ≈ 0.99 atol=0.001  # Q20 = 99% accuracy
+            Test.@test Mycelia.phred_to_probability(UInt8(30)) ≈ 0.999 atol=0.0001  # Q30 = 99.9% accuracy
+            
+            # Test PHRED to error probability conversion
+            Test.@test Mycelia.phred_to_error_probability(UInt8(10)) ≈ 0.1 atol=0.01
+            Test.@test Mycelia.phred_to_error_probability(UInt8(20)) ≈ 0.01 atol=0.001
+        end
+        
+        Test.@testset "Qualmer Probability" begin
+            # Create test qualmer with known quality scores
+            dna_seq = BioSequences.LongDNA{4}("ACTG")
+            kmer = Kmers.DNAKmer{4}(dna_seq)
+            high_quals = (UInt8(30), UInt8(30), UInt8(30), UInt8(30))  # High quality
+            low_quals = (UInt8(10), UInt8(10), UInt8(10), UInt8(10))   # Low quality
+            
+            high_qmer = Mycelia.Qualmer(kmer, high_quals)
+            low_qmer = Mycelia.Qualmer(kmer, low_quals)
+            
+            # High quality should have higher correctness probability
+            high_prob = Mycelia.qualmer_correctness_probability(high_qmer)
+            low_prob = Mycelia.qualmer_correctness_probability(low_qmer)
+            Test.@test high_prob > low_prob
+            Test.@test high_prob > 0.99  # Should be very high for Q30
+            Test.@test low_prob < 0.9   # Should be lower for Q10
+        end
+        
+        Test.@testset "Joint Probability" begin
+            # Create multiple observations of the same k-mer
+            dna_seq = BioSequences.LongDNA{4}("ACTG")
+            kmer = Kmers.DNAKmer{4}(dna_seq)
+            quals1 = (UInt8(30), UInt8(25), UInt8(20), UInt8(15))
+            quals2 = (UInt8(25), UInt8(30), UInt8(25), UInt8(20))
+            
+            qmer1 = Mycelia.Qualmer(kmer, quals1)
+            qmer2 = Mycelia.Qualmer(kmer, quals2)
+            
+            # Test joint probability calculation
+            joint_prob = Mycelia.joint_qualmer_probability([qmer1, qmer2])
+            Test.@test joint_prob >= 0.0
+            Test.@test joint_prob <= 1.0
+            
+            # Test position-wise joint probability
+            pos_joint_prob = Mycelia.position_wise_joint_probability([qmer1, qmer2])
+            Test.@test pos_joint_prob >= 0.0
+            Test.@test pos_joint_prob <= 1.0
+            
+            # Test empty vector
+            Test.@test Mycelia.joint_qualmer_probability(Mycelia.Qualmer[]) == 0.0
+        end
+    end
+    
+    Test.@testset "Graph Construction and Analysis" begin
+        # Create test FASTQ records
+        records = [
+            FASTX.FASTQ.Record("read1", "ACTGCATGCA", "IIIIIIIIII"),
+            FASTX.FASTQ.Record("read2", "TGCATGCAAT", "HHHHHHHHHH"),
+            FASTX.FASTQ.Record("read3", "CATGCAATGC", "GGGGGGGGGG")
+        ]
+        
+        Test.@testset "Basic Graph Construction" begin
+            # Build a qualmer graph
+            graph = Mycelia.build_qualmer_graph(records, k=4)
+            Test.@test isa(graph, MetaGraphsNext.MetaGraph)
+            
+            # Check that graph has vertices
+            vertices = collect(MetaGraphsNext.labels(graph))
+            Test.@test length(vertices) > 0
+            
+            # Get basic statistics
+            stats = Mycelia.get_qualmer_statistics(graph)
+            Test.@test haskey(stats, "num_vertices")
+            Test.@test haskey(stats, "num_edges")
+            Test.@test haskey(stats, "mean_coverage")
+            Test.@test stats["num_vertices"] >= 0
+            Test.@test stats["mean_coverage"] >= 0.0
+        end
+        
+        Test.@testset "Quality Metrics" begin
+            graph = Mycelia.build_qualmer_graph(records, k=3, min_coverage=1)
+            
+            # Calculate assembly quality metrics
+            quality_metrics = Mycelia.calculate_assembly_quality_metrics(graph)
+            Test.@test quality_metrics.mean_coverage >= 0.0
+            Test.@test quality_metrics.mean_quality >= 0.0
+            Test.@test quality_metrics.mean_confidence >= 0.0
+            Test.@test quality_metrics.low_confidence_fraction >= 0.0
+            Test.@test quality_metrics.low_confidence_fraction <= 1.0
+            Test.@test quality_metrics.total_kmers >= 0
+        end
+        
+        Test.@testset "Error Identification" begin
+            graph = Mycelia.build_qualmer_graph(records, k=3, min_coverage=1)
+            
+            # Identify potential errors with lenient thresholds
+            error_labels = Mycelia.identify_potential_errors(graph, 
+                min_coverage=1, min_quality=5.0, min_confidence=0.1)
+            Test.@test isa(error_labels, Vector)
+            # All labels should be k-mers (Kmers.Kmer types)
+            if !isempty(error_labels)
+                Test.@test all(v -> isa(v, Kmers.Kmer), error_labels)
+            end
+        end
+    end
+    
+    Test.@testset "Additional Edge Cases and Coverage" begin
+        Test.@testset "Quality Score Edge Cases" begin
+            # Test with extreme quality scores
+            Test.@test Mycelia.phred_to_probability(UInt8(0)) ≈ 0.0 atol=0.01  # Very low quality
+            Test.@test Mycelia.phred_to_probability(UInt8(60)) ≈ 1.0 atol=0.000002  # Very high quality
+            
+            # Test with mixed quality qualmer
+            dna_seq = BioSequences.LongDNA{4}("ACTG")
+            kmer = Kmers.DNAKmer{4}(dna_seq)
+            mixed_quals = (UInt8(0), UInt8(60), UInt8(0), UInt8(60))
+            mixed_qmer = Mycelia.Qualmer(kmer, mixed_quals)
+            
+            prob = Mycelia.qualmer_correctness_probability(mixed_qmer)
+            Test.@test prob >= 0.0
+            Test.@test prob <= 1.0
+        end
+        
+        Test.@testset "Qualmer Constructor Edge Cases" begin
+            # Test constructor with AbstractVector input
+            dna_seq = BioSequences.LongDNA{4}("ACG")
+            kmer = Kmers.DNAKmer{3}(dna_seq)
+            qual_vec = [30, 25, 20]  # Int vector
+            
+            qmer = Mycelia.Qualmer(kmer, qual_vec)
+            Test.@test qmer.qualities == (0x1e, 0x19, 0x14)  # Converted to UInt8
+            
+            # Test assertion error for mismatched lengths
+            Test.@test_throws AssertionError Mycelia.Qualmer(kmer, [30, 25])  # Too short
+        end
+        
+        Test.@testset "Empty Graph Handling" begin
+            # Test statistics on empty graph
+            empty_graph = MetaGraphsNext.MetaGraph(
+                MetaGraphsNext.DiGraph(),
+                label_type=Kmers.DNAKmer{3},
+                vertex_data_type=Mycelia.QualmerVertexData,
+                edge_data_type=Mycelia.QualmerEdgeData,
+                weight_function=edge_data -> edge_data.weight,
+                default_weight=0.0
+            )
+            
+            stats = Mycelia.get_qualmer_statistics(empty_graph)
+            Test.@test stats["num_vertices"] == 0
+            Test.@test stats["num_edges"] == 0
+            Test.@test stats["mean_coverage"] == 0.0
+        end
     end
 end

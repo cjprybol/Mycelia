@@ -1,3 +1,321 @@
+function recursively_list_directories(dir::AbstractString)
+    directories_list = String[]
+    for (root, directories, files) in Base.walkdir(dir)
+        for d in directories
+            directory_path = joinpath(root, d)
+            # @assert isdir(directory_path)
+            push!(directories_list, directory_path)
+        end
+    end
+    return directories_list
+end
+
+function recursively_list_files(dir::AbstractString)
+    files_list = String[]
+    for (root, directories, files) in Base.walkdir(dir)
+        for f in files
+            file_path = joinpath(root, f)
+            # @assert isfile(file_path)
+            push!(files_list, file_path)
+        end
+    end
+    return files_list
+end
+
+"""
+    read_xlsx(filename::AbstractString) -> NamedTuple
+
+Read all sheets from an XLSX file into a NamedTuple of DataFrames.
+
+Each sheet becomes a field in the NamedTuple where the field name is the sheet name
+and the value is the corresponding DataFrame.
+
+# Arguments
+- `filename::AbstractString`: Path to the XLSX file
+
+# Returns
+- `NamedTuple`: Named tuple with sheet names as keys and DataFrames as values
+"""
+function read_xlsx(filename::AbstractString)
+    
+    # Ensure filename ends with .xlsx
+    filename = _ensure_xlsx_extension(filename)
+    
+    # Open the XLSX file
+    xf = XLSX.readxlsx(filename)
+    
+    # Get all sheet names
+    sheet_names = XLSX.sheetnames(xf)
+    
+    # Read each sheet into a DataFrame
+    dataframes = []
+    symbols = Symbol[]
+    
+    for sheet_name in sheet_names
+        df = DataFrames.DataFrame(XLSX.readtable(filename, sheet_name)...)
+        push!(dataframes, df)
+        push!(symbols, Symbol(sheet_name))
+    end
+    
+    # Create and return named tuple
+    return NamedTuple{Tuple(symbols)}(dataframes)
+end
+
+"""
+    write_xlsx(filename::AbstractString, dataframes...)
+
+Write one or more DataFrames to an XLSX file with multiple sheets.
+
+# Arguments
+- `filename::AbstractString`: Path for the output XLSX file
+- `dataframes...`: Variable number of arguments that can be DataFrames or Pairs of sheet_name => dataframe
+"""
+function write_xlsx(filename::AbstractString, dataframes...)
+    
+    # Ensure filename ends with .xlsx
+    filename = _ensure_xlsx_extension(filename)
+    
+    # Process arguments to extract sheet names and dataframes
+    sheets = _process_dataframe_args(dataframes...)
+    
+    # Create new XLSX file
+    XLSX.openxlsx(filename, mode="w") do xf
+        for (sheet_name, df) in sheets
+            sheet = XLSX.addsheet!(xf, sheet_name)
+            
+            # Write headers
+            col_names = DataFrames.names(df)
+            for (col_idx, col_name) in enumerate(col_names)
+                sheet[1, col_idx] = string(col_name)
+            end
+            
+            # Write data
+            for row_idx in 1:DataFrames.nrow(df)
+                for (col_idx, col_name) in enumerate(col_names)
+                    value = df[row_idx, col_name]
+                    # Handle missing values
+                    if DataFrames.ismissing(value)
+                        sheet[row_idx + 1, col_idx] = ""
+                    else
+                        sheet[row_idx + 1, col_idx] = value
+                    end
+                end
+            end
+        end
+    end
+    
+    println("Successfully wrote $(length(sheets)) sheet(s) to $filename")
+end
+
+"""
+    write_xlsx_single(filename::AbstractString, dataframe; sheet_name::AbstractString="Sheet1")
+
+Convenience function to write a single DataFrame to an XLSX file.
+
+# Arguments
+- `filename::AbstractString`: Path for the output XLSX file
+- `dataframe`: DataFrame to write
+- `sheet_name::AbstractString`: Name for the sheet (default: "Sheet1")
+"""
+function write_xlsx_single(filename::AbstractString, dataframe; sheet_name::AbstractString="Sheet1")
+    write_xlsx(filename, sheet_name => dataframe)
+end
+
+"""
+    write_xlsx_single(filename::AbstractString, sheet_pair::Pair)
+
+Convenience function to write a single DataFrame with custom sheet name using pair syntax.
+
+# Arguments
+- `filename::AbstractString`: Path for the output XLSX file
+- `sheet_pair::Pair`: Pair of sheet_name => dataframe
+"""
+function write_xlsx_single(filename::AbstractString, sheet_pair::Pair)
+    write_xlsx(filename, sheet_pair)
+end
+
+# Helper functions
+
+"""
+Internal function to ensure filename has .xlsx extension and warn about other extensions.
+"""
+function _ensure_xlsx_extension(filename::AbstractString)
+    # Check for other common tabular data extensions
+    other_extensions = [".csv", ".tsv", ".txt", ".tab"]
+    filename_lower = lowercase(filename)
+    
+    for ext in other_extensions
+        if endswith(filename_lower, ext)
+            @warn "File extension '$ext' detected. This function works with Excel files (.xlsx). " *
+                  "Converting extension to .xlsx"
+            filename = filename[1:end-length(ext)] * ".xlsx"
+            return filename
+        end
+    end
+    
+    # Add .xlsx if not present
+    if !endswith(filename_lower, ".xlsx")
+        filename = filename * ".xlsx"
+    end
+    
+    return filename
+end
+
+"""
+Internal function to process variable arguments for write_xlsx function.
+"""
+function _process_dataframe_args(dataframes...)
+    
+    sheets = Pair{String, DataFrames.DataFrame}[]
+    auto_sheet_counter = 1
+    
+    for arg in dataframes
+        if isa(arg, DataFrames.DataFrame)
+            # Auto-generate sheet name
+            sheet_name = "Sheet$auto_sheet_counter"
+            push!(sheets, sheet_name => arg)
+            auto_sheet_counter += 1
+        elseif isa(arg, Pair)
+            # Custom sheet name provided
+            sheet_name, df = arg
+            if !isa(df, DataFrames.DataFrame)
+                error("Value in pair must be a DataFrame, got $(typeof(df))")
+            end
+            push!(sheets, string(sheet_name) => df)
+        else
+            error("Arguments must be DataFrames or Pairs of sheet_name => dataframe, got $(typeof(arg))")
+        end
+    end
+    
+    if isempty(sheets)
+        error("At least one DataFrame must be provided")
+    end
+    
+    return sheets
+end
+
+
+"""
+    sanitize_for_arrow(df::DataFrames.DataFrame) -> DataFrames.DataFrame
+
+Creates a new DataFrame with columns sanitized for Arrow compatibility.
+
+It identifies columns with abstract or mixed types (e.g., `Vector{Any}`)
+and converts them to the most specific, concrete type possible.
+
+- If types are compatible (e.g., `Int` and `Float64`), they are promoted.
+- If types are incompatible (e.g., `Int` and `String`), the column is
+  converted to `String` and a warning is issued.
+"""
+function sanitize_for_arrow(df::DataFrames.DataFrame)
+    sanitized_df = copy(df) # Work on a copy
+    
+    for col_name in names(sanitized_df)
+        col = sanitized_df[!, col_name]
+        
+        # Only process columns with abstract element types
+        if !isconcretetype(eltype(col))
+            # Get all unique types present in the column, ignoring missings
+            present_types = unique(typeof.(skipmissing(col)))
+            
+            if isempty(present_types)
+                # Column is all `missing`, which is fine.
+                continue
+            end
+            
+            target_type = nothing
+            try
+                # Attempt to promote all found types to a common supertype
+                target_type = reduce(promote_type, present_types)
+            catch
+                # Promotion failed (e.g., trying to promote Int and String)
+                # Fall back to String as the only safe option
+                target_type = String
+                @warn "Column '$col_name' has incompatible mixed types. Converting to String."
+            end
+            
+            # Create a new column by converting each element to the target type
+            new_col = map(col) do val
+                ismissing(val) ? missing : convert(target_type, val)
+            end
+            
+            sanitized_df[!, col_name] = new_col
+        end
+    end
+    
+    return sanitized_df
+end
+
+"""
+    write_arrow(
+        df::DataFrames.DataFrame;
+        filename::String,
+        compress::Symbol=:zstd,
+        force::Bool=false,
+        sanitize::Bool=true
+    ) -> String
+
+Writes a DataFrame to an Apache Arrow file with optional pre-sanitization.
+
+# Keyword Arguments
+- `filename::String`: The path for the output Arrow file.
+- `compress::Symbol=:zstd`: Compression algorithm (:zstd, :lz4, :gzip, or nothing).
+- `force::Bool=false`: If `true`, overwrite an existing file.
+- `sanitize::Bool=true`: If `true`, automatically run `sanitize_for_arrow`
+  to resolve mixed-type columns before writing. Recommended to leave on.
+"""
+function write_arrow(
+    df::DataFrames.DataFrame;
+    filename::String,
+    compress::Symbol=:zstd,
+    force::Bool=false,
+    verbose::Bool=false,
+    sanitize::Bool=true # New keyword for safety
+)
+    if isfile(filename) && !force
+        @warn "File '$filename' already exists. Use force=true to overwrite."
+        return filename
+    end
+    
+    # Use a temporary variable to hold the DataFrame to be written
+    df_to_write = df
+
+    # Sanitize the DataFrame by default or if requested
+    if sanitize
+        df_to_write = sanitize_for_arrow(df)
+    end
+
+    # Arrow.write handles everything else
+    Arrow.write(filename, df_to_write, compress=compress)
+    
+    verbose && println("Successfully wrote DataFrame to $filename")
+    return filename
+end
+
+"""
+    read_arrow(filename::String) -> DataFrames.DataFrame
+
+Reads an Apache Arrow file into a Julia DataFrame.
+
+# Arguments
+- `filename::String`: The path to the Arrow file.
+
+# Returns
+- `DataFrames.DataFrame`: The loaded DataFrame.
+"""
+function read_arrow(filename::String)
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Reading is a simple two-step process: open a table, then convert to a DataFrame.
+    arrow_table = Arrow.Table(filename)
+    df = DataFrames.DataFrame(arrow_table)
+    
+    return df
+end
+
+
 # """
 #     @recordtest call_expr
 
@@ -1453,7 +1771,7 @@ function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
     if !isfile(filepath)
         error("parse_jsonl: file not found: $filepath")
     end
-    file_stat = stat(filepath)
+    file_stat = Base.Filesystem.stat(filepath)
     if file_stat.size == 0
         error("parse_jsonl: file is empty: $filepath")
     end
@@ -2333,4 +2651,192 @@ function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{FAST
     end
     
     return (total_gc / total_bases) * 100.0
+end
+
+# =============================================================================
+# Comprehensive Sequence Hashing Functions
+# =============================================================================
+
+"""
+    _calculate_required_bytes(encoding::Symbol, encoded_length::Int) -> Int
+
+Calculate minimum bytes needed to produce desired encoded length.
+"""
+function _calculate_required_bytes(encoding::Symbol, encoded_length::Int)::Int
+    if encoding == :hex
+        return ceil(Int, encoded_length / 2)
+    elseif encoding == :base58
+        # Base58 uses log2(58) ≈ 5.86 bits per character
+        # Add safety margin to account for encoding variability
+        bits_needed = encoded_length * log2(58)
+        bytes_needed = ceil(Int, bits_needed / 8)
+        # Add 1 extra byte as safety margin for Base58 encoding variability
+        return bytes_needed + 1
+    elseif encoding == :base64
+        # Base64 uses 6 bits per character, but has padding
+        return ceil(Int, encoded_length * 3 / 4)
+    else
+        error("Unsupported encoding: $encoding")
+    end
+end
+
+"""
+    _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded_length::Union{Int,Missing}, allow_truncation::Bool) -> String
+
+Internal function to encode hash bytes with specified encoding and length handling.
+"""
+function _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded_length::Union{Int,Missing}, allow_truncation::Bool)::String
+    if encoding == :hex
+        encoded = bytes2hex(hash_bytes)
+    elseif encoding == :base58
+        encoded = String(Base58.base58encode(hash_bytes))
+    elseif encoding == :base64
+        encoded = Base64.base64encode(hash_bytes)
+    else
+        error("Unsupported encoding: $encoding. Supported: :hex, :base58, :base64")
+    end
+    
+    # Handle length requirements
+    if ismissing(encoded_length)
+        return encoded
+    elseif length(encoded) == encoded_length
+        return encoded
+    elseif length(encoded) > encoded_length
+        # Auto-truncation for encodings with padding/safety margins
+        # Our calculations in _calculate_required_bytes prevent "too short" errors
+        # but may produce excess characters. Auto-truncate to requested length.
+        if encoding == :base58 || encoding == :base64
+            return encoded[1:encoded_length]
+        elseif allow_truncation
+            return encoded[1:encoded_length]
+        else
+            error("Encoded hash length ($(length(encoded))) exceeds requested length ($encoded_length). Set allow_truncation=true to truncate.")
+        end
+    else
+        error("Cannot generate encoded hash of length $encoded_length from $(length(hash_bytes)) bytes with $encoding encoding (produces $(length(encoded)) characters)")
+    end
+end
+
+"""
+    crc32_checksum(data_to_hash::AbstractString; normalize_case::Bool=true) -> UInt32
+
+Simple CRC32 checksum function returning raw checksum value.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input data to checksum
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+
+# Returns
+- `UInt32`: Raw CRC32 checksum value
+"""
+function crc32_checksum(data_to_hash::AbstractString; normalize_case::Bool=true)::UInt32
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    return CRC32c.crc32c(Vector{UInt8}(normalized_data))
+end
+
+"""
+    create_md5_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate MD5 hash with configurable encoding and length.
+"""
+function create_md5_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = Vector{UInt8}(MD5.md5(Vector{UInt8}(normalized_data)))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha1_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-1 hash with configurable encoding and length.
+"""
+function create_sha1_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha1(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-256 hash with configurable encoding and length.
+"""
+function create_sha256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha256(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-512 hash with configurable encoding and length.
+"""
+function create_sha512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha512(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha3_256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-3 256-bit hash with configurable encoding and length.
+"""
+function create_sha3_256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha3_256(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_sha3_512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate SHA-3 512-bit hash with configurable encoding and length.
+"""
+function create_sha3_512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    hash_bytes = SHA.sha3_512(Vector{UInt8}(normalized_data))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_crc32_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Generate CRC32 checksum with configurable encoding and length.
+"""
+function create_crc32_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    crc_val = CRC32c.crc32c(Vector{UInt8}(normalized_data))
+    # Convert to 4 bytes (32 bits) in little-endian format
+    hash_bytes = Vector{UInt8}(reinterpret(UInt8, [crc_val]))
+    return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
+end
+
+"""
+    create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false, hash_bytes::Union{Int,Missing}=missing) -> String
+
+Generate BLAKE3 hash with configurable encoding and length.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input data to hash
+- `encoding::Symbol=:hex`: Output encoding (:hex, :base58, :base64)
+- `encoded_length::Int=64`: Desired output length (optimized for tree-of-life scale)
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+- `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
+- `hash_bytes::Union{Int,Missing}=missing`: Raw bytes to generate (auto-calculated if missing)
+"""
+function create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false, hash_bytes::Union{Int,Missing}=missing)::String
+    normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
+    
+    # Calculate required bytes if not specified
+    bytes_needed = ismissing(hash_bytes) ? _calculate_required_bytes(encoding, encoded_length) : hash_bytes
+    
+    hasher = Blake3Hash.Blake3Ctx()
+    Blake3Hash.update!(hasher, Vector{UInt8}(normalized_data))
+    
+    output_buffer = Vector{UInt8}(undef, bytes_needed)
+    Blake3Hash.digest(hasher, output_buffer)
+    
+    return _encode_hash_bytes(output_buffer, encoding, encoded_length, allow_truncation)
 end

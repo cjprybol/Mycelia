@@ -27,6 +27,9 @@
             "version": "lts",
             "pnpmVersion": "latest",
             "nvmVersion": "latest"
+        },
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installVim": true
         }
 	},
     "waitFor": "postCreateCommand",
@@ -50,16 +53,17 @@
                 "GitHub.copilot",
                 "tamasfe.even-better-toml",
                 "ms-azuretools.vscode-docker",
-                "vadimcn.vscode-lldb",
-                "ms-python.autopep8",
-                "ms-python.debugpy",
-                "ms-python.vscode-pylance"
+                "google.gemini-cli-vscode-ide-companion",
+                "Anthropic.claude-code",
+                "kilocode.kilo-code",
+                "ms-azuretools.vscode-containers",
+                "vscodevim.vim",
+                "DavidAnson.vscode-markdownlint"
             ]
         }
     },
-    "postCreateCommand": "bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.Registry.update(); Pkg.resolve(); Pkg.instantiate(); Pkg.precompile()'",
-    "postStartCommand": "julia --project=. -e 'using Pkg; Pkg.resolve(); Pkg.instantiate();'",
-    // "postCreateCommand": "bash .devcontainer/setup.sh"
+    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y vim && bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile()'"
+    // "postStartCommand": "",
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 

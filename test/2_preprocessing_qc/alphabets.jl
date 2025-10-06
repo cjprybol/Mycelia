@@ -1,7 +1,18 @@
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# ```bash
+# julia --project=. --color=yes -e 'include("test/2_preprocessing_qc/alphabets.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/alphabets.jl", "test/2_preprocessing_qc", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import BioSequences
@@ -22,13 +33,14 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
         # Test DNA sequences
         Test.@test Mycelia.detect_alphabet("ATCG") == :DNA
         Test.@test Mycelia.detect_alphabet("atcg") == :DNA
+        Test.@test Mycelia.detect_alphabet("ATCGN") == :DNA  # Test ACGTN detection
         Test.@test Mycelia.detect_alphabet("ATCGNatcgn") == :DNA
         Test.@test Mycelia.detect_alphabet("ATCGRYSWKMBDH") == :DNA
-        Test.@test Mycelia.detect_alphabet("") == :DNA  # default case
         
         # Test RNA sequences
         Test.@test Mycelia.detect_alphabet("AUCG") == :RNA
         Test.@test Mycelia.detect_alphabet("aucg") == :RNA
+        Test.@test Mycelia.detect_alphabet("AUCGN") == :RNA  # Test ACGUN detection
         Test.@test Mycelia.detect_alphabet("AUCGNaucgn") == :RNA
         Test.@test Mycelia.detect_alphabet("AUCGRYSWKMBDH") == :RNA
         
@@ -36,15 +48,20 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
         Test.@test Mycelia.detect_alphabet("MKTLVF") == :AA
         Test.@test Mycelia.detect_alphabet("PROTEIN") == :AA
         Test.@test Mycelia.detect_alphabet("ATCGX") == :AA  # X is not in nucleotide alphabet
-        Test.@test Mycelia.detect_alphabet("123") == :AA  # Numbers not in nucleotide alphabet
+        Test.@test_throws ArgumentError Mycelia.detect_alphabet("123")  # Numbers not in any alphabet
         
-        # Test edge cases
-        Test.@test Mycelia.detect_alphabet("ACGN") == :DNA  # No T or U, defaults to DNA
+        # Test edge cases and hierarchy
+        Test.@test Mycelia.detect_alphabet("ACGN") == :DNA  # No T or U, fits DNA+N
+        Test.@test Mycelia.detect_alphabet("ACG") == :DNA   # Unambiguous DNA comes before RNA
+        Test.@test Mycelia.detect_alphabet("ACGU") == :RNA  # Contains U, must be RNA
+        Test.@test Mycelia.detect_alphabet("ACGT") == :DNA  # Contains T, must be DNA
+        Test.@test Mycelia.detect_alphabet("ACN") == :DNA   # Fits ACGTN before ACGUN
+        Test.@test Mycelia.detect_alphabet("ACUN") == :RNA  # Contains U, must be RNA
         
-        # Test error cases
-        Test.@test_throws ArgumentError Mycelia.detect_alphabet("ATUG")  # Both T and U
-        Test.@test_throws ArgumentError Mycelia.detect_alphabet("AtuG")  # Both t and U
-        Test.@test_throws ArgumentError Mycelia.detect_alphabet("ATCGAAU")  # Mixed T and U
+        # Test sequences that contain both T and U should be classified as AA
+        Test.@test Mycelia.detect_alphabet("ATUG") == :AA  # Both T and U, not valid nucleotide
+        Test.@test Mycelia.detect_alphabet("AtuG") == :AA  # Both t and U, not valid nucleotide
+        Test.@test Mycelia.detect_alphabet("ATCGAAU") == :AA  # Mixed T and U, not valid nucleotide
     end
 
     Test.@testset "detect_alphabet function - BioSequence input" begin
@@ -92,25 +109,26 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
         Test.@test long_dna isa BioSequences.LongDNA{4}
         Test.@test length(long_dna) == 16
         
-        # Test error conditions
-        Test.@test_throws ArgumentError Mycelia.convert_sequence("ATUG")  # Mixed T and U
+        # Test sequences with mixed T and U become AA
+        atug_result = Mycelia.convert_sequence("ATUG")  # Mixed T and U becomes AA
+        Test.@test atug_result isa BioSequences.LongAA
     end
 
     Test.@testset "Edge cases and error handling" begin
-        # Test empty string
-        Test.@test Mycelia.detect_alphabet("") == :DNA
-        empty_result = Mycelia.convert_sequence("")
-        Test.@test empty_result isa BioSequences.LongDNA{4}
-        Test.@test length(empty_result) == 0
+        # Test empty string should throw error
+        Test.@test_throws ArgumentError Mycelia.detect_alphabet("")
+        Test.@test_throws ArgumentError Mycelia.convert_sequence("")
         
         # Test single character sequences
-        Test.@test Mycelia.detect_alphabet("A") == :DNA
-        Test.@test Mycelia.detect_alphabet("U") == :RNA
-        Test.@test Mycelia.detect_alphabet("X") == :AA
+        Test.@test Mycelia.detect_alphabet("A") == :DNA  # A is in DNA (comes first)
+        Test.@test Mycelia.detect_alphabet("T") == :DNA  # T is DNA-specific
+        Test.@test Mycelia.detect_alphabet("U") == :RNA  # U is RNA-specific
+        Test.@test Mycelia.detect_alphabet("N") == :DNA  # N fits ACGTN first
+        Test.@test Mycelia.detect_alphabet("X") == :AA   # X is AA-specific
         
         # Test sequences with gaps/unknown characters
-        Test.@test Mycelia.detect_alphabet("AT-CG") == :AA  # Gap character makes it protein
-        Test.@test Mycelia.detect_alphabet("ATCG?") == :AA  # Unknown character
+        Test.@test Mycelia.detect_alphabet("AT-CG") == :DNA  # Gap character is filtered out in alphabet constants
+        Test.@test_throws ArgumentError Mycelia.detect_alphabet("ATCG?")  # Unknown character throws error
         
         # Test very long sequences
         long_seq = repeat("ATCG", 1000)
@@ -127,7 +145,12 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
             ("AUCG", :RNA), 
             ("MKTL", :AA),
             ("atcgn", :DNA),
-            ("aucgn", :RNA)
+            ("aucgn", :RNA),
+            ("ATCGN", :DNA),  # Test ACGTN
+            ("AUCGN", :RNA),  # Test ACGUN
+            ("ACG", :DNA),    # Test hierarchy: DNA comes before RNA
+            ("ACGT", :DNA),   # Test T-containing sequence
+            ("ACGU", :RNA)    # Test U-containing sequence
         ]
         
         for (seq, expected_alphabet) in test_sequences
@@ -158,5 +181,29 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
         Test.@test length(converted_dna) == 40000
         Test.@test length(converted_rna) == 40000
         Test.@test length(converted_aa) == 40000
+    end
+
+    Test.@testset "ACGTN and ACGUN alphabet detection" begin
+        # Test that N-containing sequences are properly detected
+        Test.@test Mycelia.detect_alphabet("NNNNN") == :DNA  # N alone should be DNA (ACGTN first)
+        Test.@test Mycelia.detect_alphabet("ATCGNNNN") == :DNA
+        Test.@test Mycelia.detect_alphabet("AUCGNNNN") == :RNA
+        
+        # Test sequences that fit ACGTN/ACGUN but not unambiguous alphabets
+        Test.@test Mycelia.detect_alphabet("ACGN") == :DNA
+        Test.@test Mycelia.detect_alphabet("ACUN") == :RNA
+        
+        # Test mixed case with N
+        Test.@test Mycelia.detect_alphabet("atcgN") == :DNA
+        Test.@test Mycelia.detect_alphabet("aucgN") == :RNA
+        
+        # Verify conversion works for ACGTN/ACGUN sequences
+        dna_n_result = Mycelia.convert_sequence("ATCGN")
+        Test.@test dna_n_result isa BioSequences.LongDNA{4}
+        Test.@test string(dna_n_result) == "ATCGN"
+        
+        rna_n_result = Mycelia.convert_sequence("AUCGN")
+        Test.@test rna_n_result isa BioSequences.LongRNA{4}
+        Test.@test string(rna_n_result) == "AUCGN"
     end
 end

@@ -597,40 +597,124 @@ function minimap_map(;
         as_string=false,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
         threads=Sys.CPU_THREADS,
-        denominator=DEFAULT_MINIMAP_DENOMINATOR
+        denominator=DEFAULT_MINIMAP_DENOMINATOR,
+        output_format="bam",
+        sorted=true,
+        quiet=true
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    @assert output_format in ["sam", "sam.gz", "bam"] "output_format must be 'sam', 'sam.gz', or 'bam'"
+
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    # temp_sam_outfile = fastq * "." * basename(fasta) * "." * "minimap2.sam"
-    # outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
-    outfile = fastq * "." * basename(fasta) * ".minimap2.sorted.bam"
+
+    # Construct output filename based on format
+    base_name = fastq * "." * basename(fasta) * ".minimap2"
+    if sorted
+        base_name *= ".sorted"
+    end
+    outfile = base_name * "." * output_format
+
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
-    # Mycelia.add_bioconda_env("pigz")
-    # if as_string
-    #     cmd =
-    #     """
-    #     $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-    #     && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
-    #     """
-    # else
-    #     map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-    #     compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-    #     cmd = pipeline(map, compress)
-    # end
-    if as_string
-        cmd =
-        """
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
-        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
-        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
-        """
-    else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
-        sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -`
-        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
-        cmd = pipeline(map, sort_cmd, compress)
+
+    # Build command based on output format
+    if output_format == "sam"
+        # Direct SAM output
+        if as_string
+            if sorted
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
+                """
+            else
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)
+                """
+            end
+        else
+            if sorted
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
+                cmd = pipeline(map_cmd, sort_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            else
+                if quiet
+                    cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)`, stdout=devnull, stderr=devnull)
+                else
+                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)`
+                end
+            end
+        end
+
+    elseif output_format == "sam.gz"
+        # Gzipped SAM output using samtools for proper BGZF compression
+        if as_string
+            if sorted
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -
+                """
+            else
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -
+                """
+            end
+        else
+            if sorted
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -`
+                cmd = pipeline(map_cmd, sort_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            else
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -`
+                cmd = pipeline(map_cmd, view_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            end
+        end
+
+    else  # output_format == "bam"
+        # BAM output (default behavior)
+        if as_string
+            if sorted
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                """
+            else
+                cmd = """
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                """
+            end
+        else
+            if sorted
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -`
+                compress_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
+                cmd = pipeline(map_cmd, sort_cmd, compress_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            else
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                compress_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
+                cmd = pipeline(map_cmd, compress_cmd)
+                if quiet
+                    cmd = pipeline(cmd, stderr=devnull)
+                end
+            end
+        end
     end
+
     return (;cmd, outfile)
 end
 
@@ -1004,58 +1088,210 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Runs the MMseqs2 easy-search command on the given query FASTA file against the target database.
 
-# Arguments
-- `query_fasta::String`: Path to the query FASTA file.
-- `target_database::String`: Path to the target database.
-- `out_dir::String`: Directory to store the output file. Defaults to the directory of the query FASTA file.
-- `outfile::String`: Name of the output file. Defaults to a combination of the query FASTA and target database filenames.
-- `format_output::String`: Format of the output. Defaults to a predefined set of fields.
-- `threads::Int`: Number of CPU threads to use. Defaults to the number of CPU threads available.
-- `force::Bool`: If true, forces the re-generation of the output file even if it already exists. Defaults to false.
+Arguments
+- query_fasta::String: Path to the query FASTA file.
+- target_database::String: Path to the target database.
+- out_dir::String: Directory to store the output file. Defaults to the directory of the query FASTA file.
+- outfile::String: Base name of the output file (may include .gz). Defaults to a combination of the query FASTA and target database filenames with a .txt extension (and .gz automatically added if gzip=true).
+- format_output::String: Format of the output. Defaults to a predefined set of fields.
+- threads::Int: Number of CPU threads to use. Defaults to the number of CPU threads available.
+- force::Bool: If true, forces re-generation of the (uncompressed) output even if it or a compressed variant already exists.
+- gzip::Bool: If true (default), compress the final output with pigz. If true and the given outfile lacks a .gz suffix, it is appended. If false and the provided outfile ends with .gz, an error is raised.
+- validate_compression::Bool: If true (default) and gzip=true, performs a pigz -t integrity test before deleting the uncompressed file. Validation reads the entire compressed file and verifies CRC32 and size modulo 2^32.
+- keep_uncompressed::Bool: If true, retains the uncompressed file even after successful compression/validation. If validate_compression=true and keep_uncompressed=false, the uncompressed file is removed only after a successful pigz -t test.
 
-# Returns
-- `outfile_path::String`: Path to the generated output file.
+Behavior Notes
+- If gzip=true and the compressed file is missing but the corresponding uncompressed file exists (from a prior run or failed compression) and force=false, the function reuses the uncompressed file and (re)attempts compression instead of re-running MMseqs2.
+- If force=true, MMseqs2 is always re-run and existing output artifacts are removed first.
+- If a zero-byte compressed file exists, it is treated as corrupt, removed, and regeneration proceeds.
+- Validation (pigz -t) is only run during the compression step (i.e., not re-run on an already existing compressed file being returned early).
+- Compression uses pigz with the same thread count as MMseqs2.
+- No staleness check is performed to confirm the uncompressed file matches current inputs.
 
-# Notes
-- Adds the `mmseqs2` environment using Bioconda if not already present.
-- Removes temporary files created during the process.
+Returns
+- outfile_path::String: Path to the final (compressed or uncompressed) output file.
+
+Integrity Caveats
+- pigz -t validates internal integrity (CRC32 and length modulo 2^32) of the compressed file; it does not compare against a preserved checksum of the original unless you add such a mechanism externally.
 """
 function run_mmseqs_easy_search(;
-        query_fasta,
-        target_database,
-        out_dir=dirname(query_fasta),
-        outfile=basename(query_fasta) * ".mmseqs_easy_search." * basename(target_database) * ".txt",
-        format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-        threads = Sys.CPU_THREADS,
-        force=false)
-    
-    add_bioconda_env("mmseqs2")
-    outfile_path = joinpath(out_dir, outfile)
-    tmp_dir = joinpath(out_dir, "tmp")
-    if force || (!force && !isfile(outfile_path))
-        cmd = 
-        `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
-            easy-search
-            $(query_fasta)
-            $(target_database)
-            $(outfile_path)
-            $(tmp_dir)
-            --threads $(threads)
-            --format-mode 4
-            --format-output $(format_output)
-            --start-sens 1 -s 7 --sens-steps 7
-            --sort-results 1
-            --remove-tmp-files 1
-        `
-        @time run(pipeline(cmd))
+    query_fasta,
+    target_database,
+    out_dir = dirname(query_fasta),
+    outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." * basename(target_database) * ".txt",
+    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
+    threads = Sys.CPU_THREADS,
+    force::Bool = false,
+    gzip::Bool = true,
+    validate_compression::Bool = true,
+    keep_uncompressed::Bool = false,
+)
+    # Validate interaction of flags
+    if !gzip && validate_compression
+        @warn "validate_compression requested but gzip=false; validation will be skipped."
+    end
+    if !gzip && keep_uncompressed
+        @warn "keep_uncompressed is irrelevant because gzip=false."
+    end
+
+    # Normalize outfile names and semantics
+    if gzip
+        if endswith(outfile, ".gz")
+            compressed_name = outfile
+            uncompressed_name = replace(outfile, r"\.gz$" => "")
+        else
+            uncompressed_name = outfile
+            compressed_name = outfile * ".gz"
+        end
     else
-        @info "target outfile $(outfile_path) already exists, remove it or set force=true to re-generate"
+        if endswith(outfile, ".gz")
+            error("gzip was set to false but the provided outfile ends with .gz: $(outfile)")
+        else
+            uncompressed_name = outfile
+            compressed_name = nothing
+        end
     end
-    # we set remote tmp files = 1 above, but it still doesn't seem to work?
+
+    final_outfile_name = gzip ? compressed_name :: String : uncompressed_name
+    final_outfile_path = joinpath(out_dir, final_outfile_name)
+    work_outfile_path  = gzip ? joinpath(out_dir, uncompressed_name) : final_outfile_path
+    tmp_dir = joinpath(out_dir, "tmp")
+
+    # Ensure required environments (pigz only if needed)
+    add_bioconda_env("mmseqs2")
+    if gzip
+        add_bioconda_env("pigz")
+    end
+
+    # Helper: compress (optionally validate) with pigz
+    function _compress_with_pigz(uncompressed_path::String, final_path::String, threads::Int;
+                                 validate::Bool,
+                                 keep_uncompressed::Bool)
+        if !isfile(uncompressed_path)
+            error("Cannot compress: uncompressed file $(uncompressed_path) does not exist.")
+        end
+
+        # Remove zero-byte or clearly invalid existing compressed file artifact if present
+        if isfile(final_path) && filesize(final_path) == 0
+            @warn "Existing compressed file $(final_path) is zero bytes; removing before retry."
+            rm(final_path; force=true)
+        end
+
+        # Skip if final already exists (rare race case)
+        if !isfile(final_path)
+            # Construct pigz command flags
+            # -k if we must keep original either for validation or explicit retention
+            keep_flag = (validate || keep_uncompressed) ? "-k" : ""
+            cmd_pigz = `$(CONDA_RUNNER) run --no-capture-output -n pigz pigz $keep_flag -p $(threads) -f $(uncompressed_path)`
+            @info "Compressing with pigz (threads=$(threads), validate=$(validate), keep_uncompressed=$(keep_uncompressed))"
+            @time run(cmd_pigz)
+        end
+
+        if !isfile(final_path)
+            error("Compression failed: expected compressed file $(final_path) was not created.")
+        end
+
+        if validate
+            # Integrity test
+            cmd_test = `$(CONDA_RUNNER) run --no-capture-output -n pigz pigz -t $(final_path)`
+            @info "Validating compressed file integrity with pigz -t: $(final_path)"
+            try
+                @time run(cmd_test)
+            catch err
+                @error "pigz -t integrity test failed; retaining uncompressed file $(uncompressed_path)" error=err
+                # Remove corrupted compressed file to avoid confusion
+                try
+                    rm(final_path; force=true)
+                catch
+                end
+                error("Validation failed for compressed file $(final_path): $(err)")
+            end
+
+            # Remove uncompressed only if we do not want to keep it
+            if !keep_uncompressed && isfile(uncompressed_path)
+                try
+                    rm(uncompressed_path; force=true)
+                catch err
+                    @warn "Failed to remove uncompressed file after successful validation: $(uncompressed_path)" error=err
+                end
+            end
+        else
+            # If not validating and not keeping, pigz (without -k) already removed uncompressed.
+            # If keeping (keep_uncompressed=true), pigz was invoked with -k above.
+            nothing
+        end
+
+        return final_path
+    end
+
+    # Handle zero-byte final compressed artifact early (force regeneration path)
+    if gzip && isfile(final_outfile_path) && filesize(final_outfile_path) == 0
+        @warn "Existing compressed file $(final_outfile_path) is zero bytes; removing for regeneration."
+        rm(final_outfile_path; force=true)
+    end
+
+    # Early return if final artifact already exists and not forcing
+    if !force && isfile(final_outfile_path)
+        @info "Target outfile $(final_outfile_path) already exists; returning existing file."
+        return final_outfile_path
+    end
+
+    # Determine if we can reuse an existing uncompressed file (avoid re-running MMseqs2)
+    reused_uncompressed = false
+    if gzip && !force && !isfile(final_outfile_path) && isfile(work_outfile_path)
+        @info "Found existing uncompressed file $(work_outfile_path); will skip MMseqs2 run and proceed to compression."
+        reused_uncompressed = true
+    end
+
+    # Force cleanup if required
+    if force
+        if isfile(final_outfile_path)
+            rm(final_outfile_path; force=true)
+        end
+        if gzip && isfile(work_outfile_path)
+            rm(work_outfile_path; force=true)
+        end
+    end
+
+    # Run MMseqs2 only if we do not reuse an existing uncompressed result
+    if !(gzip && reused_uncompressed)
+        cmd_search =
+            `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
+                easy-search
+                $(query_fasta)
+                $(target_database)
+                $(work_outfile_path)
+                $(tmp_dir)
+                --threads $(threads)
+                --format-mode 4
+                --format-output $(format_output)
+                --start-sens 1 -s 7 --sens-steps 7
+                --sort-results 1
+                --remove-tmp-files 1
+            `
+        @info "Running MMseqs2 easy-search -> $(work_outfile_path)"
+        @time run(cmd_search)
+    end
+
+    # Compression (and optional validation)
+    if gzip
+        if !isfile(final_outfile_path)
+            _compress_with_pigz(work_outfile_path, final_outfile_path, threads;
+                                validate = validate_compression,
+                                keep_uncompressed = keep_uncompressed)
+        else
+            @info "Compressed file already present after generation: $(final_outfile_path)"
+            # If user requested validation but file already existed, we skip re-validation to avoid a full read.
+            # A custom flag could be added later to force re-validation of existing compressed outputs.
+        end
+    end
+
+    # Cleanup tmp directory if present
     if isdir(tmp_dir)
-        rm(tmp_dir, recursive=true)
+        rm(tmp_dir; recursive=true)
     end
-    return outfile_path
+
+    return final_outfile_path
 end
 
 """
@@ -1687,44 +1923,400 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+Stream a (plain or gzipped) MMSeqs2 easy-search tab-delimited output file and
+return a DataFrame containing exactly one (top) hit per query.
 
-Parse MMseqs2 tophit alignment output file into a structured DataFrame.
+Operation Modes
+- Grouped mode (assume_grouped=true):
+  All hits for a query are contiguous (block per query, blocks may appear in any order).
+  The first row of each block is assumed to be the top hit; subsequent rows in the block
+  are skipped (unless needed for validation checks).
+- Unsorted mode (assume_grouped=false):
+  Queries may interleave; every row is examined and the best row per query retained
+  according to ranking rules.
 
-# Arguments
-- `tophit_aln::AbstractString`: Path to tab-delimited MMseqs2 alignment output file
+Ranking
+- rank_by = :bits   (higher bits better; tie-break by lower evalue if present).
+- rank_by = :evalue (lower evalue better; tie-break by higher bits if present).
 
-# Returns
-DataFrame with columns:
-- `query`: Query sequence/profile identifier
-- `target`: Target sequence/profile identifier  
-- `percent identity`: Sequence identity percentage
-- `alignment length`: Length of alignment
-- `number of mismatches`: Count of mismatched positions
-- `number of gaps`: Count of gap openings
-- `query start`: Start position in query sequence
-- `query end`: End position in query sequence
-- `target start`: Start position in target sequence
-- `target end`: End position in target sequence
-- `evalue`: E-value of alignment
-- `bit score`: Bit score of alignment
+Validation (only in grouped mode)
+- validation = :none disables all checks.
+- validation = :fast or :full (currently identical) performs:
+  1. Interleaving detection (query reappears after its block ended).
+  2. Intra-block ordering check (later hit outranks the first).
+
+Column Typing
+- A default schema of known MMSeqs2 columns is provided (can be overridden via schema).
+- Unknown columns default to String.
+- keep_columns restricts output to a specified ordered subset; otherwise the full header order is kept.
+- Numeric parse failures become missing if allow_parse_fail=true (columns will then have a Union element type).
+- String columns can be pooled if pool_strings=true.
+- When narrow_types=true a post-pass removes Missing from column types when no missings are present.
+
+Arguments
+- mmseqs_file::String: Input path (optionally .gz).
+- assume_grouped::Bool=true: Whether hits for each query are contiguous.
+- validation::Symbol=:fast: One of :none, :fast, :full.
+- rank_by::Symbol=:bits: One of :bits or :evalue.
+- keep_columns::Union{Nothing,Vector{String}}=nothing: Subset of columns to keep (ordered).
+- schema::Union{Nothing,Dict{String,DataType}}=nothing: Override default column types.
+- pool_strings::Bool=true: Pool string columns for memory savings.
+- allow_parse_fail::Bool=true: If true, failed numeric parses become missing; otherwise errors are thrown.
+- narrow_types::Bool=true: Post-pass type narrowing when no missings are present.
+
+Returns
+- DataFrames.DataFrame: One row per query (top hit), columns in original or requested order with concrete element types.
+
+Remarks
+- In grouped mode memory is O(#queries).
+- In unsorted mode memory is also O(#queries) since only best rows are stored.
 """
-function parse_mmseqs_tophit_aln(tophit_aln)
-    data, header = uCSV.read(tophit_aln, delim='\t')
-    # (1,2) identifiers for query and target sequences/profiles, (3) sequence identity, (4) alignment length, (5) number of mismatches, (6) number of gap openings, (7-8, 9-10) domain start and end-position in query and in target, (11) E-value, and (12) bit score.
-    # query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits
-    header = [
-        "query",
-        "target",
-        "percent identity",
-        "alignment length",
-        "number of mismatches",
-        "number of gaps",
-        "query start",
-        "query end",
-        "target start",
-        "target end",
-        "evalue",
-        "bit score"
-    ]
-    DataFrames.DataFrame(data, header)
+function top_hits_mmseqs(
+    mmseqs_file::String;
+    assume_grouped::Bool = true,
+    validation::Symbol = :fast,
+    rank_by::Symbol = :bits,
+    keep_columns::Union{Nothing,Vector{String}} = nothing,
+    schema::Union{Nothing,Dict{String,DataType}} = nothing,
+    pool_strings::Bool = true,
+    allow_parse_fail::Bool = true,
+    narrow_types::Bool = true
+) :: DataFrames.DataFrame
+    if !(rank_by in (:bits, :evalue))
+        throw(ArgumentError("rank_by must be :bits or :evalue"))
+    end
+    if !(validation in (:none, :fast, :full))
+        throw(ArgumentError("validation must be :none, :fast, or :full"))
+    end
+
+    selected_cols::Vector{String} = String[]
+    selected_idx::Vector{Int} = Int[]
+    # Allow union types by using Any for values
+    col_types = Dict{String,Any}()
+    stored_cols = Dict{String,AbstractVector}()
+
+    io = endswith(lowercase(mmseqs_file), ".gz") ?
+        CodecZlib.GzipDecompressorStream(open(mmseqs_file, "r")) :
+        open(mmseqs_file, "r")
+
+    try
+        if eof(io)
+            return DataFrames.DataFrame()
+        end
+        header_line = readline(io)
+        if isempty(header_line)
+            return DataFrames.DataFrame()
+        end
+
+        cols = split(header_line, '\t', keepempty=true)
+        col_index = Dict{String,Int}(c => i for (i, c) in enumerate(cols))
+
+        if !haskey(col_index, "query")
+            throw(ArgumentError("Missing required column 'query'"))
+        end
+        if rank_by == :bits && !haskey(col_index, "bits")
+            throw(ArgumentError("Missing column 'bits' required for rank_by=:bits"))
+        elseif rank_by == :evalue && !haskey(col_index, "evalue")
+            throw(ArgumentError("Missing column 'evalue' required for rank_by=:evalue"))
+        end
+
+        default_schema = Dict(
+            "query"    => String,
+            "qheader"  => String,
+            "qlen"     => Int,
+            "target"   => String,
+            "theader"  => String,
+            "tlen"     => Int,
+            "nident"   => Int,
+            "fident"   => Float64,
+            "pident"   => Float64,
+            "alnlen"   => Int,
+            "mismatch" => Int,
+            "gapopen"  => Int,
+            "qstart"   => Int,
+            "qend"     => Int,
+            "tstart"   => Int,
+            "tend"     => Int,
+            "evalue"   => Float64,
+            "bits"     => Float64,
+            "taxid"    => Int,
+            "taxname"  => String
+        )
+        if schema !== nothing
+            for (k,v) in schema
+                default_schema[k] = v
+            end
+        end
+
+        if keep_columns === nothing
+            selected_cols = copy(cols)
+        else
+            missing = setdiff(keep_columns, collect(keys(col_index)))
+            if !isempty(missing)
+                throw(ArgumentError("Requested keep_columns not found: $(missing)"))
+            end
+            selected_cols = keep_columns
+        end
+        selected_idx = map(c -> col_index[c], selected_cols)
+
+        for c in selected_cols
+            T = get(default_schema, c, String)
+            if T === Int
+                col_types[c] = allow_parse_fail ? Union{Int,Missing} : Int
+            elseif T === Float64
+                col_types[c] = allow_parse_fail ? Union{Float64,Missing} : Float64
+            elseif T === String
+                col_types[c] = String
+            else
+                col_types[c] = T
+            end
+        end
+
+        if assume_grouped
+            for c in selected_cols
+                T = col_types[c]
+                stored_cols[c] = Vector{T}()
+            end
+        end
+
+        @inline function parse_cell(T, raw::AbstractString)
+            if T === String
+                return raw  # Will auto-convert SubString -> String on push if needed
+            elseif T === Int
+                return parse(Int, raw)
+            elseif T === Float64
+                return parse(Float64, raw)
+            elseif T === Union{Int,Missing}
+                raw == "" && return missing
+                v = tryparse(Int, raw)
+                return v === nothing ? missing : v
+            elseif T === Union{Float64,Missing}
+                raw == "" && return missing
+                v = tryparse(Float64, raw)
+                return v === nothing ? missing : v
+            else
+                return raw
+            end
+        end
+
+        @inline function extract_rank(fields::Vector{SubString{String}})
+            if rank_by == :bits
+                bits_val = begin
+                    b = tryparse(Float64, fields[col_index["bits"]]); b === nothing && (b = -Inf); b
+                end
+                if haskey(col_index, "evalue")
+                    e_val = begin
+                        e = tryparse(Float64, fields[col_index["evalue"]]); e === nothing && (e = Inf); e
+                    end
+                    return (bits_val, e_val)
+                else
+                    return (bits_val, Inf)
+                end
+            else
+                e_val = begin
+                    e = tryparse(Float64, fields[col_index["evalue"]]); e === nothing && (e = Inf); e
+                end
+                if haskey(col_index, "bits")
+                    b_val = begin
+                        b = tryparse(Float64, fields[col_index["bits"]]); b === nothing && (b = -Inf); b
+                    end
+                    return (e_val, -b_val)
+                else
+                    return (e_val, 0.0)
+                end
+            end
+        end
+
+        @inline function better_rank(a, b)
+            if rank_by == :bits
+                return (a[1] > b[1]) || (a[1] == b[1] && a[2] < b[2])
+            else
+                return (a[1] < b[1]) || (a[1] == b[1] && a[2] < b[2])
+            end
+        end
+
+        current_query::Union{Nothing,String} = nothing
+        current_first_rank = nothing
+        closed_queries = validation == :none ? nothing : Set{String}()
+        interleave_violation = false
+        intra_rank_violation = false
+
+        best_hits = Dict{String, Tuple{Any, Vector{Any}}}()
+
+        function append_grouped!(fields)
+            @inbounds for (j, c) in enumerate(selected_cols)
+                raw = fields[selected_idx[j]]
+                T = col_types[c]
+                vec = stored_cols[c]
+                push!(vec, parse_cell(T, raw))
+            end
+        end
+
+        function build_row(fields)::Vector{Any}
+            row = Vector{Any}(undef, length(selected_cols))
+            @inbounds for (j, c) in enumerate(selected_cols)
+                raw = fields[selected_idx[j]]
+                T = col_types[c]
+                row[j] = parse_cell(T, raw)
+            end
+            return row
+        end
+
+        for line in eachline(io)
+            isempty(line) && continue
+            fields = split(line, '\t', keepempty=true)
+            length(fields) < length(cols) && continue
+            q = fields[col_index["query"]]
+
+            if assume_grouped
+                if current_query === nothing
+                    current_query = q
+                    current_first_rank = extract_rank(fields)
+                    append_grouped!(fields)
+                elseif q == current_query
+                    if validation != :none
+                        rtuple = extract_rank(fields)
+                        if better_rank(rtuple, current_first_rank)
+                            intra_rank_violation = true
+                        end
+                    end
+                    continue
+                else
+                    if validation != :none && closed_queries !== nothing
+                        if in(q, closed_queries)
+                            interleave_violation = true
+                        end
+                        push!(closed_queries, current_query)
+                    end
+                    current_query = q
+                    current_first_rank = extract_rank(fields)
+                    append_grouped!(fields)
+                end
+            else
+                rtuple = extract_rank(fields)
+                if haskey(best_hits, q)
+                    old_rank, _ = best_hits[q]
+                    if better_rank(rtuple, old_rank)
+                        best_hits[q] = (rtuple, build_row(fields))
+                    end
+                else
+                    best_hits[q] = (rtuple, build_row(fields))
+                end
+            end
+        end
+
+        if !assume_grouped
+            n = length(best_hits)
+            for c in selected_cols
+                T = col_types[c]
+                stored_cols[c] = Vector{T}(undef, n)
+            end
+            i = 1
+            for (_, tup) in best_hits
+                row = tup[2]
+                @inbounds for (j, c) in enumerate(selected_cols)
+                    stored_cols[c][i] = row[j]
+                end
+                i += 1
+            end
+        end
+
+        if assume_grouped && validation != :none
+            if interleave_violation
+                @warn "Validation: Detected interleaving (a query block reappeared)."
+            end
+            if intra_rank_violation
+                @warn "Validation: Detected a later hit within a block that outranks the first."
+            end
+        end
+
+        df_cols = Vector{AbstractVector}(undef, length(selected_cols))
+        @inbounds for (j, c) in enumerate(selected_cols)
+            df_cols[j] = stored_cols[c]
+        end
+        df = DataFrames.DataFrame(df_cols, Symbol.(selected_cols))
+
+        if narrow_types
+            narrow_column_types!(df)
+        end
+
+        if pool_strings
+            for c in names(df)
+                if eltype(df[!, c]) <: AbstractString
+                    df[!, c] = PooledArrays.PooledArray(df[!, c])
+                end
+            end
+        end
+
+        return df
+    finally
+        close(io)
+    end
 end
+
+# Internal utility: narrow Union{T,Missing} columns without missings down to Vector{T}.
+function narrow_column_types!(df::DataFrames.DataFrame)
+    for c in names(df)
+        T = eltype(df[!, c])
+        if T isa Union
+            nm = Base.nonmissingtype(T)
+            if (nm !== Missing) && (nm !== T)
+                has_missing = false
+                @inbounds for v in df[!, c]
+                    if v === missing
+                        has_missing = true
+                        break
+                    end
+                end
+                if !has_missing
+                    df[!, c] = convert(Vector{nm}, df[!, c])
+                end
+            end
+        end
+    end
+    return df
+end
+
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
+
+# Parse MMseqs2 tophit alignment output file into a structured DataFrame.
+
+# # Arguments
+# - `tophit_aln::AbstractString`: Path to tab-delimited MMseqs2 alignment output file
+
+# # Returns
+# DataFrame with columns:
+# - `query`: Query sequence/profile identifier
+# - `target`: Target sequence/profile identifier  
+# - `percent identity`: Sequence identity percentage
+# - `alignment length`: Length of alignment
+# - `number of mismatches`: Count of mismatched positions
+# - `number of gaps`: Count of gap openings
+# - `query start`: Start position in query sequence
+# - `query end`: End position in query sequence
+# - `target start`: Start position in target sequence
+# - `target end`: End position in target sequence
+# - `evalue`: E-value of alignment
+# - `bit score`: Bit score of alignment
+# """
+# function parse_mmseqs_tophit_aln(tophit_aln)
+#     data, header = uCSV.read(tophit_aln, delim='\t')
+#     # (1,2) identifiers for query and target sequences/profiles, (3) sequence identity, (4) alignment length, (5) number of mismatches, (6) number of gap openings, (7-8, 9-10) domain start and end-position in query and in target, (11) E-value, and (12) bit score.
+#     # query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits
+#     header = [
+#         "query",
+#         "target",
+#         "percent identity",
+#         "alignment length",
+#         "number of mismatches",
+#         "number of gaps",
+#         "query start",
+#         "query end",
+#         "target start",
+#         "target end",
+#         "evalue",
+#         "bit score"
+#     ]
+#     DataFrames.DataFrame(data, header)
+# end

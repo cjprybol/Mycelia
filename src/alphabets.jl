@@ -16,41 +16,78 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Determines the alphabet of a sequence. The function scans through `seq` only once:
-- If a 'T' or 't' is found (and no 'U/u'), the sequence is classified as DNA.
-- If a 'U' or 'u' is found (and no 'T/t'), it is classified as RNA.
-- If both T and U occur, an error is thrown.
-- If a character outside the canonical nucleotide and ambiguity codes is encountered,
-  the sequence is assumed to be protein.
-- If neither T nor U are found, the sequence is assumed to be DNA.
+Determines the most likely alphabet of a biological sequence.
+
+The function follows a hierarchical approach, from the most specific (unambiguous)
+to the most general (ambiguous) alphabets. It checks if the set of characters
+in the input sequence is a subset of the character sets defined in `Mycelia.alphabets`.
+
+The order of checking is:
+1.  Unambiguous DNA
+2.  Unambiguous RNA
+3.  DNA + N (ACGTN)
+4.  RNA + N (ACGUN)
+5.  Unambiguous Amino Acid
+6.  Ambiguous DNA (if not a fit for any previous set)
+7.  Ambiguous RNA
+8.  Ambiguous Amino Acid
+
+If a sequence fits multiple alphabets (e.g., "ACGU" is valid RNA and AA), it is
+classified as the first one matched in the hierarchy (RNA in this case). If the
+sequence does not fit any of the defined alphabets or is empty, an `ArgumentError` is thrown.
 """
 function detect_alphabet(seq::AbstractString)::Symbol
-    hasT = false
-    hasU = false
-    # Define allowed nucleotide characters (both for DNA and RNA, including common ambiguity codes)
-    # TODO: define this by merging the alphabets from BioSymbols
-    valid_nucleotides = "ACGTacgtACGUacguNRYSWKMBDHnryswkmbdh"
-    for c in seq
-        if c == 'T' || c == 't'
-            hasT = true
-        elseif c == 'U' || c == 'u'
-            hasU = true
-        elseif !(c in valid_nucleotides)
-            # If an unexpected character is encountered, assume it's a protein sequence.
-            return :AA
-        end
-        if hasT && hasU
-            throw(ArgumentError("Sequence contains both T and U, ambiguous alphabet"))
-        end
+    if isempty(seq)
+        throw(ArgumentError("Input sequence cannot be empty."))
     end
-    if hasT
+
+    seq_chars = Set(seq)
+
+    # --- Step 1: Check against Unambiguous Alphabets ---
+    # From smallest to largest to find the most specific classification.
+
+    # DNA is the most restrictive unambiguous nucleotide alphabet.
+    if issubset(seq_chars, UNAMBIGUOUS_DNA_CHARSET)
         return :DNA
-    elseif hasU
+    end
+    # RNA is the next most restrictive unambiguous nucleotide alphabet.
+    if issubset(seq_chars, UNAMBIGUOUS_RNA_CHARSET)
         return :RNA
-    else
-        # In the absence of explicit T or U, default to DNA.
+    end
+
+    # --- Step 2: Check against N-containing Alphabets ---
+    # Check DNA+N and RNA+N before full ambiguous sets.
+
+    if issubset(seq_chars, ACGTN_DNA_CHARSET)
         return :DNA
     end
+    if issubset(seq_chars, ACGUN_RNA_CHARSET)
+        return :RNA
+    end
+
+    # --- Step 3: Check Unambiguous Amino Acid ---
+    # Amino Acid is the least restrictive unambiguous alphabet.
+    if issubset(seq_chars, UNAMBIGUOUS_AA_CHARSET)
+        return :AA
+    end
+
+    # --- Step 4: Check against Full Ambiguous Alphabets ---
+    # This block is reached only if the sequence contains multiple ambiguous characters.
+
+    if issubset(seq_chars, AMBIGUOUS_DNA_CHARSET)
+        return :DNA
+    end
+    if issubset(seq_chars, AMBIGUOUS_RNA_CHARSET)
+        return :RNA
+    end
+    if issubset(seq_chars, AMBIGUOUS_AA_CHARSET)
+        return :AA
+    end
+
+    # --- Step 5: No Alphabet Found ---
+    # If the sequence characters do not form a subset of any known alphabet.
+    unmatched_chars = setdiff(seq_chars, union(AMBIGUOUS_DNA_CHARSET, AMBIGUOUS_RNA_CHARSET, AMBIGUOUS_AA_CHARSET))
+    throw(ArgumentError("Sequence contains characters that do not belong to any known alphabet: $(join(unmatched_chars, ", "))"))
 end
 
 """
@@ -105,5 +142,45 @@ function convert_sequence(seq::AbstractString)
         return BioSequences.LongAA(seq)
     else
         throw(ArgumentError("Unrecognized alphabet type"))
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Validates that a sequence string can be successfully converted to the specified alphabet type.
+
+Uses BioSequences constructors to validate the sequence without requiring alphabet detection.
+Returns `true` if the sequence is valid for the specified alphabet, `false` otherwise.
+
+# Arguments
+- `seq::AbstractString`: The sequence string to validate
+- `alphabet::Symbol`: The target alphabet (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns
+`Bool`: `true` if sequence is valid for the alphabet, `false` otherwise.
+
+# Examples
+```julia
+validate_alphabet("ACGT", :DNA)   # true
+validate_alphabet("ACGU", :RNA)   # true
+validate_alphabet("ACGT", :RNA)   # false (contains T)
+validate_alphabet("ACDEFGHIKLMNPQRSTVWY", :AA)  # true
+```
+"""
+function validate_alphabet(seq::AbstractString, alphabet::Symbol)::Bool
+    try
+        if alphabet == :DNA
+            BioSequences.LongDNA{4}(seq)
+        elseif alphabet == :RNA
+            BioSequences.LongRNA{4}(seq)
+        elseif alphabet == :AA
+            BioSequences.LongAA(seq)
+        else
+            return false
+        end
+        return true
+    catch
+        return false
     end
 end

@@ -1,10 +1,20 @@
-# julia --project=test -e 'include("test/4_assembly/six_graph_hierarchy_tests.jl")'
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
 # julia --project=. -e 'include("test/4_assembly/six_graph_hierarchy_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/six_graph_hierarchy_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import MetaGraphsNext
@@ -388,31 +398,31 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
         Test.@testset "Automatic Type Detection" begin
             dna_records, fastq_records, rna_records, protein_records = create_test_data()
             
-            # Test DNA assembly (should default to Qualmer for FASTQ)
+            # Test DNA assembly (should auto-detect method based on input format)
             Test.@testset "DNA Assembly Type Detection" begin
-                # FASTQ input should use Qualmer graphs
-                contigs_fastq = Mycelia.assemble_genome(fastq_records, method=Mycelia.QualmerGraph, k=5)
-                Test.@test contigs_fastq isa Vector{String}
-                Test.@test !isempty(contigs_fastq)
-                
-                # FASTA input should use K-mer graphs
-                contigs_fasta = Mycelia.assemble_genome(dna_records, method=Mycelia.KmerGraph, k=5)
-                Test.@test contigs_fasta isa Vector{String}
-                Test.@test !isempty(contigs_fasta)
+                # FASTQ input should auto-detect to Qualmer graphs
+                result_fastq = Mycelia.assemble_genome(fastq_records; k=5)
+                Test.@test result_fastq isa Mycelia.AssemblyResult
+                Test.@test !isempty(result_fastq.contigs)
+
+                # FASTA input should auto-detect to K-mer graphs
+                result_fasta = Mycelia.assemble_genome(dna_records; k=5)
+                Test.@test result_fasta isa Mycelia.AssemblyResult
+                Test.@test !isempty(result_fasta.contigs)
             end
-            
+
             # Test RNA assembly
             Test.@testset "RNA Assembly Type Detection" begin
-                contigs_rna = Mycelia.assemble_genome(rna_records, method=Mycelia.KmerGraph, k=4)
-                Test.@test contigs_rna isa Vector{String}
-                Test.@test !isempty(contigs_rna)
+                result_rna = Mycelia.assemble_genome(rna_records; k=4)
+                Test.@test result_rna isa Mycelia.AssemblyResult
+                Test.@test !isempty(result_rna.contigs)
             end
-            
-            # Test protein assembly
+
+            # Test protein assembly (should auto-detect SingleStrand mode)
             Test.@testset "Protein Assembly Type Detection" begin
-                contigs_protein = Mycelia.assemble_genome(protein_records, method=Mycelia.KmerGraph, k=3)
-                Test.@test contigs_protein isa Vector{String}
-                Test.@test !isempty(contigs_protein)
+                result_protein = Mycelia.assemble_genome(protein_records; k=3)
+                Test.@test result_protein isa Mycelia.AssemblyResult
+                Test.@test !isempty(result_protein.contigs)
             end
         end
         
@@ -427,11 +437,11 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@test Mycelia.BioSequenceGraph isa Mycelia.AssemblyMethod
             Test.@test Mycelia.QualityBioSequenceGraph isa Mycelia.AssemblyMethod
             
-            # Test that methods work with appropriate data
-            Test.@test_nowarn Mycelia.assemble_genome(dna_records, method=Mycelia.KmerGraph, k=5)
-            Test.@test_nowarn Mycelia.assemble_genome(fastq_records, method=Mycelia.QualmerGraph, k=5)
-            Test.@test_nowarn Mycelia.assemble_genome(dna_records, method=Mycelia.BioSequenceGraph, k=5)
-            Test.@test_nowarn Mycelia.assemble_genome(fastq_records, method=Mycelia.QualityBioSequenceGraph, k=5)
+            # Test that auto-detection works without errors for different input types
+            Test.@test_nowarn Mycelia.assemble_genome(dna_records; k=5)  # Auto-detects k-mer graph for FASTA
+            Test.@test_nowarn Mycelia.assemble_genome(fastq_records; k=5)  # Auto-detects qualmer graph for FASTQ
+            Test.@test_nowarn Mycelia.assemble_genome(dna_records; min_overlap=10)  # Auto-detects BioSequence graph
+            Test.@test_nowarn Mycelia.assemble_genome(fastq_records; min_overlap=10)  # Auto-detects Quality BioSequence graph
         end
     end
     

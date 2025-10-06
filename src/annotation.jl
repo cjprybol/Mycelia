@@ -1,77 +1,702 @@
-function run_phage_annotation(;
-    fasta::AbstractString,
-    pharroka_dbdir = joinpath(homedir(), "workspace", "pharroka"),
-    phold_dbdir = joinpath(homedir(), "workspace", "phold"),
-    phynteny_dbdir = joinpath(homedir(), "workspace", "phynteny"),
-    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
-    pharroka_outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pharroka"),
-    phold_outdir = joinpath(pharroka_outdir, "phold"),
-    phynteny_outdir = joinpath(phold_outdir, "phynteny"),
-    threads = Sys.CPU_THREADS
-)
-    Mycelia.add_bioconda_env("pharokka")
-    Mycelia.add_bioconda_env("phold")
-    Mycelia.add_bioconda_env("phynteny_transformer")
-    if !isdir(pharroka_dbdir) || isempty(readdir(pharroka_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka install_databases.py -o $(pharroka_dbdir)`)
-    end
-    if !isdir(pharroka_outdir) || isempty(readdir(pharroka_outdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka  pharokka.py -i $(fasta) -o $(pharroka_outdir) -d $(pharroka_dbdir) -t $(threads)  -m  -g prodigal-gv --force`)
-    end
-    if !isdir(phold_dbdir) || isempty(readdir(phold_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold install --database $(phold_dbdir)`)
-    end
-    pharroko_gbk = joinpath(pharroka_outdir, prefix * ".gbk")
-    @assert isfile(pharroko_gbk)
-    if !isdir(phold_outdir) || isempty(readdir(phold_outdir))
-        # skip GPU integration at the moment
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold run --input $(pharroko_gbk) --prefix $(prefix) --output $(phold_outdir) --database $(phold_dbdir) --threads $(threads) --cpu --force`)
-    end
-    if !isdir(phynteny_dbdir) || isempty(readddir(phynteny_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer install_models -o $(phynteny_dbdir)`)
-    end
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer  phynteny_transformer --help --advanced`)
-end
+# """
+#     build_exact_match_table(uniref_df::DataFrames.DataFrame,
+#                             observed_df::DataFrames.DataFrame;
+#                             taxonomy_level::Symbol = :cluster,
+#                             compute_bits::Bool = false)
 
+# Constructs a DataFrame mimicking MMseqs2 easy-search output for exact (hash-based) matches.
 
+# Inputs must both contain a `seq_hash` column. `observed_df` must contain at least
+# `query` and `qheader`. If `compute_bits=true`, a `sequence` column in `observed_df`
+# is preferred; otherwise representative sequence from UniRef is used.
 
-function run_pgap(;
-        fasta::AbstractString,
-        organism::AbstractString,
-        pgap_dir = joinpath(homedir(), "workspace", "pgap"),
-        outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
-        as_string = false,
-        force = false,
-        threads = Sys.CPU_THREADS,
-        prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => "")
-        # --memory
+# taxonomy_level:
+#   :cluster        -> taxid = common_taxon_id, taxname = common_taxon
+#   :representative -> taxid = rep_ncbi_taxonomy, taxname = common_taxon (fallback) or rep_protein_name
+
+# The output columns are:
+# query qheader target theader pident fident nident alnlen mismatch gapopen qstart qend qlen tstart tend tlen evalue bits taxid taxname
+
+# Column `theader` is the full FASTA header for the target (target ID plus description),
+# matching MMseqs2 style, e.g.:
+# UniRef100_P99999 Cytochrome c n=5 Tax=Hominidae TaxID=9604 RepID=CYC_HUMAN
+# """
+# function build_exact_match_table(uniref_df::DataFrames.DataFrame,
+#                                  observed_df::DataFrames.DataFrame;
+#                                  taxonomy_level::Symbol = :cluster,
+#                                  compute_bits::Bool = false)
+
+#     @assert :seq_hash in propertynames(uniref_df) "uniref_df lacks seq_hash"
+#     @assert :seq_hash in propertynames(observed_df) "observed_df lacks seq_hash"
+#     @assert :query in propertynames(observed_df) "observed_df lacks query"
+#     @assert :qheader in propertynames(observed_df) "observed_df lacks qheader"
+
+#     joined = DataFrames.innerjoin(
+#         observed_df,
+#         uniref_df,
+#         on = :seq_hash,
+#         makeunique = true
+#     )
+
+#     has_obs_seq = :sequence in propertynames(observed_df)
+#     rep_len_col = similar(joined.seq_hash, Int)
+#     for (i, _) in enumerate(rep_len_col)
+#         len_entry = joined.rep_sequence_length_attr[i]
+#         rep_len = if len_entry !== missing
+#             Int(len_entry)
+#         elseif joined.rep_sequence[i] !== missing
+#             length(joined.rep_sequence[i])
+#         elseif has_obs_seq && joined.sequence[i] !== missing
+#             length(joined.sequence[i])
+#         else
+#             0
+#         end
+#         rep_len_col[i] = rep_len
+#     end
+
+#     # Build full FASTA header (theader) including target ID at start
+#     theader_col = Vector{String}(undef, DataFrames.nrow(joined))
+#     for i in eachindex(theader_col)
+#         cluster_name = joined.name[i] === missing ? "" : String(joined.name[i])
+#         cluster_name = replace(cluster_name, r"^Cluster:\s*" => "")
+#         parts = String[]
+#         if !isempty(cluster_name)
+#             push!(parts, cluster_name)
+#         end
+#         mc = joined.member_count[i]
+#         if mc !== missing
+#             push!(parts, "n=$(mc)")
+#         end
+#         taxname_cluster = joined.common_taxon[i]
+#         if taxname_cluster !== missing
+#             push!(parts, "Tax=$(taxname_cluster)")
+#         end
+#         taxid_cluster = joined.common_taxon_id[i]
+#         if taxid_cluster !== missing
+#             push!(parts, "TaxID=$(taxid_cluster)")
+#         end
+#         repid = joined.rep_db_id[i]
+#         if repid !== missing
+#             push!(parts, "RepID=$(repid)")
+#         end
+#         desc = join(parts, " ")
+#         theader_col[i] = isempty(desc) ? String(joined.entry_id[i]) :
+#             (String(joined.entry_id[i]) * " " * desc)
+#     end
+
+#     taxid_col = Vector{Union{Missing,String}}(undef, DataFrames.nrow(joined))
+#     taxname_col = Vector{Union{Missing,String}}(undef, DataFrames.nrow(joined))
+#     for i in eachindex(taxid_col)
+#         if taxonomy_level == :cluster
+#             taxid_col[i] = joined.common_taxon_id[i]
+#             taxname_col[i] = joined.common_taxon[i]
+#         elseif taxonomy_level == :representative
+#             taxid_col[i] = joined.rep_ncbi_taxonomy[i]
+#             taxname_col[i] = joined.common_taxon[i] !== missing ? joined.common_taxon[i] : joined.rep_protein_name[i]
+#         else
+#             error("taxonomy_level must be :cluster or :representative")
+#         end
+#     end
+
+#     n = DataFrames.nrow(joined)
+#     pident = fill(100.0, n)
+#     fident = fill(1.0, n)
+#     nident = rep_len_col
+#     alnlen = rep_len_col
+#     mismatch = fill(0, n)
+#     gapopen = fill(0, n)
+#     qstart = fill(1, n)
+#     qend = rep_len_col
+#     qlen = rep_len_col
+#     tstart = fill(1, n)
+#     tend = rep_len_col
+#     tlen = rep_len_col
+#     evalue = fill(0.0, n)
+
+#     bits = Vector{Union{Missing,Float64}}(undef, n)
+#     if compute_bits
+#         for i in 1:n
+#             seq = if has_obs_seq && joined.sequence[i] !== missing
+#                 String(joined.sequence[i])
+#             elseif joined.rep_sequence[i] !== missing
+#                 String(joined.rep_sequence[i])
+#             else
+#                 ""
+#             end
+#             bits[i] = isempty(seq) ? missing : _compute_bits(seq)
+#         end
+#     else
+#         fill!(bits, missing)
+#     end
+
+#     result = DataFrames.DataFrame(
+#         query = joined.query,
+#         qheader = joined.qheader,
+#         target = joined.entry_id,
+#         theader = theader_col,
+#         pident = pident,
+#         fident = fident,
+#         nident = nident,
+#         alnlen = alnlen,
+#         mismatch = mismatch,
+#         gapopen = gapopen,
+#         qstart = qstart,
+#         qend = qend,
+#         qlen = qlen,
+#         tstart = tstart,
+#         tend = tend,
+#         tlen = tlen,
+#         evalue = evalue,
+#         bits = bits,
+#         taxid = taxid_col,
+#         taxname = taxname_col
+#     )
+
+#     return result
+# end
+
+# function _compute_bits(seq::AbstractString)
+#     raw = 0
+#     for c in seq
+#         raw += get(BLOSUM62_DIAG, c, 0)
+#     end
+#     return (BLAST_LAMBDA * raw - log(BLAST_K)) / log(2)
+# end
+
+# # --------------- Internal per-entry processing ----------------
+# # This function remains the same as the previous working version.
+# function _process_entry!(
+#     entry_node::EzXML.Node,
+#     entry_id_col,
+#     updated_col,
+#     name_col,
+#     rep_db_type_col,
+#     rep_db_id_col,
+#     rep_uniprotkb_accession_col,
+#     rep_uniparc_id_col,
+#     rep_uniref90_id_col,
+#     rep_uniref50_id_col,
+#     rep_protein_name_col,
+#     rep_ncbi_taxonomy_col,
+#     rep_source_organism_col,
+#     rep_is_seed_col,
+#     rep_length_reported_col,
+#     rep_sequence_col::Union{Nothing,Vector{Union{Missing,String}}},
+#     rep_sequence_length_attr_col,
+#     rep_sequence_checksum_col,
+#     member_count_col,
+#     common_taxon_col,
+#     common_taxon_id_col,
+#     entry_property_types_col,
+#     entry_property_values_col,
+#     rep_property_types_col,
+#     rep_property_values_col,
+#     member_db_ids_col,
+#     member_uniprotkb_accessions_col,
+#     member_uniparc_ids_col,
+#     store_sequence::Bool
+# )
+#     # Attributes
+#     eid_attr = EzXML.haskey(entry_node, "id") ? entry_node["id"] : ""
+#     updated_attr = EzXML.haskey(entry_node, "updated") ? entry_node["updated"] : missing
+
+#     # <name>
+#     entry_name_node = EzXML.findfirst("name", entry_node)
+#     entry_name = entry_name_node === nothing ? missing : strip(EzXML.nodecontent(entry_name_node))
+
+#     # Entry-level properties
+#     e_prop_types = String[]
+#     e_prop_values = String[]
+#     local_member_count = missing
+#     local_common_taxon = missing
+#     local_common_taxon_id = missing
+
+#     for child in EzXML.eachelement(entry_node)
+#         if EzXML.nodename(child) == "property"
+#             t = EzXML.haskey(child, "type") ? child["type"] : nothing
+#             v = EzXML.haskey(child, "value") ? child["value"] : nothing
+#             if t !== nothing && v !== nothing
+#                 push!(e_prop_types, t)
+#                 push!(e_prop_values, v)
+#                 if t == "member count"
+#                     local_member_count = something(tryparse(Int, v), missing)
+#                 elseif t == "common taxon"
+#                     local_common_taxon = v
+#                 elseif t == "common taxon ID"
+#                     local_common_taxon_id = v
+#                 end
+#             end
+#         end
+#     end
+
+#     # Representative member
+#     rep_db_type, rep_db_id = missing, missing
+#     rep_props_types, rep_props_values = String[], String[]
+#     rep_uniprotkb_acc, rep_uniparc_id_val, rep_uniref90_id_val, rep_uniref50_id_val = missing, missing, missing, missing
+#     rep_protein_name_val, rep_ncbi_taxonomy_val, rep_source_organism_val = missing, missing, missing
+#     rep_is_seed_val, rep_length_prop = missing, missing
+#     rep_sequence_text, rep_seq_len_attr, rep_seq_checksum = missing, missing, missing
+
+#     rep_member_node = EzXML.findfirst("representativeMember", entry_node)
+#     if rep_member_node !== nothing
+#         db_ref_node = EzXML.findfirst("dbReference", rep_member_node)
+#         if db_ref_node !== nothing
+#             rep_db_type = EzXML.haskey(db_ref_node, "type") ? db_ref_node["type"] : missing
+#             rep_db_id = EzXML.haskey(db_ref_node, "id") ? db_ref_node["id"] : missing
+
+#             for p in EzXML.eachelement(db_ref_node)
+#                 if EzXML.nodename(p) == "property"
+#                     pt = EzXML.haskey(p, "type") ? p["type"] : nothing
+#                     pv = EzXML.haskey(p, "value") ? p["value"] : nothing
+#                     if pt !== nothing && pv !== nothing
+#                         push!(rep_props_types, pt)
+#                         push!(rep_props_values, pv)
+#                         if pt == "UniProtKB accession"; rep_uniprotkb_acc = pv
+#                         elseif pt == "UniParc ID"; rep_uniparc_id_val = pv
+#                         elseif pt == "UniRef90 ID"; rep_uniref90_id_val = pv
+#                         elseif pt == "UniRef50 ID"; rep_uniref50_id_val = pv
+#                         elseif pt == "protein name"; rep_protein_name_val = pv
+#                         elseif pt == "NCBI taxonomy"; rep_ncbi_taxonomy_val = pv
+#                         elseif pt == "source organism"; rep_source_organism_val = pv
+#                         elseif pt == "isSeed"; rep_is_seed_val = lowercase(pv) == "true"
+#                         elseif pt == "length"; rep_length_prop = something(tryparse(Int, pv), missing)
+#                         end
+#                     end
+#                 end
+#             end
+#         end
+
+#         seq_node = EzXML.findfirst("sequence", rep_member_node)
+#         if seq_node !== nothing
+#             rep_sequence_text = replace(EzXML.nodecontent(seq_node), r"\s+" => "")
+#             len_attr = EzXML.haskey(seq_node, "length") ? seq_node["length"] : nothing
+#             rep_seq_len_attr = len_attr === nothing ? missing : something(tryparse(Int, len_attr), missing)
+#             cks = EzXML.haskey(seq_node, "checksum") ? seq_node["checksum"] : nothing
+#             rep_seq_checksum = cks === nothing ? missing : cks
+#         end
+#     end
+
+#     # Other Members
+#     member_ids_local, member_uniprot_accs, member_uniparc_ids_local = String[], String[], String[]
+#     for child in EzXML.eachelement(entry_node)
+#         if EzXML.nodename(child) == "member"
+#             dbref = EzXML.findfirst("dbReference", child)
+#             if dbref !== nothing
+#                 mid = EzXML.haskey(dbref, "id") ? dbref["id"] : ""
+#                 push!(member_ids_local, mid)
+#                 local_up, local_upc = nothing, nothing
+#                 for p in EzXML.eachelement(dbref)
+#                     if EzXML.nodename(p) == "property"
+#                         pt = EzXML.haskey(p, "type") ? p["type"] : nothing
+#                         pv = EzXML.haskey(p, "value") ? p["value"] : nothing
+#                         if pt == "UniProtKB accession"; local_up = pv
+#                         elseif pt == "UniParc ID"; local_upc = pv
+#                         end
+#                     end
+#                 end
+#                 if local_up !== nothing; push!(member_uniprot_accs, local_up); end
+#                 if local_upc !== nothing; push!(member_uniparc_ids_local, local_upc); end
+#             end
+#         end
+#     end
+
+#     # Normalize sequence length
+#     if rep_sequence_text !== missing
+#         actual_len = length(rep_sequence_text)
+#         if rep_seq_len_attr !== actual_len
+#             rep_seq_len_attr = actual_len
+#         end
+#     end
+
+#     # Push data to columns
+#     push!(entry_id_col, eid_attr)
+#     push!(updated_col, updated_attr)
+#     push!(name_col, entry_name)
+#     push!(rep_db_type_col, rep_db_type)
+#     push!(rep_db_id_col, rep_db_id)
+#     push!(rep_uniprotkb_accession_col, rep_uniprotkb_acc)
+#     push!(rep_uniparc_id_col, rep_uniparc_id_val)
+#     push!(rep_uniref90_id_col, rep_uniref90_id_val)
+#     push!(rep_uniref50_id_col, rep_uniref50_id_val)
+#     push!(rep_protein_name_col, rep_protein_name_val)
+#     push!(rep_ncbi_taxonomy_col, rep_ncbi_taxonomy_val)
+#     push!(rep_source_organism_col, rep_source_organism_val)
+#     push!(rep_is_seed_col, rep_is_seed_val)
+#     push!(rep_length_reported_col, rep_length_prop)
+#     if store_sequence; push!(rep_sequence_col, rep_sequence_text); end
+#     push!(rep_sequence_length_attr_col, rep_seq_len_attr)
+#     push!(rep_sequence_checksum_col, rep_seq_checksum)
+#     push!(member_count_col, local_member_count)
+#     push!(common_taxon_col, local_common_taxon)
+#     push!(common_taxon_id_col, local_common_taxon_id)
+#     push!(entry_property_types_col, e_prop_types)
+#     push!(entry_property_values_col, e_prop_values)
+#     push!(rep_property_types_col, rep_props_types)
+#     push!(rep_property_values_col, rep_props_values)
+#     push!(member_db_ids_col, member_ids_local)
+#     push!(member_uniprotkb_accessions_col, member_uniprot_accs)
+#     push!(member_uniparc_ids_col, member_uniparc_ids_local)
+
+#     return nothing
+# end
+
+# Takes forever to run and uses too much memory, not recommended
+# """
+#     parse_uniref100_to_dataframe(xml_path::String;
+#                                  limit::Union{Nothing,Int}=nothing,
+#                                  store_sequence::Bool=true,
+#                                  include_ids::Union{Nothing, Set{String}}=nothing)
+
+# Parses a UniRef100 XML file into a DataFrame, with options for filtering and memory management.
+# """
+# function parse_uniref100_to_dataframe(xml_path::String;
+#                                       limit::Union{Nothing,Int}=nothing,
+#                                       store_sequence::Bool=true,
+#                                       include_ids::Union{Nothing, Set{String}}=nothing)
+
+#     # ---------------- Column storage ----------------
+#     entry_id = String[]
+#     updated = Vector{Union{Missing,String}}()
+#     name = Vector{Union{Missing,String}}()
+#     rep_db_type = Vector{Union{Missing,String}}()
+#     rep_db_id = Vector{Union{Missing,String}}()
+#     rep_uniprotkb_accession = Vector{Union{Missing,String}}()
+#     rep_uniparc_id = Vector{Union{Missing,String}}()
+#     rep_uniref90_id = Vector{Union{Missing,String}}()
+#     rep_uniref50_id = Vector{Union{Missing,String}}()
+#     rep_protein_name = Vector{Union{Missing,String}}()
+#     rep_ncbi_taxonomy = Vector{Union{Missing,String}}()
+#     rep_source_organism = Vector{Union{Missing,String}}()
+#     rep_is_seed = Vector{Union{Missing,Bool}}()
+#     rep_length_reported = Vector{Union{Missing,Int}}()
+#     rep_sequence = store_sequence ? Vector{Union{Missing,String}}() : nothing
+#     rep_sequence_length_attr = Vector{Union{Missing,Int}}()
+#     rep_sequence_checksum = Vector{Union{Missing,String}}()
+#     member_count = Vector{Union{Missing,Int}}()
+#     common_taxon = Vector{Union{Missing,String}}()
+#     common_taxon_id = Vector{Union{Missing,String}}()
+#     entry_property_types = Vector{Vector{String}}()
+#     entry_property_values = Vector{Vector{String}}()
+#     rep_property_types = Vector{Vector{String}}()
+#     rep_property_values = Vector{Vector{String}}()
+#     member_db_ids = Vector{Vector{String}}()
+#     member_uniprotkb_accessions = Vector{Vector{String}}()
+#     member_uniparc_ids = Vector{Vector{String}}()
+
+#     # ---------------- Open & detect gzip ----------------
+#     raw_io = open(xml_path, "r")
+#     stream = raw_io
+#     try
+#         if endswith(lowercase(xml_path), ".gz")
+#             stream = CodecZlib.GzipDecompressorStream(raw_io)
+#         end
+
+#         # ---------------- Line-based entry extraction ----------------
+#         buf = IOBuffer()
+#         in_entry = false
+#         records_read = 0
+#         records_kept = 0
+
+#         while !eof(stream)
+#             line = readline(stream)
+
+#             if !in_entry && occursin("<entry", line)
+#                 in_entry = true
+#                 truncate(buf, 0)
+#             end
+
+#             if in_entry
+#                 write(buf, line)
+#                 if occursin("</entry>", line)
+#                     in_entry = false
+#                     records_read += 1
+                    
+#                     entry_xml_string = String(take!(buf))
+#                     doc = EzXML.parsexml(entry_xml_string)
+#                     root = EzXML.root(doc)
+
+#                     # --- MODIFICATION: Filter by ID before full processing ---
+#                     if include_ids !== nothing
+#                         entry_id_val = EzXML.haskey(root, "id") ? root["id"] : ""
+#                         if entry_id_val ∉ include_ids
+#                             continue # Skip this entry
+#                         end
+#                     end
+                    
+#                     _process_entry!(
+#                         root,
+#                         entry_id, updated, name,
+#                         rep_db_type, rep_db_id,
+#                         rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
+#                         rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
+#                         rep_length_reported,
+#                         rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
+#                         member_count, common_taxon, common_taxon_id,
+#                         entry_property_types, entry_property_values,
+#                         rep_property_types, rep_property_values,
+#                         member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
+#                         store_sequence
+#                     )
+#                     records_kept += 1
+
+#                     # --- MODIFICATION: Update progress meter ---
+#                     if records_read % 1_000_000 == 0
+#                         println("Records read from file: ", records_read)
+#                     end
+
+#                     if limit !== nothing && records_kept >= limit
+#                         break
+#                     end
+#                 end
+#             end
+#         end
+
+#         println("Finished parsing. Total records read: ", records_read, ". Total records kept: ", records_kept)
+#     finally
+#         close(raw_io)
+#     end
+
+#     # ---------------- Build DataFrame ----------------
+#     df_cols = Dict{Symbol, Any}(
+#         :entry_id => entry_id,
+#         :updated => updated,
+#         :name => name,
+#         :rep_db_type => rep_db_type,
+#         :rep_db_id => rep_db_id,
+#         :rep_uniprotkb_accession => rep_uniprotkb_accession,
+#         :rep_uniparc_id => rep_uniparc_id,
+#         :rep_uniref90_id => rep_uniref90_id,
+#         :rep_uniref50_id => rep_uniref50_id,
+#         :rep_protein_name => rep_protein_name,
+#         :rep_ncbi_taxonomy => rep_ncbi_taxonomy,
+#         :rep_source_organism => rep_source_organism,
+#         :rep_is_seed => rep_is_seed,
+#         :rep_length_reported => rep_length_reported,
+#         :rep_sequence_length_attr => rep_sequence_length_attr,
+#         :rep_sequence_checksum => rep_sequence_checksum,
+#         :member_count => member_count,
+#         :common_taxon => common_taxon,
+#         :common_taxon_id => common_taxon_id,
+#         :entry_property_types => entry_property_types,
+#         :entry_property_values => entry_property_values,
+#         :rep_property_types => rep_property_types,
+#         :rep_property_values => rep_property_values,
+#         :member_db_ids => member_db_ids,
+#         :member_uniprotkb_accessions => member_uniprotkb_accessions,
+#         :member_uniparc_ids => member_uniparc_ids,
+#     )
+
+#     if store_sequence
+#         df_cols[:rep_sequence] = rep_sequence
+#     end
+
+#     return DataFrames.DataFrame(df_cols)
+# end
+
+# # not working
+# function run_phage_annotation(;
+#     fasta::AbstractString,
+#     pharroka_dbdir = joinpath(homedir(), "workspace", "pharroka"),
+#     phold_dbdir = joinpath(homedir(), "workspace", "phold"),
+#     phynteny_dbdir = joinpath(homedir(), "workspace", "phynteny"),
+#     prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+#     pharroka_outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pharroka"),
+#     phold_outdir = joinpath(pharroka_outdir, "phold"),
+#     phynteny_outdir = joinpath(phold_outdir, "phynteny"),
+#     threads = Sys.CPU_THREADS
+# )
+#     Mycelia.add_bioconda_env("pharokka")
+#     Mycelia.add_bioconda_env("phold")
+#     Mycelia.add_bioconda_env("phynteny_transformer")
+#     if !isdir(pharroka_dbdir) || isempty(readdir(pharroka_dbdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka install_databases.py -o $(pharroka_dbdir)`)
+#     end
+#     if !isdir(pharroka_outdir) || isempty(readdir(pharroka_outdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka  pharokka.py -i $(fasta) -o $(pharroka_outdir) -d $(pharroka_dbdir) -t $(threads)  -m  -g prodigal-gv --force`)
+#     end
+#     if !isdir(phold_dbdir) || isempty(readdir(phold_dbdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold install --database $(phold_dbdir)`)
+#     end
+#     pharroko_gbk = joinpath(pharroka_outdir, prefix * ".gbk")
+#     @assert isfile(pharroko_gbk)
+#     if !isdir(phold_outdir) || isempty(readdir(phold_outdir))
+#         # skip GPU integration at the moment
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold run --input $(pharroko_gbk) --prefix $(prefix) --output $(phold_outdir) --database $(phold_dbdir) --threads $(threads) --cpu --force`)
+#     end
+#     if !isdir(phynteny_dbdir) || isempty(readddir(phynteny_dbdir))
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer install_models -o $(phynteny_dbdir)`)
+#     end
+#     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer  phynteny_transformer --help --advanced`)
+# end
+
+"""
+    run_pgap(;
+        fasta,
+        organism,
+        pgap_dir,
+        outdir,
+        as_string,
+        force,
+        threads,
+        prefix,
+        min_seq_length,
+        filter_short,
+        ignore_all_errors,
     )
+
+Run the PGAP (Prokaryotic Genome Annotation Pipeline) tool on a FASTA file.
+
+This function:
+- Ensures PGAP is present/updated.
+- Materializes a temporary FASTA for execution by reading the input with `Mycelia.open_fastx`,
+  filtering out sequences shorter than `min_seq_length` (default 200 nt), and writing the
+  result with `Mycelia.write_fasta`.
+- Treats a run as successful if either a success marker (`.pgap_success`) is present OR
+  all expected output files exist for the given `prefix`.
+- If an existing `outdir` is complete, results are reused unless `force=true`.
+  If incomplete, it is removed automatically so reruns do not require `force`.
+- Cleans up partial output directories on failure so retries do not require `force`.
+- Optionally appends the PGAP flag `--ignore-all-errors` (when `ignore_all_errors=true`) to
+  continue despite QC errors and still obtain a draft annotation.
+
+Arguments:
+- `fasta::AbstractString`: Input FASTA (compressed or uncompressed).
+- `organism::AbstractString`: Organism name for annotation.
+- `pgap_dir`: Directory containing PGAP installation. Defaults to `~/workspace/pgap`.
+- `outdir`: Output directory for results. Defaults to input filename with "_pgap" suffix.
+- `as_string::Bool=false`: If true, returns the command string instead of executing it (no temp files created).
+- `force::Bool=false`: If true, overwrites an existing completed output directory.
+- `threads::Int`: CPU threads to use. Defaults to system CPU count.
+- `prefix`: Prefix for output files. Defaults to input filename without extension.
+- `min_seq_length::Int=200`: Minimum sequence length (nt) retained in the filtered FASTA.
+- `filter_short::Bool=true`: If true, sequences shorter than `min_seq_length` are removed prior to PGAP.
+- `ignore_all_errors::Bool=false`: If true, adds `--ignore-all-errors` to the PGAP run to ignore non-essential QC errors.
+
+Returns:
+- `String`: Path to `outdir` when `as_string=false`, or the bash command string when `as_string=true`.
+"""
+function run_pgap(;
+    fasta::AbstractString,
+    organism::AbstractString,
+    pgap_dir = joinpath(homedir(), "workspace", "pgap"),
+    outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
+    as_string::Bool = false,
+    force::Bool = false,
+    threads::Int = Sys.CPU_THREADS,
+    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+    min_seq_length::Int = 200,
+    filter_short::Bool = true,
+    ignore_all_errors::Bool = false,
+)
+    # Expected outputs from a successful run (accept either prefix.fna or prefixprefix.fna)
+    function _expected_complete(outdir_::AbstractString, prefix_::AbstractString)
+        singles = String[
+            joinpath(outdir_, "$(prefix_)_cds_from_genomic.fna"),
+            joinpath(outdir_, "$(prefix_)_translated_cds.faa"),
+            joinpath(outdir_, "$(prefix_)_with_genomic_fasta.gff"),
+            joinpath(outdir_, "$(prefix_).faa"),
+            joinpath(outdir_, "$(prefix_).gbk"),
+            joinpath(outdir_, "$(prefix_).gff"),
+            joinpath(outdir_, "$(prefix_).sqn"),
+            joinpath(outdir_, "$(prefix_)ani-tax-report.txt"),
+            joinpath(outdir_, "$(prefix_)ani-tax-report.xml"),
+            joinpath(outdir_, "$(prefix_)checkm.txt"),
+            joinpath(outdir_, "$(prefix_)cwltool.log"),
+            joinpath(outdir_, "$(prefix_)fastaval.xml"),
+            joinpath(outdir_, "$(prefix_)uuid.txt"),
+        ]
+        any_groups = Vector{Vector{String}}([
+            [ joinpath(outdir_, "$(prefix_).fna"),
+              joinpath(outdir_, "$(prefix_)$(prefix_).fna") ],
+        ])
+        if !all(isfile, singles)
+            return false
+        end
+        return all(group -> any(isfile, group), any_groups)
+    end
+
+    success_marker = joinpath(outdir, ".pgap_success")
+    _run_is_successful(outdir_::AbstractString, prefix_::AbstractString) =
+        isfile(success_marker) || _expected_complete(outdir_, prefix_)
+
+    # Ensure PGAP availability
     pgap_py_script = joinpath(pgap_dir, "pgap.py")
     if !isfile(pgap_py_script)
         mkpath(dirname(pgap_py_script))
         run(`wget -O $(pgap_py_script) https://github.com/ncbi/pgap/raw/prod/scripts/pgap.py`)
-        # run(`chmod +x $(pgap_py_script)`)
         @assert isfile(pgap_py_script)
     end
     if isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
         @time run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-    end 
-    if force && isdir(outdir)
-        rm(outdir, recursive=true)
-    elseif !force && isdir(outdir)
-        @warn "$outdir already exists, use `force=true` to overwrite existing results"
-        return outdir
-    end    
+    end
+
+    # Handle pre-existing outdir
+    if isdir(outdir)
+        if force
+            rm(outdir, recursive=true)
+        else
+            if _run_is_successful(outdir, prefix)
+                @info "Detected completed PGAP run in $outdir; reusing outputs"
+                return outdir
+            else
+                @warn "$outdir exists but appears incomplete; removing it to allow a clean retry"
+                rm(outdir, recursive=true)
+            end
+        end
+    end
     @assert !isdir(outdir)
+
+    # If only returning the command string, do not create temp files
     if as_string
-        # Generate the fully expanded bash command
-        # --report-usage-false
-        bash_command = "PGAP_INPUT_DIR=$pgap_dir python3 $pgap_py_script --output $outdir --genome $fasta --report-usage-true --taxcheck --auto-correct-tax --organism $organism --cpu $(threads) --prefix $(prefix)"
-        # Print it so you can copy and paste
-        return bash_command
-    else
-        @time run(setenv(`python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism $(organism) --cpu $(threads)  --prefix $(prefix)`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-        return outdir
+        base_cmd = "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --output $(outdir) --genome $(fasta) --report-usage-true --taxcheck --auto-correct-tax --organism '$(organism)' --cpu $(threads) --prefix $(prefix)"
+        if ignore_all_errors
+            base_cmd *= " --ignore-all-errors"
+        end
+        return base_cmd
+    end
+
+    # Build filtered temporary FASTA
+    filtered_fasta::Union{Nothing,String} = nothing
+    try
+        reader = Mycelia.open_fastx(fasta)
+        records = FASTX.FASTA.Record[]
+        for record in reader
+            seq = FASTX.sequence(record)
+            if (!filter_short) || (length(seq) >= min_seq_length)
+                # Make an owned copy (iterator may reuse buffers)
+                push!(records, copy(record))
+            end
+        end
+        if isempty(records)
+            throw(ArgumentError("All sequences were filtered out (min_seq_length=$(min_seq_length) nt); nothing to annotate."))
+        end
+        filtered_fasta = Mycelia.write_fasta(; outfile = tempname() * ".fna", records = records, gzip = false)
+
+        # Construct command with optional ignore-all-errors flag
+        cmd = `python3 $(pgap_py_script) --output $(outdir) --genome $(filtered_fasta) --report-usage-true --taxcheck --auto-correct-tax --organism $(organism) --cpu $(threads) --prefix $(prefix)`
+        if ignore_all_errors
+            cmd = `$cmd --ignore-all-errors`
+        end
+
+        try
+            @time run(setenv(cmd, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+            open(success_marker, "w") do io
+                write(io, "ok\n")
+            end
+            return outdir
+        catch e
+            if isdir(outdir)
+                try
+                    rm(outdir, recursive=true)
+                catch
+                end
+            end
+            rethrow(e)
+        end
+    finally
+        if !isnothing(filtered_fasta) && isfile(filtered_fasta)
+            rm(filtered_fasta)
+        end
     end
 end
 
@@ -1325,7 +1950,7 @@ function parallel_pyrodigal(normalized_fastas::Vector{String})
     end
     Base.println("------------------------------------")
 
-    return successful_results, failed_files # Return both successes and failures
+    return (;successful_results, failed_files) # Return both successes and failures
 end
 
 # """
@@ -1556,29 +2181,172 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run the 'padloc' tool from the 'padlocbio' conda environment on a given FASTA file.
 
 https://doi.org/10.1093/nar/gkab883
-
 https://github.com/padlocbio/padloc
 
-This function first ensures that the 'padloc' environment is available via Bioconda. 
-It then attempts to update the 'padloc' database. 
-If a 'padloc' output file (with a '_padloc.csv' suffix) does not already exist for the input FASTA file, 
-it runs 'padloc' with the specified FASTA file as input.
+This function:
+- Ensures that the 'padloc' environment is available.
+- Attempts to update the 'padloc' database (via setup_padloc()).
+- Decompresses compressed FASTA inputs (.gz, .bz2, .xz, .zip) into a temporary directory.
+- Runs 'padloc' to produce a CSV plus associated prodigal and HMM output files.
+- If the padloc command fails, it logs the error, cleans up temporary files, optionally removes the newly created output directory, and returns a tuple with all output paths set to missing plus the captured error object.
+- On success, returns a tuple of discovered/expected files (csv may be missing if not produced) and error = nothing.
+
+Parameters:
+- fasta_file::AbstractString: Path to input FASTA (possibly compressed).
+- outdir::AbstractString: Output directory (default: derived from FASTA filename with '_padloc' suffix).
+- threads: Number of CPU threads for padloc.
+- cleanup_on_failure::Bool: If true, and the output directory did not exist prior to this call, it will be removed on failure.
+- return_error::Bool: If true, errors are captured and returned; if false, the error is rethrown after cleanup.
+- verbose::Bool: If false (default), suppress stdout/stderr from the padloc command unless it fails.
 """
-function run_padloc(;fasta_file, outdir=dirname(abspath(fasta_file)), threads=Sys.CPU_THREADS)
-    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), ".fna" => "") * "_padloc.csv")
-    if !isfile(padloc_outfile)
-        setup_padloc()
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(fasta_file) --outdir $(outdir) --cpu $(threads)`)
-    else
-        @info "$(padloc_outfile) already present"
+function run_padloc(; fasta_file,
+                     outdir = replace(fasta_file, Mycelia.FASTA_REGEX => "") * "_padloc",
+                     threads = Sys.CPU_THREADS,
+                     cleanup_on_failure::Bool = true,
+                     return_error::Bool = true,
+                     verbose::Bool = false)
+
+    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "") * "_padloc.csv")
+    pre_existing_outdir = isdir(outdir)
+
+    if isfile(padloc_outfile)
+        if verbose
+            @info "$(padloc_outfile) already present"
+        end
+        padloc_faa = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa"))
+        padloc_gff = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff"))
+        padloc_domtblout = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout"))
+        return (csv = padloc_outfile,
+                faa = padloc_faa,
+                gff = padloc_gff,
+                domtblout = padloc_domtblout,
+                error = nothing)
     end
-    padloc_faa = replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa")
-    padloc_gff = replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff")
-    padloc_domtblout = replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout")
+
+    setup_padloc()
+
+    if !isdir(outdir)
+        mkpath(outdir)
+    end
+
+    compressed_ext_regex = r"\.(gz|bz2|xz|zip)$"i
+    is_compressed = occursin(compressed_ext_regex, fasta_file)
+
+    temp_dir = ""
+    temp_fasta = ""
+    input_fasta = fasta_file
+
+    if is_compressed
+        temp_dir = mktempdir()
+        temp_fname = replace(basename(fasta_file), compressed_ext_regex => "")
+        temp_fasta = joinpath(temp_dir, temp_fname)
+        if verbose
+            @info "Detected compressed FASTA; creating temporary uncompressed copy at $(temp_fasta)"
+        end
+
+        open(temp_fasta, "w") do io
+            lf = lowercase(fasta_file)
+            if endswith(lf, ".gz")
+                run(pipeline(`gzip -dc $fasta_file`, stdout=io))
+            elseif endswith(lf, ".bz2")
+                run(pipeline(`bzip2 -dc $fasta_file`, stdout=io))
+            elseif endswith(lf, ".xz")
+                run(pipeline(`xz -dc $fasta_file`, stdout=io))
+            elseif endswith(lf, ".zip")
+                run(pipeline(`unzip -p $fasta_file`, stdout=io))
+            else
+                run(pipeline(`gzip -dc $fasta_file`, stdout=io))
+            end
+        end
+        input_fasta = temp_fasta
+    end
+
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n padloc padloc --fna $(input_fasta) --outdir $(outdir) --cpu $(threads)`
+    run_error = nothing
+
+    stdout_str = ""
+    stderr_str = ""
+
+    try
+        if verbose
+            run(cmd)
+        else
+            out_pipe = Pipe()
+            err_pipe = Pipe()
+
+            process = run(pipeline(cmd, stdout=out_pipe, stderr=err_pipe), wait=false)
+            close(out_pipe.in)
+            close(err_pipe.in)
+
+            stdout_task = @async read(out_pipe, String)
+            stderr_task = @async read(err_pipe, String)
+            
+            wait(process) # Throws ProcessFailedException on non-zero exit
+
+            stdout_str = fetch(stdout_task)
+            stderr_str = fetch(stderr_task)
+        end
+    catch err
+        run_error = err
+        
+        # If we were capturing output, fetch it for the log.
+        # This check is needed because tasks might not be defined if `verbose=true`.
+        if @isdefined(stdout_task)
+            stdout_str = fetch(stdout_task)
+        end
+        if @isdefined(stderr_task)
+            stderr_str = fetch(stderr_task)
+        end
+
+        @error "padloc command failed" fasta_file=fasta_file outdir=outdir cmd=string(cmd) error=err stdout=stdout_str stderr=stderr_str
+
+        if cleanup_on_failure && !pre_existing_outdir && isdir(outdir)
+            try
+                rm(outdir; force=true, recursive=true)
+                if verbose
+                    @info "Removed output directory after failure: $(outdir)"
+                end
+            catch cleanup_err
+                @warn "Failed to remove output directory after failure" outdir=outdir cleanup_error=cleanup_err
+            end
+        end
+        if !return_error
+            rethrow()
+        end
+    finally
+        if is_compressed && temp_dir != ""
+            try
+                rm(temp_dir; force=true, recursive=true)
+                if verbose
+                    @info "Removed temporary directory $(temp_dir)"
+                end
+            catch err
+                @warn "Failed to remove temporary files at $(temp_dir)" error=err
+            end
+        end
+    end
+
+    if run_error !== nothing
+        return (csv = missing,
+                faa = missing,
+                gff = missing,
+                domtblout = missing,
+                error = run_error)
+    end
+
+    padloc_faa = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa"))
+    padloc_gff = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff"))
+    padloc_domtblout = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout"))
+
     if !isfile(padloc_outfile)
         padloc_outfile = missing
     end
-    return (csv = padloc_outfile, faa = padloc_faa, gff = padloc_gff, domtblout = padloc_domtblout)
+
+    return (csv = padloc_outfile,
+            faa = padloc_faa,
+            gff = padloc_gff,
+            domtblout = padloc_domtblout,
+            error = nothing)
 end
 
 """
@@ -1640,39 +2408,87 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run TransTermHP to predict rho-independent transcription terminators in DNA sequences.
 
 # Arguments
-- `fasta`: Path to input FASTA file containing DNA sequences
+- `fasta`: Path to input FASTA file containing DNA sequences. Can be gzip compressed.
 - `gff`: Optional path to GFF annotation file. If provided, improves prediction accuracy
 
 # Returns
 - `String`: Path to output file containing TransTermHP predictions
 
 # Details
-- Uses Conda environment 'transtermhp' for execution
-- Automatically generates coordinate file from FASTA or GFF input
-- Removes temporary coordinate file after completion
-- Requires Mycelia's Conda setup
+- If the input `fasta` is gzip compressed, a temporary uncompressed copy will be used only when necessary.
+- Uses Conda environment 'transtermhp' for execution.
+- Automatically generates coordinate file from FASTA or GFF input.
+- Removes temporary files after completion.
+- Requires Mycelia's Conda setup.
 """
 function run_transterm(;fasta, gff="")
-    # note in my one test with phage genomes, calling without gff yeilds more hits but average confidence is a bit lower
-    if isempty(gff)
-        coordinates = generate_transterm_coordinates_from_fasta(fasta)
-    else
-        coordinates = generate_transterm_coordinates_from_gff(gff)
+    # Determine the base path for output files, removing .gz if present.
+    base_path_for_outputs = isempty(gff) ? fasta : gff
+    if endswith(lowercase(base_path_for_outputs), ".gz")
+        base_path_for_outputs = base_path_for_outputs[1:end-3]
     end
-    transterm_calls_file = replace(coordinates, ".coords" => ".transterm.txt")
-    Mycelia.add_bioconda_env("transtermhp")
 
-    conda_base = dirname(dirname(Mycelia.CONDA_RUNNER))
-    dat_file = "$(conda_base)/envs/transtermhp/data/expterm.dat"
-    # @show isfile(dat_file)
-    # @assert = first(readlines(`find $(conda_base) -name "expterm.dat"`))
-    # @show dat_file
-    @assert isfile(dat_file)
-    # conda_base = chomp(read(`$(Mycelia.CONDA_RUNNER) info --base`, String))
-    # dat_file = "$(conda_base)/envs/transtermhp/data/expterm.dat"
-    # @assert isfile(dat_file)
-    run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta) $(coordinates)`, transterm_calls_file))    
-    rm(coordinates)
+    # Determine the final output file path from the base path.
+    # The logic assumes coordinate files from GFFs will also follow a predictable pattern
+    # that can be replicated to determine the final output name.
+    transterm_calls_file = replace(base_path_for_outputs, r"\.(gff|gff3|fasta|fna|faa|fa)$" => ".transterm.txt")
+
+    if isfile(transterm_calls_file)
+        return transterm_calls_file
+    end
+
+    fasta_to_use = fasta
+    temp_fasta_path = ""
+    coordinates = ""
+
+    try
+        # Only decompress fasta if it's gzipped AND we are not using a GFF file.
+        # generate_transterm_coordinates_from_fasta requires an uncompressed file.
+        # The `transterm` binary itself needs the fasta, but it may handle compression,
+        # so we only decompress when our Julia functions require it.
+        if isempty(gff) && endswith(lowercase(fasta), ".gz")
+            temp_fasta_path = write_fasta(records=collect(open_fastx(fasta)), gzip=false)
+            fasta_to_use = temp_fasta_path
+        end
+
+        if isempty(gff)
+            coordinates = generate_transterm_coordinates_from_fasta(fasta_to_use)
+        else
+            coordinates = generate_transterm_coordinates_from_gff(gff)
+        end
+        
+        Mycelia.add_bioconda_env("transtermhp")
+
+        conda_base = dirname(dirname(Mycelia.CONDA_RUNNER))
+        dat_file = joinpath(conda_base, "envs", "transtermhp", "data", "expterm.dat")
+
+        @assert isfile(dat_file) "expterm.dat not found in Conda environment"
+
+        # Note: We pass the original `fasta` path to the command, assuming `transterm`
+        # can handle it (even if compressed). We only needed `fasta_to_use` for the
+        # Julia-side coordinate generation.
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta_to_use) $(coordinates)`
+        stderr_buffer = IOBuffer()
+        
+        # The stdout of the process is redirected to `transterm_calls_file`.
+        # The stderr is captured in `stderr_buffer`.
+        process = run(pipeline(cmd, stdout=transterm_calls_file, stderr=stderr_buffer), wait=false)
+        wait(process)
+
+        if !success(process)
+            stderr_output = String(take!(stderr_buffer))
+            error("TransTermHP failed with exit code $(process.exitcode):\n$stderr_output")
+        end
+    finally
+        # Cleanup temporary files
+        if !isempty(coordinates) && isfile(coordinates)
+            rm(coordinates)
+        end
+        if !isempty(temp_fasta_path) && isfile(temp_fasta_path)
+            rm(temp_fasta_path)
+        end
+    end
+    
     return transterm_calls_file
 end
 
@@ -1793,136 +2609,151 @@ function generate_transterm_coordinates_from_gff(gff_file)
     return transterm_coordinates_file
 end
 
-# function run_prokka(ID, OUT_DIR, normalized_fasta_file)
-#     prokka_dir="$(OUT_DIR)/prokka"
-#     if !isdir(prokka_dir)
-#         mkdir(prokka_dir)
-#     end
-#     prokka_cmd = `prokka --force --cpus 1 --outdir $(prokka_dir) --prefix $(ID) $(normalized_fasta_file)`
-#     run(pipeline(prokka_cmd, stdout="$(prokka_dir)/prokka.out"))
-#     return prokka_dir
-# end
-
-# function run_mlst(ID, OUT_DIR, normalized_fasta_file)
-#     mlst_dir="$(OUT_DIR)/mlst"
-#     if !isdir(mlst_dir)
-#         mkdir(mlst_dir)
-#     end
-#     p = pipeline(
-#             `mlst $(normalized_fasta_file)`,
-#             stdout="$(mlst_dir)/$(ID).mlst.out")
-#     run(p)
-#     return mlst_dir
-# end
-
-# function run_phispy(ID, OUT_DIR, prokka_dir)
-#     # 1 	prophage_coordinates.tsv
-#     # 2 	GenBank format output
-#     # 4 	prophage and bacterial sequences
-#     # 8 	prophage_information.tsv
-#     # 16 	prophage.tsv
-#     # 32 	GFF3 format
-#     # 64 	prophage.tbl
-#     # 128 	test data used in the random forest
-#     # 255   for all of them
-
-#     phispy_dir="$(OUT_DIR)/phispy"
-#     if !isdir(phispy_dir)
-#         mkdir(phispy_dir)
-#     end
-#     if isempty(readdir(phispy_dir))
-#         phisphy_cmd = `PhiSpy.py $(prokka_dir)/$(ID).gbk --output_dir $(phispy_dir) --file_prefix $(ID)-phispy --output_choice 255`
-#         try
-#             run(pipeline(phisphy_cmd, stdout="$(phispy_dir)/phisphy.out"))
-#         catch
-#             if isfile("$(phispy_dir)/$(ID)-phispy_prophage.gff3")
-#                 @warn "phispy errored out after prophage gff3 was written"
-#             else
-#                 @error "phispy prophage gff3 not written"
-#             end
-#         end
-#     end
-#     return phispy_dir
-# end
-
-# function run_trnascan(ID, out_dir, normalized_fasta_file)
-#     trnascan_dir = "$(out_dir)/trnascan"
-#     # trnascan doesn't like to overwrite existing things
-#     if !isdir(trnascan_dir)
-#         mkdir(trnascan_dir)
-#     end
-#     if isempty(readdir(trnascan_dir))
-
-#         #     -B for using Bacterial
-#         trnascan_cmd = 
-#         `tRNAscan-SE 
-#             -B 
-#             --output $(trnascan_dir)/$(ID).trnascan.out 
-#             --bed $(trnascan_dir)/$(ID).trnascan.bed 
-#             --fasta $(trnascan_dir)/$(ID).trnascan.fasta 
-#             --struct $(trnascan_dir)/$(ID).trnascan.struct
-#             --stats $(trnascan_dir)/$(ID).trnascan.stats 
-#             --log $(trnascan_dir)/$(ID).trnascan.log
-#             $(normalized_fasta_file)`
-#         run(pipeline(trnascan_cmd, stdout="$(trnascan_dir)/trnascan.out", stderr="$(trnascan_dir)/trnascan.out"))
-#     end
-#     return trnascan_dir
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run tRNAscan-SE to identify and annotate transfer RNA genes in the provided sequence file.
+Handles gzip-compressed input files by decompressing them to a temporary location.
 
 # Arguments
-- `fna_file::String`: Path to input FASTA nucleotide file
-- `outdir::String`: Output directory path (default: input_file_path + "_trnascan")
+- `fna_file::String`: Path to the input FASTA nucleotide file. Can be gzip-compressed.
+- `outdir::String`: Path to the output directory (default: `replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan"`).
+- `model::String`: The tRNA model to use. Defaults to `"G"`.
+    - `"G"`: General model (all three domains).
+    - `"E"`: Eukaryotic.
+    - `"B"`: Bacterial.
+    - `"A"`: Archaeal.
+    - `"O"`: Other organellar.
+    - `"M mammal"` or `"M vert"`: Mitochondrial models.
+- `force::Bool`: If true, forces a rerun even if all output files already exist. Defaults to `false`.
+- `verbose::Bool`: If true, prints info messages and command output. Defaults to `false`.
 
 # Returns
-- `String`: Path to the output directory containing tRNAscan-SE results
+- `NamedTuple`: A named tuple containing the paths to all generated files and the output directory: `(out, bed, fasta, structure, stats, log, outdir)`.
 
 # Output Files
 Creates the following files in `outdir`:
-- `*.trnascan.out`: Main output with tRNA predictions
-- `*.trnascan.bed`: BED format coordinates
-- `*.trnascan.fasta`: FASTA sequences of predicted tRNAs
-- `*.trnascan.struct`: Secondary structure predictions
-- `*.trnascan.stats`: Summary statistics
-- `*.trnascan.log`: Program execution log
+- `*.trnascan.out`: Main output with tRNA predictions.
+- `*.trnascan.bed`: BED format coordinates of tRNAs.
+- `*.trnascan.fasta`: FASTA sequences of predicted tRNAs.
+- `*.trnascan.struct`: Secondary structure predictions.
+- `*.trnascan.stats`: Summary statistics.
+- `*.trnascan.log`: Program execution log.
 
 # Notes
-- Uses the general tRNA model (-G flag) suitable for all domains of life
-- Automatically sets up tRNAscan-SE via Bioconda
-- Skips processing if output directory contains files
+- Automatically sets up the tRNAscan-SE Conda environment via `Mycelia.add_bioconda_env`.
+- Checks for the existence of expected output files to determine if the process should be skipped.
+- Cleans up partially generated files if the `tRNAscan-SE` command fails.
 """
-function run_trnascan(;fna_file, outdir=fna_file * "_trnascan")
+function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan", model::String="G", force::Bool=false, verbose::Bool=false)
     Mycelia.add_bioconda_env("trnascan-se")
-    # trnascan doesn't like to overwrite existing things
-    if !isdir(outdir)
-        mkdir(outdir)
-    else
-        @info "$(outdir) already exists"
+
+    if !ispath(outdir)
+        mkpath(outdir)
     end
-    ID = basename(fna_file)
-    if isempty(readdir(outdir))
-        # -G : use general tRNA model (cytoslic tRNAs from all 3 domains included)
-        #     -B for using Bacterial
-        trnascan_cmd =
-        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n trnascan-se tRNAscan-SE
-            -G
-            --output $(outdir)/$(ID).trnascan.out
-            --bed $(outdir)/$(ID).trnascan.bed
-            --fasta $(outdir)/$(ID).trnascan.fasta
-            --struct $(outdir)/$(ID).trnascan.struct
-            --stats $(outdir)/$(ID).trnascan.stats
-            --log $(outdir)/$(ID).trnascan.log
-            --prefix
-            --progress
-            $(fna_file)`
-        # run(pipeline(trnascan_cmd, stdout="$(outdir)/$(ID).trnascan.out", stderr="$(outdir)/$(ID).trnascan.out"))
-        run(trnascan_cmd)
+
+    ID = replace(basename(fna_file), Mycelia.FASTA_REGEX => "")
+    
+    output_files = (
+        out       = joinpath(outdir, "$(ID).trnascan.out"),
+        bed       = joinpath(outdir, "$(ID).trnascan.bed"),
+        fasta     = joinpath(outdir, "$(ID).trnascan.fasta"),
+        structure = joinpath(outdir, "$(ID).trnascan.struct"),
+        stats     = joinpath(outdir, "$(ID).trnascan.stats"),
+        log       = joinpath(outdir, "$(ID).trnascan.log"),
+    )
+
+    all_files_exist = all(ispath, values(output_files))
+
+    if all_files_exist && !force
+        if verbose
+            @info "All output files already exist in $(outdir). Skipping tRNAscan-SE run. Use `force=true` to rerun."
+        end
+        return (; output_files..., outdir=outdir)
     end
-    return outdir
+    
+    input_to_process = fna_file
+    temp_fna_path = ""
+
+    try
+        # Handle compressed input file
+        if endswith(fna_file, ".gz")
+            if verbose
+                @info "Input file is gzipped. Decompressing to a temporary file."
+            end
+            temp_fna_path, temp_io = mktemp()
+            close(temp_io) # Immediately close the stream from mktemp
+
+            open(CodecZlib.GzipDecompressorStream, fna_file, "r") do f_in
+                open(temp_fna_path, "w") do f_out
+                    write(f_out, read(f_in))
+                end
+            end
+            input_to_process = temp_fna_path
+        end
+
+        model_parts = split(model)
+        model_flag = "-" * model_parts[1]
+        
+        cmd_parts = [
+            "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "trnascan-se", "tRNAscan-SE",
+            model_flag
+        ]
+        if length(model_parts) > 1
+            push!(cmd_parts, model_parts[2])
+        end
+
+        append!(cmd_parts, [
+            "--output", output_files.out,
+            "--bed", output_files.bed,
+            "--fasta", output_files.fasta,
+            "--struct", output_files.structure,
+            "--stats", output_files.stats,
+            "--log", output_files.log,
+            input_to_process
+        ])
+
+        trnascan_cmd = Cmd(cmd_parts)
+        if verbose
+            @info "Running tRNAscan-SE command:" trnascan_cmd
+        end
+
+        try
+            if verbose
+                run(trnascan_cmd)
+            else
+                stderr_buffer = IOBuffer()
+                # Redirect stdout to devnull and capture stderr
+                process = run(pipeline(trnascan_cmd, stdout=devnull, stderr=stderr_buffer), wait=false)
+                wait(process)
+                
+                if !success(process)
+                    stderr_output = String(take!(stderr_buffer))
+                    # Throw a more informative error including stderr
+                    error("tRNAscan-SE failed with exit code $(process.exitcode). Stderr:\n$stderr_output")
+                end
+            end
+        catch e
+            @error "tRNAscan-SE failed. Cleaning up partial results."
+            for file_path in values(output_files)
+                if ispath(file_path)
+                    rm(file_path)
+                end
+            end
+            rethrow(e)
+        end
+
+    finally
+        # Cleanup the temporary file if it was created
+        if !isempty(temp_fna_path) && ispath(temp_fna_path)
+            if verbose
+                @info "Cleaning up temporary file: $(temp_fna_path)"
+            end
+            rm(temp_fna_path)
+        end
+    end
+
+    return (; output_files..., outdir=outdir)
 end
 
 # function run_counterselection_spacer_detection(strain, out_dir, normalized_fasta_file)
@@ -1994,47 +2825,6 @@ end
 #         end
 #     end
 #     return counter_selection_dir
-# end
-
-
-
-# function run_amrfinderplus(ID, out_dir, protein_fasta)
-#     amrfinderplus_dir = "$(out_dir)/amrfinderplus"
-#     if !isdir(amrfinderplus_dir)
-#         mkdir(amrfinderplus_dir)
-#     end
-
-#     if isempty(readdir(amrfinderplus_dir))
-# #         run(`amrfinder -u`)
-        
-#         # because the pipeline is set up with some hacky CONDA path manipulation, 
-#         # explictly setting amrfinder directory path to the location in the docker host
-#         amrfinder_db_path = get(ENV, "AMRFINDER_DB", "none")
-
-#         if amrfinder_db_path != "none"
-#             cmd = 
-#             `amrfinder
-#             -p $(protein_fasta)
-#             --plus
-#             --output $(amrfinderplus_dir)/$(ID).amrfinderplus.tsv
-#             -d $(amrfinder_db_path)
-#             `
-#         else
-#             cmd = 
-#             `amrfinder
-#             -p $(protein_fasta)
-#             --plus
-#             --output $(amrfinderplus_dir)/$(ID).amrfinderplus.tsv
-#             `
-#         end
-            
-
-#         p = pipeline(cmd, 
-#                 stdout="$(amrfinderplus_dir)/$(ID).amrfinderplus.out",
-#                 stderr="$(amrfinderplus_dir)/$(ID).amrfinderplus.err")
-#         run(p)
-#     end
-#     return amrfinderplus_dir
 # end
 
 """
@@ -2334,20 +3124,41 @@ Parses TransTerm output and generates a standardized GFF3 file with the followin
 """
 function transterm_output_to_gff(transterm_output)
     transterm_table = parse_transterm_output(transterm_output)
-    transterm_table[!, "source"] .= "transterm"
-    transterm_table[!, "type"] .= "terminator"
-    transterm_table[!, "phase"] .= "."
-    transterm_table[!, "attributes"] = map(x -> "label=" * replace(x, " " => "_"), transterm_table[!, "term_id"])
-    DataFrames.rename!(transterm_table,
-        ["chromosome" => "#seqid",
+    
+    final_gff_table = if DataFrames.nrow(transterm_table) == 0
+        # If the input table is empty, create an empty DataFrame with the correct GFF columns and types.
+        DataFrames.DataFrame(
+            "#seqid" => String[],
+            "source" => String[],
+            "type" => String[],
+            "start" => Int[],
+            "end" => Int[],
+            "score" => Float64[],
+            "strand" => String[],
+            "phase" => String[],
+            "attributes" => String[]
+        )
+    else
+        # If there is data, process it as before.
+        transterm_table[!, "source"] .= "transterm"
+        transterm_table[!, "type"] .= "terminator"
+        transterm_table[!, "phase"] .= "."
+        transterm_table[!, "attributes"] = map(x -> "label=" * replace(x, " " => "_"), transterm_table[!, "term_id"])
+        DataFrames.rename!(transterm_table,
+            "chromosome" => "#seqid",
             "stop" => "end",
             "confidence" => "score",
-        ]
-    )
-    transterm_table = transterm_table[!, ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]]
-    transterm_gff = write_gff(gff=transterm_table, outfile=transterm_output * ".gff")
-    uCSV.write(transterm_gff, transterm_table, delim='\t')
-    return transterm_gff
+        )
+        # Select and reorder columns for the final GFF structure.
+        transterm_table[!, ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]]
+    end
+
+    transterm_gff_path = transterm_output * ".gff"
+    # Write the resulting DataFrame (either with data or empty with correct columns) to a GFF file.
+    # uCSV will correctly write just the header if the DataFrame is empty.
+    uCSV.write(transterm_gff_path, final_gff_table, delim='\t')
+    
+    return transterm_gff_path
 end
 
 """
@@ -2370,40 +3181,60 @@ function parse_virsorter_score_tsv(virsorter_score_tsv)
 end
 
 """
-    count_predicted_genes(gff_file)
+    add_trna_attributes!(gff_df::DataFrames.DataFrame)
 
-Count the number of predicted genes from a GFF file.
+Modifies a GFF `DataFrame` in-place to add informative `label` and `product`
+attributes for tRNA features.
 
-Parses a GFF/GTF file and counts the number of CDS (coding sequence) features,
-which correspond to predicted genes.
+This function parses the tRNA type from the `ID` attribute, constructs
+`label` and `product` fields, and appends them to the `attributes` column.
+It is designed to work with attribute formats generated by tRNAscan-SE,
+for example: `ID=...tRNA13-fMetCAT`.
 
 # Arguments
-- `gff_file`: Path to GFF/GTF file
+- `gff_df::DataFrames.DataFrame`: A DataFrame containing GFF data, which will be modified.
 
 # Returns
-- Integer count of predicted genes (CDS features)
-
-# See Also
-- `run_pyrodigal`: For gene prediction that generates GFF files
-- `parse_transterm_output`: For parsing other annotation tool outputs
+- `DataFrames.DataFrame`: The modified DataFrame with updated attributes.
 """
-function count_predicted_genes(gff_file)
-    gene_count = 0
-    
-    open(gff_file, "r") do f
-        for line in eachline(f)
-            # Skip comment lines
-            if startswith(line, "#")
-                continue
-            end
-            
-            # Parse GFF line
-            fields = split(line, "\t")
-            if length(fields) >= 3 && fields[3] == "CDS"
-                gene_count += 1
-            end
+function add_trna_attributes(gff_df::DataFrames.DataFrame)
+    # This helper function will be applied to each row of the DataFrame.
+    function format_attributes(id_string::AbstractString)
+        # 1. Extract the tRNA type string from the end of the ID.
+        # Example: from "ID=...tRNA13-fMetCAT", get "fMetCAT".
+        local trna_type
+        try
+            # Split the ID by the hyphen to isolate the type.
+            trna_type = last(split(id_string, '-'))
+        catch e
+            # If split fails (e.g., no hyphen), return the original string.
+            return id_string
         end
+
+        # 2. Parse the amino acid and anticodon from the type string.
+        local amino_acid, anticodon
+        if startswith(trna_type, "fMet")
+            amino_acid = "fMet"
+            anticodon = trna_type[5:end] # The rest of the string after "fMet"
+        elseif startswith(trna_type, "Undet")
+            amino_acid = "Undet"
+            anticodon = trna_type[6:end]
+        else
+            # Standard case: first 3 letters are the amino acid.
+            amino_acid = trna_type[1:3]
+            anticodon = trna_type[4:end]
+        end
+
+        # 3. Create the new label and product strings.
+        # This format is descriptive in genome browsers.
+        label = "tRNA-$(amino_acid)"
+        product = "tRNA-$(amino_acid) ($(anticodon))"
+
+        # 4. Construct the final attributes string and return it.
+        return "label=\"$(label)\";product=\"$(product)\";$(id_string);"
     end
-    
-    return gene_count
+
+    # Apply the helper function to the 'attributes' column of the DataFrame.
+    # `ByRow` ensures the function is applied to each element individually.
+    return DataFrames.transform(gff_df, :attributes => DataFrames.ByRow(format_attributes) => :attributes)
 end

@@ -23,14 +23,22 @@ Named tuple containing:
 """
 function run_megahit(;fastq1, fastq2=nothing, outdir="megahit_output", min_contig_len=200, k_list="21,29,39,59,79,99,119,141")
     Mycelia.add_bioconda_env("megahit")
-    mkpath(outdir)
     
+    # MEGAHIT requires the output directory to not exist, so check output file first
     if !isfile(joinpath(outdir, "final.contigs.fa"))
+        # Remove output directory if it exists (MEGAHIT will create it)
+        if isdir(outdir)
+            rm(outdir, recursive=true)
+        end
+        
         if isnothing(fastq2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit -r $(fastq1) -o $(outdir) --min-contig-len $(min_contig_len) --k-list $(k_list) -t $(Sys.CPU_THREADS)`)
         else
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit -1 $(fastq1) -2 $(fastq2) -o $(outdir) --min-contig-len $(min_contig_len) --k-list $(k_list) -t $(Sys.CPU_THREADS)`)
         end
+    else
+        # If output already exists, ensure directory exists for return value
+        mkpath(outdir)
     end
     return (;outdir, contigs=joinpath(outdir, "final.contigs.fa"))
 end
@@ -75,6 +83,44 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Run SPAdes assembler for single genome isolate assembly.
+
+# Arguments
+- `fastq1::String`: Path to first paired-end FASTQ file
+- `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
+- `outdir::String`: Output directory path (default: "spades_output")
+- `k_list::String`: k-mer sizes to use (default: "21,33,55,77")
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `contigs::String`: Path to assembled contigs file
+- `scaffolds::String`: Path to scaffolds file
+
+# Details
+- Automatically creates and uses a conda environment with spades
+- Designed for single bacterial/archaeal genome assembly
+- Optimized for uniform coverage isolate data
+- Skips assembly if output directory already exists
+- Utilizes all available CPU threads
+"""
+function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,33,55,77")
+    Mycelia.add_bioconda_env("spades")
+    mkpath(outdir)
+    
+    if !isfile(joinpath(outdir, "contigs.fasta"))
+        if isnothing(fastq2)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -s $(fastq1) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
+        else
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
+        end
+    end
+    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Run SKESA assembler for high-accuracy bacterial genome assembly.
 
 # Arguments
@@ -110,52 +156,52 @@ function run_skesa(;fastq1, fastq2=nothing, outdir="skesa_output", min_contig_le
     return (;outdir, contigs=contigs_file)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run IDBA-UD assembler for metagenomic assembly with uneven depth.
+# Run IDBA-UD assembler for metagenomic assembly with uneven depth.
 
-# Arguments
-- `fastq1::String`: Path to first paired-end FASTQ file
-- `fastq2::String`: Path to second paired-end FASTQ file
-- `outdir::String`: Output directory path (default: "idba_ud_output")
-- `min_k::Int`: Minimum k-mer size (default: 20)
-- `max_k::Int`: Maximum k-mer size (default: 100)
-- `step::Int`: K-mer size increment step (default: 20)
+# # Arguments
+# - `fastq1::String`: Path to first paired-end FASTQ file
+# - `fastq2::String`: Path to second paired-end FASTQ file
+# - `outdir::String`: Output directory path (default: "idba_ud_output")
+# - `min_k::Int`: Minimum k-mer size (default: 20)
+# - `max_k::Int`: Maximum k-mer size (default: 100)
+# - `step::Int`: K-mer size increment step (default: 20)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `scaffolds::String`: Path to scaffolds file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `contigs::String`: Path to contigs file
+# - `scaffolds::String`: Path to scaffolds file
 
-# Details
-- Uses multi-k-mer iterative assembly approach
-- Specifically designed for metagenomic data with uneven coverage depths
-- Automatically creates and uses a conda environment with idba
-- Requires paired-end reads merged to fasta format
-- Skips assembly if output directory already exists
-- Utilizes all available CPU threads
-"""
-function run_idba_ud(;fastq1, fastq2, outdir="idba_ud_output", min_k=20, max_k=100, step=20)
-    Mycelia.add_bioconda_env("idba")
-    mkpath(outdir)
+# # Details
+# - Uses multi-k-mer iterative assembly approach
+# - Specifically designed for metagenomic data with uneven coverage depths
+# - Automatically creates and uses a conda environment with idba
+# - Requires paired-end reads merged to fasta format
+# - Skips assembly if output directory already exists
+# - Utilizes all available CPU threads
+# """
+# function run_idba_ud(;fastq1, fastq2, outdir="idba_ud_output", min_k=20, max_k=100, step=20)
+#     Mycelia.add_bioconda_env("idba")
+#     mkpath(outdir)
     
-    # IDBA-UD requires paired reads in fasta format
-    merged_fasta = joinpath(outdir, "merged_reads.fa")
-    contig_file = joinpath(outdir, "contig.fa")
-    scaffold_file = joinpath(outdir, "scaffold.fa")
+#     # IDBA-UD requires paired reads in fasta format
+#     merged_fasta = joinpath(outdir, "merged_reads.fa")
+#     contig_file = joinpath(outdir, "contig.fa")
+#     scaffold_file = joinpath(outdir, "scaffold.fa")
     
-    if !isfile(contig_file)
-        # Convert and merge FASTQ to FASTA format for IDBA-UD
-        if !isfile(merged_fasta)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba fq2fa --merge $(fastq1) $(fastq2) $(merged_fasta)`)
-        end
+#     if !isfile(contig_file)
+#         # Convert and merge FASTQ to FASTA format for IDBA-UD
+#         if !isfile(merged_fasta)
+#             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba fq2fa --merge $(fastq1) $(fastq2) $(merged_fasta)`)
+#         end
         
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba idba_ud -r $(merged_fasta) -o $(outdir) --mink $(min_k) --maxk $(max_k) --step $(step) --num_threads $(Sys.CPU_THREADS)`)
-    end
-    return (;outdir, contigs=contig_file, scaffolds=scaffold_file)
-end
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba idba_ud -r $(merged_fasta) -o $(outdir) --mink $(min_k) --maxk $(max_k) --step $(step) --num_threads $(Sys.CPU_THREADS)`)
+#     end
+#     return (;outdir, contigs=contig_file, scaffolds=scaffold_file)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -165,7 +211,7 @@ Run Flye assembler for long read assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "flye_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
 
 # Returns
@@ -179,12 +225,16 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_flye(;fastq, outdir="flye_output", genome_size, read_type="pacbio-hifi")
+function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi")
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye flye --$(read_type) $(fastq) --out-dir $(outdir) --genome-size $(genome_size) --threads $(Sys.CPU_THREADS)`)
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
     return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
 end
@@ -197,7 +247,7 @@ Run metaFlye assembler for long-read metagenomic assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "metaflye_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
 - `meta::Bool`: Enable metagenome mode (default: true)
 - `min_overlap::Int`: Minimum overlap between reads (default: auto-selected)
@@ -215,17 +265,21 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_metaflye(;fastq, outdir="metaflye_output", genome_size, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
+function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--genome-size", genome_size, "--threads", string(Sys.CPU_THREADS)]
-        
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
+
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+
         if meta
             push!(cmd_args, "--meta")
         end
-        
+
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
         end
@@ -243,8 +297,9 @@ Run Canu assembler for long read assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "canu_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio", "nanopore")
+- `stopOnLowCoverage::Integer`: Minimum coverage required to continue assembly (default: 10)
 
 # Returns
 Named tuple containing:
@@ -256,17 +311,18 @@ Named tuple containing:
 - Includes error correction, trimming, and assembly stages
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
+- Can reduce `stopOnLowCoverage` for CI environments or low-coverage datasets
 """
-function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio")
+function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10)
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
     
-    prefix = basename(fastq, ".fastq")
+    prefix = splitext(basename(fastq))[1]
     if !isfile(joinpath(outdir, "$(prefix).contigs.fasta"))
         if read_type == "pacbio"
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage)`)
         elseif read_type == "nanopore"
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(Sys.CPU_THREADS)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage)`)
         else
             error("Unsupported read type: $(read_type). Use 'pacbio' or 'nanopore'.")
         end
@@ -282,6 +338,7 @@ Run the hifiasm genome assembler on PacBio HiFi reads.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing HiFi reads
 - `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm")
+- `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
 
 # Returns
 Named tuple containing:
@@ -293,53 +350,73 @@ Named tuple containing:
 - Uses primary assembly mode (--primary) optimized for inbred samples
 - Skips assembly if output files already exist at the specified prefix
 - Utilizes all available CPU threads
+- Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
 """
-function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
+function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm", bloom_filter=-1)
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
-    hifiasm_outputs = filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true))
+    # Check if output directory exists before trying to read it
+    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
     # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
     if isempty(hifiasm_outputs)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm --primary -l0 -o $(hifiasm_outprefix) -t $(Sys.CPU_THREADS) $(fastq)`)
+        mkpath(outdir)
+        # Build command with optional bloom filter flag
+        cmd_args = ["hifiasm", "--primary", "-l0", "-o", hifiasm_outprefix, "-t", string(Sys.CPU_THREADS)]
+        if bloom_filter >= 0
+            push!(cmd_args, "-f$(bloom_filter)")
+        end
+        push!(cmd_args, fastq)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm $(cmd_args)`)
     end
     return (;outdir, hifiasm_outprefix)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# disabled due to poor performance relative to other long read metagenomic assemblers in tests
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run hifiasm-meta assembler for metagenomic PacBio HiFi assembly.
+# Run hifiasm-meta assembler for metagenomic PacBio HiFi assembly.
 
-# Arguments
-- `fastq::String`: Path to input FASTQ file containing HiFi reads
-- `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm_meta")
-- `similarity::Float64`: Similarity threshold for strain resolution (default: 0.85)
-- `purge_level::Int`: Purge level for strain variants (default: 2)
+# # Arguments
+# - `fastq::String`: Path to input FASTQ file containing HiFi reads
+# - `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm_meta")
+# - `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
+# - `read_selection::Bool`: Enable read selection for mock/small datasets (default: false)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
 
-# Details
-- Uses hifiasm-meta's string graph approach for metagenomic strain resolution
-- Implements SNV-based read phasing to separate closely related strains
-- Optimized for low-abundance species and strain-level diversity
-- Automatically creates and uses a conda environment with hifiasm
-- Skips assembly if output files already exist at the specified prefix
-- Utilizes all available CPU threads
-"""
-function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", similarity=0.85, purge_level=2)
-    Mycelia.add_bioconda_env("hifiasm")
-    mkpath(outdir)
-    hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
-    hifiasm_outputs = filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true))
+# # Details
+# - Uses hifiasm-meta's string graph approach for metagenomic strain resolution
+# - Automatically creates and uses a conda environment with hifiasm_meta
+# - Skips assembly if output files already exist at the specified prefix
+# - Utilizes all available CPU threads
+# - Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
+# - Read selection (-S) can be enabled for mock/small datasets to handle low complexity data
+# """
+# function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloom_filter=-1, read_selection=false)
+#     Mycelia.add_bioconda_env("hifiasm_meta")
+#     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
+#     # Check if output directory exists before trying to read it
+#     hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
     
-    if isempty(hifiasm_outputs)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm-meta -t $(Sys.CPU_THREADS) -o $(hifiasm_outprefix) --purge-cov $(purge_level) --similarity $(similarity) $(fastq)`)
-    end
-    return (;outdir, hifiasm_outprefix)
-end
+#     if isempty(hifiasm_outputs)
+#         mkpath(outdir)
+#         # Build command with optional flags
+#         cmd_args = ["hifiasm_meta", "-t", string(Sys.CPU_THREADS), "-o", hifiasm_outprefix]
+#         if bloom_filter >= 0
+#             push!(cmd_args, "-f$(bloom_filter)")
+#         end
+#         if read_selection
+#             push!(cmd_args, "-S")
+#         end
+#         push!(cmd_args, fastq)
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`)
+#     end
+#     return (;outdir, hifiasm_outprefix)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -365,14 +442,22 @@ Named tuple containing:
 """
 function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_output")
     Mycelia.add_bioconda_env("unicycler")
-    mkpath(outdir)
     
+    # Unicycler requires the output directory to not exist, so check output file first
     if !isfile(joinpath(outdir, "assembly.fasta"))
+        # Remove output directory if it exists (Unicycler will create it)
+        if isdir(outdir)
+            rm(outdir, recursive=true)
+        end
+        
         if isnothing(short_2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -s $(short_1) -l $(long_reads) -o $(outdir) -t $(Sys.CPU_THREADS)`)
         else
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -1 $(short_1) -2 $(short_2) -l $(long_reads) -o $(outdir) -t $(Sys.CPU_THREADS)`)
         end
+    else
+        # If output already exists, ensure directory exists for return value
+        mkpath(outdir)
     end
     return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
 end
@@ -401,31 +486,125 @@ Assembly method enumeration for unified interface.
 end
 
 """
-Assembly configuration structure.
+Detect sequence type from input records using existing robust functions.
+"""
+function _detect_sequence_type(reads)
+    if isempty(reads)
+        return BioSequences.LongDNA{4}  # Default to DNA
+    end
+
+    # Get first sequence
+    first_seq = if reads[1] isa FASTX.FASTA.Record
+        FASTX.FASTA.sequence(reads[1])
+    elseif reads[1] isa FASTX.FASTQ.Record
+        FASTX.FASTQ.sequence(reads[1])
+    elseif reads[1] isa String
+        return String
+    else
+        error("Unsupported input type: $(typeof(reads[1]))")
+    end
+
+    # Use existing robust convert_sequence function which handles detection internally
+    biosequence = convert_sequence(first_seq)
+    return typeof(biosequence)
+end
+
+"""
+Determine k-mer type from observations and k value.
+"""
+function _determine_kmer_type(observations, k::Int)
+    if isempty(observations)
+        return Kmers.DNAKmer{k}  # Default to DNA k-mers
+    end
+
+    # Extract first sequence to determine type
+    first_seq = if observations[1] isa FASTX.FASTA.Record
+        FASTX.FASTA.sequence(observations[1])
+    elseif observations[1] isa FASTX.FASTQ.Record
+        FASTX.FASTQ.sequence(observations[1])
+    else
+        error("Unsupported observation type: $(typeof(observations[1]))")
+    end
+
+    # Use existing robust convert_sequence function for type detection
+    biosequence = convert_sequence(first_seq)
+
+    # Determine appropriate k-mer type based on sequence type
+    if biosequence isa BioSequences.LongDNA
+        return Kmers.DNAKmer{k}
+    elseif biosequence isa BioSequences.LongRNA
+        return Kmers.RNAKmer{k}
+    elseif biosequence isa BioSequences.LongAA
+        return Kmers.AAKmer{k}
+    else
+        error("Unsupported sequence type for k-mer graph: $(typeof(biosequence))")
+    end
+end
+
+"""
+Enhanced assembly configuration structure with input validation.
 """
 struct AssemblyConfig
-    k::Int                          # Primary k-mer size
-    error_rate::Float64             # Expected sequencing error rate
-    min_coverage::Int               # Minimum coverage for k-mer inclusion  
-    graph_mode::GraphMode           # SingleStrand or DoubleStrand
-    use_quality_scores::Bool        # Whether to use FASTQ quality scores
-    polish_iterations::Int          # Number of polishing iterations
-    bubble_resolution::Bool         # Whether to resolve bubble structures
-    repeat_resolution::Bool         # Whether to resolve repeat regions
-    
-    # Constructor with sensible defaults
+    # Core parameters - exactly one of these should be specified
+    k::Union{Int, Nothing}                                              # k-mer size (Nothing for overlap-based)
+    min_overlap::Union{Int, Nothing}                                    # Min overlap (Nothing for k-mer based)
+
+    # Input constraints
+    sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}}  # Type of input sequences
+    graph_mode::GraphMode                                               # SingleStrand or DoubleStrand
+
+    # Assembly parameters
+    error_rate::Float64                     # Expected sequencing error rate
+    min_coverage::Int                       # Minimum coverage for k-mer inclusion
+    use_quality_scores::Bool                # Whether to use FASTQ quality scores
+    polish_iterations::Int                  # Number of polishing iterations
+    bubble_resolution::Bool                 # Whether to resolve bubble structures
+    repeat_resolution::Bool                 # Whether to resolve repeat regions
+
+    # Constructor with validation
     function AssemblyConfig(;
-        k::Int = 31,
+        k::Union{Int, Nothing} = nothing,
+        min_overlap::Union{Int, Nothing} = nothing,
+        sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}} = BioSequences.LongDNA{4},
+        graph_mode::GraphMode = DoubleStrand,
         error_rate::Float64 = 0.01,
         min_coverage::Int = 3,
-        graph_mode::GraphMode = DoubleStrand,
         use_quality_scores::Bool = true,
         polish_iterations::Int = 3,
         bubble_resolution::Bool = true,
         repeat_resolution::Bool = true
     )
-        new(k, error_rate, min_coverage, graph_mode, use_quality_scores, 
-            polish_iterations, bubble_resolution, repeat_resolution)
+        # Validation: Must specify exactly one of k or min_overlap
+        if k === nothing && min_overlap === nothing
+            k = 31  # Default to k-mer mode with k=31
+        elseif k !== nothing && min_overlap !== nothing
+            error("Cannot specify both k ($(k)) and min_overlap ($(min_overlap)). Choose one approach.")
+        end
+
+        # Validation: Check strand compatibility with sequence types
+        if sequence_type <: BioSequences.LongAA && graph_mode == DoubleStrand
+            error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
+        end
+        if sequence_type == String && graph_mode == DoubleStrand
+            error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
+        end
+
+        # Validation: Parameter ranges
+        if k !== nothing && (k < 1 || k > 64)
+            error("k-mer size must be between 1 and 64, got k=$(k)")
+        end
+        if min_overlap !== nothing && min_overlap < 1
+            error("min_overlap must be positive, got min_overlap=$(min_overlap)")
+        end
+        if !(0.0 <= error_rate <= 1.0)
+            error("error_rate must be between 0.0 and 1.0, got error_rate=$(error_rate)")
+        end
+        if min_coverage < 1
+            error("min_coverage must be positive, got min_coverage=$(min_coverage)")
+        end
+
+        new(k, min_overlap, sequence_type, graph_mode, error_rate, min_coverage,
+            use_quality_scores, polish_iterations, bubble_resolution, repeat_resolution)
     end
 end
 
@@ -435,14 +614,18 @@ Assembly result structure containing contigs and metadata.
 struct AssemblyResult
     contigs::Vector{String}             # Final assembled contigs
     contig_names::Vector{String}        # Contig identifiers
-    graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Final assembly graph (optional)
+    graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Complete assembly graph (optional)
+    simplified_graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Simplified graph with collapsed paths
+    paths::Dict{String, Vector}         # Path mappings for GFA P-lines (path_id -> vertex_sequence)
     assembly_stats::Dict{String, Any}   # Assembly statistics and metrics
     fastq_contigs::Vector{FASTX.FASTQ.Record}  # Quality-aware contigs (FASTQ format)
-    
-    function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String}; 
-                          graph=nothing, assembly_stats=Dict{String, Any}(),
-                          fastq_contigs=FASTX.FASTQ.Record[])
-        new(contigs, contig_names, graph, assembly_stats, fastq_contigs)
+    gfa_compatible::Bool                # Whether graph structure is valid for GFA export
+
+    function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String};
+                          graph=nothing, simplified_graph=nothing, paths=Dict{String, Vector}(),
+                          assembly_stats=Dict{String, Any}(), fastq_contigs=FASTX.FASTQ.Record[],
+                          gfa_compatible=true)
+        new(contigs, contig_names, graph, simplified_graph, paths, assembly_stats, fastq_contigs, gfa_compatible)
     end
 end
 
@@ -486,67 +669,266 @@ function write_fastq_contigs(result::AssemblyResult, output_file::String)
 end
 
 """
-    assemble_genome(reads; method=StringGraph, config=AssemblyConfig()) -> AssemblyResult
+    write_gfa(result::AssemblyResult, output_file::String)
 
-Unified genome assembly interface using Phase 2 next-generation algorithms.
+Write assembly result to GFA (Graphical Fragment Assembly) format.
+Exports both graph topology and path information leveraging existing infrastructure.
+"""
+function write_gfa(result::AssemblyResult, output_file::String)
+    if isnothing(result.graph)
+        error("AssemblyResult contains no graph - cannot write GFA format")
+    end
+
+    if !result.gfa_compatible
+        @warn "AssemblyResult is marked as not GFA compatible - output may be invalid"
+    end
+
+    # Use the simplified graph if available, otherwise the full graph
+    graph_to_write = isnothing(result.simplified_graph) ? result.graph : result.simplified_graph
+
+    # Write base GFA structure using existing function
+    write_gfa_next(graph_to_write, output_file)
+
+    # Append path information if available
+    if !isempty(result.paths)
+        _append_gfa_paths(output_file, result.paths, result.contigs, result.contig_names)
+    end
+
+    @info "Assembly written to GFA format: $(output_file)"
+    return output_file
+end
+
+"""
+    save_assembly(result::AssemblyResult, output_file::String)
+
+Save complete assembly result using robust JLD2 serialization.
+"""
+function save_assembly(result::AssemblyResult, output_file::String)
+    JLD2.save(output_file, "assembly_result", result)
+    @info "Assembly saved to $(output_file)"
+    return output_file
+end
+
+"""
+    load_assembly(input_file::String) -> AssemblyResult
+
+Load complete assembly result from JLD2 file.
+"""
+function load_assembly(input_file::String)
+    return JLD2.load(input_file, "assembly_result")
+end
+
+"""
+    has_graph_structure(result::AssemblyResult) -> Bool
+
+Check if assembly result contains graph structure information.
+"""
+has_graph_structure(result::AssemblyResult) = !isnothing(result.graph)
+
+"""
+    has_simplified_graph(result::AssemblyResult) -> Bool
+
+Check if assembly result contains simplified graph with collapsed paths.
+"""
+has_simplified_graph(result::AssemblyResult) = !isnothing(result.simplified_graph)
+
+"""
+    has_paths(result::AssemblyResult) -> Bool
+
+Check if assembly result contains path mapping information.
+"""
+has_paths(result::AssemblyResult) = !isempty(result.paths)
+
+"""
+    validate_assembly_structure(result::AssemblyResult) -> Dict{String, Any}
+
+Validate the internal consistency of an AssemblyResult structure.
+Returns validation report complementing the existing validate_assembly function.
+"""
+function validate_assembly_structure(result::AssemblyResult)
+    report = Dict{String, Any}(
+        "valid" => true,
+        "issues" => String[],
+        "warnings" => String[]
+    )
+
+    # Check contig/name consistency
+    if length(result.contigs) != length(result.contig_names)
+        push!(report["issues"], "Contigs and contig_names have different lengths")
+        report["valid"] = false
+    end
+
+    # Check graph consistency if present
+    if !isnothing(result.graph) && !isnothing(result.simplified_graph)
+        if typeof(result.graph) != typeof(result.simplified_graph)
+            push!(report["warnings"], "Graph and simplified_graph have different types")
+        end
+    end
+
+    # Check path consistency
+    if !isempty(result.paths) && isnothing(result.graph)
+        push!(report["warnings"], "Paths provided but no graph structure available")
+    end
+
+    # Check GFA compatibility
+    if result.gfa_compatible && isnothing(result.graph)
+        push!(report["issues"], "Marked as GFA compatible but no graph structure")
+        report["valid"] = false
+    end
+
+    return report
+end
+
+"""
+    _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector}, contigs::Vector{String}, contig_names::Vector{String})
+
+Append path information to an existing GFA file.
+Adds GFA P-lines (path lines) that describe walks through the graph corresponding to assembled contigs.
+"""
+function _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector},
+                          contigs::Vector{String}, contig_names::Vector{String})
+    open(gfa_file, "a") do io
+        println(io, "# Path information for assembled contigs")
+
+        for (i, contig_name) in enumerate(contig_names)
+            if haskey(paths, contig_name) && i <= length(contigs)
+                path_vertices = paths[contig_name]
+                if !isempty(path_vertices)
+                    # Format: P <path_name> <vertex_list> <overlaps>
+                    vertex_list = join(string.(path_vertices) .* "+", ",")
+                    overlaps = repeat("*,", length(path_vertices) - 1) * "*"  # Default overlaps
+                    println(io, "P\t$(contig_name)\t$(vertex_list)\t$(overlaps)")
+                end
+            end
+        end
+    end
+end
+
+"""
+Auto-configure assembly based on input type and parameters.
+"""
+function _auto_configure_assembly(reads; k=nothing, min_overlap=nothing, graph_mode=nothing, kwargs...)
+    # Detect input format and sequence type
+    sequence_type = _detect_sequence_type(reads)
+
+    # Determine if quality scores are available
+    use_quality_scores = all(r -> r isa FASTX.FASTQ.Record, reads)
+
+    # Auto-detect graph mode if not specified
+    if graph_mode === nothing
+        graph_mode = if sequence_type <: BioSequences.LongAA || sequence_type == String
+            SingleStrand  # AA and strings can only be single strand
+        else
+            DoubleStrand  # DNA/RNA default to double strand
+        end
+    end
+
+    # Create config with detected parameters
+    return AssemblyConfig(;
+        k=k,
+        min_overlap=min_overlap,
+        sequence_type=sequence_type,
+        graph_mode=graph_mode,
+        use_quality_scores=use_quality_scores,
+        kwargs...
+    )
+end
+
+"""
+    assemble_genome(reads; k=31, kwargs...) -> AssemblyResult
+    assemble_genome(reads, config::AssemblyConfig) -> AssemblyResult
+
+Unified genome assembly interface with auto-detection and type-stable dispatch.
+
+# Auto-Detection Convenience Method
+```julia
+# Auto-detect sequence type and format, use k-mer approach
+result = assemble_genome(fasta_records; k=25)
+
+# Auto-detect sequence type and format, use overlap approach
+result = assemble_genome(fasta_records; min_overlap=100)
+
+# Override auto-detected parameters
+result = assemble_genome(reads; k=31, graph_mode=SingleStrand, error_rate=0.005)
+```
+
+# Type-Stable Direct Method
+```julia
+# Explicit configuration for maximum performance
+config = AssemblyConfig(k=25, sequence_type=BioSequences.LongDNA{4},
+                       graph_mode=DoubleStrand, use_quality_scores=true)
+result = assemble_genome(reads, config)
+```
 
 # Arguments
 - `reads`: Vector of FASTA/FASTQ records or file paths
-- `method`: Assembly strategy (StringGraph, KmerGraph, HybridOLC, MultiK)
-- `config`: Assembly configuration parameters
+- `config`: Assembly configuration (for type-stable version)
+
+# Keyword Arguments (auto-detection version)
+- `k`: k-mer size (mutually exclusive with min_overlap)
+- `min_overlap`: Minimum overlap length (mutually exclusive with k)
+- `graph_mode`: SingleStrand or DoubleStrand (auto-detected if not specified)
+- `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
 - `AssemblyResult`: Structure containing contigs, names, and assembly metadata
 
 # Details
-This is the main entry point for the unified assembly pipeline, leveraging:
-- Phase 1: MetaGraphsNext strand-aware graph construction  
-- Phase 2: Probabilistic algorithms, enhanced Viterbi, and graph algorithms
-- Phase 3: Integrated workflow with polishing and validation
+This interface automatically:
+1. **Detects sequence type**: DNA, RNA, AA, or String from input
+2. **Chooses assembly method**: k-mer vs overlap-based on parameters
+3. **Validates compatibility**: AA/String sequences → SingleStrand only
+4. **Dispatches optimally**: Based on input type and quality scores
 
-# Examples
-```julia
-# Basic assembly with default parameters
-reads = load_fastq_records("reads.fastq")
-result = assemble_genome(reads)
-
-# Custom assembly with specific k-mer size and error rate
-config = AssemblyConfig(k=25, error_rate=0.005, polish_iterations=5)
-result = assemble_genome(reads; method=KmerGraph, config=config)
-
-# Access results
-contigs = result.contigs
-stats = result.assembly_stats
-```
+**Method Selection Logic:**
+- String input + k → N-gram graph
+- String input + min_overlap → String graph
+- BioSequence input + k + quality → Qualmer graph
+- BioSequence input + k → K-mer graph
+- BioSequence input + min_overlap + quality → Quality BioSequence graph
+- BioSequence input + min_overlap → BioSequence graph
 """
-function assemble_genome(reads; method::AssemblyMethod=QualmerGraph, config::AssemblyConfig=AssemblyConfig())
-    @info "Starting unified genome assembly" method config.k config.error_rate
-    
+function assemble_genome(reads; kwargs...)
+    # Auto-detect configuration and dispatch to type-stable version
+    config = _auto_configure_assembly(reads; kwargs...)
+    return assemble_genome(reads, config)
+end
+
+"""
+Type-stable main assembly function that dispatches based on configuration.
+"""
+function assemble_genome(reads, config::AssemblyConfig)
+    @info "Starting unified genome assembly" config.sequence_type config.graph_mode config.k config.min_overlap
+
     # Phase 1: Load and validate input
     observations = _prepare_observations(reads)
     @info "Loaded $(length(observations)) sequence observations"
-    
-    # Phase 2: Assembly strategy dispatch following 6-graph hierarchy
-    if method == NgramGraph
-        result = _assemble_ngram_graph(observations, config)
-    elseif method == KmerGraph  
-        result = _assemble_kmer_graph(observations, config)
-    elseif method == QualmerGraph
-        result = _assemble_qualmer_graph(observations, config)
-    elseif method == StringGraph
-        result = _assemble_string_graph(observations, config)
-    elseif method == BioSequenceGraph
-        result = _assemble_biosequence_graph(observations, config)
-    elseif method == QualityBioSequenceGraph
-        result = _assemble_quality_biosequence_graph(observations, config)
-    elseif method == HybridOLC
-        result = _assemble_hybrid_olc(observations, config)
-    elseif method == MultiK
-        result = _assemble_multi_k(observations, config)
+
+    # Phase 2: Type-stable dispatch based on config parameters
+    result = if config.sequence_type == String
+        if config.k !== nothing
+            _assemble_ngram_graph(observations, config)  # N-gram
+        else
+            _assemble_string_graph(observations, config)  # String graph (overlap-based)
+        end
+    elseif config.sequence_type <: BioSequences.BioSequence
+        if config.use_quality_scores
+            if config.k !== nothing
+                _assemble_qualmer_graph(observations, config)  # Qualmer
+            else
+                _assemble_quality_biosequence_graph(observations, config)  # Quality overlap-based
+            end
+        else
+            if config.k !== nothing
+                _assemble_kmer_graph(observations, config)  # K-mer
+            else
+                _assemble_biosequence_graph(observations, config)  # BioSequence overlap-based
+            end
+        end
     else
-        throw(ArgumentError("Unknown assembly method: $method"))
+        throw(ArgumentError("Unsupported sequence type: $(config.sequence_type)"))
     end
-    
+
     @info "Assembly completed: $(length(result.contigs)) contigs generated"
     return result
 end
@@ -1742,44 +2124,45 @@ function _simplify_ngram_to_string_graph(ngram_graph)
     return ngram_graph
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# ISN'T AVAILABLE IN BIOCONDA
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run QuickMerge for assembly merging and scaffolding.
+# Run QuickMerge for assembly merging and scaffolding.
 
-# Arguments
-- `self_assembly::String`: Path to self assembly FASTA file (primary assembly)
-- `ref_assembly::String`: Path to reference assembly FASTA file (hybrid assembly)
-- `outdir::String`: Output directory path (default: "quickmerge_output")
-- `hco::Float64`: HCO threshold for overlap detection (default: 5.0)
-- `c::Float64`: Coverage cutoff for contig filtering (default: 1.5)
-- `l::Int`: Minimum alignment length (default: 5000)
+# # Arguments
+# - `self_assembly::String`: Path to self assembly FASTA file (primary assembly)
+# - `ref_assembly::String`: Path to reference assembly FASTA file (hybrid assembly)
+# - `outdir::String`: Output directory path (default: "quickmerge_output")
+# - `hco::Float64`: HCO threshold for overlap detection (default: 5.0)
+# - `c::Float64`: Coverage cutoff for contig filtering (default: 1.5)
+# - `l::Int`: Minimum alignment length (default: 5000)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `merged_assembly::String`: Path to merged assembly file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `merged_assembly::String`: Path to merged assembly file
 
-# Details
-- Uses MUMmer-based approach for identifying high-confidence overlaps
-- Merges assemblies by splicing contigs at overlap boundaries
-- Optimized for merging complementary assemblies (e.g., short+long read)
-- Automatically creates and uses a conda environment with quickmerge
-- Skips analysis if output files already exist
-"""
-function run_quickmerge(self_assembly::String, ref_assembly::String; outdir::String="quickmerge_output", hco::Float64=5.0, c::Float64=1.5, l::Int=5000)
-    Mycelia.add_bioconda_env("quickmerge")
-    mkpath(outdir)
+# # Details
+# - Uses MUMmer-based approach for identifying high-confidence overlaps
+# - Merges assemblies by splicing contigs at overlap boundaries
+# - Optimized for merging complementary assemblies (e.g., short+long read)
+# - Automatically creates and uses a conda environment with quickmerge
+# - Skips analysis if output files already exist
+# """
+# function run_quickmerge(self_assembly::String, ref_assembly::String; outdir::String="quickmerge_output", hco::Float64=5.0, c::Float64=1.5, l::Int=5000)
+#     Mycelia.add_bioconda_env("bioconda::quickmerge")
+#     mkpath(outdir)
     
-    merged_assembly = joinpath(outdir, "merged.fasta")
+#     merged_assembly = joinpath(outdir, "merged.fasta")
     
-    if !isfile(merged_assembly)
-        # Run QuickMerge
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quickmerge merge_wrapper.py $(self_assembly) $(ref_assembly) -pre $(outdir)/merged -hco $(hco) -c $(c) -l $(l)`)
-    end
+#     if !isfile(merged_assembly)
+#         # Run QuickMerge
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quickmerge merge_wrapper.py $(self_assembly) $(ref_assembly) -pre $(outdir)/merged -hco $(hco) -c $(c) -l $(l)`)
+#     end
     
-    return (;outdir, merged_assembly)
-end
+#     return (;outdir, merged_assembly)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1957,123 +2340,123 @@ function run_strong(assembly_graph::String, reads_file::String; outdir::String="
     return (;outdir, strain_unitigs)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run Ray assembler for de novo genome assembly.
+# Run Ray assembler for de novo genome assembly.
 
-# Arguments
-- `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
-- `outdir::String`: Output directory path (default: "ray_output")
-- `k::Int`: K-mer size for assembly (default: 31)
-- `min_contig_length::Int`: Minimum contig length (default: 200)
+# # Arguments
+# - `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
+# - `outdir::String`: Output directory path (default: "ray_output")
+# - `k::Int`: K-mer size for assembly (default: 31)
+# - `min_contig_length::Int`: Minimum contig length (default: 200)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `scaffolds::String`: Path to scaffolds file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `contigs::String`: Path to contigs file
+# - `scaffolds::String`: Path to scaffolds file
 
-# Details
-- Uses Ray's distributed de Bruijn graph approach
-- Supports both single-end and paired-end reads
-- Automatically creates and uses a conda environment with ray
-- Skips assembly if output directory already exists
-- Utilizes all available CPU threads
-"""
-function run_ray(reads_files::Vector{String}; outdir::String="ray_output", k::Int=31, min_contig_length::Int=200)
-    Mycelia.add_bioconda_env("ray")
-    mkpath(outdir)
+# # Details
+# - Uses Ray's distributed de Bruijn graph approach
+# - Supports both single-end and paired-end reads
+# - Automatically creates and uses a conda environment with ray
+# - Skips assembly if output directory already exists
+# - Utilizes all available CPU threads
+# """
+# function run_ray(reads_files::Vector{String}; outdir::String="ray_output", k::Int=31, min_contig_length::Int=200)
+#     Mycelia.add_bioconda_env("ray")
+#     mkpath(outdir)
     
-    contigs_file = joinpath(outdir, "Contigs.fasta")
-    scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
+#     contigs_file = joinpath(outdir, "Contigs.fasta")
+#     scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
     
-    if !isfile(contigs_file)
-        # Build Ray command arguments
-        cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
+#     if !isfile(contigs_file)
+#         # Build Ray command arguments
+#         cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
         
-        # Add reads files - Ray auto-detects paired vs single-end
-        if length(reads_files) == 2
-            # Paired-end reads
-            push!(cmd_args, "-p", reads_files[1], reads_files[2])
-        elseif length(reads_files) == 1
-            # Single-end reads  
-            push!(cmd_args, "-s", reads_files[1])
-        else
-            # Multiple libraries - treat as single-end
-            for reads_file in reads_files
-                push!(cmd_args, "-s", reads_file)
-            end
-        end
+#         # Add reads files - Ray auto-detects paired vs single-end
+#         if length(reads_files) == 2
+#             # Paired-end reads
+#             push!(cmd_args, "-p", reads_files[1], reads_files[2])
+#         elseif length(reads_files) == 1
+#             # Single-end reads  
+#             push!(cmd_args, "-s", reads_files[1])
+#         else
+#             # Multiple libraries - treat as single-end
+#             for reads_file in reads_files
+#                 push!(cmd_args, "-s", reads_file)
+#             end
+#         end
         
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
-    end
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
+#     end
     
-    return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
-end
+#     return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
+# end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run Ray Meta for metagenomic assembly.
+# Run Ray Meta for metagenomic assembly.
 
-# Arguments
-- `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
-- `outdir::String`: Output directory path (default: "ray_meta_output")
-- `k::Int`: K-mer size for assembly (default: 31)
-- `min_contig_length::Int`: Minimum contig length (default: 200)
-- `enable_communities::Bool`: Enable community detection (default: true)
+# # Arguments
+# - `reads_files::Vector{String}`: Vector of FASTQ file paths (supports paired-end and single-end)
+# - `outdir::String`: Output directory path (default: "ray_meta_output")
+# - `k::Int`: K-mer size for assembly (default: 31)
+# - `min_contig_length::Int`: Minimum contig length (default: 200)
+# - `enable_communities::Bool`: Enable community detection (default: true)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `scaffolds::String`: Path to scaffolds file
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `contigs::String`: Path to contigs file
+# - `scaffolds::String`: Path to scaffolds file
 
-# Details
-- Uses Ray Meta's distributed approach for metagenomic data
-- Supports community detection for binning related sequences
-- Handles uneven coverage typical in metagenomic samples
-- Automatically creates and uses a conda environment with ray
-- Skips assembly if output directory already exists
-"""
-function run_ray_meta(reads_files::Vector{String}; outdir::String="ray_meta_output", k::Int=31, min_contig_length::Int=200, enable_communities::Bool=true)
-    Mycelia.add_bioconda_env("ray")
-    mkpath(outdir)
+# # Details
+# - Uses Ray Meta's distributed approach for metagenomic data
+# - Supports community detection for binning related sequences
+# - Handles uneven coverage typical in metagenomic samples
+# - Automatically creates and uses a conda environment with ray
+# - Skips assembly if output directory already exists
+# """
+# function run_ray_meta(reads_files::Vector{String}; outdir::String="ray_meta_output", k::Int=31, min_contig_length::Int=200, enable_communities::Bool=true)
+#     Mycelia.add_bioconda_env("ray")
+#     mkpath(outdir)
     
-    contigs_file = joinpath(outdir, "Contigs.fasta")
-    scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
+#     contigs_file = joinpath(outdir, "Contigs.fasta")
+#     scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
     
-    if !isfile(contigs_file)
-        # Build Ray Meta command arguments
-        cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
+#     if !isfile(contigs_file)
+#         # Build Ray Meta command arguments
+#         cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
         
-        # Enable metagenomic mode
-        push!(cmd_args, "-enable-neighbourhoods")
+#         # Enable metagenomic mode
+#         push!(cmd_args, "-enable-neighbourhoods")
         
-        if enable_communities
-            push!(cmd_args, "-enable-neighbourhoods")
-        end
+#         if enable_communities
+#             push!(cmd_args, "-enable-neighbourhoods")
+#         end
         
-        # Add reads files
-        if length(reads_files) == 2
-            # Paired-end reads
-            push!(cmd_args, "-p", reads_files[1], reads_files[2])
-        elseif length(reads_files) == 1
-            # Single-end reads
-            push!(cmd_args, "-s", reads_files[1])
-        else
-            # Multiple libraries
-            for reads_file in reads_files
-                push!(cmd_args, "-s", reads_file)
-            end
-        end
+#         # Add reads files
+#         if length(reads_files) == 2
+#             # Paired-end reads
+#             push!(cmd_args, "-p", reads_files[1], reads_files[2])
+#         elseif length(reads_files) == 1
+#             # Single-end reads
+#             push!(cmd_args, "-s", reads_files[1])
+#         else
+#             # Multiple libraries
+#             for reads_file in reads_files
+#                 push!(cmd_args, "-s", reads_file)
+#             end
+#         end
         
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
-    end
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
+#     end
     
-    return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
-end
+#     return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2118,6 +2501,60 @@ function run_velvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdi
         
         # Step 2: velvetg (graph construction and traversal)
         cmd_args = ["velvetg", outdir, "-min_contig_lgth", string(min_contig_lgth)]
+        
+        if exp_cov != "auto"
+            push!(cmd_args, "-exp_cov", exp_cov)
+        end
+        
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet $(cmd_args)`)
+    end
+    
+    return (;outdir, contigs=contigs_file)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run metaVelvet assembler for metagenomic short-read assembly.
+
+# Arguments
+- `fastq1::String`: Path to first paired-end FASTQ file
+- `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
+- `outdir::String`: Output directory path (default: "metavelvet_output")
+- `k::Int`: K-mer size for assembly (default: 31)
+- `exp_cov::String`: Expected coverage (default: "auto")
+- `min_contig_lgth::Int`: Minimum contig length (default: 200)
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `contigs::String`: Path to assembled contigs file
+
+# Details
+- Uses metaVelvet's approach for metagenomic data with varying coverage
+- Two-step process: velveth (indexing) + meta-velvetg (metagenomic assembly)
+- Designed for mixed community samples with uneven coverage
+- Automatically creates and uses a conda environment with velvet
+- Skips assembly if output directory already exists
+"""
+function run_metavelvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdir::String="metavelvet_output", k::Int=31, exp_cov::String="auto", min_contig_lgth::Int=200)
+    Mycelia.add_bioconda_env("velvet")
+    mkpath(outdir)
+    
+    contigs_file = joinpath(outdir, "meta-velvetg.contigs.fa")
+    
+    if !isfile(contigs_file)
+        # Step 1: velveth (k-mer hashing and indexing) - same as regular velvet
+        if isnothing(fastq2)
+            # Single-end reads
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet velveth $(outdir) $(k) -short -fastq $(fastq1)`)
+        else
+            # Paired-end reads
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet velveth $(outdir) $(k) -shortPaired -fastq -separate $(fastq1) $(fastq2)`)
+        end
+        
+        # Step 2: meta-velvetg (metagenomic graph construction and traversal)
+        cmd_args = ["meta-velvetg", outdir, "-min_contig_lgth", string(min_contig_lgth)]
         
         if exp_cov != "auto"
             push!(cmd_args, "-exp_cov", exp_cov)
@@ -2205,11 +2642,15 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run metaMDBG assembler for metagenomic long-read assembly.
 
 # Arguments
-- `fastq_file::String`: Path to input FASTQ file containing long reads
+- `hifi_reads::Union{String,Vector{String},Nothing}`: Path(s) to HiFi (PacBio) read files (default: nothing)
+- `ont_reads::Union{String,Vector{String},Nothing}`: Path(s) to ONT (Nanopore) read files (default: nothing)
 - `outdir::String`: Output directory path (default: "metamdbg_output")
 - `abundance_min::Int`: Minimum abundance threshold (default: 3)
-- `length_min::Int`: Minimum sequence length (default: 1000)
-- `nb_cores::Int`: Number of cores to use (default: Sys.CPU_THREADS)
+- `threads::Int`: Number of threads to use (default: Sys.CPU_THREADS)
+- `graph_k::Int`: K-mer resolution level for graph generation (default: 21)
+
+Note: Must provide either `hifi_reads`, `ont_reads`, or both. Cannot be both nothing.
+Graph generation: Automatically generates assembly graphs using the specified k-mer resolution.
 
 # Returns
 Named tuple containing:
@@ -2225,7 +2666,18 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with metamdbg
 - Skips assembly if output directory already exists
 """
-function run_metamdbg(fastq_file::String; outdir::String="metamdbg_output", abundance_min::Int=3, length_min::Int=1000, nb_cores::Int=Sys.CPU_THREADS)
+function run_metamdbg(; hifi_reads::Union{String,Vector{String},Nothing}=nothing, 
+                      ont_reads::Union{String,Vector{String},Nothing}=nothing,
+                      outdir::String="metamdbg_output", 
+                      abundance_min::Int=3, 
+                      threads::Int=Sys.CPU_THREADS,
+                      graph_k::Int=21)
+    
+    # Validate input - must have at least one read type
+    if isnothing(hifi_reads) && isnothing(ont_reads)
+        error("Must provide either hifi_reads, ont_reads, or both")
+    end
+    
     Mycelia.add_bioconda_env("metamdbg")
     mkpath(outdir)
     
@@ -2233,53 +2685,57 @@ function run_metamdbg(fastq_file::String; outdir::String="metamdbg_output", abun
     graph_file = joinpath(outdir, "graph.gfa")
     
     if !isfile(contigs_file)
-        # Run metaMDBG assembly
-        cmd_args = [
-            "metaMDBG", "asm",
-            "--in-dir", dirname(fastq_file),
-            "--in-reads", basename(fastq_file),
-            "--out-dir", outdir,
-            "--abundance-min", string(abundance_min),
-            "--length-min", string(length_min),
-            "--nb-cores", string(nb_cores)
-        ]
+        # Build command arguments
+        cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
+        
+        # Add HiFi reads if provided
+        if !isnothing(hifi_reads)
+            push!(cmd_args, "--in-hifi")
+            if isa(hifi_reads, String)
+                push!(cmd_args, hifi_reads)
+            else
+                append!(cmd_args, hifi_reads)
+            end
+        end
+        
+        # Add ONT reads if provided
+        if !isnothing(ont_reads)
+            push!(cmd_args, "--in-ont")
+            if isa(ont_reads, String)
+                push!(cmd_args, ont_reads)
+            else
+                append!(cmd_args, ont_reads)
+            end
+        end
+        
+        # Add other parameters
+        push!(cmd_args, "--min-abundance", string(abundance_min))
+        push!(cmd_args, "--threads", string(threads))
         
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(cmd_args)`)
         
-        # metaMDBG may output with different naming - check for common output files
-        possible_contigs = [
-            joinpath(outdir, "contigs.fasta"),
-            joinpath(outdir, "final_contigs.fasta"),
-            joinpath(outdir, "assembly.fasta")
+        # Generate assembly graph using metaMDBG gfa command
+        gfa_cmd_args = [
+            "metaMDBG", "gfa",
+            "--assembly-dir", outdir,
+            "--k", string(graph_k),
+            "--threads", string(threads)
         ]
         
-        possible_graphs = [
-            joinpath(outdir, "graph.gfa"),
-            joinpath(outdir, "assembly_graph.gfa"),
-            joinpath(outdir, "final_graph.gfa")
-        ]
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`)
         
-        # Find actual output files
-        actual_contigs = ""
-        actual_graph = ""
+        # Set expected output file names
+        contigs_file = joinpath(outdir, "contigs.fasta.gz")  # metaMDBG compresses output
         
-        for possible in possible_contigs
-            if isfile(possible)
-                actual_contigs = possible
-                break
-            end
+        # Find the generated graph file (format: assemblyGraph_k{k}_{length}bps.gfa)
+        graph_files = filter(f -> startswith(basename(f), "assemblyGraph_k") && endswith(f, ".gfa"), 
+                           readdir(outdir, join=true))
+        
+        if isempty(graph_files)
+            error("metaMDBG failed to generate assembly graph file. Expected file pattern: assemblyGraph_k*.gfa in $outdir")
         end
         
-        for possible in possible_graphs
-            if isfile(possible)
-                actual_graph = possible
-                break
-            end
-        end
-        
-        # Update file paths
-        contigs_file = actual_contigs
-        graph_file = actual_graph
+        graph_file = first(graph_files)
     end
     
     return (;outdir, contigs=contigs_file, graph=graph_file)
@@ -2327,28 +2783,4 @@ function run_strainy(assembly_file::String, long_reads::String; outdir::String="
     end
     
     return (;outdir, strain_assemblies)
-end
-
-"""
-Determine appropriate k-mer type from observations.
-"""
-function _determine_kmer_type(observations, k)
-    # Examine first observation to determine sequence type
-    if !isempty(observations)
-        sample_seq = string(FASTX.FASTA.sequence(observations[1]))
-        
-        # Check if it's protein sequence (contains amino acids)
-        if occursin(r"[ARNDCQEGHILKMFPSTWYV]", uppercase(sample_seq))
-            return Kmers.AAKmer{k}
-        # Check if it's RNA (contains U)
-        elseif occursin('U', uppercase(sample_seq))
-            return Kmers.RNAKmer{k}
-        # Default to DNA
-        else
-            return Kmers.DNAKmer{k}
-        end
-    end
-    
-    # Default to DNA k-mer
-    return Kmers.DNAKmer{k}
 end

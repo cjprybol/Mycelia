@@ -59,6 +59,4 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 
 ## Function Docstrings
 
-```@autodocs
-Modules = [Mycelia]
-```
+For complete API documentation, see the [API Reference](api-reference.md) section.

@@ -12,13 +12,6 @@ Key features:
 - Created by simplification of Qualmer graphs
 """
 
-import MetaGraphsNext
-import Graphs
-import BioSequences
-import FASTX
-import DocStringExtensions
-import Statistics
-
 """
 Quality-aware BioSequence vertex data.
 """
@@ -177,7 +170,7 @@ quality_graph = qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
 ```
 """
 function qualmer_graph_to_quality_biosequence_graph(qualmer_graph::MetaGraphsNext.MetaGraph; 
-                                                   min_path_length::Int=2)
+                                                   min_path_length::Int=1)
     
     # Determine sequence type from qualmer graph
     qualmer_labels = collect(MetaGraphsNext.labels(qualmer_graph))
@@ -640,4 +633,116 @@ function _find_quality_sequence_overlap(seq1, seq2, vertex_data1::QualityBioSequ
     end
     
     return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a quality-aware string n-gram graph from FASTQ records.
+
+This creates n-gram graphs from string sequences with associated quality scores,
+where each n-gram vertex retains quality information from all observations.
+"""
+function build_string_qualmer_ngram_graph_next(fastq_records::Vector{FASTX.FASTQ.Record}, ngram_length::Int;
+                                              graph_mode::GraphMode=SingleStrand)
+
+    if isempty(fastq_records)
+        throw(ArgumentError("Cannot build graph from empty FASTQ records"))
+    end
+
+    # Create MetaGraphsNext graph for quality-aware string n-grams
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=String,
+        vertex_data_type=QualityStringVertexData,
+        edge_data_type=QualityStringEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0
+    )
+
+    # Extract n-grams with quality information
+    ngram_quality_data = Dict{String, Vector{Vector{Int}}}()
+    for record in fastq_records
+        sequence_str = FASTX.sequence(String, record)
+        quality = FASTX.quality(record)
+
+        # Generate n-grams with quality
+        for i in 1:(length(sequence_str) - ngram_length + 1)
+            ngram = sequence_str[i:i+ngram_length-1]
+            ngram_quality = quality[i:i+ngram_length-1]
+
+            if !haskey(ngram_quality_data, ngram)
+                ngram_quality_data[ngram] = Vector{Int}[]
+            end
+            push!(ngram_quality_data[ngram], collect(Int, ngram_quality))
+        end
+    end
+
+    # Add vertices for each n-gram with quality data
+    for (ngram, quality_vectors) in ngram_quality_data
+        graph[ngram] = QualityStringVertexData(ngram, quality_vectors)
+    end
+
+    # Add edges between consecutive n-grams from each record
+    for record in fastq_records
+        sequence_str = FASTX.sequence(String, record)
+        quality = FASTX.quality(record)
+
+        ngrams = [sequence_str[i:i+ngram_length-1] for i in 1:(length(sequence_str) - ngram_length + 1)]
+
+        for i in 1:(length(ngrams) - 1)
+            curr_ngram = ngrams[i]
+            next_ngram = ngrams[i + 1]
+
+            if haskey(graph, curr_ngram) && haskey(graph, next_ngram)
+                if !haskey(graph, curr_ngram, next_ngram)
+                    graph[curr_ngram, next_ngram] = QualityStringEdgeData(ngram_length - 1, 1.0)
+                end
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a quality-aware string BioSequence-like graph from FASTQ records.
+
+This treats strings as sequence-like entities with quality information,
+creating a graph where each entire string sequence becomes a vertex with quality data.
+"""
+function build_string_qualmer_biosequence_graph_next(fastq_records::Vector{FASTX.FASTQ.Record};
+                                                    graph_mode::GraphMode=SingleStrand)
+
+    if isempty(fastq_records)
+        throw(ArgumentError("Cannot build graph from empty FASTQ records"))
+    end
+
+    # Create MetaGraphsNext graph for quality-aware string sequences
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=String,
+        vertex_data_type=QualityStringVertexData,
+        edge_data_type=QualityStringEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0
+    )
+
+    # Add vertices for each string sequence with quality information
+    for record in fastq_records
+        sequence_str = FASTX.sequence(String, record)
+        quality = FASTX.quality(record)
+
+        if !haskey(graph, sequence_str)
+            graph[sequence_str] = QualityStringVertexData(sequence_str, [collect(Int, quality)])
+        else
+            # Add quality information to existing vertex
+            vertex_data = graph[sequence_str]
+            push!(vertex_data.quality_scores, collect(Int, quality))
+        end
+    end
+
+    return graph
 end

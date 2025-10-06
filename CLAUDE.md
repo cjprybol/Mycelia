@@ -148,3 +148,12 @@ The package integrates with various bioinformatics tools:
 - **Clearly distinguish between completed features and planned features** in documentation
 - **Use precise, technical language** rather than marketing language
 - **Focus on functionality and capabilities** rather than superlative claims
+
+## Testing Standards
+
+### Never Disable Tests
+- **NEVER disable or skip tests because underlying functionality is broken** - this masks bugs and prevents proper quality assurance
+- **Fix the implementation first**, then ensure tests cover complete, expected, and logically correct behavior
+- **Tests should define the expected behavior** - if a function fails tests, fix the function to meet the expected behavior
+- **Use @test_skip only for features that are explicitly planned but not yet implemented**
+- **All implemented functions must have working, comprehensive tests**

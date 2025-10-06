@@ -353,12 +353,12 @@ function pairwise_distance_matrix(
 
     Threads.@threads for entity_1_index in 1:n_entities
         for entity_2_index in entity_1_index+1:n_entities
-            a = matrix[:, entity_1_index]
-            b = matrix[:, entity_2_index]
+            a = @view matrix[:, entity_1_index]
+            b = @view matrix[:, entity_2_index]
             dist = dist_func(a, b)
             distance_matrix[entity_1_index, entity_2_index] = dist
             distance_matrix[entity_2_index, entity_1_index] = dist
-            if show_progress && Threads.threadid() == 1
+            if show_progress
                 ProgressMeter.next!(progress)
             end
         end

@@ -1,3 +1,213 @@
+# Streaming FASTA/FASTQ normalization to a compressed JSON Lines file, record-by-record,
+# with an optional progress meter.
+
+"""
+    fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
+                                   output_path::Union{Nothing,AbstractString}=nothing,
+                                   human_readable_id::Union{String,Nothing}=nothing,
+                                   force_truncate::Bool=false,
+                                   show_progress::Bool=true,
+                                   progress_every::Int=1000,
+                                   progress_desc::AbstractString="Streaming normalization",
+                                   progress_output::IO=stderr)
+
+Stream the input FASTA/FASTQ file and write one JSON object per line (NDJSON) to
+a compressed output file. This avoids loading the entire table or very long
+sequences into memory and avoids delimiter limitations of TSV/CSV.
+
+When `output_path` is not provided, a default is derived by replacing the file
+extension matched by `Mycelia.FAST(A|Q)_REGEX` (including optional .gz) with
+`.normalized.jsonl.gz`.
+
+A lightweight progress meter can be shown during streaming. It displays processed
+records, elapsed time, and records/second as an indefinite spinner. Control its
+frequency with `progress_every` to reduce overhead.
+"""
+function fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
+                                       output_path::Union{Nothing,AbstractString}=nothing,
+                                       human_readable_id::Union{String,Nothing}=nothing,
+                                       force_truncate::Bool=false,
+                                       show_progress::Bool=true,
+                                       progress_every::Int=1000,
+                                       progress_desc::AbstractString="Streaming normalization",
+                                       progress_output::IO=stderr)
+
+    # --- Extract human_readable_id from filename if not provided ---
+    if isnothing(human_readable_id)
+        human_readable_id = _extract_human_readable_id_from_fastx_path(fastx_path, force_truncate)
+    end
+
+    # --- Input Validation ---
+    @assert isfile(fastx_path) && filesize(fastx_path) > 0 "File does not exist or is empty."
+    if length(human_readable_id) > 16
+        if force_truncate
+            @warn "Human-readable identifier '$(human_readable_id)' exceeds 16 characters, truncating to '$(human_readable_id[1:16])'"
+            human_readable_id = human_readable_id[1:16]
+        else
+            error("Human-readable identifier '$(human_readable_id)' cannot exceed 16 characters. Use force_truncate=true to allow truncation.")
+        end
+    end
+
+    # --- File Type Detection (using Mycelia) ---
+    file_type = if occursin(Mycelia.FASTA_REGEX, fastx_path)
+        :fasta
+    elseif occursin(Mycelia.FASTQ_REGEX, fastx_path)
+        :fastq
+    else
+        error("File is not FASTA or FASTQ")
+    end
+
+    # --- Derive output path if not provided ---
+    out_path = isnothing(output_path) ? _default_out_path(fastx_path) : String(output_path)
+
+    # --- Stream records and write NDJSON.gz ---
+    if endswith(out_path, ".gz")
+        open(out_path, "w") do raw
+            gz = CodecZlib.GzipCompressorStream(raw)
+            try
+                _write_ndjson_stream(
+                    gz, fastx_path, human_readable_id, file_type;
+                    show_progress=show_progress,
+                    progress_every=progress_every,
+                    progress_desc=progress_desc,
+                    progress_output=progress_output,
+                )
+                flush(gz)
+            finally
+                close(gz)
+            end
+        end
+    else
+        open(out_path, "w") do io
+            _write_ndjson_stream(
+                io, fastx_path, human_readable_id, file_type;
+                show_progress=show_progress,
+                progress_every=progress_every,
+                progress_desc=progress_desc,
+                progress_output=progress_output,
+            )
+            flush(io)
+        end
+    end
+
+    return out_path
+end
+
+# --- Helpers ---
+
+# Build the default output path by replacing FASTX suffix (including optional .gz) with .normalized.jsonl.gz
+function _default_out_path(fastx_path::AbstractString)
+    m_fasta = match(Mycelia.FASTA_REGEX, fastx_path)
+    m_fastq = match(Mycelia.FASTQ_REGEX, fastx_path)
+    if (m_fasta === nothing) && (m_fastq === nothing)
+        error("Input path does not match expected regex pattern: $(fastx_path)")
+    else
+        if !(m_fasta === nothing)
+            output_path = replace(fastx_path, Mycelia.FASTA_REGEX => ".normalized.jsonl.gz")
+        else
+            output_path = replace(fastx_path, Mycelia.FASTQ_REGEX => ".normalized.jsonl.gz")
+        end
+    end
+    return output_path
+end
+
+# Core streaming writer: one JSON object per record, with optional progress meter
+function _write_ndjson_stream(io::IO, fastx_path::AbstractString, human_readable_id::String, file_type::Symbol;
+                              show_progress::Bool,
+                              progress_every::Int,
+                              progress_desc::AbstractString,
+                              progress_output::IO)
+
+    n_processed::Int = 0
+    t0 = time()
+    p = nothing
+    if show_progress
+        p = ProgressMeter.ProgressUnknown(desc=progress_desc, dt=0.5, output=progress_output)
+    end
+
+    for record in Mycelia.open_fastx(fastx_path)
+        record_sequence = FASTX.sequence(String, record)
+
+        # Quality handling
+        record_quality = if file_type == :fastq
+            Float64.(collect(FASTX.quality_scores(record)))
+        else
+            nothing
+        end
+
+        # Compute derived fields
+        record_identifier = FASTX.identifier(record)
+        record_description = FASTX.description(record)
+        sequence_hash = create_base58_hash(record_sequence, encoded_length=16)
+        record_alphabet = join(sort(collect(Set(uppercase(record_sequence)))))
+        record_type = string(Mycelia.detect_alphabet(record_sequence))
+        mean_record_quality = (record_quality === nothing) ? nothing : Statistics.mean(record_quality)
+        median_record_quality = (record_quality === nothing) ? nothing : Statistics.median(record_quality)
+        record_length = length(record_sequence)
+
+        # Simplified hierarchical identifier without joint sequence hash
+        sequence_identifier = string(human_readable_id, "_", sequence_hash)
+        if length(sequence_identifier) > 50
+            error("NCBI identifier length limit of 50 characters exceeded: $(sequence_identifier)")
+        end
+
+        # Emit JSON in a deterministic key order via NamedTuple literal
+        obj = (
+            fastx_path = Base.basename(fastx_path),
+            human_readable_id = human_readable_id,
+            sequence_hash = sequence_hash,
+            sequence_identifier = sequence_identifier,
+            record_identifier = record_identifier,
+            record_description = record_description,
+            record_length = record_length,
+            record_alphabet = record_alphabet,
+            record_type = record_type,
+            mean_record_quality = mean_record_quality,
+            median_record_quality = median_record_quality,
+            record_quality = record_quality,
+            record_sequence = record_sequence,
+            file_type = String(file_type),
+        )
+
+        JSON.print(io, obj)
+        write(io, '\n')
+
+        # Progress
+        n_processed += 1
+        if show_progress && (n_processed % progress_every == 0)
+            elapsed = time() - t0
+            rps = elapsed > 0 ? (n_processed / elapsed) : 0.0
+            ProgressMeter.next!(p; showvalues=[
+                (:records, n_processed),
+                (:elapsed, _fmt_hms(elapsed)),
+                (:rps, round(rps, digits=2)),
+            ])
+        end
+    end
+
+    if show_progress
+        elapsed = time() - t0
+        rps = elapsed > 0 ? (n_processed / elapsed) : 0.0
+        ProgressMeter.finish!(p; showvalues=[
+            (:records, n_processed),
+            (:elapsed, _fmt_hms(elapsed)),
+            (:rps, round(rps, digits=2)),
+        ])
+    end
+
+    nothing
+end
+
+# Format seconds as HH:MM:SS
+function _fmt_hms(t::Real)
+    t ≤ 0 && return "00:00:00"
+    s = floor(Int, t)
+    h = s ÷ 3600
+    m = (s % 3600) ÷ 60
+    ss = s % 60
+    return Printf.@sprintf("%02d:%02d:%02d", h, m, ss)
+end
+
 """
     normalized_table2fastx(
         table::DataFrames.DataFrame;
@@ -13,75 +223,187 @@ Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP 
 
 # Keyword Arguments
 - `output_dir::String="."`: The directory to save the file.
-- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension).
+- `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension). Defaults to the normalized fastx identifier in the table.
 - `gzip::Bool=false`: If `true`, the output file will be GZIP compressed.
 """
 function normalized_table2fastx(
     table::DataFrames.DataFrame;
-    output_dir::String=".",
+    output_dir::AbstractString=".",
     output_basename::Union{String, Nothing}=nothing,
+    force::Bool=false,
+    verbose::Bool=false,
     gzip::Bool=false # New keyword argument for compression
 )
     # --- 1. Determine Output Format and Record Type ---
     is_fastq = !all(ismissing, table.record_quality)
-    RecordType = is_fastq ? FASTX.FASTQ.Record : FASTX.FASTA.Record
     
     # Update file extension logic to handle compression
     file_extension = is_fastq ? ".fq" : ".fna"
     if gzip
         file_extension *= ".gz"
     end
-
-    # --- 2. Construct Vector of Records ---
-    records = RecordType[]
-    sizehint!(records, nrow(table))
-
-    for row in eachrow(table)
-        if is_fastq
-            quality_integers = round.(Int, row.record_quality)
-            record = FASTX.FASTQ.Record(row.sequence_identifier, row.record_sequence, quality_integers)
+    
+    # --- 2. Determine Final Output Path ---
+    local basename
+    if isnothing(output_basename)
+        if hasproperty(table, :fastx_identifier)
+            basename = table.fastx_identifier[1]
+        elseif hasproperty(table, :genome_identifier)
+            basename = table.genome_identifier[1]
         else
-            record = FASTX.FASTA.Record(row.sequence_identifier, row.record_sequence)
+            error("Neither 'fastx_identifier' nor 'genome_identifier' columns found in the table.")
         end
-        push!(records, record)
+    else
+        basename = output_basename
     end
-
-    # --- 3. Determine Final Output Path ---
-    basename = isnothing(output_basename) ? table.genome_identifier[1] : output_basename
     final_outfile = joinpath(output_dir, basename * file_extension)
 
-    # --- 4. Call Your Existing Writer Function ---
-    if is_fastq
-        writen_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+    if !isfile(final_outfile) || force
+        # --- 3. Construct Vector of Records ---
+        RecordType = is_fastq ? FASTX.FASTQ.Record : FASTX.FASTA.Record
+        records = RecordType[]
+        sizehint!(records, DataFrames.nrow(table))
+    
+        for row in eachrow(table)
+            if is_fastq
+                quality_integers = round.(Int, row.record_quality)
+                record = FASTX.FASTQ.Record(row.sequence_identifier, row.record_sequence, quality_integers)
+            else
+                record = FASTX.FASTA.Record(row.sequence_identifier, row.record_sequence)
+            end
+            push!(records, record)
+        end
+        
+        # --- 4. Call Your Existing Writer Function ---
+        if is_fastq
+            writen_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+        else
+            writen_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+        end
+        @assert writen_outfile == final_outfile
+    
+        verbose && Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
     else
-        writen_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+        verbose && @warn "$(final_outfile) already present, use force=true to overwrite"
     end
-
-    @assert writen_outfile == final_outfile
-
-    Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
     return final_outfile
 end
 
 """
-    fastx2normalized_table(; fastx_path::String, human_readable_id::String) -> DataFrames.DataFrame
+    _extract_human_readable_id_from_fastx_path(fastx_path::String, force_truncate::Bool=false) -> String
+
+Internal function to intelligently extract a human-readable identifier from a FASTX filename.
+Handles common bioinformatics naming patterns and attempts to find the longest meaningful prefix.
+"""
+function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, force_truncate::Bool=false)
+    filename = basename(fastx_path)
+    
+    # Remove file extensions using existing regex patterns
+    base_name = if occursin(Mycelia.FASTA_REGEX, filename)
+        replace(filename, Mycelia.FASTA_REGEX => "")
+    elseif occursin(Mycelia.FASTQ_REGEX, filename) 
+        replace(filename, Mycelia.FASTQ_REGEX => "")
+    else
+        error("File '$(filename)' does not match FASTA or FASTQ naming patterns. Supported extensions: .fasta, .fna, .faa, .fa, .frn, .fastq, .fq (optionally .gz compressed)")
+    end
+    
+    # If already <= 16 characters, return as-is
+    if length(base_name) <= 16
+        return base_name
+    end
+    
+    # Try to find meaningful prefixes by splitting on common delimiters
+    delimiters = ['_', '-', ' ', '.']
+    viable_prefixes = String[]
+    
+    for delimiter in delimiters
+        if occursin(delimiter, base_name)
+            parts = split(base_name, delimiter)
+            # Build cumulative prefixes
+            current_prefix = ""
+            for part in parts
+                test_prefix = isempty(current_prefix) ? part : current_prefix * string(delimiter) * part
+                if length(test_prefix) <= 16
+                    current_prefix = test_prefix
+                    push!(viable_prefixes, current_prefix)
+                else
+                    break
+                end
+            end
+        end
+    end
+    
+    # Find the longest viable prefix
+    if !isempty(viable_prefixes)
+        longest_prefix = viable_prefixes[argmax(length.(viable_prefixes))]
+        
+        # Skip very short prefixes that aren't meaningful for common patterns
+        if length(longest_prefix) >= 3
+            # Check for common bioinformatics prefixes we want to avoid stopping at
+            meaningless_prefixes = ["GCA", "GCF", "NC", "NZ", "NW", "NT", "AC", "AE", "AF", "AY", "DQ", "EF", "EU", "FJ", "GQ", "HM", "JF", "JN", "JQ", "JX", "KC", "KF", "KJ", "KM", "KP", "KR", "KT", "KU", "KX", "KY", "MF", "MG", "MH", "MK", "MN", "MT", "MW", "MZ"]
+            
+            # If we have a short meaningless prefix, try to get more context
+            if longest_prefix in meaningless_prefixes && length(viable_prefixes) > 1
+                # Look for a longer prefix that includes more meaningful information
+                longer_prefixes = filter(p -> length(p) > length(longest_prefix) && length(p) <= 16, viable_prefixes)
+                if !isempty(longer_prefixes)
+                    longest_prefix = longer_prefixes[argmax(length.(longer_prefixes))]
+                end
+            end
+            
+            return longest_prefix
+        end
+    end
+    
+    # If no viable prefix found, either truncate with warning or error
+    if force_truncate
+        truncated = base_name[1:16]
+        @warn "Could not find meaningful identifier prefix for '$(base_name)'. Using truncated version: '$(truncated)'"
+        return truncated
+    else
+        error("Could not extract a viable identifier (≤16 chars) from filename '$(base_name)'. Consider using force_truncate=true or providing human_readable_id explicitly.")
+    end
+end
+
+"""
+    fastx2normalized_table(fastx_path::String; human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false) -> DataFrames.DataFrame
+    fastx2normalized_table(; fastx_path::String, human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false) -> DataFrames.DataFrame
 
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Reads a FASTA or FASTQ file and converts its records into a normalized `DataFrames.DataFrame` with stable, hierarchical identifiers.
 
+# Arguments (positional version)
+- `fastx_path::String`: Path to a FASTA or FASTQ file.
+
 # Keyword Arguments
 - `fastx_path::String`: Path to a FASTA or FASTQ file.
-- `human_readable_id::String`: A required, human-readable identifier for the genome/entity (max 16 characters).
+- `human_readable_id::Union{String,Nothing}`: A human-readable identifier for the genome/entity (max 16 characters). 
+  If `nothing`, attempts to extract from filename intelligently.
+- `force_truncate::Bool`: If true, truncates long identifiers to 16 characters with warning instead of erroring.
 
 # Returns
 - `DataFrames.DataFrame`: A data frame with standardized columns, including the new hierarchical identifiers.
 """
-function fastx2normalized_table(; fastx_path::String, human_readable_id::String)
+function fastx2normalized_table(fastx_path::AbstractString; human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false)
+    return fastx2normalized_table(; fastx_path=fastx_path, human_readable_id=human_readable_id, force_truncate=force_truncate)
+end
+
+function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false)
+    # --- Extract human_readable_id from filename if not provided ---
+    if isnothing(human_readable_id)
+        human_readable_id = _extract_human_readable_id_from_fastx_path(fastx_path, force_truncate)
+    end
+
     # --- Input Validation ---
     @assert isfile(fastx_path) && filesize(fastx_path) > 0 "File does not exist or is empty."
     if length(human_readable_id) > 16
-        error("Human-readable identifier cannot exceed 16 characters.")
+        if force_truncate
+            @warn "Human-readable identifier '$(human_readable_id)' exceeds 16 characters, truncating to '$(human_readable_id[1:16])'"
+            human_readable_id = human_readable_id[1:16]
+        else
+            error("Human-readable identifier '$(human_readable_id)' cannot exceed 16 characters. Use force_truncate=true to allow truncation.")
+        end
     end
 
     # --- DataFrame Initialization ---
@@ -128,18 +450,18 @@ function fastx2normalized_table(; fastx_path::String, human_readable_id::String)
 
     # --- Add New Hierarchical Identifier Columns ---
     current_columns = names(normalized_table)
-    genome_hash = generate_genome_hash(normalized_table.sequence_hash, encoded_length=16)
+    fastx_hash = generate_joint_sequence_hash(normalized_table.sequence_hash, encoded_length=16)
 
     normalized_table[!, "human_readable_id"] .= human_readable_id
-    normalized_table[!, "genome_hash"] .= genome_hash
-    normalized_table[!, "genome_identifier"] .= human_readable_id .* "_" .* genome_hash
-    normalized_table[!, "sequence_identifier"] .= normalized_table.genome_identifier .* "_" .* normalized_table.sequence_hash
+    normalized_table[!, "fastx_hash"] .= fastx_hash
+    normalized_table[!, "fastx_identifier"] .= human_readable_id .* "_" .* fastx_hash
+    normalized_table[!, "sequence_identifier"] .= normalized_table.fastx_identifier .* "_" .* normalized_table.sequence_hash
     @assert all(length.(normalized_table[!, "sequence_identifier"]) .<= 50) "NCBI identifier length limit of 50 characters exceeded."
     normalized_table[!, "fastx_path"] .= Base.basename(fastx_path)
 
     final_order = [
-        "fastx_path", "human_readable_id", "genome_hash", "sequence_hash",
-        "genome_identifier", "sequence_identifier", "record_identifier",
+        "fastx_path", "human_readable_id", "fastx_hash", "sequence_hash",
+        "fastx_identifier", "sequence_identifier", "record_identifier",
         "record_description", "record_length", "record_alphabet", "record_type",
         "mean_record_quality", "median_record_quality", "record_quality",
         "record_sequence"
@@ -148,73 +470,60 @@ function fastx2normalized_table(; fastx_path::String, human_readable_id::String)
 end
 
 """
-    create_base58_hash(data_to_hash::String, encoded_length::Int) -> String
+    create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=64, normalize_case::Bool=true) -> String
 
 Hashes a string using BLAKE3 and returns a Base58 encoded string of a
-specified approximate length.
+specified *exact* length.
 
 # Arguments
-- `data_to_hash::String`: The input data to hash (e.g., a biological sequence).
-- `encoded_length::Int`: The target length for the final Base58 encoded string.
+- `data_to_hash::AbstractString`: Input data to hash
+- `encoded_length::Int=64`: Length of the Base58 encoded output (default 64 provides ~380 bits entropy for tree-of-life scale applications)
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
 
-# Returns
-- `String`: The resulting Base58 hash string.
+# Details
+By default, sequences are normalized to uppercase before hashing to ensure
+case-insensitive hashing for biological sequences where case differences
+are typically not meaningful. The default 64-character length provides
+collision resistance suitable for massive multi-omics applications spanning
+the sequence diversity of the tree of life.
+
+This function now calls the comprehensive create_blake3_hash function.
 """
-function create_base58_hash(data_to_hash::String; encoded_length::Int=32)::String
-    if encoded_length <= 0
-        error("Invalid hash length: $encoded_length. It must be positive.")
-    end
-
-    # Calculate the number of raw bytes needed to generate a Base58 string
-    # of the target length. Each Base58 character encodes ~5.85 bits (log₂(58)).
-    # We use floor() to be conservative and ensure we don't exceed the target length.
-    bits_needed = encoded_length * log2(58)
-    raw_bytes_needed = floor(Int, bits_needed / 8)
-
-    # If the calculation results in 0 bytes, we can't generate a hash.
-    if raw_bytes_needed == 0
-        error("Cannot generate a hash for an encoded length of $encoded_length. It is too short.")
-    end
-
-    # Use BLAKE3 to generate the exact number of raw bytes needed
-    hasher = Blake3Hash.Blake3Ctx()
-    Blake3Hash.update!(hasher, data_to_hash)
-    output_buffer = Vector{UInt8}(undef, raw_bytes_needed)
-    Blake3Hash.digest(hasher, output_buffer)
-
-    # Encode the raw bytes and return the result
-    return Base58.encode(output_buffer)
+function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=64, normalize_case::Bool=true)::String
+    return create_blake3_hash(data_to_hash; encoding=:base58, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=true)
 end
 
 """
-    generate_genome_hash(sequences::Vector{String}; hash_len::Int=32) -> String
+    generate_joint_sequence_hash(sequences::Vector{String}; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
 
-Computes a single, order-independent hash for a collection of sequences (a genome).
+Computes a single, order-independent hash for a collection of sequences.
 
 This function works by hashing each sequence individually, sorting the resulting
 hashes, and then hashing the concatenated list of sorted hashes. This ensures
-that the final genome hash is stable, even if the sequences are provided in a
+that the final joint sequence hash is stable, even if the sequences are provided in a
 different order.
 
 # Arguments
 - `sequences::Vector{String}`: A vector of strings, where each string is a biological sequence.
-- `hash_len::Int=32`: The desired length for the final Base58 encoded genome hash.
+- `hash_function::Symbol=:blake3`: Hash algorithm to use (:blake3, :sha256, :sha512, :md5, :sha1, :sha3_256, :sha3_512, :crc32)
+- `encoding::Symbol=:base58`: Output encoding (:hex, :base58, :base64)
+- `encoded_length::Int=64`: The desired length for the final encoded hash (default 64 provides ~380 bits entropy)
+- `normalize_case::Bool=true`: If true, converts sequences to uppercase before hashing
+- `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
 
 # Returns
-- `String`: A single, stable Base58 hash representing the entire genome.
+- `String`: A single, stable hash representing the joint set of sequences.
 """
-function generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32)::String
+function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false)::String
     if isempty(sequences)
         error("Input sequence vector cannot be empty.")
     end
 
-    # 1. Hash each sequence individually and collect their hex representations
-    # We use hex here because it's a standard, sortable text format for hashes.
+    # 1. Hash each sequence individually using create_sequence_hash for consistency
     individual_hashes = Vector{String}(undef, length(sequences))
     for i in 1:length(sequences)
-        # Get the standard 32-byte (256-bit) raw hash for maximum uniqueness
-        raw_hash = Blake3Hash.blake3(sequences[i])
-        individual_hashes[i] = bytes2hex(raw_hash)
+        # Use create_sequence_hash with user-specified hash function and encoding
+        individual_hashes[i] = create_sequence_hash(sequences[i], hash_function=hash_function, encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
     end
 
     # 2. Sort the list of hashes. This is the key to making it order-independent!
@@ -223,11 +532,115 @@ function generate_genome_hash(sequences::Vector{String}; encoded_length::Int=32)
     # 3. Combine the sorted hashes into a single string
     combined_data = join(individual_hashes)
 
-    # 4. Hash the combined string to get the final genome hash
-    # We can use the function from our previous discussion for this final step.
-    final_genome_hash = create_base58_hash(combined_data, encoded_length=hash_len)
+    # 4. Hash the combined string to get the final joint sequence hash with same encoding length
+    # Use normalize_case=false here because we're hashing encoded strings, not biological sequences
+    final_joint_sequence_hash = create_sequence_hash(combined_data, hash_function=hash_function, encoding=encoding, encoded_length=encoded_length, normalize_case=false, allow_truncation=allow_truncation)
 
-    return final_genome_hash
+    return final_joint_sequence_hash
+end
+
+"""
+    create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false) -> String
+
+Unified biological sequence hashing function with selectable algorithms.
+
+# Arguments
+- `data_to_hash::AbstractString`: Input sequence data to hash
+- `hash_function::Symbol=:blake3`: Hash algorithm (:blake3, :sha256, :sha512, :md5, :sha1, :sha3_256, :sha3_512, :crc32)
+- `encoding::Symbol=:base58`: Output encoding (:hex, :base58, :base64)
+- `encoded_length::Union{Int,Missing}=missing`: Desired output length (uses function defaults if missing)
+- `normalize_case::Bool=true`: If true, converts input to uppercase before hashing
+- `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
+
+# Returns
+- `String`: Hash in specified encoding and length
+
+# Details
+This is the recommended function for biological sequence hashing, defaulting to
+BLAKE3 with Base58 encoding for optimal collision resistance and compactness.
+When encoded_length=missing, each hash function uses its optimal default length.
+"""
+function create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+    # Validate input - empty sequences are not valid in biological context
+    if isempty(data_to_hash)
+        error("Empty sequences are not valid for biological sequence hashing")
+    end
+    if hash_function == :blake3
+        # For Blake3, pass through encoded_length (will use 64 as default if missing)
+        if ismissing(encoded_length)
+            # return create_blake3_hash(data_to_hash; encoding=encoding, encoded_length=64, normalize_case=normalize_case, allow_truncation=allow_truncation)
+            return create_blake3_hash(data_to_hash; encoding=encoding, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        else
+            return create_blake3_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        end
+    elseif hash_function == :sha256
+        return create_sha256_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha512
+        return create_sha512_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :md5
+        return create_md5_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha1
+        return create_sha1_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha3_256
+        return create_sha3_256_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :sha3_512
+        return create_sha3_512_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    elseif hash_function == :crc32
+        return create_crc32_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+    else
+        error("Unsupported hash function: $hash_function")
+    end
+end
+
+"""
+    create_sequence_hash(seq::BioSequences.LongSequence; kwargs...) -> String
+
+Convenience wrapper for hashing BioSequence objects directly.
+Converts the BioSequence to string and passes all keyword arguments to create_sequence_hash.
+
+# Arguments
+- `seq::BioSequences.LongSequence`: BioSequence object (DNA, RNA, or amino acid)
+- `kwargs...`: All keyword arguments supported by create_sequence_hash
+
+# Examples
+```julia
+dna_seq = BioSequences.dna"ATCGATCGATCG"
+hash = create_sequence_hash(dna_seq, encoded_length=32)
+
+rna_seq = BioSequences.rna"AUCGAUCGAUCG" 
+hash = create_sequence_hash(rna_seq, hash_function=:sha256)
+
+aa_seq = BioSequences.aa"MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWERVMGDGERQFSTLKSTVEAIWAGIKATEAAVSEEFGLAPFLPDQIHFVHSQELLSRYPDLDAKGRERAIAKDLGAVFLVGIGGKLSDGHRHDVRAPDYDDWUAFGVLLWEIACDESGLAGGWEKGQEGAVDASAEVFRHHVMDSSEQGGGGLLAEGWQQQQQQQQQDQDQSQSSQGWQQQQQQGGWAWQGWQSQQAEGQGWAGSAQAEGQAAEGQAAGWAGSAQAEGQAAGSAQWAGGGGWAGAGGWAGSAQWAGGGGWAGAGMGWAGAGGWAGSAQWAGGGGWAGAGMGWAGAGGWAGSQQQWAQGQQMVAEPGFVGQE"
+hash = create_sequence_hash(aa_seq, encoded_length=64)
+```
+"""
+function create_sequence_hash(seq::BioSequences.LongSequence; kwargs...)::String
+    return create_sequence_hash(string(seq); kwargs...)
+end
+
+"""
+    create_sequence_hash(kmer::Kmers.Kmer; kwargs...) -> String
+
+Convenience wrapper for hashing k-mer objects directly.
+Converts the k-mer to string and passes all keyword arguments to create_sequence_hash.
+
+# Arguments  
+- `kmer::Kmers.Kmer`: k-mer object (DNAKmer, RNAKmer, AAKmer)
+- `kwargs...`: All keyword arguments supported by create_sequence_hash
+
+# Examples
+```julia
+import Kmers, BioSequences
+dna_seq = BioSequences.LongDNA{4}("ATCGATCG")
+kmer = Kmers.DNAKmer{8}(dna_seq)
+hash = create_sequence_hash(kmer, encoded_length=16)
+
+# With different parameters
+hash = create_sequence_hash(kmer, hash_function=:md5, encoding=:hex)
+```
+"""
+function create_sequence_hash(kmer::Kmers.Kmer; kwargs...)::String
+    return create_sequence_hash(string(kmer); kwargs...)
 end
 
 """
@@ -475,47 +888,6 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
     return results_table
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and FastQC.
-
-# # Arguments
-# - `outdir::String`: Output directory containing input FASTQ files
-# - `identifier::String`: Prefix for input/output filenames
-
-# # Input files
-# Expects paired FASTQ files in `outdir` named:
-# - `{identifier}_1.fastq.gz` (forward reads)
-# - `{identifier}_2.fastq.gz` (reverse reads)
-
-# # Output files
-# Creates trimmed reads in `outdir/trim_galore/`:
-# - `{identifier}_1_val_1.fq.gz` (trimmed forward reads)
-# - `{identifier}_2_val_2.fq.gz` (trimmed reverse reads)
-
-# # Dependencies
-# Requires trim_galore conda environment:
-# """
-# function trim_galore(;outdir="", identifier="")
-    
-#     trim_galore_dir = joinpath(outdir, "trim_galore")
-    
-#     forward_reads = joinpath(outdir, "$(identifier)_1.fastq.gz")
-#     reverse_reads = joinpath(outdir, "$(identifier)_2.fastq.gz")
-    
-#     trimmed_forward_reads = joinpath(trim_galore_dir, "$(identifier)_1_val_1.fq.gz")
-#     trimmed_reverse_reads = joinpath(trim_galore_dir, "$(identifier)_2_val_2.fq.gz")
-    
-#     # mamba create -n trim_galore -c bioconda trim_galore
-#     if !isfile(trimmed_forward_reads) && !isfile(trimmed_reverse_reads)
-#         cmd = `conda run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
-#         run(cmd)
-#     else
-#         @info "$(trimmed_forward_reads) & $(trimmed_reverse_reads) already present"
-#     end
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -530,10 +902,10 @@ Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and Fas
 - `Tuple{String, String}`: Paths to trimmed forward and reverse read files
 
 # Dependencies
-Requires trim_galore conda environment:
-- `mamba create -n trim_galore -c bioconda trim_galore`
+Requires trim_galore conda environment
 """
 function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd())
+    Mycelia.add_bioconda_env("trim-galore")
     # Create output directory if it doesn't exist
     trim_galore_dir = mkpath(joinpath(outdir, "trim_galore"))
     
@@ -546,7 +918,7 @@ function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdi
     trimmed_reverse = joinpath(trim_galore_dir, replace(reverse_base, Mycelia.FASTQ_REGEX => "_val_2.fq.gz"))
     
     if !isfile(trimmed_forward) && !isfile(trimmed_reverse)
-        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim_galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
         run(cmd)
     else
         @info "$(trimmed_forward) & $(trimmed_reverse) already present"
@@ -558,21 +930,37 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Perform quality control (QC) filtering and trimming on short-read FASTQ files using fastp.
+Perform quality control (QC) filtering and trimming on paired-end short-read FASTQ files using fastp.
 
 # Arguments
-- `in_fastq::String`: Path to the input FASTQ file.
-- `out_fastq::String`: Path to the output FASTQ file.
-- `adapter_seq::String`: Adapter sequence to trim.
-- `quality_threshold::Int`: Minimum phred score for trimming (default 20).
-- `min_length::Int`: Minimum read length to retain (default 50).
+- `forward_reads::String`: Path to the forward (R1) FASTQ file.
+- `reverse_reads::String`: Path to the reverse (R2) FASTQ file.
+- `out_forward::String`: Output path for filtered forward reads (auto-generated if not specified).
+- `out_reverse::String`: Output path for filtered reverse reads (auto-generated if not specified).
+- `report_title::String`: Title for the HTML/JSON report (auto-generated if not specified).
+- `html::String`: Output path for HTML report (auto-generated if not specified).
+- `json::String`: Output path for JSON report (auto-generated if not specified).
+- `enable_dedup::Union{Bool,Nothing}`: Control deduplication behavior. If `true`, forces deduplication with memory-aware settings. If `false`, disables deduplication. If `nothing` (default), uses automatic logic based on file size and available memory.
 
 # Returns
-- `String`: Path to the filtered and trimmed FASTQ file.
+- Named tuple containing paths to: `(out_forward, out_reverse, json, html)`
 
 # Details
-This function uses fastp to remove adapter contamination, trim low‐quality bases from the 3′ end,
-and discard reads shorter than `min_length`. It’s a simple wrapper that executes the external fastp command.
+This function uses fastp to perform quality control, adapter trimming, and optional deduplication on paired-end reads.
+
+## Smart Deduplication Logic
+The function includes intelligent memory management for deduplication:
+
+- **User Control**: Set `enable_dedup=true` to force deduplication, or `enable_dedup=false` to disable it.
+- **Automatic Mode**: When `enable_dedup=nothing` (default), the function:
+  - Skips deduplication for small files (< 100MB total) for efficiency
+  - For larger files, enables deduplication if sufficient memory is available
+- **Memory-Aware Settings**: Automatically adjusts fastp's `--dup_calc_accuracy` based on available system memory:
+  - Default: Level 3 (4GB memory) if sufficient memory available
+  - Fallback: Level 2 (2GB memory) or Level 1 (1GB memory) if needed
+  - Disables deduplication if < 1GB memory available
+
+This ensures the process won't be killed due to out-of-memory conditions while maintaining deduplication benefits when feasible.
 """
 function qc_filter_short_reads_fastp(;
         forward_reads::String,
@@ -581,7 +969,8 @@ function qc_filter_short_reads_fastp(;
         out_reverse::String=replace(reverse_reads, Mycelia.FASTQ_REGEX => ".fastp.2.fq.gz"),
         report_title::String="$(forward_reads) $(reverse_reads) fastp report",
         html::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.html",
-        json::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.json"
+        json::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.json",
+        enable_dedup::Union{Bool,Nothing}=nothing
     )
     # usage: fastp -i <in1> -o <out1> [-I <in1> -O <out2>] [options...]
     # options:
@@ -704,6 +1093,66 @@ function qc_filter_short_reads_fastp(;
     #   -?, --help                         print this message
     if !isfile(out_forward) || !isfile(out_reverse) || !isfile(json) || !isfile(html)
         Mycelia.add_bioconda_env("fastp")
+        
+        ## Smart deduplication logic based on file size and available memory
+        dedup_args = String[]
+        
+        if enable_dedup === false
+            ## User explicitly disabled dedup - don't add any dedup arguments
+            @info "Deduplication explicitly disabled by user"
+        elseif enable_dedup === true
+            ## User explicitly enabled dedup - use default settings but check memory
+            file_size_bytes = filesize(forward_reads) + filesize(reverse_reads)
+            available_memory = Sys.free_memory()
+            
+            ## fastp dedup accuracy levels: 1G, 2G, 4G, 8G, 16G, 24G (levels 1-6)
+            ## Default is level 3 (4GB) for dedup mode
+            dedup_memory_gb = 4
+            dedup_memory_bytes = dedup_memory_gb * 1024^3
+            
+            if dedup_memory_bytes > available_memory
+                @warn "Not enough memory for default deduplication (need $(Base.format_bytes(dedup_memory_bytes)), have $(Base.format_bytes(available_memory))). Using lower accuracy level."
+                ## Try progressively lower accuracy levels
+                if available_memory >= 2 * 1024^3  ## 2GB available
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "2")
+                    @info "Using dedup accuracy level 2 (2GB memory)"
+                elseif available_memory >= 1024^3  ## 1GB available
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "1")
+                    @info "Using dedup accuracy level 1 (1GB memory)"
+                else
+                    @warn "Insufficient memory for deduplication (need at least 1GB). Disabling deduplication."
+                end
+            else
+                push!(dedup_args, "--dedup")
+                @info "Using default deduplication (accuracy level 3, 4GB memory)"
+            end
+        else
+            ## enable_dedup is nothing - use automatic logic based on file size and memory
+            file_size_bytes = filesize(forward_reads) + filesize(reverse_reads)
+            available_memory = Sys.free_memory()
+            
+            ## Heuristic: if files are small (< 100MB total), dedup is probably not worth the memory cost
+            if file_size_bytes < 100 * 1024^2
+                @info "Small input files ($(Base.format_bytes(file_size_bytes))). Skipping deduplication for efficiency."
+            else
+                ## For larger files, check if we have enough memory for dedup
+                dedup_memory_bytes = 4 * 1024^3  ## Default level 3 needs 4GB
+                
+                if dedup_memory_bytes <= available_memory
+                    push!(dedup_args, "--dedup")
+                    @info "Enabling deduplication with default settings (4GB memory, $(Base.format_bytes(available_memory)) available)"
+                elseif available_memory >= 2 * 1024^3
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "2")
+                    @info "Enabling deduplication with reduced accuracy (2GB memory, $(Base.format_bytes(available_memory)) available)"
+                elseif available_memory >= 1024^3
+                    push!(dedup_args, "--dedup", "--dup_calc_accuracy", "1")
+                    @info "Enabling deduplication with minimal accuracy (1GB memory, $(Base.format_bytes(available_memory)) available)"
+                else
+                    @warn "Insufficient memory for deduplication (need at least 1GB, have $(Base.format_bytes(available_memory))). Disabling deduplication."
+                end
+            end
+        end
+        
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastp fastp
                 --in1 $(forward_reads)
                 --in2 $(reverse_reads)
@@ -712,7 +1161,7 @@ function qc_filter_short_reads_fastp(;
                 --json $(json)
                 --html $(html)
                 --report_title $(report_title)
-                --dedup`
+                $(dedup_args)`
         run(cmd)
     else
         @show isfile(out_forward)
@@ -812,38 +1261,56 @@ function qc_filter_long_reads_filtlong(;
     return out_fastq
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# Perform QC filtering on long-read FASTQ files using chopper.
+Perform QC filtering on long-read FASTQ files using chopper.
 
-# # Arguments
-# - `in_fastq::String`: Path to the input FASTQ file.
-# - `out_fastq::String`: Path to the output FASTQ file.
-# - `quality_threshold::Int`: Minimum average quality to retain a read (default 10).
-# - `min_length::Int`: Minimum read length (default 1000).
+# Arguments
+- `in_fastq::String`: Path to the input FASTQ file.
+- `out_fastq::String`: Path to the output FASTQ file (optional, auto-generated if not provided).
+- `quality_threshold::Int`: Minimum average quality to retain a read (default 20).
+- `min_length::Int`: Minimum read length (default 1000).
 
-# # Returns
-# - `String`: Path to the filtered FASTQ file.
+# Returns
+- `String`: Path to the filtered FASTQ file.
 
-# # Details
-# This function uses chopper to discard long reads that do not meet the minimum quality or length thresholds.
-# It is intended for Oxford Nanopore or similar long-read datasets.
+# Details
+This function uses chopper to discard long reads that do not meet the minimum quality or length thresholds.
+It is intended for Oxford Nanopore or similar long-read datasets.
 
-# # Dependencies
-# Requires chopper to be installed via conda
-# """
-# function qc_filter_long_reads_chopper(in_fastq::String, out_fastq::String; quality_threshold::Int=20, min_length::Int=1000)
-#     # chopper reads from STDIN and writes to STDOUT, so we pipe the file
-#     Mycelia.add_bioconda_env("chopper")
-#     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n chopper chopper --input (in_fastq) --quality $(quality_threshold) --minlength $(min_length)`
-#     p = pipeline(`cat $(in_fastq)`, cmd)
-#     , out_fastq)
-#     open(out_fastq, "w") do outf
-#         run(pipeline(`cat $(in_fastq)`, cmd; stdout=outf))
-#     end
-#     return out_fastq
-# end
+# Dependencies
+Requires chopper to be installed via conda
+"""
+function qc_filter_long_reads_chopper(;
+        in_fastq::String,
+        out_fastq::String = replace(in_fastq, Mycelia.FASTQ_REGEX => ".chopper.fq.gz"),
+        quality_threshold::Int = 20,
+        min_length::Int = 1000
+    )
+    if !isfile(out_fastq)
+        Mycelia.add_bioconda_env("chopper")
+        # chopper reads from STDIN and writes to STDOUT, so we pipe the file
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n chopper chopper --quality $(quality_threshold) --minlength $(min_length)`
+        
+        # Handle both compressed and uncompressed input files
+        input_cmd = if endswith(in_fastq, ".gz")
+            `zcat $(in_fastq)`
+        else
+            `cat $(in_fastq)`
+        end
+        
+        # Create pipeline: input file -> chopper -> gzip -> output
+        pipeline_cmd = pipeline(
+            input_cmd,
+            cmd,
+            `gzip`
+        )
+        
+        run(pipeline(pipeline_cmd, out_fastq))
+    end
+    return out_fastq
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1014,6 +1481,7 @@ function merge_fasta_files(;fasta_files, fasta_file)
                 end
             end
         end
+        close(fastx_io)
     end
     @info "$(length(identifiers)) records merged..."
     return fasta_file
@@ -1259,7 +1727,7 @@ Calculate the total size (in bases) of all sequences in a FASTA file.
 # Returns
 - `Int`: Sum of lengths of all sequences in the FASTA file
 """
-function fasta_genome_size(fasta_file)
+function total_fasta_size(fasta_file)
     return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
 end
 
