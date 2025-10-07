@@ -1,82 +1,100 @@
-# DNA K-mer Graph - DoubleStrand Mode Test
+# DNA K-mer Doublestrand (Canonical) Graph Test
 #
-# Run with: julia --project=. -e 'include("test/4_assembly/dna_kmer_doublestrand_test.jl")'
+# Tests for canonical k-mer graph construction where forward and reverse
+# complement k-mers are merged into canonical representation.
+#
+# Run with: julia --project=. test/4_assembly/dna_kmer_doublestrand_test.jl
 
 import Test
 import Mycelia
 import BioSequences
 import FASTX
 import Kmers
-import MetaGraphsNext
 
-Test.@testset "DNA K-mer DoubleStrand Graph" begin
-    # Test data
-    test_dna = BioSequences.dna"ATCGATCG"
-    reads = [FASTX.FASTA.Record("test", test_dna)]
+Test.@testset "DNA K-mer Doublestrand Graph" begin
 
-    # Build graph
-    graph = Mycelia.build_kmer_graph_next(Kmers.DNAKmer{3}, reads; graph_mode=Mycelia.DoubleStrand)
+    Test.@testset "Canonical K-mer Merging - Basic" begin
+        # Read with ATG and its RC CAT
+        seq1 = "ATGCAT"
+        record = FASTX.FASTA.Record("read_001", seq1)
 
-    # Structure validation - canonicalization reduces vertex count
-    vertices = collect(MetaGraphsNext.labels(graph))
-    Test.@test length(vertices) == 2  # Canonical k-mers
-    Test.@test MetaGraphsNext.ne(graph) == 4
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
 
-    # Coverage validation
-    for vertex_label in vertices
-        vertex_data = graph[vertex_label]
-        Test.@test !isempty(vertex_data.coverage)
+        # Canonical form of ATG is ATG (ATG < CAT lexicographically)
+        # Canonical form of CAT is ATG
+        # So we should have fewer vertices than singlestrand
 
-        for cov_entry in vertex_data.coverage
-            obs_id, pos, strand = cov_entry
-            Test.@test obs_id isa Int
-            Test.@test pos isa Int
-            Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
-        end
+        # In "ATGCAT": ATG, TGC, GCA, CAT
+        # Canonical: ATG (for ATG and CAT), GCA (for TGC and GCA)
+        Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2
     end
 
-    # Verify both orientations are tracked
-    found_both_orientations = false
-    for vertex_label in vertices
-        vertex_data = graph[vertex_label]
-        strands = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-        if Mycelia.Forward in strands && Mycelia.Reverse in strands
-            found_both_orientations = true
-            break
-        end
-    end
-    @info "Found both orientations in DoubleStrand mode: $found_both_orientations"
+    Test.@testset "Evidence Merging from Both Strands" begin
+        # Forward read: ATGC
+        record1 = FASTX.FASTA.Record("read_fwd", "ATGC")
+        # Reverse read: GCAT (RC of ATGC)
+        record2 = FASTX.FASTA.Record("read_rev", "GCAT")
 
-    # Path reconstruction
-    paths = Mycelia.find_eulerian_paths_next(graph)
-    Test.@test !isempty(paths)
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record1, record2], 3; dataset_id="test")
 
-    # Verify we can reconstruct sequences
-    reconstruction_success = false
-    for path_vector in paths
-        if !isempty(path_vector)
-            try
-                vertex_type = typeof(first(path_vector))
-                walk_steps = Mycelia.WalkStep{vertex_type}[]
+        # Both reads should contribute to canonical k-mers
+        # Check that observation count reflects both strands
+        canon_atg = BioSequences.canonical(Kmers.DNAKmer{3}("ATG"))
+        count = Mycelia.Rhizomorph.get_vertex_observation_count(graph, canon_atg)
 
-                for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
-                    push!(walk_steps, step)
-                end
-
-                graph_path = Mycelia.GraphPath(walk_steps)
-                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
-
-                if reconstructed !== nothing
-                    reconstruction_success = true
-                    @info "Successfully reconstructed: $(typeof(reconstructed)) of length $(length(reconstructed))"
-                    break
-                end
-            catch e
-                @warn "Reconstruction failed: $e"
-            end
-        end
+        # Should have 2 observations (one from each read)
+        Test.@test count == 2
     end
 
-    Test.@test reconstruction_success
+    Test.@testset "Strand Evidence is Preserved" begin
+        record = FASTX.FASTA.Record("read_001", "ATGC")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+
+        canon_atg = BioSequences.canonical(Kmers.DNAKmer{3}("ATG"))
+        vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, canon_atg)
+
+        # Should have evidence with Forward strand
+        evidence_set = vertex_data.evidence["test"]["read_001"]
+        Test.@test length(evidence_set) >= 1
+
+        # At least one evidence entry should be Forward
+        has_forward = any(e -> e.strand == Mycelia.Rhizomorph.Forward, evidence_set)
+        Test.@test has_forward
+    end
+
+    Test.@testset "Palindromic K-mers" begin
+        # Palindromic k-mer: GCGC has RC = GCGC
+        record = FASTX.FASTA.Record("read_001", "GCGCGC")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 4; dataset_id="test")
+
+        kmer = Kmers.DNAKmer{4}("GCGC")
+        canon = BioSequences.canonical(kmer)
+
+        Test.@test Mycelia.Rhizomorph.has_vertex(graph, canon)
+        # GCGCGC contains: GCGC (palindrome), CGCG (palindrome), GCGC (duplicate)
+        # Both are palindromes so they are their own canonical forms
+        Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2  # GCGC and CGCG
+    end
+
+    Test.@testset "Graph Query Functions Work on Doublestrand" begin
+        record = FASTX.FASTA.Record("read_001", "ATGCGATCG")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+
+        # Query functions should work
+        sources = Mycelia.Rhizomorph.get_all_sources(graph)
+
+        # In doublestrand graphs, RC edges can create cycles, so there may not be sinks
+        # Just verify that query functions work without error
+        Test.@test length(sources) > 0
+        Test.@test Mycelia.Rhizomorph.vertex_count(graph) > 0
+    end
+
+    Test.@testset "AA Sequences Rejected for Doublestrand" begin
+        record = FASTX.FASTA.Record("protein_001", "MKVLW")
+
+        # AA sequences don't have reverse complement
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3)
+    end
 end
+
+println("✓ DNA doublestrand k-mer graph tests completed")
