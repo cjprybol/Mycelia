@@ -583,7 +583,7 @@ function run_pgap(;
     as_string::Bool = false,
     force::Bool = false,
     threads::Int = Sys.CPU_THREADS,
-    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+    prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
     min_seq_length::Int = 200,
     filter_short::Bool = true,
     ignore_all_errors::Bool = false,
@@ -721,9 +721,9 @@ The taxonomy check accepts:
 
 By default, this uses the same output directory as the full PGAP annotation (_pgap suffix), allowing
 seamless reuse of existing taxonomy check results from previous annotation runs. If the taxonomy
-report already exists, it will be reused. Unlike the full annotation function, this does not support
-force=true to avoid accidentally removing full annotation results. To re-run, manually delete the
-specific taxonomy report file(s).
+report already exists, it will be reused. If the output directory exists but lacks the taxonomy
+report, PGAP will be run with a temporary output directory and the taxonomy files will be moved
+to the final location.
 
 Arguments:
 - `fasta::AbstractString`: Input FASTA file (used to calculate ANI for taxonomy validation).
@@ -734,8 +734,7 @@ Arguments:
 - `prefix`: Prefix for output files. Defaults to input filename without extension.
 
 Returns:
-- `String`: Path to `outdir` when `as_string=false`, or the bash command string when `as_string=true`.
-  The main output file is `<prefix>ani-tax-report.txt` containing taxonomy validation results.
+- `NamedTuple`: Contains `outdir`, `txt_report`, and `xml_report` paths.
 """
 function run_pgap_taxonomy_check(;
     fasta::AbstractString,
@@ -743,7 +742,7 @@ function run_pgap_taxonomy_check(;
     pgap_dir = joinpath(homedir(), "workspace", "pgap"),
     outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
     as_string::Bool = false,
-    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+    prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
 )
     # Expected output from taxonomy check
     tax_report = joinpath(outdir, "$(prefix)ani-tax-report.txt")
@@ -752,7 +751,7 @@ function run_pgap_taxonomy_check(;
     # Check if taxonomy report already exists
     if isfile(tax_report)
         @info "Detected existing PGAP taxonomy report at $tax_report; reusing results"
-        return outdir
+        return (outdir = outdir, txt_report = tax_report, xml_report = tax_report_xml)
     end
     
     # Ensure PGAP availability
@@ -766,38 +765,316 @@ function run_pgap_taxonomy_check(;
         @time Base.run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
     end
 
-    # Create output directory if it doesn't exist
-    if !isdir(outdir)
-        mkpath(outdir)
-    end
-
     # If only returning the command string, return immediately
     if as_string
-        return "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --taxcheck-only --output $(outdir) --genome $(fasta) --organism '$(organism)' --prefix $(prefix)"
+        return "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --report-usage-true --taxcheck-only --output $(outdir) --genome $(fasta) --organism '$(organism)' --prefix $(prefix)"
     end
 
-    # Construct and run the taxonomy check command
-    cmd = `python3 $(pgap_py_script) --taxcheck-only --output $(outdir) --genome $(fasta) --organism $(organism) --prefix $(prefix)`
+    # Build temporary uncompressed FASTA for PGAP
+    temp_fasta::Union{Nothing,String} = nothing
+    temp_outdir::Union{Nothing,String} = nothing
     
     try
-        @time Base.run(setenv(cmd, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-        return outdir
-    catch e
-        # Only clean up the specific taxonomy files we tried to create, not the entire directory
-        if isfile(tax_report)
-            try
-                rm(tax_report)
-            catch
-            end
+        reader = Mycelia.open_fastx(fasta)
+        records = FASTX.FASTA.Record[]
+        for record in reader
+            # Make an owned copy (iterator may reuse buffers)
+            push!(records, copy(record))
         end
-        if isfile(tax_report_xml)
-            try
-                rm(tax_report_xml)
-            catch
-            end
+        if isempty(records)
+            throw(ArgumentError("No sequences found in FASTA file."))
         end
-        rethrow(e)
+        temp_fasta = Mycelia.write_fasta(; outfile = tempname() * ".fna", records = records, gzip = false)
+
+        # PGAP won't write to an existing directory, so we need to handle this
+        # If outdir exists, use a temporary directory and move the results
+        use_temp_dir = isdir(outdir)
+        actual_outdir = if use_temp_dir
+            # Create a temporary directory path without actually creating the directory
+            temp_base = tempname()
+            # Remove it if it exists
+            if isdir(temp_base)
+                rm(temp_base, recursive=true)
+            end
+            temp_outdir = temp_base
+            temp_base
+        else
+            outdir
+        end
+        
+        # Construct and run the taxonomy check command
+        cmd = `python3 $(pgap_py_script) --report-usage-true --taxcheck-only --output $(actual_outdir) --genome $(temp_fasta) --organism $(organism) --prefix $(prefix)`
+        
+        temp_tax_report = joinpath(actual_outdir, "$(prefix)ani-tax-report.txt")
+        temp_tax_report_xml = joinpath(actual_outdir, "$(prefix)ani-tax-report.xml")
+        
+        try
+            @time Base.run(setenv(cmd, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+            
+            # If we used a temporary directory, move the taxonomy files to the final location
+            if use_temp_dir
+                if !isdir(outdir)
+                    mkpath(outdir)
+                end
+                if isfile(temp_tax_report)
+                    mv(temp_tax_report, tax_report, force=true)
+                end
+                if isfile(temp_tax_report_xml)
+                    mv(temp_tax_report_xml, tax_report_xml, force=true)
+                end
+                # Clean up temporary directory
+                if !isnothing(temp_outdir) && isdir(temp_outdir)
+                    rm(temp_outdir, recursive=true, force=true)
+                end
+            end
+            
+            return (outdir = outdir, txt_report = tax_report, xml_report = tax_report_xml)
+        catch e
+            # Clean up temporary directory if it exists
+            if !isnothing(temp_outdir) && isdir(temp_outdir)
+                try
+                    rm(temp_outdir, recursive=true, force=true)
+                catch
+                end
+            end
+            # Only clean up the specific taxonomy files if we wrote directly to outdir
+            if !use_temp_dir
+                if isfile(tax_report)
+                    try
+                        rm(tax_report)
+                    catch
+                    end
+                end
+                if isfile(tax_report_xml)
+                    try
+                        rm(tax_report_xml)
+                    catch
+                    end
+                end
+            end
+            rethrow(e)
+        end
+    finally
+        if !isnothing(temp_fasta) && isfile(temp_fasta)
+            rm(temp_fasta)
+        end
     end
+end
+
+"""
+    PGAPTaxonomyMatch
+
+Represents a single ANI match from a PGAP taxonomy report.
+
+Fields:
+- `ani::Float64`: ANI value between the query assembly and this type
+- `query_coverage::Float64`: Percentage of query assembly covered
+- `subject_coverage::Float64`: Percentage of subject (type) assembly covered
+- `new_seq::Int`: Count of bases best assigned to this type assembly
+- `cntm_seq::Int`: Portion of new_seq allocated for contamination evaluation
+- `assembly_id::Int`: Release ID of the type assembly
+- `flags::String`: Type flags (C=contaminant, E=effectively published, T=trusted species)
+- `organism::String`: Organism name of this type assembly
+- `assembly_accession::String`: Assembly accession
+- `assembly_name::String`: Assembly name
+"""
+struct PGAPTaxonomyMatch
+    ani::Float64
+    query_coverage::Float64
+    subject_coverage::Float64
+    new_seq::Int
+    cntm_seq::Int
+    assembly_id::Int
+    flags::String
+    organism::String
+    assembly_accession::String
+    assembly_name::String
+end
+
+"""
+    PGAPTaxonomyReport
+
+Parsed results from a PGAP taxonomy check report.
+
+Fields:
+- `assembly_name::String`: Name of the query assembly
+- `submitted_organism::String`: Organism name as submitted
+- `submitted_taxid::Union{Int,Nothing}`: Taxonomic ID of submitted organism
+- `submitted_rank::Union{String,Nothing}`: Taxonomic rank of submitted organism
+- `submitted_lineage::Union{String,Nothing}`: Full lineage of submitted organism
+- `predicted_organism::Union{String,Nothing}`: Predicted organism name (if different)
+- `predicted_taxid::Union{Int,Nothing}`: Taxonomic ID of predicted organism
+- `predicted_rank::Union{String,Nothing}`: Taxonomic rank of predicted organism
+- `predicted_lineage::Union{String,Nothing}`: Full lineage of predicted organism
+- `best_match_organism::Union{String,Nothing}`: Best match organism (for CONFIRMED genus-level submissions)
+- `best_match_taxid::Union{Int,Nothing}`: Best match taxonomic ID
+- `best_match_rank::Union{String,Nothing}`: Best match taxonomic rank
+- `best_match_lineage::Union{String,Nothing}`: Best match lineage
+- `has_type::Bool`: Whether submitted organism has a type assembly
+- `status::String`: One of CONFIRMED, MISASSIGNED, INCONCLUSIVE, or CONTAMINATED
+- `confidence::String`: Confidence level (HIGH, MEDIUM, LOW)
+- `matches::Vector{PGAPTaxonomyMatch}`: All ANI matches sorted by relevance
+"""
+struct PGAPTaxonomyReport
+    assembly_name::String
+    submitted_organism::String
+    submitted_taxid::Union{Int,Nothing}
+    submitted_rank::Union{String,Nothing}
+    submitted_lineage::Union{String,Nothing}
+    predicted_organism::Union{String,Nothing}
+    predicted_taxid::Union{Int,Nothing}
+    predicted_rank::Union{String,Nothing}
+    predicted_lineage::Union{String,Nothing}
+    best_match_organism::Union{String,Nothing}
+    best_match_taxid::Union{Int,Nothing}
+    best_match_rank::Union{String,Nothing}
+    best_match_lineage::Union{String,Nothing}
+    has_type::Bool
+    status::String
+    confidence::String
+    matches::Vector{PGAPTaxonomyMatch}
+end
+
+"""
+    parse_pgap_taxonomy_report(report_file::AbstractString)
+
+Parse a PGAP taxonomy check report file into a structured format.
+
+Arguments:
+- `report_file::AbstractString`: Path to the ani-tax-report.txt file
+
+Returns:
+- `PGAPTaxonomyReport`: Structured representation of the taxonomy check results
+"""
+function parse_pgap_taxonomy_report(report_file::AbstractString)
+    lines = readlines(report_file)
+    
+    # Initialize variables
+    assembly_name = ""
+    submitted_organism = ""
+    submitted_taxid = nothing
+    submitted_rank = nothing
+    submitted_lineage = nothing
+    predicted_organism = nothing
+    predicted_taxid = nothing
+    predicted_rank = nothing
+    predicted_lineage = nothing
+    best_match_organism = nothing
+    best_match_taxid = nothing
+    best_match_rank = nothing
+    best_match_lineage = nothing
+    has_type = false
+    status = ""
+    confidence = ""
+    matches = PGAPTaxonomyMatch[]
+    
+    in_table = false
+    
+    for line in lines
+        line = strip(line)
+        
+        # Skip empty lines
+        if isempty(line)
+            continue
+        end
+        
+        # Parse header information
+        if startswith(line, "ANI report for assembly:")
+            assembly_name = strip(split(line, ":", limit=2)[2])
+        elseif startswith(line, "Submitted organism:")
+            # Parse: Organism name (taxid = X, rank = Y, lineage = Z)
+            parts = split(line, ":", limit=2)[2]
+            if contains(parts, "(taxid")
+                org_match = match(r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$", strip(parts))
+                if !isnothing(org_match)
+                    submitted_organism = strip(org_match.captures[1])
+                    submitted_taxid = parse(Int, org_match.captures[2])
+                    submitted_rank = strip(org_match.captures[3])
+                    submitted_lineage = strip(org_match.captures[4])
+                end
+            else
+                submitted_organism = strip(parts)
+            end
+        elseif startswith(line, "Predicted organism:")
+            parts = split(line, ":", limit=2)[2]
+            if contains(parts, "(taxid")
+                org_match = match(r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$", strip(parts))
+                if !isnothing(org_match)
+                    predicted_organism = strip(org_match.captures[1])
+                    predicted_taxid = parse(Int, org_match.captures[2])
+                    predicted_rank = strip(org_match.captures[3])
+                    predicted_lineage = strip(org_match.captures[4])
+                end
+            end
+        elseif startswith(line, "Best match:")
+            parts = split(line, ":", limit=2)[2]
+            if contains(parts, "(taxid")
+                org_match = match(r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$", strip(parts))
+                if !isnothing(org_match)
+                    best_match_organism = strip(org_match.captures[1])
+                    best_match_taxid = parse(Int, org_match.captures[2])
+                    best_match_rank = strip(org_match.captures[3])
+                    best_match_lineage = strip(org_match.captures[4])
+                end
+            end
+        elseif startswith(line, "Submitted organism has type:")
+            has_type = contains(lowercase(line), "yes")
+        elseif startswith(line, "Status:")
+            status = strip(split(line, ":", limit=2)[2])
+        elseif startswith(line, "Confidence:")
+            confidence = strip(split(line, ":", limit=2)[2])
+        elseif startswith(line, "ANI") && contains(line, "(Coverages)")
+            # Start of table header
+            in_table = true
+            continue
+        elseif startswith(line, "---")
+            # Table separator line
+            continue
+        elseif startswith(line, "Table legend:")
+            # End of table
+            in_table = false
+            continue
+        elseif in_table
+            # Parse match lines
+            # Format: ANI (query_cov subject_cov) NewSeq CntmSeq Assembly Flg Organism (accession, name)
+            match_regex = r"^\s*(\d+\.\d+)\s+\(\s*(\d+\.\d+)\s+(\d+\.\d+)\)\s+(\d+)\s+(\d+)\s+(\d+)\s+([A-Z]*)\s+(.+?)\s+\(([^,]+),\s*(.+)\)\s*$"
+            m = match(match_regex, line)
+            if !isnothing(m)
+                push!(matches, PGAPTaxonomyMatch(
+                    parse(Float64, m.captures[1]),
+                    parse(Float64, m.captures[2]),
+                    parse(Float64, m.captures[3]),
+                    parse(Int, m.captures[4]),
+                    parse(Int, m.captures[5]),
+                    parse(Int, m.captures[6]),
+                    m.captures[7],
+                    strip(m.captures[8]),
+                    strip(m.captures[9]),
+                    strip(m.captures[10])
+                ))
+            end
+        end
+    end
+    
+    return PGAPTaxonomyReport(
+        assembly_name,
+        submitted_organism,
+        submitted_taxid,
+        submitted_rank,
+        submitted_lineage,
+        predicted_organism,
+        predicted_taxid,
+        predicted_rank,
+        predicted_lineage,
+        best_match_organism,
+        best_match_taxid,
+        best_match_rank,
+        best_match_lineage,
+        has_type,
+        status,
+        confidence,
+        matches
+    )
 end
 
 function run_bakta(;
