@@ -734,6 +734,106 @@ function run_pgap(;
     end
 end
 
+"""
+    run_pgap_taxonomy_check(;
+        fasta,
+        organism,
+        pgap_dir,
+        outdir,
+        as_string,
+        prefix,
+    )
+
+Run PGAP's taxonomy check (--taxcheck-only) to validate or obtain corrections for organism taxonomy.
+
+This function runs only the taxonomy validation step of PGAP, which is much faster than a full
+annotation. It verifies the provided organism name against NCBI taxonomy and can suggest corrections.
+
+The taxonomy check accepts:
+- Genus only (e.g., "Escherichia")
+- Genus species (e.g., "Escherichia coli")
+
+By default, this uses the same output directory as the full PGAP annotation (_pgap suffix), allowing
+seamless reuse of existing taxonomy check results from previous annotation runs. If the taxonomy
+report already exists, it will be reused. Unlike the full annotation function, this does not support
+force=true to avoid accidentally removing full annotation results. To re-run, manually delete the
+specific taxonomy report file(s).
+
+Arguments:
+- `fasta::AbstractString`: Input FASTA file (used to calculate ANI for taxonomy validation).
+- `organism::AbstractString`: Organism name (Genus or Genus species) to validate.
+- `pgap_dir`: Directory containing PGAP installation. Defaults to `~/workspace/pgap`.
+- `outdir`: Output directory for results. Defaults to input filename with "_pgap" suffix (same as full annotation).
+- `as_string::Bool=false`: If true, returns the command string instead of executing it.
+- `prefix`: Prefix for output files. Defaults to input filename without extension.
+
+Returns:
+- `String`: Path to `outdir` when `as_string=false`, or the bash command string when `as_string=true`.
+  The main output file is `<prefix>ani-tax-report.txt` containing taxonomy validation results.
+"""
+function run_pgap_taxonomy_check(;
+    fasta::AbstractString,
+    organism::AbstractString,
+    pgap_dir = joinpath(homedir(), "workspace", "pgap"),
+    outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
+    as_string::Bool = false,
+    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
+)
+    # Expected output from taxonomy check
+    tax_report = joinpath(outdir, "$(prefix)ani-tax-report.txt")
+    tax_report_xml = joinpath(outdir, "$(prefix)ani-tax-report.xml")
+    
+    # Check if taxonomy report already exists
+    if isfile(tax_report)
+        @info "Detected existing PGAP taxonomy report at $tax_report; reusing results"
+        return outdir
+    end
+    
+    # Ensure PGAP availability
+    pgap_py_script = joinpath(pgap_dir, "pgap.py")
+    if !isfile(pgap_py_script)
+        mkpath(dirname(pgap_py_script))
+        Base.run(`wget -O $(pgap_py_script) https://github.com/ncbi/pgap/raw/prod/scripts/pgap.py`)
+        @assert isfile(pgap_py_script)
+    end
+    if isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
+        @time Base.run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+    end
+
+    # Create output directory if it doesn't exist
+    if !isdir(outdir)
+        mkpath(outdir)
+    end
+
+    # If only returning the command string, return immediately
+    if as_string
+        return "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --taxcheck-only --output $(outdir) --genome $(fasta) --organism '$(organism)' --prefix $(prefix)"
+    end
+
+    # Construct and run the taxonomy check command
+    cmd = `python3 $(pgap_py_script) --taxcheck-only --output $(outdir) --genome $(fasta) --organism $(organism) --prefix $(prefix)`
+    
+    try
+        @time Base.run(setenv(cmd, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+        return outdir
+    catch e
+        # Only clean up the specific taxonomy files we tried to create, not the entire directory
+        if isfile(tax_report)
+            try
+                rm(tax_report)
+            catch
+            end
+        end
+        if isfile(tax_report_xml)
+            try
+                rm(tax_report_xml)
+            catch
+            end
+        end
+        rethrow(e)
+    end
+end
+
 function run_bakta(;
         fasta::AbstractString,
         outdir = replace(fasta, Mycelia.FASTA_REGEX => "_bakta"),
