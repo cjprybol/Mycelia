@@ -612,18 +612,20 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
             # Check quality threshold
             mean_qual = Statistics.mean(qmer.qualities)
             if mean_qual >= min_quality
-                # Get canonical representation
-                canonical_qmer = graph_mode == DoubleStrand ? qmer : canonical(qmer)
-                canonical_kmer = canonical_qmer.kmer
+                # Get appropriate representation based on graph mode
+                # DoubleStrand: qualmers_unambiguous_canonical already gives us canonical qualmers
+                # SingleStrand: qualmers_unambiguous gives us as-is qualmers
+                graph_qmer = qmer  # Use as-is since iterator already handles canonicalization
+                graph_kmer = graph_qmer.kmer
                 
                 # Create observation
                 observation = QualmerObservation(qmer, seq_id, pos)
                 
                 # Store observation
-                if !haskey(canonical_observations, canonical_kmer)
-                    canonical_observations[canonical_kmer] = QualmerObservation[]
+                if !haskey(canonical_observations, graph_kmer)
+                    canonical_observations[graph_kmer] = QualmerObservation[]
                 end
-                push!(canonical_observations[canonical_kmer], observation)
+                push!(canonical_observations[graph_kmer], observation)
             end
         end
     end

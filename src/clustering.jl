@@ -140,6 +140,16 @@ function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mk
 end
 
 """
+Vertex data for hierarchical clustering graph nodes.
+"""
+struct HclustVertexData
+    hclust_id::String
+    height::Float64
+    x::Float64
+    y::Float64
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert a hierarchical clustering tree into a directed metagraph representation.
@@ -148,56 +158,75 @@ Convert a hierarchical clustering tree into a directed metagraph representation.
 - `hcl::Clustering.Hclust`: Hierarchical clustering result object
 
 # Returns
-- `MetaGraphs.MetaDiGraph`: Directed graph with metadata representing the clustering hierarchy
+- `MetaGraphsNext.MetaGraph`: Directed graph with metadata representing the clustering hierarchy
 
 # Graph Properties
-The resulting graph contains the following vertex properties:
-- `:hclust_id`: String identifier for each node
-- `:height`: Height/distance at each merge point (0.0 for leaves)
-- `:x`: Horizontal position for visualization (0-1 range)
-- `:y`: Vertical position based on normalized height
-- `:hcl`: Original clustering object (stored as graph property)
+The resulting graph contains vertices with the following data:
+- `hclust_id`: String identifier for each node
+- `height`: Height/distance at each merge point (0.0 for leaves)
+- `x`: Horizontal position for visualization (0-1 range)
+- `y`: Vertical position based on normalized height
 """
 function hclust_to_metagraph(hcl::Clustering.Hclust)
-    total_nodes = length(hcl.order) + size(hcl.merges, 1)
-    mg = MetaGraphs.MetaDiGraph(total_nodes)
-    MetaGraphs.set_prop!(mg, :hcl, hcl)
+    # Create MetaGraphsNext graph
+    mg = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=String,
+        vertex_data_type=HclustVertexData,
+        edge_data_type=Nothing,
+        graph_data=hcl  # Store original clustering object as graph metadata
+    )
+
+    # Add leaf nodes
     for leaf_node in hcl.labels
-        MetaGraphs.set_prop!(mg, leaf_node, :hclust_id, string(-leaf_node))
-        MetaGraphs.set_prop!(mg, leaf_node, :height, 0.0)
+        hclust_id = string(-leaf_node)
+        mg[hclust_id] = HclustVertexData(hclust_id, 0.0, 0.0, 0.0)  # x and y will be set later
     end
+
+    # Set x positions for leaf nodes based on order
     for (i, ordered_leaf_node) in enumerate(hcl.order)
+        hclust_id = string(-ordered_leaf_node)
         x = i / (length(hcl.order) + 1)
-        MetaGraphs.set_prop!(mg, ordered_leaf_node, :x, x)
+        vertex_data = mg[hclust_id]
+        mg[hclust_id] = HclustVertexData(vertex_data.hclust_id, vertex_data.height, x, vertex_data.y)
     end
+
+    # Add internal nodes
     for (i, (left, right)) in enumerate(eachrow(hcl.merges))
-        graph_i = length(hcl.order) + i
         hclust_id = string(i)
-        MetaGraphs.set_prop!(mg, graph_i, :hclust_id, hclust_id)
+        mg[hclust_id] = HclustVertexData(hclust_id, 0.0, 0.0, 0.0)  # height, x, y will be set later
     end
-    MetaGraphs.set_indexing_prop!(mg, :hclust_id)
 
+    # Set up hierarchy with edges and positions
     for (i, ((left, right), height)) in enumerate(zip(eachrow(hcl.merges), hcl.heights))
-        parent_vertex = mg[string(i), :hclust_id]
-        MetaGraphs.set_prop!(mg, parent_vertex, :height, height)
-        
-        left_child_vertex = mg[string(left), :hclust_id]
-        right_child_vertex = mg[string(right), :hclust_id]
+        parent_id = string(i)
+        left_child_id = string(left)
+        right_child_id = string(right)
 
-        x = Statistics.middle(mg.vprops[left_child_vertex][:x], mg.vprops[right_child_vertex][:x])
-        MetaGraphs.set_prop!(mg, parent_vertex, :x, x)
+        # Update parent height
+        parent_data = mg[parent_id]
+        mg[parent_id] = HclustVertexData(parent_data.hclust_id, height, parent_data.x, parent_data.y)
 
-        e1 = Graphs.Edge(parent_vertex, left_child_vertex)
-        e2 = Graphs.Edge(parent_vertex, right_child_vertex)
-        Graphs.add_edge!(mg, e1)
-        Graphs.add_edge!(mg, e2)
+        # Calculate parent x position as midpoint of children
+        left_child_data = mg[left_child_id]
+        right_child_data = mg[right_child_id]
+        x = (left_child_data.x + right_child_data.x) / 2
+
+        # Update parent x position
+        parent_data = mg[parent_id]
+        mg[parent_id] = HclustVertexData(parent_data.hclust_id, parent_data.height, x, parent_data.y)
+
+        # Add edges from parent to children
+        mg[parent_id, left_child_id] = nothing
+        mg[parent_id, right_child_id] = nothing
     end
 
-    max_height = maximum(get.(values(mg.vprops), :height, missing))
-    for v in Graphs.vertices(mg)
-        relative_height = (max_height - mg.vprops[v][:height]) / max_height
-        # y = 1 - relative_height
-        MetaGraphs.set_prop!(mg, v, :y, relative_height)
+    # Calculate and set y positions based on normalized heights
+    max_height = maximum(hcl.heights)
+    for label in MetaGraphsNext.labels(mg)
+        vertex_data = mg[label]
+        relative_height = (max_height - vertex_data.height) / max_height
+        mg[label] = HclustVertexData(vertex_data.hclust_id, vertex_data.height, vertex_data.x, relative_height)
     end
 
     return mg

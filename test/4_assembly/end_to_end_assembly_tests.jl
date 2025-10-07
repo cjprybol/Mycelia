@@ -23,6 +23,7 @@ import BioSequences
 import FASTX
 import Random
 import StatsBase
+import Kmers
 
 # Test parameters
 const TEST_LENGTHS = [10, 100, 1000]
@@ -32,12 +33,12 @@ const COVERAGE_DEPTHS = [10, 100, 1000]
 """
 Helper function to create FASTQ records from sequences with error simulation.
 """
-function create_test_reads(reference_sequence::String, coverage::Int, error_rate::Float64)
+function create_test_reads(reference_sequence::Union{String, BioSequences.LongDNA{4}}, coverage::Int, error_rate::Float64)
     records = FASTX.FASTQ.Record[]
-    
+
     for i in 1:coverage
         # Use the observe function to introduce errors
-        bio_seq = BioSequences.LongDNA{4}(reference_sequence)
+        bio_seq = reference_sequence isa String ? BioSequences.LongDNA{4}(reference_sequence) : reference_sequence
         observed_seq, quality_scores = Mycelia.observe(bio_seq, error_rate=error_rate)
         
         # Convert quality scores to string format
@@ -74,18 +75,25 @@ end
 """
 Helper function to create FASTQ records from amino acid sequences.
 """
-function create_test_aa_reads(reference_sequence::String, coverage::Int, error_rate::Float64)
+function create_test_aa_reads(reference_sequence::Union{String, BioSequences.LongAA}, coverage::Int, error_rate::Float64)
     records = FASTX.FASTQ.Record[]
-    
+
     for i in 1:coverage
         # Use the observe function to introduce errors
-        bio_seq = BioSequences.LongAA(reference_sequence)
+        bio_seq = reference_sequence isa String ? BioSequences.LongAA(reference_sequence) : reference_sequence
         observed_seq, quality_scores = Mycelia.observe(bio_seq, error_rate=error_rate)
-        
+
+        ## Validate that no termination characters (*) are present in amino acid sequences
+        ## This ensures compatibility with FASTQ format
+        observed_seq_str = string(observed_seq)
+        if occursin('*', observed_seq_str)
+            error("Amino acid sequence contains termination character '*' which is invalid for FASTQ format: $observed_seq_str")
+        end
+
         # Convert quality scores to string format
         quality_string = String([Char(q + 33) for q in quality_scores])
-        
-        record = FASTX.FASTQ.Record("read_$i", string(observed_seq), quality_string)
+
+        record = FASTX.FASTQ.Record("read_$i", observed_seq_str, quality_string)
         push!(records, record)
     end
     
@@ -97,8 +105,8 @@ Test.@testset "End-to-End Assembly Tests" begin
     Test.@testset "Base Case: Reference Sequence Graph Round-trip" begin
         Test.@testset "String Graph Base Case" begin
             # Test with simple strings
-            for length in TEST_LENGTHS
-                reference_string = Random.randstring(length)
+            for seq_length in TEST_LENGTHS
+                reference_string = Random.randstring(seq_length)
                 
                 # Create graph from reference
                 graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
@@ -115,82 +123,79 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
         
         Test.@testset "Sequence Graph Next Base Case - DNA" begin
-            for length in TEST_LENGTHS
-                if length >= 6  # Minimum length for meaningful k-mer analysis
-                    reference_seq = BioSequences.randdnaseq(length)
-                    reference_record = FASTX.FASTA.Record("reference", reference_seq)
-                    
-                    # Test DoubleStrand mode (canonical)
-                    kmer_type = BioSequences.DNAKmer{5}
-                    graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record]; 
-                                                        graph_mode=Mycelia.DoubleStrand)
-                    Test.@test graph isa MetaGraphsNext.MetaGraph
-                    Test.@test !isempty(MetaGraphsNext.labels(graph))
-                    
-                    # Verify vertices are canonical k-mers
-                    for label in MetaGraphsNext.labels(graph)
-                        vertex_data = graph[label]
-                        Test.@test vertex_data isa Mycelia.KmerVertexData
-                        Test.@test vertex_data.canonical_kmer == label
-                    end
-                    
-                    # Test that we can write and read GFA
-                    Test.@test hasmethod(Mycelia.write_gfa_next, (typeof(graph), String))
-                    Test.@test hasmethod(Mycelia.read_gfa_next, (String,))
+            for seq_length in TEST_LENGTHS
+                reference_seq = BioSequences.randdnaseq(seq_length)
+                reference_record = FASTX.FASTA.Record("reference", reference_seq)
+
+                # Test DoubleStrand mode (canonical)
+                kmer_type = Kmers.DNAKmer{5}
+                graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record];
+                                                    graph_mode=Mycelia.DoubleStrand)
+                Test.@test graph isa MetaGraphsNext.MetaGraph
+                Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                # Verify vertices are canonical k-mers
+                for label in MetaGraphsNext.labels(graph)
+                    vertex_data = graph[label]
+                    Test.@test vertex_data isa Mycelia.KmerVertexData
+                    Test.@test vertex_data.canonical_kmer == label
                 end
+
+                # Test that we can write and read GFA
+                Test.@test hasmethod(Mycelia.write_gfa_next, (typeof(graph), String))
+                Test.@test hasmethod(Mycelia.read_gfa_next, (String,))
             end
         end
         
         Test.@testset "Sequence Graph Next Base Case - RNA" begin
-            for length in TEST_LENGTHS
-                if length >= 6  # Minimum length for meaningful k-mer analysis
-                    reference_seq = string(BioSequences.randrnaseq(length))
-                    reference_record = FASTX.FASTA.Record("reference", reference_seq)
-                    
-                    # Test SingleStrand mode for RNA
-                    kmer_type = BioSequences.RNAKmer{5}
-                    graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record]; 
-                                                        graph_mode=Mycelia.SingleStrand)
-                    Test.@test graph isa MetaGraphsNext.MetaGraph
-                    Test.@test !isempty(MetaGraphsNext.labels(graph))
-                    
-                    # Verify vertices contain RNA k-mers
-                    for label in MetaGraphsNext.labels(graph)
-                        vertex_data = graph[label]
-                        Test.@test vertex_data isa Mycelia.KmerVertexData
-                        Test.@test 'U' in vertex_data.canonical_kmer || 'A' in vertex_data.canonical_kmer
-                    end
+            for seq_length in TEST_LENGTHS
+                reference_seq = string(BioSequences.randrnaseq(seq_length))
+                reference_record = FASTX.FASTA.Record("reference", reference_seq)
+
+                # Test SingleStrand mode for RNA
+                kmer_type = Kmers.RNAKmer{5}
+                graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record];
+                                                    graph_mode=Mycelia.SingleStrand)
+                Test.@test graph isa MetaGraphsNext.MetaGraph
+                Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                # Verify vertices contain RNA k-mers
+                for label in MetaGraphsNext.labels(graph)
+                    vertex_data = graph[label]
+                    Test.@test vertex_data isa Mycelia.KmerVertexData
+                    # Verify the k-mer type is RNA (not converted to DNA)
+                    Test.@test vertex_data.canonical_kmer isa Kmers.RNAKmer
+                    # Verify no T nucleotides (RNA should never contain T)
+                    Test.@test !occursin('T', string(vertex_data.canonical_kmer))
                 end
             end
         end
         
         Test.@testset "Sequence Graph Next Base Case - Amino Acids" begin
-            for length in TEST_LENGTHS
-                if length >= 6  # Minimum length for meaningful k-mer analysis
-                    reference_seq = BioSequences.randaaseq(length)
-                    reference_record = FASTX.FASTA.Record("reference", reference_seq)
-                    
-                    # Test SingleStrand mode for amino acids
-                    kmer_type = BioSequences.AminoAcidKmer{5}
-                    graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record]; 
-                                                        graph_mode=Mycelia.SingleStrand)
-                    Test.@test graph isa MetaGraphsNext.MetaGraph
-                    Test.@test !isempty(MetaGraphsNext.labels(graph))
-                    
-                    # Verify vertices contain amino acid k-mers
-                    for label in MetaGraphsNext.labels(graph)
-                        vertex_data = graph[label]
-                        Test.@test vertex_data isa Mycelia.KmerVertexData
-                        # Check that all characters are valid amino acids
-                        Test.@test all(c in "ACDEFGHIKLMNPQRSTVWY" for c in vertex_data.canonical_kmer)
-                    end
+            for seq_length in TEST_LENGTHS
+                reference_seq = BioSequences.randaaseq(seq_length)
+                reference_record = FASTX.FASTA.Record("reference", reference_seq)
+
+                # Test SingleStrand mode for amino acids
+                kmer_type = Kmers.AAKmer{5}
+                graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record];
+                                                    graph_mode=Mycelia.SingleStrand)
+                Test.@test graph isa MetaGraphsNext.MetaGraph
+                Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                # Verify vertices contain amino acid k-mers
+                for label in MetaGraphsNext.labels(graph)
+                    vertex_data = graph[label]
+                    Test.@test vertex_data isa Mycelia.KmerVertexData
+                    # Check that all characters are valid amino acids
+                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_SYMBOLS for c in string(vertex_data.canonical_kmer))
                 end
             end
         end
 
         Test.@testset "String Graph Base Case - ASCII Greek" begin
-            for length in TEST_LENGTHS
-                reference_string = Mycelia.rand_ascii_greek_string(length)
+            for seq_length in TEST_LENGTHS
+                reference_string = Mycelia.rand_ascii_greek_string(seq_length)
                 
                 # Create graph from reference
                 graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
@@ -211,8 +216,8 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
 
         Test.@testset "String Graph Base Case - Latin1" begin
-            for length in TEST_LENGTHS
-                reference_string = Mycelia.rand_latin1_string(length)
+            for seq_length in TEST_LENGTHS
+                reference_string = Mycelia.rand_latin1_string(seq_length)
                 
                 # Create graph from reference
                 graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
@@ -233,8 +238,8 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
 
         Test.@testset "String Graph Base Case - BMP Printable" begin
-            for length in TEST_LENGTHS
-                reference_string = Mycelia.rand_bmp_printable_string(length)
+            for seq_length in TEST_LENGTHS
+                reference_string = Mycelia.rand_bmp_printable_string(seq_length)
                 
                 # Create graph from reference
                 graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
@@ -255,8 +260,8 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
 
         Test.@testset "String Graph Base Case - Printable Unicode" begin
-            for length in TEST_LENGTHS
-                reference_string = Mycelia.rand_printable_unicode_string(length)
+            for seq_length in TEST_LENGTHS
+                reference_string = Mycelia.rand_printable_unicode_string(seq_length)
                 
                 # Create graph from reference
                 graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
@@ -279,8 +284,8 @@ Test.@testset "End-to-End Assembly Tests" begin
     
     Test.@testset "String Graph Assembly with Error Rates and Coverage" begin
         Test.@testset "Basic String Assembly" begin
-            for length in TEST_LENGTHS
-                reference_string = Random.randstring(length)
+            for seq_length in TEST_LENGTHS
+                reference_string = Random.randstring(seq_length)
                 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -317,39 +322,65 @@ Test.@testset "End-to-End Assembly Tests" begin
     
     Test.@testset "Strand-Specific Sequence Graph Next Assembly" begin
         Test.@testset "DNA SingleStrand Mode" begin
-            for length in TEST_LENGTHS
-                if length >= 10  # Minimum length for meaningful assembly
-                    reference_seq = BioSequences.randdnaseq(length)
-                    
-                    for error_rate in ERROR_RATES
-                        for coverage in COVERAGE_DEPTHS
-                            # Create simulated reads
-                            reads = create_test_reads(reference_seq, coverage, error_rate)
-                            
-                            # Build k-mer graph in SingleStrand mode
-                            kmer_type = BioSequences.DNAKmer{5}
-                            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                                graph_mode=Mycelia.SingleStrand)
-                            
-                            Test.@test graph isa MetaGraphsNext.MetaGraph
-                            Test.@test !isempty(MetaGraphsNext.labels(graph))
-                            
-                            # Verify all strand orientations are Forward in SingleStrand mode
-                            for label in MetaGraphsNext.labels(graph)
-                                vertex_data = graph[label]
-                                for (obs_id, pos, strand) in vertex_data.coverage
-                                    Test.@test strand == Mycelia.Forward
-                                end
+            for seq_length in TEST_LENGTHS
+                reference_seq = BioSequences.randdnaseq(seq_length)
+
+                for error_rate in ERROR_RATES
+                    for coverage in COVERAGE_DEPTHS
+                        # Create simulated reads
+                        reads = create_test_reads(reference_seq, coverage, error_rate)
+
+                        # Build k-mer graph in SingleStrand mode
+                        kmer_type = Kmers.DNAKmer{5}
+                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
+                                                            graph_mode=Mycelia.SingleStrand)
+
+                        Test.@test graph isa MetaGraphsNext.MetaGraph
+                        Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                        # Verify all strand orientations are Forward in SingleStrand mode
+                        for label in MetaGraphsNext.labels(graph)
+                            vertex_data = graph[label]
+                            for (obs_id, pos, strand) in vertex_data.coverage
+                                Test.@test strand == Mycelia.Forward
                             end
-                            
-                            # Test that edges respect strand constraints
-                            for edge_label in MetaGraphsNext.edge_labels(graph)
-                                if !isempty(edge_label)
-                                    edge_data = graph[edge_label...]
-                                    Test.@test edge_data isa Mycelia.KmerEdgeData
-                                    Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
-                                    Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
-                                end
+                        end
+
+                        # Test that edges respect strand constraints
+                        for edge_label in MetaGraphsNext.edge_labels(graph)
+                            if !isempty(edge_label)
+                                edge_data = graph[edge_label...]
+                                Test.@test edge_data isa Mycelia.KmerEdgeData
+                                Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
+                                Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
+                            end
+                        end
+
+                        # Test quality-aware assembly from k-mer graph to FASTQ
+                        # Build qualmer graph for quality-aware processing
+                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.SingleStrand)
+                        Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert to quality-aware BioSequence graph
+                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        Test.@test quality_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert back to FASTQ records with quality scores
+                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
+                        Test.@test !isempty(assembled_fastq_records)
+                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
+
+                        # Validate that assembled sequences are proper DNA
+                        for record in assembled_fastq_records
+                            sequence_str = FASTX.sequence(String, record)
+                            if !isempty(sequence_str)
+                                detected_type = Mycelia.detect_alphabet(sequence_str)
+                                Test.@test detected_type == :DNA
+
+                                # Quality scores should reflect assembly confidence
+                                quality_scores = Mycelia.get_phred_scores(record)
+                                Test.@test !isempty(quality_scores)
+                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -358,29 +389,76 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
         
         Test.@testset "RNA SingleStrand Mode" begin
-            for length in TEST_LENGTHS
-                if length >= 10  # Minimum length for meaningful assembly
-                    reference_seq = string(BioSequences.randrnaseq(length))
-                    
-                    for error_rate in ERROR_RATES
-                        for coverage in COVERAGE_DEPTHS
-                            # Create simulated reads
-                            reads = create_test_rna_reads(reference_seq, coverage, error_rate)
-                            
-                            # Build k-mer graph in SingleStrand mode
-                            kmer_type = BioSequences.RNAKmer{5}
-                            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                                graph_mode=Mycelia.SingleStrand)
-                            
-                            Test.@test graph isa MetaGraphsNext.MetaGraph
-                            Test.@test !isempty(MetaGraphsNext.labels(graph))
-                            
-                            # Verify RNA-specific properties
-                            for label in MetaGraphsNext.labels(graph)
-                                vertex_data = graph[label]
-                                Test.@test vertex_data isa Mycelia.KmerVertexData
-                                # RNA sequences should contain U instead of T
-                                Test.@test 'U' in vertex_data.canonical_kmer || 'A' in vertex_data.canonical_kmer
+            for seq_length in TEST_LENGTHS
+                reference_seq = string(BioSequences.randrnaseq(seq_length))
+
+                for error_rate in ERROR_RATES
+                    for coverage in COVERAGE_DEPTHS
+                        # Create simulated reads
+                        reads = create_test_rna_reads(reference_seq, coverage, error_rate)
+
+                        # Build k-mer graph in SingleStrand mode
+                        kmer_type = Kmers.RNAKmer{5}
+                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
+                                                            graph_mode=Mycelia.SingleStrand)
+
+                        Test.@test graph isa MetaGraphsNext.MetaGraph
+                        Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                        # Verify RNA-specific properties
+                        for label in MetaGraphsNext.labels(graph)
+                            vertex_data = graph[label]
+                            Test.@test vertex_data isa Mycelia.KmerVertexData
+                            # Verify the k-mer type is RNA (not converted to DNA)
+                            Test.@test vertex_data.canonical_kmer isa Kmers.RNAKmer
+                            # Verify no T nucleotides (RNA should never contain T)
+                            Test.@test !occursin('T', string(vertex_data.canonical_kmer))
+
+                            # Test sequence type validation using existing functions
+                            kmer_string = string(vertex_data.canonical_kmer)
+                            # Note: detect_alphabet() may return :DNA for ambiguous sequences (A,C,G only)
+                            # but the k-mer type system correctly preserves RNA type
+                            detected_alphabet = Mycelia.detect_alphabet(kmer_string)
+                            # Only test for RNA detection when U is actually present
+                            if occursin('U', kmer_string)
+                                Test.@test detected_alphabet == :RNA
+                            end
+
+                            # Test that the sequence is valid RNA using BioSequences constructor
+                            Test.@test_nowarn BioSequences.LongRNA{4}(kmer_string)
+                            # Test that it's NOT valid DNA if it contains U
+                            if occursin('U', kmer_string)
+                                Test.@test_throws Exception BioSequences.LongDNA{4}(kmer_string)
+                            end
+                        end
+
+                        # Test quality-aware assembly from k-mer graph to FASTQ
+                        # Build qualmer graph for quality-aware processing
+                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.SingleStrand)
+                        Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert to quality-aware BioSequence graph
+                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        Test.@test quality_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert back to FASTQ records with quality scores
+                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
+                        Test.@test !isempty(assembled_fastq_records)
+                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
+
+                        # Validate that assembled sequences are proper RNA
+                        for record in assembled_fastq_records
+                            sequence_str = FASTX.sequence(String, record)
+                            if !isempty(sequence_str)
+                                detected_type = Mycelia.detect_alphabet(sequence_str)
+                                Test.@test detected_type == :RNA
+                                # Verify no T nucleotides (RNA should never contain T)
+                                Test.@test !occursin('T', sequence_str)
+
+                                # Quality scores should reflect assembly confidence
+                                quality_scores = Mycelia.get_phred_scores(record)
+                                Test.@test !isempty(quality_scores)
+                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -389,29 +467,63 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
         
         Test.@testset "Amino Acid SingleStrand Mode" begin
-            for length in TEST_LENGTHS
-                if length >= 10  # Minimum length for meaningful assembly
-                    reference_seq = BioSequences.randaaseq(length)
-                    
-                    for error_rate in ERROR_RATES
-                        for coverage in COVERAGE_DEPTHS
-                            # Create simulated reads
-                            reads = create_test_aa_reads(reference_seq, coverage, error_rate)
-                            
-                            # Build k-mer graph in SingleStrand mode
-                            kmer_type = BioSequences.AminoAcidKmer{3}  # Shorter k-mers for AA
-                            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                                graph_mode=Mycelia.SingleStrand)
-                            
-                            Test.@test graph isa MetaGraphsNext.MetaGraph
-                            Test.@test !isempty(MetaGraphsNext.labels(graph))
-                            
-                            # Verify amino acid-specific properties
-                            for label in MetaGraphsNext.labels(graph)
-                                vertex_data = graph[label]
-                                Test.@test vertex_data isa Mycelia.KmerVertexData
-                                # All characters should be valid amino acids
-                                Test.@test all(c in "ACDEFGHIKLMNPQRSTVWY" for c in vertex_data.canonical_kmer)
+            for seq_length in TEST_LENGTHS
+                reference_seq = BioSequences.randaaseq(seq_length)
+
+                for error_rate in ERROR_RATES
+                    for coverage in COVERAGE_DEPTHS
+                        # Create simulated reads
+                        reads = create_test_aa_reads(reference_seq, coverage, error_rate)
+
+                        # Build k-mer graph in SingleStrand mode
+                        kmer_type = Kmers.AAKmer{3}  # Shorter k-mers for AA
+                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
+                                                            graph_mode=Mycelia.SingleStrand)
+
+                        Test.@test graph isa MetaGraphsNext.MetaGraph
+                        Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                        # Verify amino acid-specific properties
+                        for label in MetaGraphsNext.labels(graph)
+                            vertex_data = graph[label]
+                            Test.@test vertex_data isa Mycelia.KmerVertexData
+                            # Verify this is an amino acid k-mer
+                            Test.@test vertex_data.canonical_kmer isa Kmers.AAKmer
+
+                            # Test sequence type validation using existing functions
+                            kmer_string = string(vertex_data.canonical_kmer)
+                            detected_alphabet = Mycelia.detect_alphabet(kmer_string)
+                            Test.@test detected_alphabet == :AA
+
+                            # Verify the k-mer can be constructed as a valid AA sequence
+                            Test.@test_nowarn BioSequences.LongAA(kmer_string)
+                        end
+
+                        # Test quality-aware assembly from k-mer graph to FASTQ
+                        # Build qualmer graph for quality-aware processing
+                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=3, graph_mode=Mycelia.SingleStrand)
+                        Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert to quality-aware BioSequence graph
+                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        Test.@test quality_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert back to FASTQ records with quality scores
+                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
+                        Test.@test !isempty(assembled_fastq_records)
+                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
+
+                        # Validate that assembled sequences are proper amino acids
+                        for record in assembled_fastq_records
+                            sequence_str = FASTX.sequence(String, record)
+                            if !isempty(sequence_str)
+                                detected_type = Mycelia.detect_alphabet(sequence_str)
+                                Test.@test detected_type == :AA
+
+                                # Quality scores should reflect assembly confidence
+                                quality_scores = Mycelia.get_phred_scores(record)
+                                Test.@test !isempty(quality_scores)
+                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -422,43 +534,69 @@ Test.@testset "End-to-End Assembly Tests" begin
     
     Test.@testset "Canonical/Double-Stranded Sequence Graph Next Assembly" begin
         Test.@testset "DNA DoubleStrand Mode" begin
-            for length in TEST_LENGTHS
-                if length >= 10  # Minimum length for meaningful assembly
-                    reference_seq = BioSequences.randdnaseq(length)
-                    
-                    for error_rate in ERROR_RATES
-                        for coverage in COVERAGE_DEPTHS
-                            # Create simulated reads
-                            reads = create_test_reads(reference_seq, coverage, error_rate)
-                            
-                            # Build k-mer graph in DoubleStrand mode (canonical)
-                            kmer_type = BioSequences.DNAKmer{5}
-                            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                                graph_mode=Mycelia.DoubleStrand)
-                            
-                            Test.@test graph isa MetaGraphsNext.MetaGraph
-                            Test.@test !isempty(MetaGraphsNext.labels(graph))
-                            
-                            # Verify canonical k-mer properties
-                            for label in MetaGraphsNext.labels(graph)
-                                vertex_data = graph[label]
-                                Test.@test vertex_data isa Mycelia.KmerVertexData
-                                Test.@test vertex_data.canonical_kmer == label
-                                
-                                # In DoubleStrand mode, we should see both Forward and Reverse orientations
-                                strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-                                Test.@test !isempty(strand_orientations)
+            for seq_length in TEST_LENGTHS
+                reference_seq = BioSequences.randdnaseq(seq_length)
+
+                for error_rate in ERROR_RATES
+                    for coverage in COVERAGE_DEPTHS
+                        # Create simulated reads
+                        reads = create_test_reads(reference_seq, coverage, error_rate)
+
+                        # Build k-mer graph in DoubleStrand mode (canonical)
+                        kmer_type = Kmers.DNAKmer{5}
+                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
+                                                            graph_mode=Mycelia.DoubleStrand)
+
+                        Test.@test graph isa MetaGraphsNext.MetaGraph
+                        Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                        # Verify canonical k-mer properties
+                        for label in MetaGraphsNext.labels(graph)
+                            vertex_data = graph[label]
+                            Test.@test vertex_data isa Mycelia.KmerVertexData
+                            Test.@test vertex_data.canonical_kmer == label
+
+                            # In DoubleStrand mode, we should see both Forward and Reverse orientations
+                            strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
+                            Test.@test !isempty(strand_orientations)
+                        end
+
+                        # Test that edges handle strand transitions correctly
+                        for edge_label in MetaGraphsNext.edge_labels(graph)
+                            if !isempty(edge_label)
+                                edge_data = graph[edge_label...]
+                                Test.@test edge_data isa Mycelia.KmerEdgeData
+                                Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
+                                Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
+                                Test.@test edge_data.weight >= 0.0
                             end
-                            
-                            # Test that edges handle strand transitions correctly
-                            for edge_label in MetaGraphsNext.edge_labels(graph)
-                                if !isempty(edge_label)
-                                    edge_data = graph[edge_label...]
-                                    Test.@test edge_data isa Mycelia.KmerEdgeData
-                                    Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
-                                    Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
-                                    Test.@test edge_data.weight >= 0.0
-                                end
+                        end
+
+                        # Test quality-aware assembly from k-mer graph to FASTQ
+                        # Build qualmer graph for quality-aware processing
+                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.DoubleStrand)
+                        Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert to quality-aware BioSequence graph
+                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        Test.@test quality_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert back to FASTQ records with quality scores
+                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
+                        Test.@test !isempty(assembled_fastq_records)
+                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
+
+                        # Validate that assembled sequences are proper DNA
+                        for record in assembled_fastq_records
+                            sequence_str = FASTX.sequence(String, record)
+                            if !isempty(sequence_str)
+                                detected_type = Mycelia.detect_alphabet(sequence_str)
+                                Test.@test detected_type == :DNA
+
+                                # Quality scores should reflect assembly confidence
+                                quality_scores = Mycelia.get_phred_scores(record)
+                                Test.@test !isempty(quality_scores)
+                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -467,29 +605,75 @@ Test.@testset "End-to-End Assembly Tests" begin
         end
         
         Test.@testset "RNA DoubleStrand Mode" begin
-            for length in TEST_LENGTHS
-                if length >= 10  # Minimum length for meaningful assembly
-                    reference_seq = string(BioSequences.randrnaseq(length))
-                    
-                    for error_rate in ERROR_RATES
-                        for coverage in COVERAGE_DEPTHS
-                            # Create simulated reads
-                            reads = create_test_rna_reads(reference_seq, coverage, error_rate)
-                            
-                            # Build k-mer graph in DoubleStrand mode (canonical)
-                            kmer_type = BioSequences.RNAKmer{5}
-                            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                                graph_mode=Mycelia.DoubleStrand)
-                            
-                            Test.@test graph isa MetaGraphsNext.MetaGraph
-                            Test.@test !isempty(MetaGraphsNext.labels(graph))
-                            
-                            # Verify canonical RNA k-mer properties
-                            for label in MetaGraphsNext.labels(graph)
-                                vertex_data = graph[label]
-                                Test.@test vertex_data isa Mycelia.KmerVertexData
-                                Test.@test vertex_data.canonical_kmer == label
-                                Test.@test 'U' in vertex_data.canonical_kmer || 'A' in vertex_data.canonical_kmer
+            for seq_length in TEST_LENGTHS
+                reference_seq = string(BioSequences.randrnaseq(seq_length))
+
+                for error_rate in ERROR_RATES
+                    for coverage in COVERAGE_DEPTHS
+                        # Create simulated reads
+                        reads = create_test_rna_reads(reference_seq, coverage, error_rate)
+
+                        # Build k-mer graph in DoubleStrand mode (canonical)
+                        kmer_type = Kmers.RNAKmer{5}
+                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
+                                                            graph_mode=Mycelia.DoubleStrand)
+
+                        Test.@test graph isa MetaGraphsNext.MetaGraph
+                        Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+                        # Verify canonical RNA k-mer properties
+                        for label in MetaGraphsNext.labels(graph)
+                            vertex_data = graph[label]
+                            Test.@test vertex_data isa Mycelia.KmerVertexData
+                            Test.@test vertex_data.canonical_kmer == label
+                            # Verify the k-mer type is RNA (not converted to DNA)
+                            Test.@test vertex_data.canonical_kmer isa Kmers.RNAKmer
+                            # Verify no T nucleotides (RNA should never contain T)
+                            Test.@test !occursin('T', string(vertex_data.canonical_kmer))
+
+                            # Test sequence type validation
+                            kmer_string = string(vertex_data.canonical_kmer)
+                            detected_alphabet = Mycelia.detect_alphabet(kmer_string)
+                            # Only test for RNA detection when U is actually present
+                            if occursin('U', kmer_string)
+                                Test.@test detected_alphabet == :RNA
+                            end
+
+                            # Test that the sequence is valid RNA using BioSequences constructor
+                            Test.@test_nowarn BioSequences.LongRNA{4}(kmer_string)
+                            # Test that it's NOT valid DNA if it contains U
+                            if occursin('U', kmer_string)
+                                Test.@test_throws Exception BioSequences.LongDNA{4}(kmer_string)
+                            end
+                        end
+
+                        # Test quality-aware assembly from k-mer graph to FASTQ
+                        # Build qualmer graph for quality-aware processing
+                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.DoubleStrand)
+                        Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert to quality-aware BioSequence graph
+                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        Test.@test quality_graph isa MetaGraphsNext.MetaGraph
+
+                        # Convert back to FASTQ records with quality scores
+                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
+                        Test.@test !isempty(assembled_fastq_records)
+                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
+
+                        # Validate that assembled sequences are proper RNA
+                        for record in assembled_fastq_records
+                            sequence_str = FASTX.sequence(String, record)
+                            if !isempty(sequence_str)
+                                detected_type = Mycelia.detect_alphabet(sequence_str)
+                                Test.@test detected_type == :RNA
+                                # Verify no T nucleotides (RNA should never contain T)
+                                Test.@test !occursin('T', sequence_str)
+
+                                # Quality scores should reflect assembly confidence
+                                quality_scores = Mycelia.get_phred_scores(record)
+                                Test.@test !isempty(quality_scores)
+                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -512,7 +696,7 @@ Test.@testset "End-to-End Assembly Tests" begin
             reference_seq = string(BioSequences.randdnaseq(100))
             reference_record = FASTX.FASTA.Record("reference", reference_seq)
             
-            kmer_type = BioSequences.DNAKmer{5}
+            kmer_type = Kmers.DNAKmer{5}
             graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record])
             
             # Test that we can work with the graph (basic functionality)
@@ -533,7 +717,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reads = create_test_reads(reference_seq, 100, 0.01)
                 
                 # Build graphs and verify they don't crash
-                kmer_type = BioSequences.DNAKmer{5}
+                kmer_type = Kmers.DNAKmer{5}
                 
                 # Test both modes
                 single_graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
@@ -558,16 +742,87 @@ Test.@testset "End-to-End Assembly Tests" begin
             for coverage in [10, 100]
                 reads = create_test_reads(reference_seq, coverage, error_rate)
                 
-                kmer_type = BioSequences.DNAKmer{5}
+                kmer_type = Kmers.DNAKmer{5}
                 graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
                                                     graph_mode=Mycelia.DoubleStrand)
                 
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
                 # Higher coverage should generally result in more robust graphs
-                total_coverage = sum(length(vertex_data.coverage) for vertex_data in values(graph.vertex_data))
+                total_coverage = sum(length(graph[label].coverage) for label in MetaGraphsNext.labels(graph))
                 Test.@test total_coverage > 0
             end
+        end
+    end
+
+    Test.@testset "K-mer Canonicalization Consistency Tests" begin
+        ## Test that validates the fix for canonical k-mer consistency between
+        ## graph construction and path extraction (the main issue we resolved)
+
+        Test.@testset "DoubleStrand DNA Canonicalization Consistency" begin
+            # Create a DNA sequence that will have different canonical forms
+            # if lexicographic vs BioSequences.canonical() are used
+            reference_seq = BioSequences.dna"ATCGTTTT"  # Forward
+            reverse_comp = BioSequences.reverse_complement(reference_seq)  # AAAACGAT
+
+            # Test with both forward and reverse complement sequences
+            reads = [
+                FASTX.FASTA.Record("forward", reference_seq),
+                FASTX.FASTA.Record("reverse", reverse_comp)
+            ]
+
+            kmer_type = Kmers.DNAKmer{5}
+            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.DoubleStrand)
+
+            Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+            # Test that we have proper coverage and strand orientations
+            # This validates the canonicalization consistency fix
+            total_coverage_entries = 0
+            has_both_orientations = false
+
+            for label in MetaGraphsNext.labels(graph)
+                vertex_data = graph[label]
+                strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
+                total_coverage_entries += length(strand_orientations)
+
+                # Check if we see both orientations (should happen with reverse complements)
+                if Mycelia.Forward in strand_orientations && Mycelia.Reverse in strand_orientations
+                    has_both_orientations = true
+                end
+            end
+
+            Test.@test total_coverage_entries > 0
+            Test.@test has_both_orientations  # Should see both orientations with forward and reverse sequences
+        end
+
+        Test.@testset "SingleStrand RNA Non-Canonicalization Consistency" begin
+            # Test that SingleStrand mode uses k-mers as-is without canonicalization
+            reference_seq = BioSequences.rna"AUCGUUUU"
+            reads = [FASTX.FASTA.Record("rna", reference_seq)]
+
+            kmer_type = Kmers.RNAKmer{5}
+            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.SingleStrand)
+
+            Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+            # Test that all coverage entries use Forward orientation in SingleStrand mode
+            # This validates the SingleStrand non-canonicalization fix
+            total_coverage_entries = 0
+            all_forward = true
+
+            for label in MetaGraphsNext.labels(graph)
+                vertex_data = graph[label]
+                for (obs_id, pos, strand) in vertex_data.coverage
+                    total_coverage_entries += 1
+                    if strand != Mycelia.Forward
+                        all_forward = false
+                    end
+                end
+            end
+
+            Test.@test total_coverage_entries > 0
+            Test.@test all_forward  # All orientations should be Forward in SingleStrand mode
         end
     end
 end

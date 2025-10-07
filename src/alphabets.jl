@@ -144,3 +144,43 @@ function convert_sequence(seq::AbstractString)
         throw(ArgumentError("Unrecognized alphabet type"))
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Validates that a sequence string can be successfully converted to the specified alphabet type.
+
+Uses BioSequences constructors to validate the sequence without requiring alphabet detection.
+Returns `true` if the sequence is valid for the specified alphabet, `false` otherwise.
+
+# Arguments
+- `seq::AbstractString`: The sequence string to validate
+- `alphabet::Symbol`: The target alphabet (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns
+`Bool`: `true` if sequence is valid for the alphabet, `false` otherwise.
+
+# Examples
+```julia
+validate_alphabet("ACGT", :DNA)   # true
+validate_alphabet("ACGU", :RNA)   # true
+validate_alphabet("ACGT", :RNA)   # false (contains T)
+validate_alphabet("ACDEFGHIKLMNPQRSTVWY", :AA)  # true
+```
+"""
+function validate_alphabet(seq::AbstractString, alphabet::Symbol)::Bool
+    try
+        if alphabet == :DNA
+            BioSequences.LongDNA{4}(seq)
+        elseif alphabet == :RNA
+            BioSequences.LongRNA{4}(seq)
+        elseif alphabet == :AA
+            BioSequences.LongAA(seq)
+        else
+            return false
+        end
+        return true
+    catch
+        return false
+    end
+end

@@ -126,9 +126,10 @@ Test.@testset "K-mer Analysis Tests" begin
             Test.@test length(rna_kmers) == 4^k  ## 4^3 = 64 for RNA
             Test.@test isa(rna_kmers, Vector)  ## Should be vector of k-mer objects
             
-            # Test AA alphabet (23 amino acids: 20 standard + O, U, Term, no ambiguous symbols)
+            # Test AA alphabet (22 amino acids: 20 standard + O, U, no ambiguous symbols)
             aa_kmers = Mycelia.generate_all_possible_kmers(2, Mycelia.AA_ALPHABET)
-            Test.@test length(aa_kmers) == 23^2  ## 23^2 = 529 (20 standard + O + U + Term)
+            Test.@test length(aa_kmers) == length(Mycelia.AA_ALPHABET)^2  ## 22^2 = 484 (20 standard + O + U)
+            Test.@test length(aa_kmers) == 22^2  ## 22^2 = 484 (20 standard + O + U)
             Test.@test isa(aa_kmers, Vector)  ## Should be vector of k-mer objects
             
             # Test canonical k-mer generation

@@ -27,6 +27,9 @@
             "version": "lts",
             "pnpmVersion": "latest",
             "nvmVersion": "latest"
+        },
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installVim": true
         }
 	},
     "waitFor": "postCreateCommand",
@@ -59,9 +62,8 @@
             ]
         }
     },
-    "postCreateCommand": "bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.Registry.update(); Pkg.resolve(); Pkg.instantiate(); Pkg.precompile()'",
-    "postStartCommand": "julia --project=. -e 'using Pkg; Pkg.resolve(); Pkg.instantiate();'",
-    // "postCreateCommand": "bash .devcontainer/setup.sh"
+    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y vim && bash .devcontainer/setup.sh && julia --project=. -e 'using Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile()'"
+    // "postStartCommand": "",
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 

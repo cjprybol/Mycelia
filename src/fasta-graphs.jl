@@ -164,6 +164,13 @@ function kmer_graph_to_biosequence_graph(kmer_graph::MetaGraphsNext.MetaGraph;
         weight_function=edge_data -> edge_data.weight,
         default_weight=0.0
     )
+
+    # Store the original k-mer size in graph metadata
+    if !isempty(kmer_labels)
+        k_size = length(string(first(kmer_labels)))
+        # Note: MetaGraphsNext doesn't support graph-level metadata the same way
+        # The k-size will be retrievable from constituent_kmers in vertex data
+    end
     
     # Find linear paths in k-mer graph
     paths = _find_linear_paths(kmer_graph, min_path_length)

@@ -211,7 +211,7 @@ Run Flye assembler for long read assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "flye_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
 
 # Returns
@@ -225,12 +225,16 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_flye(;fastq, outdir="flye_output", genome_size, read_type="pacbio-hifi")
+function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi")
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye flye --$(read_type) $(fastq) --out-dir $(outdir) --genome-size $(genome_size) --threads $(Sys.CPU_THREADS)`)
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
     return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
 end
@@ -243,7 +247,7 @@ Run metaFlye assembler for long-read metagenomic assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "metaflye_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
 - `meta::Bool`: Enable metagenome mode (default: true)
 - `min_overlap::Int`: Minimum overlap between reads (default: auto-selected)
@@ -261,17 +265,21 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_metaflye(;fastq, outdir="metaflye_output", genome_size, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
+function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--genome-size", genome_size, "--threads", string(Sys.CPU_THREADS)]
-        
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
+
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+
         if meta
             push!(cmd_args, "--meta")
         end
-        
+
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
         end
@@ -289,7 +297,7 @@ Run Canu assembler for long read assembly.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing long reads
 - `outdir::String`: Output directory path (default: "canu_output")
-- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g")
+- `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio", "nanopore")
 - `stopOnLowCoverage::Integer`: Minimum coverage required to continue assembly (default: 10)
 
@@ -330,6 +338,7 @@ Run the hifiasm genome assembler on PacBio HiFi reads.
 # Arguments
 - `fastq::String`: Path to input FASTQ file containing HiFi reads
 - `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm")
+- `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
 
 # Returns
 Named tuple containing:
@@ -341,8 +350,9 @@ Named tuple containing:
 - Uses primary assembly mode (--primary) optimized for inbred samples
 - Skips assembly if output files already exist at the specified prefix
 - Utilizes all available CPU threads
+- Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
 """
-function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
+function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm", bloom_filter=-1)
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
     # Check if output directory exists before trying to read it
@@ -350,47 +360,63 @@ function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm")
     # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
     if isempty(hifiasm_outputs)
         mkpath(outdir)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm --primary -l0 -o $(hifiasm_outprefix) -t $(Sys.CPU_THREADS) $(fastq)`)
+        # Build command with optional bloom filter flag
+        cmd_args = ["hifiasm", "--primary", "-l0", "-o", hifiasm_outprefix, "-t", string(Sys.CPU_THREADS)]
+        if bloom_filter >= 0
+            push!(cmd_args, "-f$(bloom_filter)")
+        end
+        push!(cmd_args, fastq)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm $(cmd_args)`)
     end
     return (;outdir, hifiasm_outprefix)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+# disabled due to poor performance relative to other long read metagenomic assemblers in tests
+# """
+# $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run hifiasm-meta assembler for metagenomic PacBio HiFi assembly.
+# Run hifiasm-meta assembler for metagenomic PacBio HiFi assembly.
 
-# Arguments
-- `fastq::String`: Path to input FASTQ file containing HiFi reads
-- `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm_meta")
-- `similarity::Float64`: Similarity threshold for strain resolution (default: 0.85)
-- `purge_level::Int`: Purge level for strain variants (default: 2)
+# # Arguments
+# - `fastq::String`: Path to input FASTQ file containing HiFi reads
+# - `outdir::String`: Output directory path (default: "\${basename(fastq)}_hifiasm_meta")
+# - `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
+# - `read_selection::Bool`: Enable read selection for mock/small datasets (default: false)
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
+# # Returns
+# Named tuple containing:
+# - `outdir::String`: Path to output directory
+# - `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
 
-# Details
-- Uses hifiasm-meta's string graph approach for metagenomic strain resolution
-- Implements SNV-based read phasing to separate closely related strains
-- Optimized for low-abundance species and strain-level diversity
-- Automatically creates and uses a conda environment with hifiasm
-- Skips assembly if output files already exist at the specified prefix
-- Utilizes all available CPU threads
-"""
-function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", similarity=0.85, purge_level=2)
-    Mycelia.add_bioconda_env("hifiasm")
-    hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
-    # Check if output directory exists before trying to read it
-    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
+# # Details
+# - Uses hifiasm-meta's string graph approach for metagenomic strain resolution
+# - Automatically creates and uses a conda environment with hifiasm_meta
+# - Skips assembly if output files already exist at the specified prefix
+# - Utilizes all available CPU threads
+# - Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
+# - Read selection (-S) can be enabled for mock/small datasets to handle low complexity data
+# """
+# function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloom_filter=-1, read_selection=false)
+#     Mycelia.add_bioconda_env("hifiasm_meta")
+#     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
+#     # Check if output directory exists before trying to read it
+#     hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
     
-    if isempty(hifiasm_outputs)
-        mkpath(outdir)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm hifiasm-meta -t $(Sys.CPU_THREADS) -o $(hifiasm_outprefix) --purge-cov $(purge_level) --similarity $(similarity) $(fastq)`)
-    end
-    return (;outdir, hifiasm_outprefix)
-end
+#     if isempty(hifiasm_outputs)
+#         mkpath(outdir)
+#         # Build command with optional flags
+#         cmd_args = ["hifiasm_meta", "-t", string(Sys.CPU_THREADS), "-o", hifiasm_outprefix]
+#         if bloom_filter >= 0
+#             push!(cmd_args, "-f$(bloom_filter)")
+#         end
+#         if read_selection
+#             push!(cmd_args, "-S")
+#         end
+#         push!(cmd_args, fastq)
+#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`)
+#     end
+#     return (;outdir, hifiasm_outprefix)
+# end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -460,31 +486,125 @@ Assembly method enumeration for unified interface.
 end
 
 """
-Assembly configuration structure.
+Detect sequence type from input records using existing robust functions.
+"""
+function _detect_sequence_type(reads)
+    if isempty(reads)
+        return BioSequences.LongDNA{4}  # Default to DNA
+    end
+
+    # Get first sequence
+    first_seq = if reads[1] isa FASTX.FASTA.Record
+        FASTX.FASTA.sequence(reads[1])
+    elseif reads[1] isa FASTX.FASTQ.Record
+        FASTX.FASTQ.sequence(reads[1])
+    elseif reads[1] isa String
+        return String
+    else
+        error("Unsupported input type: $(typeof(reads[1]))")
+    end
+
+    # Use existing robust convert_sequence function which handles detection internally
+    biosequence = convert_sequence(first_seq)
+    return typeof(biosequence)
+end
+
+"""
+Determine k-mer type from observations and k value.
+"""
+function _determine_kmer_type(observations, k::Int)
+    if isempty(observations)
+        return Kmers.DNAKmer{k}  # Default to DNA k-mers
+    end
+
+    # Extract first sequence to determine type
+    first_seq = if observations[1] isa FASTX.FASTA.Record
+        FASTX.FASTA.sequence(observations[1])
+    elseif observations[1] isa FASTX.FASTQ.Record
+        FASTX.FASTQ.sequence(observations[1])
+    else
+        error("Unsupported observation type: $(typeof(observations[1]))")
+    end
+
+    # Use existing robust convert_sequence function for type detection
+    biosequence = convert_sequence(first_seq)
+
+    # Determine appropriate k-mer type based on sequence type
+    if biosequence isa BioSequences.LongDNA
+        return Kmers.DNAKmer{k}
+    elseif biosequence isa BioSequences.LongRNA
+        return Kmers.RNAKmer{k}
+    elseif biosequence isa BioSequences.LongAA
+        return Kmers.AAKmer{k}
+    else
+        error("Unsupported sequence type for k-mer graph: $(typeof(biosequence))")
+    end
+end
+
+"""
+Enhanced assembly configuration structure with input validation.
 """
 struct AssemblyConfig
-    k::Int                          # Primary k-mer size
-    error_rate::Float64             # Expected sequencing error rate
-    min_coverage::Int               # Minimum coverage for k-mer inclusion  
-    graph_mode::GraphMode           # SingleStrand or DoubleStrand
-    use_quality_scores::Bool        # Whether to use FASTQ quality scores
-    polish_iterations::Int          # Number of polishing iterations
-    bubble_resolution::Bool         # Whether to resolve bubble structures
-    repeat_resolution::Bool         # Whether to resolve repeat regions
-    
-    # Constructor with sensible defaults
+    # Core parameters - exactly one of these should be specified
+    k::Union{Int, Nothing}                                              # k-mer size (Nothing for overlap-based)
+    min_overlap::Union{Int, Nothing}                                    # Min overlap (Nothing for k-mer based)
+
+    # Input constraints
+    sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}}  # Type of input sequences
+    graph_mode::GraphMode                                               # SingleStrand or DoubleStrand
+
+    # Assembly parameters
+    error_rate::Float64                     # Expected sequencing error rate
+    min_coverage::Int                       # Minimum coverage for k-mer inclusion
+    use_quality_scores::Bool                # Whether to use FASTQ quality scores
+    polish_iterations::Int                  # Number of polishing iterations
+    bubble_resolution::Bool                 # Whether to resolve bubble structures
+    repeat_resolution::Bool                 # Whether to resolve repeat regions
+
+    # Constructor with validation
     function AssemblyConfig(;
-        k::Int = 31,
+        k::Union{Int, Nothing} = nothing,
+        min_overlap::Union{Int, Nothing} = nothing,
+        sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}} = BioSequences.LongDNA{4},
+        graph_mode::GraphMode = DoubleStrand,
         error_rate::Float64 = 0.01,
         min_coverage::Int = 3,
-        graph_mode::GraphMode = DoubleStrand,
         use_quality_scores::Bool = true,
         polish_iterations::Int = 3,
         bubble_resolution::Bool = true,
         repeat_resolution::Bool = true
     )
-        new(k, error_rate, min_coverage, graph_mode, use_quality_scores, 
-            polish_iterations, bubble_resolution, repeat_resolution)
+        # Validation: Must specify exactly one of k or min_overlap
+        if k === nothing && min_overlap === nothing
+            k = 31  # Default to k-mer mode with k=31
+        elseif k !== nothing && min_overlap !== nothing
+            error("Cannot specify both k ($(k)) and min_overlap ($(min_overlap)). Choose one approach.")
+        end
+
+        # Validation: Check strand compatibility with sequence types
+        if sequence_type <: BioSequences.LongAA && graph_mode == DoubleStrand
+            error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
+        end
+        if sequence_type == String && graph_mode == DoubleStrand
+            error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
+        end
+
+        # Validation: Parameter ranges
+        if k !== nothing && (k < 1 || k > 64)
+            error("k-mer size must be between 1 and 64, got k=$(k)")
+        end
+        if min_overlap !== nothing && min_overlap < 1
+            error("min_overlap must be positive, got min_overlap=$(min_overlap)")
+        end
+        if !(0.0 <= error_rate <= 1.0)
+            error("error_rate must be between 0.0 and 1.0, got error_rate=$(error_rate)")
+        end
+        if min_coverage < 1
+            error("min_coverage must be positive, got min_coverage=$(min_coverage)")
+        end
+
+        new(k, min_overlap, sequence_type, graph_mode, error_rate, min_coverage,
+            use_quality_scores, polish_iterations, bubble_resolution, repeat_resolution)
     end
 end
 
@@ -494,14 +614,18 @@ Assembly result structure containing contigs and metadata.
 struct AssemblyResult
     contigs::Vector{String}             # Final assembled contigs
     contig_names::Vector{String}        # Contig identifiers
-    graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Final assembly graph (optional)
+    graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Complete assembly graph (optional)
+    simplified_graph::Union{Nothing, MetaGraphsNext.MetaGraph}  # Simplified graph with collapsed paths
+    paths::Dict{String, Vector}         # Path mappings for GFA P-lines (path_id -> vertex_sequence)
     assembly_stats::Dict{String, Any}   # Assembly statistics and metrics
     fastq_contigs::Vector{FASTX.FASTQ.Record}  # Quality-aware contigs (FASTQ format)
-    
-    function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String}; 
-                          graph=nothing, assembly_stats=Dict{String, Any}(),
-                          fastq_contigs=FASTX.FASTQ.Record[])
-        new(contigs, contig_names, graph, assembly_stats, fastq_contigs)
+    gfa_compatible::Bool                # Whether graph structure is valid for GFA export
+
+    function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String};
+                          graph=nothing, simplified_graph=nothing, paths=Dict{String, Vector}(),
+                          assembly_stats=Dict{String, Any}(), fastq_contigs=FASTX.FASTQ.Record[],
+                          gfa_compatible=true)
+        new(contigs, contig_names, graph, simplified_graph, paths, assembly_stats, fastq_contigs, gfa_compatible)
     end
 end
 
@@ -545,67 +669,266 @@ function write_fastq_contigs(result::AssemblyResult, output_file::String)
 end
 
 """
-    assemble_genome(reads; method=StringGraph, config=AssemblyConfig()) -> AssemblyResult
+    write_gfa(result::AssemblyResult, output_file::String)
 
-Unified genome assembly interface using Phase 2 next-generation algorithms.
+Write assembly result to GFA (Graphical Fragment Assembly) format.
+Exports both graph topology and path information leveraging existing infrastructure.
+"""
+function write_gfa(result::AssemblyResult, output_file::String)
+    if isnothing(result.graph)
+        error("AssemblyResult contains no graph - cannot write GFA format")
+    end
+
+    if !result.gfa_compatible
+        @warn "AssemblyResult is marked as not GFA compatible - output may be invalid"
+    end
+
+    # Use the simplified graph if available, otherwise the full graph
+    graph_to_write = isnothing(result.simplified_graph) ? result.graph : result.simplified_graph
+
+    # Write base GFA structure using existing function
+    write_gfa_next(graph_to_write, output_file)
+
+    # Append path information if available
+    if !isempty(result.paths)
+        _append_gfa_paths(output_file, result.paths, result.contigs, result.contig_names)
+    end
+
+    @info "Assembly written to GFA format: $(output_file)"
+    return output_file
+end
+
+"""
+    save_assembly(result::AssemblyResult, output_file::String)
+
+Save complete assembly result using robust JLD2 serialization.
+"""
+function save_assembly(result::AssemblyResult, output_file::String)
+    JLD2.save(output_file, "assembly_result", result)
+    @info "Assembly saved to $(output_file)"
+    return output_file
+end
+
+"""
+    load_assembly(input_file::String) -> AssemblyResult
+
+Load complete assembly result from JLD2 file.
+"""
+function load_assembly(input_file::String)
+    return JLD2.load(input_file, "assembly_result")
+end
+
+"""
+    has_graph_structure(result::AssemblyResult) -> Bool
+
+Check if assembly result contains graph structure information.
+"""
+has_graph_structure(result::AssemblyResult) = !isnothing(result.graph)
+
+"""
+    has_simplified_graph(result::AssemblyResult) -> Bool
+
+Check if assembly result contains simplified graph with collapsed paths.
+"""
+has_simplified_graph(result::AssemblyResult) = !isnothing(result.simplified_graph)
+
+"""
+    has_paths(result::AssemblyResult) -> Bool
+
+Check if assembly result contains path mapping information.
+"""
+has_paths(result::AssemblyResult) = !isempty(result.paths)
+
+"""
+    validate_assembly_structure(result::AssemblyResult) -> Dict{String, Any}
+
+Validate the internal consistency of an AssemblyResult structure.
+Returns validation report complementing the existing validate_assembly function.
+"""
+function validate_assembly_structure(result::AssemblyResult)
+    report = Dict{String, Any}(
+        "valid" => true,
+        "issues" => String[],
+        "warnings" => String[]
+    )
+
+    # Check contig/name consistency
+    if length(result.contigs) != length(result.contig_names)
+        push!(report["issues"], "Contigs and contig_names have different lengths")
+        report["valid"] = false
+    end
+
+    # Check graph consistency if present
+    if !isnothing(result.graph) && !isnothing(result.simplified_graph)
+        if typeof(result.graph) != typeof(result.simplified_graph)
+            push!(report["warnings"], "Graph and simplified_graph have different types")
+        end
+    end
+
+    # Check path consistency
+    if !isempty(result.paths) && isnothing(result.graph)
+        push!(report["warnings"], "Paths provided but no graph structure available")
+    end
+
+    # Check GFA compatibility
+    if result.gfa_compatible && isnothing(result.graph)
+        push!(report["issues"], "Marked as GFA compatible but no graph structure")
+        report["valid"] = false
+    end
+
+    return report
+end
+
+"""
+    _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector}, contigs::Vector{String}, contig_names::Vector{String})
+
+Append path information to an existing GFA file.
+Adds GFA P-lines (path lines) that describe walks through the graph corresponding to assembled contigs.
+"""
+function _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector},
+                          contigs::Vector{String}, contig_names::Vector{String})
+    open(gfa_file, "a") do io
+        println(io, "# Path information for assembled contigs")
+
+        for (i, contig_name) in enumerate(contig_names)
+            if haskey(paths, contig_name) && i <= length(contigs)
+                path_vertices = paths[contig_name]
+                if !isempty(path_vertices)
+                    # Format: P <path_name> <vertex_list> <overlaps>
+                    vertex_list = join(string.(path_vertices) .* "+", ",")
+                    overlaps = repeat("*,", length(path_vertices) - 1) * "*"  # Default overlaps
+                    println(io, "P\t$(contig_name)\t$(vertex_list)\t$(overlaps)")
+                end
+            end
+        end
+    end
+end
+
+"""
+Auto-configure assembly based on input type and parameters.
+"""
+function _auto_configure_assembly(reads; k=nothing, min_overlap=nothing, graph_mode=nothing, kwargs...)
+    # Detect input format and sequence type
+    sequence_type = _detect_sequence_type(reads)
+
+    # Determine if quality scores are available
+    use_quality_scores = all(r -> r isa FASTX.FASTQ.Record, reads)
+
+    # Auto-detect graph mode if not specified
+    if graph_mode === nothing
+        graph_mode = if sequence_type <: BioSequences.LongAA || sequence_type == String
+            SingleStrand  # AA and strings can only be single strand
+        else
+            DoubleStrand  # DNA/RNA default to double strand
+        end
+    end
+
+    # Create config with detected parameters
+    return AssemblyConfig(;
+        k=k,
+        min_overlap=min_overlap,
+        sequence_type=sequence_type,
+        graph_mode=graph_mode,
+        use_quality_scores=use_quality_scores,
+        kwargs...
+    )
+end
+
+"""
+    assemble_genome(reads; k=31, kwargs...) -> AssemblyResult
+    assemble_genome(reads, config::AssemblyConfig) -> AssemblyResult
+
+Unified genome assembly interface with auto-detection and type-stable dispatch.
+
+# Auto-Detection Convenience Method
+```julia
+# Auto-detect sequence type and format, use k-mer approach
+result = assemble_genome(fasta_records; k=25)
+
+# Auto-detect sequence type and format, use overlap approach
+result = assemble_genome(fasta_records; min_overlap=100)
+
+# Override auto-detected parameters
+result = assemble_genome(reads; k=31, graph_mode=SingleStrand, error_rate=0.005)
+```
+
+# Type-Stable Direct Method
+```julia
+# Explicit configuration for maximum performance
+config = AssemblyConfig(k=25, sequence_type=BioSequences.LongDNA{4},
+                       graph_mode=DoubleStrand, use_quality_scores=true)
+result = assemble_genome(reads, config)
+```
 
 # Arguments
 - `reads`: Vector of FASTA/FASTQ records or file paths
-- `method`: Assembly strategy (StringGraph, KmerGraph, HybridOLC, MultiK)
-- `config`: Assembly configuration parameters
+- `config`: Assembly configuration (for type-stable version)
+
+# Keyword Arguments (auto-detection version)
+- `k`: k-mer size (mutually exclusive with min_overlap)
+- `min_overlap`: Minimum overlap length (mutually exclusive with k)
+- `graph_mode`: SingleStrand or DoubleStrand (auto-detected if not specified)
+- `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
 - `AssemblyResult`: Structure containing contigs, names, and assembly metadata
 
 # Details
-This is the main entry point for the unified assembly pipeline, leveraging:
-- Phase 1: MetaGraphsNext strand-aware graph construction  
-- Phase 2: Probabilistic algorithms, enhanced Viterbi, and graph algorithms
-- Phase 3: Integrated workflow with polishing and validation
+This interface automatically:
+1. **Detects sequence type**: DNA, RNA, AA, or String from input
+2. **Chooses assembly method**: k-mer vs overlap-based on parameters
+3. **Validates compatibility**: AA/String sequences → SingleStrand only
+4. **Dispatches optimally**: Based on input type and quality scores
 
-# Examples
-```julia
-# Basic assembly with default parameters
-reads = load_fastq_records("reads.fastq")
-result = assemble_genome(reads)
-
-# Custom assembly with specific k-mer size and error rate
-config = AssemblyConfig(k=25, error_rate=0.005, polish_iterations=5)
-result = assemble_genome(reads; method=KmerGraph, config=config)
-
-# Access results
-contigs = result.contigs
-stats = result.assembly_stats
-```
+**Method Selection Logic:**
+- String input + k → N-gram graph
+- String input + min_overlap → String graph
+- BioSequence input + k + quality → Qualmer graph
+- BioSequence input + k → K-mer graph
+- BioSequence input + min_overlap + quality → Quality BioSequence graph
+- BioSequence input + min_overlap → BioSequence graph
 """
-function assemble_genome(reads; method::AssemblyMethod=QualmerGraph, config::AssemblyConfig=AssemblyConfig())
-    @info "Starting unified genome assembly" method config.k config.error_rate
-    
+function assemble_genome(reads; kwargs...)
+    # Auto-detect configuration and dispatch to type-stable version
+    config = _auto_configure_assembly(reads; kwargs...)
+    return assemble_genome(reads, config)
+end
+
+"""
+Type-stable main assembly function that dispatches based on configuration.
+"""
+function assemble_genome(reads, config::AssemblyConfig)
+    @info "Starting unified genome assembly" config.sequence_type config.graph_mode config.k config.min_overlap
+
     # Phase 1: Load and validate input
     observations = _prepare_observations(reads)
     @info "Loaded $(length(observations)) sequence observations"
-    
-    # Phase 2: Assembly strategy dispatch following 6-graph hierarchy
-    if method == NgramGraph
-        result = _assemble_ngram_graph(observations, config)
-    elseif method == KmerGraph  
-        result = _assemble_kmer_graph(observations, config)
-    elseif method == QualmerGraph
-        result = _assemble_qualmer_graph(observations, config)
-    elseif method == StringGraph
-        result = _assemble_string_graph(observations, config)
-    elseif method == BioSequenceGraph
-        result = _assemble_biosequence_graph(observations, config)
-    elseif method == QualityBioSequenceGraph
-        result = _assemble_quality_biosequence_graph(observations, config)
-    elseif method == HybridOLC
-        result = _assemble_hybrid_olc(observations, config)
-    elseif method == MultiK
-        result = _assemble_multi_k(observations, config)
+
+    # Phase 2: Type-stable dispatch based on config parameters
+    result = if config.sequence_type == String
+        if config.k !== nothing
+            _assemble_ngram_graph(observations, config)  # N-gram
+        else
+            _assemble_string_graph(observations, config)  # String graph (overlap-based)
+        end
+    elseif config.sequence_type <: BioSequences.BioSequence
+        if config.use_quality_scores
+            if config.k !== nothing
+                _assemble_qualmer_graph(observations, config)  # Qualmer
+            else
+                _assemble_quality_biosequence_graph(observations, config)  # Quality overlap-based
+            end
+        else
+            if config.k !== nothing
+                _assemble_kmer_graph(observations, config)  # K-mer
+            else
+                _assemble_biosequence_graph(observations, config)  # BioSequence overlap-based
+            end
+        end
     else
-        throw(ArgumentError("Unknown assembly method: $method"))
+        throw(ArgumentError("Unsupported sequence type: $(config.sequence_type)"))
     end
-    
+
     @info "Assembly completed: $(length(result.contigs)) contigs generated"
     return result
 end

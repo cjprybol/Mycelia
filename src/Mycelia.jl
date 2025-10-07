@@ -53,7 +53,6 @@ import LsqFit
 import Luxor
 import Makie
 import MD5
-import MetaGraphs
 import MetaGraphsNext
 import Mmap
 import MultivariateStats
@@ -112,7 +111,7 @@ include("fastq-graphs.jl")          # Quality-aware BioSequence graphs (depends 
 include("assembly.jl")
 
 # Intelligent assembly algorithms (depends on assembly.jl and core graph types)
-include("intelligent-assembly.jl")
+# include("intelligent-assembly.jl")
 
 # Iterative assembly algorithms (depends on intelligent-assembly.jl)
 include("iterative-assembly.jl")
@@ -120,8 +119,8 @@ include("iterative-assembly.jl")
 # Advanced algorithms (depend on core graph types)
 include("viterbi-next.jl")
 
-# Cross-validation pipeline (depends on both intelligent and iterative assembly)
-include("cross-validation.jl")
+# # Cross-validation pipeline (depends on both intelligent and iterative assembly)
+# include("cross-validation.jl")
 
 # to be added back as we finish their implementations
 # Reinforcement learning framework (depends on intelligent-assembly.jl and iterative-assembly.jl)

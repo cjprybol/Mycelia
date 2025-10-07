@@ -737,11 +737,10 @@ Map paired-end reads to a reference sequence using minimap2.
 # Returns
 Named tuple containing:
 - `cmd`: Command(s) to execute (String or Array{Cmd})
-- `outfile`: Path to compressed output SAM file (*.sam.gz)
+- `outfile`: Path to output BAM file
 
 # Notes
-- Requires minimap2, samtools, and pigz conda environments
-- Automatically compresses output using pigz
+- Requires minimap2, and samtools conda environments
 - Index file must exist at `\$(fasta).x\$(mapping_type).I\$(index_size).mmi`
 """
 function minimap_map_paired_end_with_index(;
@@ -755,33 +754,49 @@ function minimap_map_paired_end_with_index(;
         fasta="",
         index_file = ""
     )
+    # determine index_file and index_size
     if isempty(index_file)
         @assert !isempty(fasta) "must supply index file or fasta + mem_gb + denominator values to infer index file"
         index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
         index_file = "$(fasta).x$(mapping_type).I$(index_size).mmi"
+    else
+        # parse basename for ".I<index_size>.mmi"
+        filename = basename(index_file)
+        m = match(r"\.I(\d+G)\.mmi$", filename)
+        if m === nothing
+            error("Could not parse index size from index_file basename: $filename. Expected pattern '.I<index_size>.mmi' (e.g. genome.xsr.I42.mmi).")
+        end
+        parsed_index_size = m.captures[1]
+        expected_index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+        @assert parsed_index_size == expected_index_size "Index size in index_file ($parsed_index_size) does not match expected index size ($expected_index_size)."
+        index_size = parsed_index_size
     end
     # @show index_file
     @assert isfile(index_file) "$(index_file) not found!!"
     @assert isfile(forward) "$(forward) not found!!"
     @assert isfile(reverse) "$(reverse) not found!!"
     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
-    temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
+    # temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
     # outfile = temp_sam_outfile
-    outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz")
+    # temp_sam_outfile = 
+    outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.bam"
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
-    Mycelia.add_bioconda_env("pigz")
+    # Mycelia.add_bioconda_env("pigz")
     if as_string
         cmd =
         """
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile) \\
-        && $(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x sr -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp \\
+        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
+        | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
         """
     else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(temp_sam_outfile).tmp -o $(temp_sam_outfile)`
-        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $(threads) $(temp_sam_outfile)`
-        cmd = pipeline(map, compress)
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x sr -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp`
+        sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -`
+        compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
+        cmd = pipeline(map, sort_cmd, compress)
     end
+    
     return (;cmd, outfile)
 end
 

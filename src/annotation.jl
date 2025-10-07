@@ -163,369 +163,335 @@
 #     return (BLAST_LAMBDA * raw - log(BLAST_K)) / log(2)
 # end
 
-# --------------- Internal per-entry processing ----------------
-# This function remains the same as the previous working version.
-function _process_entry!(
-    entry_node::EzXML.Node,
-    entry_id_col,
-    updated_col,
-    name_col,
-    rep_db_type_col,
-    rep_db_id_col,
-    rep_uniprotkb_accession_col,
-    rep_uniparc_id_col,
-    rep_uniref90_id_col,
-    rep_uniref50_id_col,
-    rep_protein_name_col,
-    rep_ncbi_taxonomy_col,
-    rep_source_organism_col,
-    rep_is_seed_col,
-    rep_length_reported_col,
-    rep_sequence_col::Union{Nothing,Vector{Union{Missing,String}}},
-    rep_sequence_length_attr_col,
-    rep_sequence_checksum_col,
-    member_count_col,
-    common_taxon_col,
-    common_taxon_id_col,
-    entry_property_types_col,
-    entry_property_values_col,
-    rep_property_types_col,
-    rep_property_values_col,
-    member_db_ids_col,
-    member_uniprotkb_accessions_col,
-    member_uniparc_ids_col,
-    store_sequence::Bool
-)
-    # Attributes
-    eid_attr = EzXML.haskey(entry_node, "id") ? entry_node["id"] : ""
-    updated_attr = EzXML.haskey(entry_node, "updated") ? entry_node["updated"] : missing
+# # --------------- Internal per-entry processing ----------------
+# # This function remains the same as the previous working version.
+# function _process_entry!(
+#     entry_node::EzXML.Node,
+#     entry_id_col,
+#     updated_col,
+#     name_col,
+#     rep_db_type_col,
+#     rep_db_id_col,
+#     rep_uniprotkb_accession_col,
+#     rep_uniparc_id_col,
+#     rep_uniref90_id_col,
+#     rep_uniref50_id_col,
+#     rep_protein_name_col,
+#     rep_ncbi_taxonomy_col,
+#     rep_source_organism_col,
+#     rep_is_seed_col,
+#     rep_length_reported_col,
+#     rep_sequence_col::Union{Nothing,Vector{Union{Missing,String}}},
+#     rep_sequence_length_attr_col,
+#     rep_sequence_checksum_col,
+#     member_count_col,
+#     common_taxon_col,
+#     common_taxon_id_col,
+#     entry_property_types_col,
+#     entry_property_values_col,
+#     rep_property_types_col,
+#     rep_property_values_col,
+#     member_db_ids_col,
+#     member_uniprotkb_accessions_col,
+#     member_uniparc_ids_col,
+#     store_sequence::Bool
+# )
+#     # Attributes
+#     eid_attr = EzXML.haskey(entry_node, "id") ? entry_node["id"] : ""
+#     updated_attr = EzXML.haskey(entry_node, "updated") ? entry_node["updated"] : missing
 
-    # <name>
-    entry_name_node = EzXML.findfirst("name", entry_node)
-    entry_name = entry_name_node === nothing ? missing : strip(EzXML.nodecontent(entry_name_node))
+#     # <name>
+#     entry_name_node = EzXML.findfirst("name", entry_node)
+#     entry_name = entry_name_node === nothing ? missing : strip(EzXML.nodecontent(entry_name_node))
 
-    # Entry-level properties
-    e_prop_types = String[]
-    e_prop_values = String[]
-    local_member_count = missing
-    local_common_taxon = missing
-    local_common_taxon_id = missing
+#     # Entry-level properties
+#     e_prop_types = String[]
+#     e_prop_values = String[]
+#     local_member_count = missing
+#     local_common_taxon = missing
+#     local_common_taxon_id = missing
 
-    for child in EzXML.eachelement(entry_node)
-        if EzXML.nodename(child) == "property"
-            t = EzXML.haskey(child, "type") ? child["type"] : nothing
-            v = EzXML.haskey(child, "value") ? child["value"] : nothing
-            if t !== nothing && v !== nothing
-                push!(e_prop_types, t)
-                push!(e_prop_values, v)
-                if t == "member count"
-                    local_member_count = something(tryparse(Int, v), missing)
-                elseif t == "common taxon"
-                    local_common_taxon = v
-                elseif t == "common taxon ID"
-                    local_common_taxon_id = v
-                end
-            end
-        end
-    end
+#     for child in EzXML.eachelement(entry_node)
+#         if EzXML.nodename(child) == "property"
+#             t = EzXML.haskey(child, "type") ? child["type"] : nothing
+#             v = EzXML.haskey(child, "value") ? child["value"] : nothing
+#             if t !== nothing && v !== nothing
+#                 push!(e_prop_types, t)
+#                 push!(e_prop_values, v)
+#                 if t == "member count"
+#                     local_member_count = something(tryparse(Int, v), missing)
+#                 elseif t == "common taxon"
+#                     local_common_taxon = v
+#                 elseif t == "common taxon ID"
+#                     local_common_taxon_id = v
+#                 end
+#             end
+#         end
+#     end
 
-    # Representative member
-    rep_db_type, rep_db_id = missing, missing
-    rep_props_types, rep_props_values = String[], String[]
-    rep_uniprotkb_acc, rep_uniparc_id_val, rep_uniref90_id_val, rep_uniref50_id_val = missing, missing, missing, missing
-    rep_protein_name_val, rep_ncbi_taxonomy_val, rep_source_organism_val = missing, missing, missing
-    rep_is_seed_val, rep_length_prop = missing, missing
-    rep_sequence_text, rep_seq_len_attr, rep_seq_checksum = missing, missing, missing
+#     # Representative member
+#     rep_db_type, rep_db_id = missing, missing
+#     rep_props_types, rep_props_values = String[], String[]
+#     rep_uniprotkb_acc, rep_uniparc_id_val, rep_uniref90_id_val, rep_uniref50_id_val = missing, missing, missing, missing
+#     rep_protein_name_val, rep_ncbi_taxonomy_val, rep_source_organism_val = missing, missing, missing
+#     rep_is_seed_val, rep_length_prop = missing, missing
+#     rep_sequence_text, rep_seq_len_attr, rep_seq_checksum = missing, missing, missing
 
-    rep_member_node = EzXML.findfirst("representativeMember", entry_node)
-    if rep_member_node !== nothing
-        db_ref_node = EzXML.findfirst("dbReference", rep_member_node)
-        if db_ref_node !== nothing
-            rep_db_type = EzXML.haskey(db_ref_node, "type") ? db_ref_node["type"] : missing
-            rep_db_id = EzXML.haskey(db_ref_node, "id") ? db_ref_node["id"] : missing
+#     rep_member_node = EzXML.findfirst("representativeMember", entry_node)
+#     if rep_member_node !== nothing
+#         db_ref_node = EzXML.findfirst("dbReference", rep_member_node)
+#         if db_ref_node !== nothing
+#             rep_db_type = EzXML.haskey(db_ref_node, "type") ? db_ref_node["type"] : missing
+#             rep_db_id = EzXML.haskey(db_ref_node, "id") ? db_ref_node["id"] : missing
 
-            for p in EzXML.eachelement(db_ref_node)
-                if EzXML.nodename(p) == "property"
-                    pt = EzXML.haskey(p, "type") ? p["type"] : nothing
-                    pv = EzXML.haskey(p, "value") ? p["value"] : nothing
-                    if pt !== nothing && pv !== nothing
-                        push!(rep_props_types, pt)
-                        push!(rep_props_values, pv)
-                        if pt == "UniProtKB accession"; rep_uniprotkb_acc = pv
-                        elseif pt == "UniParc ID"; rep_uniparc_id_val = pv
-                        elseif pt == "UniRef90 ID"; rep_uniref90_id_val = pv
-                        elseif pt == "UniRef50 ID"; rep_uniref50_id_val = pv
-                        elseif pt == "protein name"; rep_protein_name_val = pv
-                        elseif pt == "NCBI taxonomy"; rep_ncbi_taxonomy_val = pv
-                        elseif pt == "source organism"; rep_source_organism_val = pv
-                        elseif pt == "isSeed"; rep_is_seed_val = lowercase(pv) == "true"
-                        elseif pt == "length"; rep_length_prop = something(tryparse(Int, pv), missing)
-                        end
-                    end
-                end
-            end
-        end
+#             for p in EzXML.eachelement(db_ref_node)
+#                 if EzXML.nodename(p) == "property"
+#                     pt = EzXML.haskey(p, "type") ? p["type"] : nothing
+#                     pv = EzXML.haskey(p, "value") ? p["value"] : nothing
+#                     if pt !== nothing && pv !== nothing
+#                         push!(rep_props_types, pt)
+#                         push!(rep_props_values, pv)
+#                         if pt == "UniProtKB accession"; rep_uniprotkb_acc = pv
+#                         elseif pt == "UniParc ID"; rep_uniparc_id_val = pv
+#                         elseif pt == "UniRef90 ID"; rep_uniref90_id_val = pv
+#                         elseif pt == "UniRef50 ID"; rep_uniref50_id_val = pv
+#                         elseif pt == "protein name"; rep_protein_name_val = pv
+#                         elseif pt == "NCBI taxonomy"; rep_ncbi_taxonomy_val = pv
+#                         elseif pt == "source organism"; rep_source_organism_val = pv
+#                         elseif pt == "isSeed"; rep_is_seed_val = lowercase(pv) == "true"
+#                         elseif pt == "length"; rep_length_prop = something(tryparse(Int, pv), missing)
+#                         end
+#                     end
+#                 end
+#             end
+#         end
 
-        seq_node = EzXML.findfirst("sequence", rep_member_node)
-        if seq_node !== nothing
-            rep_sequence_text = replace(EzXML.nodecontent(seq_node), r"\s+" => "")
-            len_attr = EzXML.haskey(seq_node, "length") ? seq_node["length"] : nothing
-            rep_seq_len_attr = len_attr === nothing ? missing : something(tryparse(Int, len_attr), missing)
-            cks = EzXML.haskey(seq_node, "checksum") ? seq_node["checksum"] : nothing
-            rep_seq_checksum = cks === nothing ? missing : cks
-        end
-    end
+#         seq_node = EzXML.findfirst("sequence", rep_member_node)
+#         if seq_node !== nothing
+#             rep_sequence_text = replace(EzXML.nodecontent(seq_node), r"\s+" => "")
+#             len_attr = EzXML.haskey(seq_node, "length") ? seq_node["length"] : nothing
+#             rep_seq_len_attr = len_attr === nothing ? missing : something(tryparse(Int, len_attr), missing)
+#             cks = EzXML.haskey(seq_node, "checksum") ? seq_node["checksum"] : nothing
+#             rep_seq_checksum = cks === nothing ? missing : cks
+#         end
+#     end
 
-    # Other Members
-    member_ids_local, member_uniprot_accs, member_uniparc_ids_local = String[], String[], String[]
-    for child in EzXML.eachelement(entry_node)
-        if EzXML.nodename(child) == "member"
-            dbref = EzXML.findfirst("dbReference", child)
-            if dbref !== nothing
-                mid = EzXML.haskey(dbref, "id") ? dbref["id"] : ""
-                push!(member_ids_local, mid)
-                local_up, local_upc = nothing, nothing
-                for p in EzXML.eachelement(dbref)
-                    if EzXML.nodename(p) == "property"
-                        pt = EzXML.haskey(p, "type") ? p["type"] : nothing
-                        pv = EzXML.haskey(p, "value") ? p["value"] : nothing
-                        if pt == "UniProtKB accession"; local_up = pv
-                        elseif pt == "UniParc ID"; local_upc = pv
-                        end
-                    end
-                end
-                if local_up !== nothing; push!(member_uniprot_accs, local_up); end
-                if local_upc !== nothing; push!(member_uniparc_ids_local, local_upc); end
-            end
-        end
-    end
+#     # Other Members
+#     member_ids_local, member_uniprot_accs, member_uniparc_ids_local = String[], String[], String[]
+#     for child in EzXML.eachelement(entry_node)
+#         if EzXML.nodename(child) == "member"
+#             dbref = EzXML.findfirst("dbReference", child)
+#             if dbref !== nothing
+#                 mid = EzXML.haskey(dbref, "id") ? dbref["id"] : ""
+#                 push!(member_ids_local, mid)
+#                 local_up, local_upc = nothing, nothing
+#                 for p in EzXML.eachelement(dbref)
+#                     if EzXML.nodename(p) == "property"
+#                         pt = EzXML.haskey(p, "type") ? p["type"] : nothing
+#                         pv = EzXML.haskey(p, "value") ? p["value"] : nothing
+#                         if pt == "UniProtKB accession"; local_up = pv
+#                         elseif pt == "UniParc ID"; local_upc = pv
+#                         end
+#                     end
+#                 end
+#                 if local_up !== nothing; push!(member_uniprot_accs, local_up); end
+#                 if local_upc !== nothing; push!(member_uniparc_ids_local, local_upc); end
+#             end
+#         end
+#     end
 
-    # Normalize sequence length
-    if rep_sequence_text !== missing
-        actual_len = length(rep_sequence_text)
-        if rep_seq_len_attr !== actual_len
-            rep_seq_len_attr = actual_len
-        end
-    end
+#     # Normalize sequence length
+#     if rep_sequence_text !== missing
+#         actual_len = length(rep_sequence_text)
+#         if rep_seq_len_attr !== actual_len
+#             rep_seq_len_attr = actual_len
+#         end
+#     end
 
-    # Push data to columns
-    push!(entry_id_col, eid_attr)
-    push!(updated_col, updated_attr)
-    push!(name_col, entry_name)
-    push!(rep_db_type_col, rep_db_type)
-    push!(rep_db_id_col, rep_db_id)
-    push!(rep_uniprotkb_accession_col, rep_uniprotkb_acc)
-    push!(rep_uniparc_id_col, rep_uniparc_id_val)
-    push!(rep_uniref90_id_col, rep_uniref90_id_val)
-    push!(rep_uniref50_id_col, rep_uniref50_id_val)
-    push!(rep_protein_name_col, rep_protein_name_val)
-    push!(rep_ncbi_taxonomy_col, rep_ncbi_taxonomy_val)
-    push!(rep_source_organism_col, rep_source_organism_val)
-    push!(rep_is_seed_col, rep_is_seed_val)
-    push!(rep_length_reported_col, rep_length_prop)
-    if store_sequence; push!(rep_sequence_col, rep_sequence_text); end
-    push!(rep_sequence_length_attr_col, rep_seq_len_attr)
-    push!(rep_sequence_checksum_col, rep_seq_checksum)
-    push!(member_count_col, local_member_count)
-    push!(common_taxon_col, local_common_taxon)
-    push!(common_taxon_id_col, local_common_taxon_id)
-    push!(entry_property_types_col, e_prop_types)
-    push!(entry_property_values_col, e_prop_values)
-    push!(rep_property_types_col, rep_props_types)
-    push!(rep_property_values_col, rep_props_values)
-    push!(member_db_ids_col, member_ids_local)
-    push!(member_uniprotkb_accessions_col, member_uniprot_accs)
-    push!(member_uniparc_ids_col, member_uniparc_ids_local)
+#     # Push data to columns
+#     push!(entry_id_col, eid_attr)
+#     push!(updated_col, updated_attr)
+#     push!(name_col, entry_name)
+#     push!(rep_db_type_col, rep_db_type)
+#     push!(rep_db_id_col, rep_db_id)
+#     push!(rep_uniprotkb_accession_col, rep_uniprotkb_acc)
+#     push!(rep_uniparc_id_col, rep_uniparc_id_val)
+#     push!(rep_uniref90_id_col, rep_uniref90_id_val)
+#     push!(rep_uniref50_id_col, rep_uniref50_id_val)
+#     push!(rep_protein_name_col, rep_protein_name_val)
+#     push!(rep_ncbi_taxonomy_col, rep_ncbi_taxonomy_val)
+#     push!(rep_source_organism_col, rep_source_organism_val)
+#     push!(rep_is_seed_col, rep_is_seed_val)
+#     push!(rep_length_reported_col, rep_length_prop)
+#     if store_sequence; push!(rep_sequence_col, rep_sequence_text); end
+#     push!(rep_sequence_length_attr_col, rep_seq_len_attr)
+#     push!(rep_sequence_checksum_col, rep_seq_checksum)
+#     push!(member_count_col, local_member_count)
+#     push!(common_taxon_col, local_common_taxon)
+#     push!(common_taxon_id_col, local_common_taxon_id)
+#     push!(entry_property_types_col, e_prop_types)
+#     push!(entry_property_values_col, e_prop_values)
+#     push!(rep_property_types_col, rep_props_types)
+#     push!(rep_property_values_col, rep_props_values)
+#     push!(member_db_ids_col, member_ids_local)
+#     push!(member_uniprotkb_accessions_col, member_uniprot_accs)
+#     push!(member_uniparc_ids_col, member_uniparc_ids_local)
 
-    return nothing
-end
+#     return nothing
+# end
 
-"""
-    parse_uniref100_to_dataframe(xml_path::String;
-                                 limit::Union{Nothing,Int}=nothing,
-                                 store_sequence::Bool=true,
-                                 include_ids::Union{Nothing, Set{String}}=nothing)
+# Takes forever to run and uses too much memory, not recommended
+# """
+#     parse_uniref100_to_dataframe(xml_path::String;
+#                                  limit::Union{Nothing,Int}=nothing,
+#                                  store_sequence::Bool=true,
+#                                  include_ids::Union{Nothing, Set{String}}=nothing)
 
-Parses a UniRef100 XML file into a DataFrame, with options for filtering and memory management.
-"""
-function parse_uniref100_to_dataframe(xml_path::String;
-                                      limit::Union{Nothing,Int}=nothing,
-                                      store_sequence::Bool=true,
-                                      include_ids::Union{Nothing, Set{String}}=nothing)
+# Parses a UniRef100 XML file into a DataFrame, with options for filtering and memory management.
+# """
+# function parse_uniref100_to_dataframe(xml_path::String;
+#                                       limit::Union{Nothing,Int}=nothing,
+#                                       store_sequence::Bool=true,
+#                                       include_ids::Union{Nothing, Set{String}}=nothing)
 
-    # ---------------- Column storage ----------------
-    entry_id = String[]
-    updated = Vector{Union{Missing,String}}()
-    name = Vector{Union{Missing,String}}()
-    rep_db_type = Vector{Union{Missing,String}}()
-    rep_db_id = Vector{Union{Missing,String}}()
-    rep_uniprotkb_accession = Vector{Union{Missing,String}}()
-    rep_uniparc_id = Vector{Union{Missing,String}}()
-    rep_uniref90_id = Vector{Union{Missing,String}}()
-    rep_uniref50_id = Vector{Union{Missing,String}}()
-    rep_protein_name = Vector{Union{Missing,String}}()
-    rep_ncbi_taxonomy = Vector{Union{Missing,String}}()
-    rep_source_organism = Vector{Union{Missing,String}}()
-    rep_is_seed = Vector{Union{Missing,Bool}}()
-    rep_length_reported = Vector{Union{Missing,Int}}()
-    rep_sequence = store_sequence ? Vector{Union{Missing,String}}() : nothing
-    rep_sequence_length_attr = Vector{Union{Missing,Int}}()
-    rep_sequence_checksum = Vector{Union{Missing,String}}()
-    member_count = Vector{Union{Missing,Int}}()
-    common_taxon = Vector{Union{Missing,String}}()
-    common_taxon_id = Vector{Union{Missing,String}}()
-    entry_property_types = Vector{Vector{String}}()
-    entry_property_values = Vector{Vector{String}}()
-    rep_property_types = Vector{Vector{String}}()
-    rep_property_values = Vector{Vector{String}}()
-    member_db_ids = Vector{Vector{String}}()
-    member_uniprotkb_accessions = Vector{Vector{String}}()
-    member_uniparc_ids = Vector{Vector{String}}()
+#     # ---------------- Column storage ----------------
+#     entry_id = String[]
+#     updated = Vector{Union{Missing,String}}()
+#     name = Vector{Union{Missing,String}}()
+#     rep_db_type = Vector{Union{Missing,String}}()
+#     rep_db_id = Vector{Union{Missing,String}}()
+#     rep_uniprotkb_accession = Vector{Union{Missing,String}}()
+#     rep_uniparc_id = Vector{Union{Missing,String}}()
+#     rep_uniref90_id = Vector{Union{Missing,String}}()
+#     rep_uniref50_id = Vector{Union{Missing,String}}()
+#     rep_protein_name = Vector{Union{Missing,String}}()
+#     rep_ncbi_taxonomy = Vector{Union{Missing,String}}()
+#     rep_source_organism = Vector{Union{Missing,String}}()
+#     rep_is_seed = Vector{Union{Missing,Bool}}()
+#     rep_length_reported = Vector{Union{Missing,Int}}()
+#     rep_sequence = store_sequence ? Vector{Union{Missing,String}}() : nothing
+#     rep_sequence_length_attr = Vector{Union{Missing,Int}}()
+#     rep_sequence_checksum = Vector{Union{Missing,String}}()
+#     member_count = Vector{Union{Missing,Int}}()
+#     common_taxon = Vector{Union{Missing,String}}()
+#     common_taxon_id = Vector{Union{Missing,String}}()
+#     entry_property_types = Vector{Vector{String}}()
+#     entry_property_values = Vector{Vector{String}}()
+#     rep_property_types = Vector{Vector{String}}()
+#     rep_property_values = Vector{Vector{String}}()
+#     member_db_ids = Vector{Vector{String}}()
+#     member_uniprotkb_accessions = Vector{Vector{String}}()
+#     member_uniparc_ids = Vector{Vector{String}}()
 
-    # ---------------- Open & detect gzip ----------------
-    raw_io = open(xml_path, "r")
-    stream = raw_io
-    try
-        if endswith(lowercase(xml_path), ".gz")
-            stream = CodecZlib.GzipDecompressorStream(raw_io)
-        end
+#     # ---------------- Open & detect gzip ----------------
+#     raw_io = open(xml_path, "r")
+#     stream = raw_io
+#     try
+#         if endswith(lowercase(xml_path), ".gz")
+#             stream = CodecZlib.GzipDecompressorStream(raw_io)
+#         end
 
-        # ---------------- Line-based entry extraction ----------------
-        buf = IOBuffer()
-        in_entry = false
-        records_read = 0
-        records_kept = 0
+#         # ---------------- Line-based entry extraction ----------------
+#         buf = IOBuffer()
+#         in_entry = false
+#         records_read = 0
+#         records_kept = 0
 
-        while !eof(stream)
-            line = readline(stream)
+#         while !eof(stream)
+#             line = readline(stream)
 
-            if !in_entry && occursin("<entry", line)
-                in_entry = true
-                truncate(buf, 0)
-            end
+#             if !in_entry && occursin("<entry", line)
+#                 in_entry = true
+#                 truncate(buf, 0)
+#             end
 
-            if in_entry
-                write(buf, line)
-                if occursin("</entry>", line)
-                    in_entry = false
-                    records_read += 1
+#             if in_entry
+#                 write(buf, line)
+#                 if occursin("</entry>", line)
+#                     in_entry = false
+#                     records_read += 1
                     
-                    entry_xml_string = String(take!(buf))
-                    doc = EzXML.parsexml(entry_xml_string)
-                    root = EzXML.root(doc)
+#                     entry_xml_string = String(take!(buf))
+#                     doc = EzXML.parsexml(entry_xml_string)
+#                     root = EzXML.root(doc)
 
-                    # --- MODIFICATION: Filter by ID before full processing ---
-                    if include_ids !== nothing
-                        entry_id_val = EzXML.haskey(root, "id") ? root["id"] : ""
-                        if entry_id_val ∉ include_ids
-                            continue # Skip this entry
-                        end
-                    end
+#                     # --- MODIFICATION: Filter by ID before full processing ---
+#                     if include_ids !== nothing
+#                         entry_id_val = EzXML.haskey(root, "id") ? root["id"] : ""
+#                         if entry_id_val ∉ include_ids
+#                             continue # Skip this entry
+#                         end
+#                     end
                     
-                    _process_entry!(
-                        root,
-                        entry_id, updated, name,
-                        rep_db_type, rep_db_id,
-                        rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
-                        rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
-                        rep_length_reported,
-                        rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
-                        member_count, common_taxon, common_taxon_id,
-                        entry_property_types, entry_property_values,
-                        rep_property_types, rep_property_values,
-                        member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
-                        store_sequence
-                    )
-                    records_kept += 1
+#                     _process_entry!(
+#                         root,
+#                         entry_id, updated, name,
+#                         rep_db_type, rep_db_id,
+#                         rep_uniprotkb_accession, rep_uniparc_id, rep_uniref90_id, rep_uniref50_id,
+#                         rep_protein_name, rep_ncbi_taxonomy, rep_source_organism, rep_is_seed,
+#                         rep_length_reported,
+#                         rep_sequence, rep_sequence_length_attr, rep_sequence_checksum,
+#                         member_count, common_taxon, common_taxon_id,
+#                         entry_property_types, entry_property_values,
+#                         rep_property_types, rep_property_values,
+#                         member_db_ids, member_uniprotkb_accessions, member_uniparc_ids,
+#                         store_sequence
+#                     )
+#                     records_kept += 1
 
-                    # --- MODIFICATION: Update progress meter ---
-                    if records_read % 1_000_000 == 0
-                        println("Records read from file: ", records_read)
-                    end
+#                     # --- MODIFICATION: Update progress meter ---
+#                     if records_read % 1_000_000 == 0
+#                         println("Records read from file: ", records_read)
+#                     end
 
-                    if limit !== nothing && records_kept >= limit
-                        break
-                    end
-                end
-            end
-        end
+#                     if limit !== nothing && records_kept >= limit
+#                         break
+#                     end
+#                 end
+#             end
+#         end
 
-        println("Finished parsing. Total records read: ", records_read, ". Total records kept: ", records_kept)
-    finally
-        close(raw_io)
-    end
+#         println("Finished parsing. Total records read: ", records_read, ". Total records kept: ", records_kept)
+#     finally
+#         close(raw_io)
+#     end
 
-    # ---------------- Build DataFrame ----------------
-    df_cols = Dict{Symbol, Any}(
-        :entry_id => entry_id,
-        :updated => updated,
-        :name => name,
-        :rep_db_type => rep_db_type,
-        :rep_db_id => rep_db_id,
-        :rep_uniprotkb_accession => rep_uniprotkb_accession,
-        :rep_uniparc_id => rep_uniparc_id,
-        :rep_uniref90_id => rep_uniref90_id,
-        :rep_uniref50_id => rep_uniref50_id,
-        :rep_protein_name => rep_protein_name,
-        :rep_ncbi_taxonomy => rep_ncbi_taxonomy,
-        :rep_source_organism => rep_source_organism,
-        :rep_is_seed => rep_is_seed,
-        :rep_length_reported => rep_length_reported,
-        :rep_sequence_length_attr => rep_sequence_length_attr,
-        :rep_sequence_checksum => rep_sequence_checksum,
-        :member_count => member_count,
-        :common_taxon => common_taxon,
-        :common_taxon_id => common_taxon_id,
-        :entry_property_types => entry_property_types,
-        :entry_property_values => entry_property_values,
-        :rep_property_types => rep_property_types,
-        :rep_property_values => rep_property_values,
-        :member_db_ids => member_db_ids,
-        :member_uniprotkb_accessions => member_uniprotkb_accessions,
-        :member_uniparc_ids => member_uniparc_ids,
-    )
+#     # ---------------- Build DataFrame ----------------
+#     df_cols = Dict{Symbol, Any}(
+#         :entry_id => entry_id,
+#         :updated => updated,
+#         :name => name,
+#         :rep_db_type => rep_db_type,
+#         :rep_db_id => rep_db_id,
+#         :rep_uniprotkb_accession => rep_uniprotkb_accession,
+#         :rep_uniparc_id => rep_uniparc_id,
+#         :rep_uniref90_id => rep_uniref90_id,
+#         :rep_uniref50_id => rep_uniref50_id,
+#         :rep_protein_name => rep_protein_name,
+#         :rep_ncbi_taxonomy => rep_ncbi_taxonomy,
+#         :rep_source_organism => rep_source_organism,
+#         :rep_is_seed => rep_is_seed,
+#         :rep_length_reported => rep_length_reported,
+#         :rep_sequence_length_attr => rep_sequence_length_attr,
+#         :rep_sequence_checksum => rep_sequence_checksum,
+#         :member_count => member_count,
+#         :common_taxon => common_taxon,
+#         :common_taxon_id => common_taxon_id,
+#         :entry_property_types => entry_property_types,
+#         :entry_property_values => entry_property_values,
+#         :rep_property_types => rep_property_types,
+#         :rep_property_values => rep_property_values,
+#         :member_db_ids => member_db_ids,
+#         :member_uniprotkb_accessions => member_uniprotkb_accessions,
+#         :member_uniparc_ids => member_uniparc_ids,
+#     )
 
-    if store_sequence
-        df_cols[:rep_sequence] = rep_sequence
-    end
+#     if store_sequence
+#         df_cols[:rep_sequence] = rep_sequence
+#     end
 
-    return DataFrames.DataFrame(df_cols)
-end
-
-function run_phage_annotation(;
-    fasta::AbstractString,
-    pharroka_dbdir = joinpath(homedir(), "workspace", "pharroka"),
-    phold_dbdir = joinpath(homedir(), "workspace", "phold"),
-    phynteny_dbdir = joinpath(homedir(), "workspace", "phynteny"),
-    prefix = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
-    pharroka_outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pharroka"),
-    phold_outdir = joinpath(pharroka_outdir, "phold"),
-    phynteny_outdir = joinpath(phold_outdir, "phynteny"),
-    threads = Sys.CPU_THREADS
-)
-    Mycelia.add_bioconda_env("pharokka")
-    Mycelia.add_bioconda_env("phold")
-    Mycelia.add_bioconda_env("phynteny_transformer")
-    if !isdir(pharroka_dbdir) || isempty(readdir(pharroka_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka install_databases.py -o $(pharroka_dbdir)`)
-    end
-    if !isdir(pharroka_outdir) || isempty(readdir(pharroka_outdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pharroka  pharokka.py -i $(fasta) -o $(pharroka_outdir) -d $(pharroka_dbdir) -t $(threads)  -m  -g prodigal-gv --force`)
-    end
-    if !isdir(phold_dbdir) || isempty(readdir(phold_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold install --database $(phold_dbdir)`)
-    end
-    pharroko_gbk = joinpath(pharroka_outdir, prefix * ".gbk")
-    @assert isfile(pharroko_gbk)
-    if !isdir(phold_outdir) || isempty(readdir(phold_outdir))
-        # skip GPU integration at the moment
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phold phold run --input $(pharroko_gbk) --prefix $(prefix) --output $(phold_outdir) --database $(phold_dbdir) --threads $(threads) --cpu --force`)
-    end
-    if !isdir(phynteny_dbdir) || isempty(readddir(phynteny_dbdir))
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer install_models -o $(phynteny_dbdir)`)
-    end
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n phynteny_transformer  phynteny_transformer --help --advanced`)
-end
+#     return DataFrames.DataFrame(df_cols)
+# end
 
 # # not working
 # function run_phage_annotation(;
@@ -2743,58 +2709,6 @@ function generate_transterm_coordinates_from_gff(gff_file)
     return transterm_coordinates_file
 end
 
-# function run_prokka(ID, OUT_DIR, normalized_fasta_file)
-#     prokka_dir="$(OUT_DIR)/prokka"
-#     if !isdir(prokka_dir)
-#         mkdir(prokka_dir)
-#     end
-#     prokka_cmd = `prokka --force --cpus 1 --outdir $(prokka_dir) --prefix $(ID) $(normalized_fasta_file)`
-#     run(pipeline(prokka_cmd, stdout="$(prokka_dir)/prokka.out"))
-#     return prokka_dir
-# end
-
-# function run_mlst(ID, OUT_DIR, normalized_fasta_file)
-#     mlst_dir="$(OUT_DIR)/mlst"
-#     if !isdir(mlst_dir)
-#         mkdir(mlst_dir)
-#     end
-#     p = pipeline(
-#             `mlst $(normalized_fasta_file)`,
-#             stdout="$(mlst_dir)/$(ID).mlst.out")
-#     run(p)
-#     return mlst_dir
-# end
-
-# function run_phispy(ID, OUT_DIR, prokka_dir)
-#     # 1 	prophage_coordinates.tsv
-#     # 2 	GenBank format output
-#     # 4 	prophage and bacterial sequences
-#     # 8 	prophage_information.tsv
-#     # 16 	prophage.tsv
-#     # 32 	GFF3 format
-#     # 64 	prophage.tbl
-#     # 128 	test data used in the random forest
-#     # 255   for all of them
-
-#     phispy_dir="$(OUT_DIR)/phispy"
-#     if !isdir(phispy_dir)
-#         mkdir(phispy_dir)
-#     end
-#     if isempty(readdir(phispy_dir))
-#         phisphy_cmd = `PhiSpy.py $(prokka_dir)/$(ID).gbk --output_dir $(phispy_dir) --file_prefix $(ID)-phispy --output_choice 255`
-#         try
-#             run(pipeline(phisphy_cmd, stdout="$(phispy_dir)/phisphy.out"))
-#         catch
-#             if isfile("$(phispy_dir)/$(ID)-phispy_prophage.gff3")
-#                 @warn "phispy errored out after prophage gff3 was written"
-#             else
-#                 @error "phispy prophage gff3 not written"
-#             end
-#         end
-#     end
-#     return phispy_dir
-# end
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -3011,47 +2925,6 @@ end
 #         end
 #     end
 #     return counter_selection_dir
-# end
-
-
-
-# function run_amrfinderplus(ID, out_dir, protein_fasta)
-#     amrfinderplus_dir = "$(out_dir)/amrfinderplus"
-#     if !isdir(amrfinderplus_dir)
-#         mkdir(amrfinderplus_dir)
-#     end
-
-#     if isempty(readdir(amrfinderplus_dir))
-# #         run(`amrfinder -u`)
-        
-#         # because the pipeline is set up with some hacky CONDA path manipulation, 
-#         # explictly setting amrfinder directory path to the location in the docker host
-#         amrfinder_db_path = get(ENV, "AMRFINDER_DB", "none")
-
-#         if amrfinder_db_path != "none"
-#             cmd = 
-#             `amrfinder
-#             -p $(protein_fasta)
-#             --plus
-#             --output $(amrfinderplus_dir)/$(ID).amrfinderplus.tsv
-#             -d $(amrfinder_db_path)
-#             `
-#         else
-#             cmd = 
-#             `amrfinder
-#             -p $(protein_fasta)
-#             --plus
-#             --output $(amrfinderplus_dir)/$(ID).amrfinderplus.tsv
-#             `
-#         end
-            
-
-#         p = pipeline(cmd, 
-#                 stdout="$(amrfinderplus_dir)/$(ID).amrfinderplus.out",
-#                 stderr="$(amrfinderplus_dir)/$(ID).amrfinderplus.err")
-#         run(p)
-#     end
-#     return amrfinderplus_dir
 # end
 
 """
@@ -3405,45 +3278,6 @@ function parse_virsorter_score_tsv(virsorter_score_tsv)
         data = [[] for i in 1:length(header)]
     end
     return DataFrames.DataFrame(data, header)
-end
-
-"""
-    count_predicted_genes(gff_file)
-
-Count the number of predicted genes from a GFF file.
-
-Parses a GFF/GTF file and counts the number of CDS (coding sequence) features,
-which correspond to predicted genes.
-
-# Arguments
-- `gff_file`: Path to GFF/GTF file
-
-# Returns
-- Integer count of predicted genes (CDS features)
-
-# See Also
-- `run_pyrodigal`: For gene prediction that generates GFF files
-- `parse_transterm_output`: For parsing other annotation tool outputs
-"""
-function count_predicted_genes(gff_file)
-    gene_count = 0
-    
-    open(gff_file, "r") do f
-        for line in eachline(f)
-            # Skip comment lines
-            if startswith(line, "#")
-                continue
-            end
-            
-            # Parse GFF line
-            fields = split(line, "\t")
-            if length(fields) >= 3 && fields[3] == "CDS"
-                gene_count += 1
-            end
-        end
-    end
-    
-    return gene_count
 end
 
 """
