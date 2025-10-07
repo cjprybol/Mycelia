@@ -293,6 +293,45 @@ function flip_evidence_strand(entry::QualityEvidenceEntry)
     return QualityEvidenceEntry(entry.position, new_strand, reversed_quality)
 end
 
+"""
+    flip_evidence_strand(entry::EdgeEvidenceEntry)
+
+Flip the strand orientation of an edge evidence entry.
+
+Used for reverse complement operations on edges.
+
+# Examples
+```julia
+forward_edge = EdgeEvidenceEntry(5, 6, Forward)
+reverse_edge = flip_evidence_strand(forward_edge)  # EdgeEvidenceEntry(5, 6, Reverse)
+```
+"""
+function flip_evidence_strand(entry::EdgeEvidenceEntry)
+    new_strand = entry.strand == Forward ? Reverse : Forward
+    return EdgeEvidenceEntry(entry.from_position, entry.to_position, new_strand)
+end
+
+"""
+    flip_evidence_strand(entry::EdgeQualityEvidenceEntry)
+
+Flip the strand orientation of an edge quality evidence entry.
+
+Also reverses the quality scores for both from and to vertices (since RC reverses the sequence).
+
+# Examples
+```julia
+entry = EdgeQualityEvidenceEntry(5, 6, Forward, UInt8[30, 35], UInt8[40, 45])
+flipped = flip_evidence_strand(entry)
+# Result: EdgeQualityEvidenceEntry(5, 6, Reverse, UInt8[35, 30], UInt8[45, 40])
+```
+"""
+function flip_evidence_strand(entry::EdgeQualityEvidenceEntry)
+    new_strand = entry.strand == Forward ? Reverse : Forward
+    reversed_from_quality = reverse(entry.from_quality)
+    reversed_to_quality = reverse(entry.to_quality)
+    return EdgeQualityEvidenceEntry(entry.from_position, entry.to_position, new_strand, reversed_from_quality, reversed_to_quality)
+end
+
 # ============================================================================
 # Counting Functions
 # ============================================================================

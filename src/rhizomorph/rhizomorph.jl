@@ -18,8 +18,16 @@ edges are added only when observed.
   - `vertex-data.jl`: Vertex data structures for all graph types
   - `edge-data.jl`: Edge data structures for all graph types
   - `evidence-functions.jl`: Evidence manipulation and query functions
+  - `graph-construction.jl`: Graph construction algorithms
 """
 module Rhizomorph
+
+# Import necessary packages for Rhizomorph functionality
+import BioSequences
+import FASTX
+import Graphs
+import Kmers
+import MetaGraphsNext
 
 # Load core components
 include("core/enums.jl")
@@ -27,5 +35,8 @@ include("core/evidence-structures.jl")
 include("core/vertex-data.jl")
 include("core/edge-data.jl")
 include("core/evidence-functions.jl")
+include("core/graph-construction.jl")
+include("core/graph-query.jl")
+include("core/quality-functions.jl")
 
 end  # module Rhizomorph
