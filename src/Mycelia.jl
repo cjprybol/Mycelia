@@ -98,9 +98,12 @@ include("alphabets.jl")
 include("constants.jl")
 include("fastx.jl")
 
+# Rhizomorph graph ecosystem (NEW - correct implementation)
+include("rhizomorph/rhizomorph.jl")
+
 # Graph type definitions and enums (foundation layer)
-include("graph-core.jl")            # Shared graph enums
-include("kmer-graphs.jl")           # K-mer graph construction utilities
+include("graph-core.jl")            # Shared graph enums (OLD - to be deprecated)
+include("kmer-graphs.jl")           # K-mer graph construction utilities (OLD - to be replaced)
 include("sequence-graphs-next.jl")  # Higher-level graph algorithms (depends on enums & k-mer types)
 include("string-graphs.jl")         # N-gram graphs
 include("qualmer-analysis.jl")      # Qualmer types and functions
