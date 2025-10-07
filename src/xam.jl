@@ -763,3 +763,366 @@ function parse_xam_to_summary_table(xam)
     # return (;records, header)
     return record_table
 end
+
+function index_bam(bam_path::String)
+    # Default samtools index output is the input file with .bai appended
+    bai_path = bam_path * ".bai"
+    
+    # Check if index already exists
+    if isfile(bai_path)
+        @info "BAM index already exists at: $bai_path"
+        return bai_path
+    end
+    
+    # Generate the index
+    # @info "ensuring samtools is installed..."
+    Mycelia.add_bioconda_env("samtools")
+    @info "Generating BAM index for: $bam_path"
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools index $bam_path`)
+    
+    return bai_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate per-base or per-region read depth from BAM files using mosdepth.
+
+# Arguments
+- `bam::String`: Path to input BAM or CRAM file
+- `prefix::String`: Output prefix for generated files (default: bam path)
+- `threads::Int=0`: Number of BAM decompression threads
+- `use_median::Bool=false`: Output median coverage instead of mean for regions
+- `fast_mode::Bool=false`: Skip internal CIGAR operations and mate overlap correction (faster)
+- `no_per_base::Bool=false`: Skip per-base depth output (recommended for speed)
+- `by::String=""`: Optional BED file path or window size for regional coverage
+- `quantize::String=""`: Quantize coverage into bins (e.g., "0:1:10:50:")
+- `thresholds::String=""`: Comma-separated coverage thresholds (e.g., "1,5,10,20")
+- `mapq::Int=0`: Minimum mapping quality threshold
+- `flag::Int=0`: Exclude reads with these SAM flags set
+- `include_flag::Int=0`: Only include reads with these SAM flags set
+- `fasta::String=""`: Reference FASTA for CRAM files
+- `force::Bool=false`: Rerun even if output files exist
+
+# Common Flag Filtering Strategies
+
+The `flag` parameter excludes reads by summing SAM flag values. Common choices:
+
+1. No filtering (default): `flag=0`
+2. Exclude unmapped: `flag=4`
+3. Exclude unmapped + failing QC: `flag=516` (4 + 512)
+4. Exclude unmapped + failing QC + duplicates: `flag=1540` (4 + 512 + 1024)
+5. Exclude unmapped + failing QC + duplicates + secondary alignments: `flag=1796` (4 + 512 + 1024 + 256)
+6. Exclude unmapped + failing QC + duplicates + secondary + supplementary: `flag=3844` (4 + 512 + 1024 + 256 + 2048)
+
+SAM Flag Reference:
+- 4: Read unmapped
+- 256: Secondary alignment (alternative mapping of same read)
+- 512: Failed quality checks
+- 1024: PCR or optical duplicate
+- 2048: Supplementary alignment (chimeric, part of read maps elsewhere)
+
+Note: Options 5 and 6 are most common for variant calling and coverage analysis.
+For counting all aligned reads including multi-mappers, use option 4.
+
+# Returns
+Named tuple containing paths to output files:
+- `prefix::String`: The output prefix used
+- `global_dist::String`: Path to global distribution file
+- `summary::String`: Path to summary statistics file
+- `per_base::String`: Path to per-base coverage (if generated)
+- `regions::String`: Path to regional coverage (if --by specified)
+- `quantized::String`: Path to quantized coverage (if --quantize specified)
+- `thresholds_file::String`: Path to thresholds file (if --thresholds specified)
+
+# Details
+mosdepth is a fast BAM/CRAM depth calculation tool that computes:
+- Per-base depth across the genome
+- Coverage distributions
+- Regional depth statistics
+- Quantized coverage bins
+
+The function automatically:
+- Installs mosdepth via conda if needed
+- Indexes the BAM file if index doesn't exist
+- Skips computation if output files already exist (unless force=true)
+
+# Output Files
+- `{prefix}.mosdepth.global.dist.txt`: Global coverage distribution
+- `{prefix}.mosdepth.summary.txt`: Summary statistics per chromosome
+- `{prefix}.per-base.bed.gz`: Per-base depth (unless no_per_base=true)
+- `{prefix}.regions.bed.gz`: Regional depth (if by is specified)
+- `{prefix}.quantized.bed.gz`: Quantized coverage (if quantize is specified)
+- `{prefix}.thresholds.bed.gz`: Threshold coverage (if thresholds is specified)
+"""
+function run_mosdepth(bam::String;
+                      prefix::String=bam,
+                      threads::Int=0,
+                      use_median::Bool=false,
+                      fast_mode::Bool=false,
+                      no_per_base::Bool=false,
+                      by::String="",
+                      quantize::String="",
+                      thresholds::String="",
+                      mapq::Int=0,
+                      flag::Int=0,
+                      include_flag::Int=0,
+                      fasta::String="",
+                      force::Bool=false)
+    
+    # Ensure mosdepth is installed
+    Mycelia.add_bioconda_env("mosdepth")
+    
+    # Ensure BAM is indexed
+    Mycelia.index_bam(bam)
+    
+    # Check if output already exists
+    summary_file = prefix * ".mosdepth.summary.txt"
+    if isfile(summary_file) && !force
+        @info "mosdepth output already exists at: $(summary_file)"
+        return (;
+            prefix=prefix,
+            global_dist=prefix * ".mosdepth.global.dist.txt",
+            summary=summary_file,
+            per_base=no_per_base ? "" : prefix * ".per-base.bed.gz",
+            regions=isempty(by) ? "" : prefix * ".regions.bed.gz",
+            quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
+            thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
+        )
+    end
+    
+    # Build command arguments
+    cmd_args = String["mosdepth"]
+    
+    # Add flags
+    push!(cmd_args, "--threads", string(threads))
+    push!(cmd_args, "--flag", string(flag))
+    push!(cmd_args, "--include-flag", string(include_flag))
+    push!(cmd_args, "--mapq", string(mapq))
+    
+    if use_median
+        push!(cmd_args, "--use-median")
+    end
+    
+    if fast_mode
+        push!(cmd_args, "--fast-mode")
+    end
+    
+    if no_per_base
+        push!(cmd_args, "--no-per-base")
+    end
+    
+    if !isempty(by)
+        push!(cmd_args, "--by", by)
+    end
+    
+    if !isempty(quantize)
+        push!(cmd_args, "--quantize", quantize)
+    end
+    
+    if !isempty(thresholds)
+        push!(cmd_args, "--thresholds", thresholds)
+    end
+    
+    if !isempty(fasta)
+        push!(cmd_args, "--fasta", fasta)
+    end
+    
+    # Add positional arguments
+    push!(cmd_args, prefix, bam)
+    
+    # Run mosdepth
+    @info "Running mosdepth on $(bam)"
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mosdepth $(cmd_args)`)
+    
+    return (;
+        prefix=prefix,
+        global_dist=prefix * ".mosdepth.global.dist.txt",
+        summary=summary_file,
+        per_base=no_per_base ? "" : prefix * ".per-base.bed.gz",
+        regions=isempty(by) ? "" : prefix * ".regions.bed.gz",
+        quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
+        thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse mosdepth global distribution file for coverage QC metrics.
+
+# Arguments
+- `dist_file::String`: Path to mosdepth .global.dist.txt or .region.dist.txt file
+
+# Returns
+DataFrames.DataFrame with columns:
+- `chromosome::String`: Chromosome name or "total" for genome-wide
+- `coverage::Int`: Coverage depth threshold
+- `proportion::Float64`: Proportion of bases with at least this coverage
+
+# Details
+The distribution file contains cumulative coverage data where each row shows
+what proportion of bases have at least X coverage. The file format is:
+- Column 1: chromosome name (or "total")
+- Column 2: coverage level
+- Column 3: proportion of bases covered at that level
+
+For QC, focus on "total" rows to get genome-wide metrics like:
+- What proportion of bases have ≥10X coverage
+- What proportion of bases have ≥30X coverage
+- Overall coverage uniformity
+"""
+function parse_mosdepth_distribution(dist_file::String)
+    if !isfile(dist_file)
+        error("Distribution file does not exist: $(dist_file)")
+    end
+    
+    df = CSV.read(dist_file, DataFrames.DataFrame;
+                  header=[:chromosome, :coverage, :proportion],
+                  delim='\t',
+                  comment="#")
+    
+    return df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse mosdepth summary file for per-chromosome coverage statistics.
+
+# Arguments
+- `summary_file::String`: Path to mosdepth .summary.txt file
+
+# Returns
+DataFrames.DataFrame with columns:
+- `chromosome::String`: Chromosome name or "total" for genome-wide
+- `length::Int`: Length of chromosome in bases
+- `bases::Int`: Number of bases with coverage data
+- `mean::Float64`: Mean coverage depth
+- `min::Float64`: Minimum coverage depth
+- `max::Float64`: Maximum coverage depth
+
+# Details
+The summary file provides basic statistics for each chromosome including
+mean, min, and max coverage. Use this for quick overview of coverage levels.
+"""
+function parse_mosdepth_summary(summary_file::String)
+    if !isfile(summary_file)
+        error("Summary file does not exist: $(summary_file)")
+    end
+    
+    df = CSV.read(summary_file, DataFrames.DataFrame; delim='\t')
+    
+    return df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse mosdepth thresholds BED file for per-region coverage QC.
+
+# Arguments
+- `thresholds_file::String`: Path to mosdepth .thresholds.bed.gz file
+
+# Returns
+DataFrames.DataFrame with columns:
+- `chrom::String`: Chromosome name
+- `start::Int`: Region start position (0-based)
+- `end::Int`: Region end position
+- `region::String`: Region name from input BED file (or "unknown")
+- Plus one column per threshold value (e.g., `1X`, `10X`, `30X`)
+
+# Details
+Each threshold column contains the count of bases in that region with
+at least that much coverage. Use this to identify regions with poor coverage.
+
+For regions with good coverage, most bases should meet your threshold.
+For example, if a 1000bp exon has only 500 bases at ≥10X, that indicates
+poor coverage quality for that exon.
+"""
+function parse_mosdepth_thresholds(thresholds_file::String)
+    if !isfile(thresholds_file)
+        error("Thresholds file does not exist: $(thresholds_file)")
+    end
+    
+    # Read with automatic header detection
+    # mosdepth writes a header line starting with #
+    df = CSV.read(thresholds_file, DataFrames.DataFrame; 
+                  delim='\t',
+                  comment="#")
+    
+    # If no header was found, mosdepth uses these column names
+    if isempty(names(df))
+        error("Unable to parse thresholds file - check file format")
+    end
+    
+    return df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract key QC metrics from mosdepth distribution data.
+
+# Arguments
+- `dist_df::DataFrames.DataFrame`: DataFrame from parse_mosdepth_distribution
+- `thresholds::Vector{Int}=[1, 3, 5, 10, 30, 50, 100, 300, 500, 1000]`: Coverage thresholds to report
+
+# Returns
+DataFrames.DataFrame with one row per chromosome containing proportion of bases
+meeting each coverage threshold.
+
+# Details
+Extracts the proportion of bases with at least X coverage for each specified
+threshold. Focuses on interpretable QC metrics rather than full distribution.
+
+For whole genome sequencing QC, typical expectations are:
+- ≥1X: >95% (most of genome accessible)
+- ≥10X: >90% (sufficient for variant calling)
+- ≥30X: >80% (high confidence variant calling)
+"""
+function summarize_mosdepth_qc(dist_df::DataFrames.DataFrame; 
+                               thresholds::Vector{Int}=[1, 3, 5, 10, 30, 50, 100, 300, 500, 1000])
+    
+    # Get unique chromosomes
+    chroms = unique(dist_df.chromosome)
+    
+    # Initialize result dataframe
+    result = DataFrames.DataFrame(chromosome=String[])
+    for threshold in thresholds
+        result[!, Symbol("coverage_$(threshold)X")] = Float64[]
+    end
+    
+    # For each chromosome, find the proportion at each threshold
+    for chrom in chroms
+        chrom_data = DataFrames.subset(dist_df, :chromosome => x -> x .== chrom)
+        
+        row_data = Dict{Symbol, Any}(:chromosome => chrom)
+        
+        for threshold in thresholds
+            # Find the row with this exact coverage value
+            matching_rows = DataFrames.subset(chrom_data, :coverage => x -> x .== threshold)
+            
+            if nrow(matching_rows) > 0
+                row_data[Symbol("coverage_$(threshold)X")] = matching_rows[1, :proportion]
+            else
+                # If exact threshold not found, interpolate from nearby values
+                lower = DataFrames.subset(chrom_data, :coverage => x -> x .< threshold)
+                higher = DataFrames.subset(chrom_data, :coverage => x -> x .> threshold)
+                
+                if nrow(lower) > 0 && nrow(higher) > 0
+                    # Use the closest lower value as conservative estimate
+                    row_data[Symbol("coverage_$(threshold)X")] = maximum(lower.proportion)
+                elseif nrow(lower) > 0
+                    row_data[Symbol("coverage_$(threshold)X")] = maximum(lower.proportion)
+                else
+                    row_data[Symbol("coverage_$(threshold)X")] = 0.0
+                end
+            end
+        end
+        
+        push!(result, row_data)
+    end
+    
+    return result
+end
