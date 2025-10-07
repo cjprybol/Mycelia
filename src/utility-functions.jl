@@ -3032,3 +3032,57 @@ function create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol=:hex,
     
     return _encode_hash_bytes(output_buffer, encoding, encoded_length, allow_truncation)
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Find the closest prime number to the given integer `n`.
+
+Returns the nearest prime number to `n`. If two prime numbers are equally distant 
+from `n`, returns the smaller one.
+
+# Arguments
+- `n::Int`: The input integer to find the nearest prime for
+
+# Returns
+- `Int`: The closest prime number to `n`
+"""
+function nearest_prime(n::Int)
+    if n < 2
+        return 2
+    end
+    next_p = Primes.nextprime(n)
+    prev_p = Primes.prevprime(n)
+    if n - prev_p <= next_p - n
+        return prev_p
+    else
+        return next_p
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a sequence of Fibonacci numbers strictly less than the input value.
+
+# Arguments
+- `n::Int`: Upper bound (exclusive) for the Fibonacci sequence
+
+# Returns
+- `Vector{Int}`: Array containing Fibonacci numbers less than n
+"""
+function fibonacci_numbers_less_than(n::Int)
+    if n <= 0
+        return []
+    elseif n == 1
+        return [0]
+    else
+        fib = [0, 1]
+        next_fib = fib[end] + fib[end-1]
+        while next_fib < n
+            push!(fib, next_fib)
+            next_fib = fib[end] + fib[end-1]
+        end
+        return fib
+    end
+end
