@@ -708,6 +708,9 @@ end
         outdir,
         as_string,
         prefix,
+        no_internet,
+        min_seq_length,
+        filter_ambiguous,
     )
 
 Run PGAP's taxonomy check (--taxcheck-only) to validate or obtain corrections for organism taxonomy.
@@ -715,9 +718,7 @@ Run PGAP's taxonomy check (--taxcheck-only) to validate or obtain corrections fo
 This function runs only the taxonomy validation step of PGAP, which is much faster than a full
 annotation. It verifies the provided organism name against NCBI taxonomy and can suggest corrections.
 
-The taxonomy check accepts:
-- Genus only (e.g., "Escherichia")
-- Genus species (e.g., "Escherichia coli")
+The taxonomy check accepts Genus only or Genus species names.
 
 By default, this uses the same output directory as the full PGAP annotation (_pgap suffix), allowing
 seamless reuse of existing taxonomy check results from previous annotation runs. If the taxonomy
@@ -725,13 +726,19 @@ report already exists, it will be reused. If the output directory exists but lac
 report, PGAP will be run with a temporary output directory and the taxonomy files will be moved
 to the final location.
 
+Sequences are filtered before submission to PGAP to remove short contigs and those containing
+ambiguous nucleotides, which can cause PGAP errors.
+
 Arguments:
 - `fasta::AbstractString`: Input FASTA file (used to calculate ANI for taxonomy validation).
 - `organism::AbstractString`: Organism name (Genus or Genus species) to validate.
 - `pgap_dir`: Directory containing PGAP installation. Defaults to `~/workspace/pgap`.
 - `outdir`: Output directory for results. Defaults to input filename with "_pgap" suffix (same as full annotation).
 - `as_string::Bool=false`: If true, returns the command string instead of executing it.
-- `prefix`: Prefix for output files. Defaults to input filename without extension.
+- `prefix`: Prefix for output files. Defaults to input filename without extension with invalid characters replaced.
+- `no_internet::Bool=false`: If true, skip all remote HTTP checks to avoid rate limiting.
+- `min_seq_length::Int=200`: Minimum sequence length in base pairs. Shorter sequences are filtered out.
+- `filter_ambiguous::Bool=true`: If true, filter out sequences containing ambiguous nucleotides (N, etc.).
 
 Returns:
 - `NamedTuple`: Contains `outdir`, `txt_report`, and `xml_report` paths.
@@ -743,6 +750,9 @@ function run_pgap_taxonomy_check(;
     outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
     as_string::Bool = false,
     prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
+    no_internet::Bool = false,
+    min_seq_length::Int = 200,
+    filter_ambiguous::Bool = false,
 )
     # Expected output from taxonomy check
     tax_report = joinpath(outdir, "$(prefix)ani-tax-report.txt")
@@ -750,7 +760,6 @@ function run_pgap_taxonomy_check(;
     
     # Check if taxonomy report already exists
     if isfile(tax_report)
-        @info "Detected existing PGAP taxonomy report at $tax_report; reusing results"
         return (outdir = outdir, txt_report = tax_report, xml_report = tax_report_xml)
     end
     
@@ -761,29 +770,58 @@ function run_pgap_taxonomy_check(;
         Base.run(`wget -O $(pgap_py_script) https://github.com/ncbi/pgap/raw/prod/scripts/pgap.py`)
         @assert isfile(pgap_py_script)
     end
-    if isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
+    if !no_internet && isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
         @time Base.run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
     end
 
     # If only returning the command string, return immediately
     if as_string
-        return "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --report-usage-true --taxcheck-only --output $(outdir) --genome $(fasta) --organism '$(organism)' --prefix $(prefix)"
+        if !no_internet
+            return "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --ignore-all-errors --report-usage-true --taxcheck-only --output $(outdir) --genome $(fasta) --organism '$(organism)' --prefix $(prefix)"
+        else
+            return "PGAP_INPUT_DIR=$(pgap_dir) python3 $(pgap_py_script) --ignore-all-errors --no-internet --report-usage-false --taxcheck-only --output $(outdir) --genome $(fasta) --organism '$(organism)' --prefix $(prefix)"
+        end
     end
 
-    # Build temporary uncompressed FASTA for PGAP
+    # Build temporary uncompressed FASTA for PGAP with filtering
     temp_fasta::Union{Nothing,String} = nothing
     temp_outdir::Union{Nothing,String} = nothing
     
     try
         reader = Mycelia.open_fastx(fasta)
         records = FASTX.FASTA.Record[]
+        filtered_count = 0
+        
         for record in reader
+            seq = FASTX.sequence(record)
+            seq_length = length(seq)
+            
+            # Filter by length
+            if seq_length <= min_seq_length
+                filtered_count += 1
+                continue
+            end
+            
+            # Filter by ambiguous nucleotides using BioSequences
+            if filter_ambiguous
+                if BioSequences.hasambiguity(BioSequences.LongDNA{4}(seq))
+                    filtered_count += 1
+                    continue
+                end
+            end
+            
             # Make an owned copy (iterator may reuse buffers)
             push!(records, copy(record))
         end
+        
         if isempty(records)
-            throw(ArgumentError("No sequences found in FASTA file."))
+            throw(ArgumentError("All sequences were filtered out (filtered: $(filtered_count), min_length: $(min_seq_length) bp, filter_ambiguous: $(filter_ambiguous)); nothing to analyze."))
         end
+        
+        if filtered_count > 0
+            # @info "Filtered $(filtered_count) sequences; $(length(records)) sequences retained for taxonomy check"
+        end
+        
         temp_fasta = Mycelia.write_fasta(; outfile = tempname() * ".fna", records = records, gzip = false)
 
         # PGAP won't write to an existing directory, so we need to handle this
@@ -803,7 +841,11 @@ function run_pgap_taxonomy_check(;
         end
         
         # Construct and run the taxonomy check command
-        cmd = `python3 $(pgap_py_script) --report-usage-true --taxcheck-only --output $(actual_outdir) --genome $(temp_fasta) --organism $(organism) --prefix $(prefix)`
+        if !no_internet
+            cmd = `python3 $(pgap_py_script) --ignore-all-errors --report-usage-true --taxcheck-only --output $(actual_outdir) --genome $(temp_fasta) --organism $(organism) --prefix $(prefix)`
+        else
+            cmd = `python3 $(pgap_py_script) --ignore-all-errors --no-internet --report-usage-false --taxcheck-only --output $(actual_outdir) --genome $(temp_fasta) --organism $(organism) --prefix $(prefix)`
+        end
         
         temp_tax_report = joinpath(actual_outdir, "$(prefix)ani-tax-report.txt")
         temp_tax_report_xml = joinpath(actual_outdir, "$(prefix)ani-tax-report.xml")
