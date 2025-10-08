@@ -636,7 +636,7 @@ function run_pgap(;
             rm(outdir, recursive=true)
         else
             if _run_is_successful(outdir, prefix)
-                @info "Detected completed PGAP run in $outdir; reusing outputs"
+                # @info "Detected completed PGAP run in $outdir; reusing outputs"
                 return outdir
             else
                 @warn "$outdir exists but appears incomplete; removing it to allow a clean retry"
