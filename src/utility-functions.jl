@@ -1454,7 +1454,29 @@ Returns as a bit array
 See also: drop_empty_columns, drop_empty_columns!
 """
 function find_nonempty_columns(df)
-    non_empty_columns = [eltype(col) != Missing || !all(v -> isnothing(v) || ismissing(v) || (!isa(v, Date) && isempty(v)), col) for col in DataFrames.eachcol(df)]
+    non_empty_columns = Bool[]
+    for col in DataFrames.eachcol(df)
+        # Skip columns that are entirely Missing or Nothing type
+        if eltype(col) == Missing || eltype(col) == Nothing
+            push!(non_empty_columns, false)
+            continue
+        end
+        
+        # Check if any value in the column is non-empty
+        has_nonempty = any(col) do v
+            if ismissing(v) || isnothing(v)
+                return false
+            end
+            # For Date types, consider them non-empty
+            if isa(v, Dates.Date)
+                return true
+            end
+            # For other types, check if they're not empty
+            return !isempty(v)
+        end
+        
+        push!(non_empty_columns, has_nonempty)
+    end
     return non_empty_columns
 end
 

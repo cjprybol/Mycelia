@@ -1119,6 +1119,39 @@ function parse_pgap_taxonomy_report(report_file::AbstractString)
     )
 end
 
+function load_pgap_taxonomy_reports(txt_reports)
+    # Parse all reports and collect into DataFrame
+    validation_rows = []
+    for txt_report in txt_reports
+        try
+            report = Mycelia.parse_pgap_taxonomy_report(txt_report)
+            
+            push!(validation_rows, (
+                submitted_organism = report.submitted_organism,
+                submitted_taxid = report.submitted_taxid,
+                submitted_rank = report.submitted_rank,
+                best_match_organism = report.best_match_organism,
+                best_match_taxid = report.best_match_taxid,
+                best_match_rank = report.best_match_rank,
+                predicted_organism = report.predicted_organism,
+                predicted_taxid = report.predicted_taxid,
+                predicted_rank = report.predicted_rank,
+                status = report.status,
+                confidence = report.confidence,
+                has_type = report.has_type,
+                top_ani = isempty(report.matches) ? missing : report.matches[1].ani,
+                top_match_organism = isempty(report.matches) ? missing : report.matches[1].organism,
+                num_matches = length(report.matches)
+            ))
+        catch e
+            println("Failed to parse report for $(result.fna_path): $e")
+        end
+    end
+    
+    validation_df = DataFrames.DataFrame(validation_rows)
+    return validation_df
+end
+
 function run_bakta(;
         fasta::AbstractString,
         outdir = replace(fasta, Mycelia.FASTA_REGEX => "_bakta"),
