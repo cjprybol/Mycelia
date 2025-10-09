@@ -11,7 +11,7 @@
 
 ## Overview
 
-Mycelia is a Julia package for bioinformatics and computational biology that implements graph-based genome assembly and quality-aware sequence analysis. The package provides both research-oriented algorithms and practical bioinformatics functionality, including extensive tool integration for genomics workflows. While some components are experimental and in active development, the package includes substantial implemented functionality for data processing, assembly, annotation, and analysis.
+Mycelia is a Julia package for bioinformatics and computational biology that implements graph-based biosequence assembly and quality-aware sequence analysis. The package provides both research-oriented algorithms and practical bioinformatics functionality, including extensive tool integration for genomics workflows. While some components are experimental and in active development, the package includes substantial implemented functionality for data processing, assembly, annotation, and analysis.
 
 ## Quick Start
 
@@ -31,10 +31,10 @@ import Mycelia
 - **Parallel Processing**: Multi-threaded analysis with progress tracking and HPC support (SLURM, rclone)
 - **Visualization**: Coverage plots, k-mer spectra, embeddings, taxonomic distributions, and more
 
-### Research Developments
+### Ongoing Areas of Reseach and Development
 
-- **Novel 6-Graph Assembly Framework**: Unique hierarchy transitioning from fixed-length (k-mer, qualmer) to variable-length (string, FASTA, FASTQ) graphs
-- **Quality-Aware Assembly**: First framework to preserve per-base quality scores throughout assembly process
+- **BioJulia-based Sequence Graph Assembly Framework**: From fixed-length (n-gram, k-mer, qualmer) to variable-length (string, FASTA, FASTQ) graphs
+- **Quality-Aware Assembly**: A framework to preserve per-base quality scores throughout assembly process
 - **Machine Learning Integration**: Reinforcement learning of optimal assembly workflow for automated parameter optimization
 
 ### Bioinformatics Workflows
@@ -84,7 +84,7 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 ### Experimental/In Development
 
 - **Rhizomorph Assembly Suite**: External assemblers (MEGAHIT, metaSPAdes, SKESA, Flye, Canu, Hifiasm, Unicycler) plus novel quality-aware graph algorithms
-- **Graph-Based Assembly**: Novel 6-graph type hierarchy with quality-aware assembly algorithms
+- **Graph-Based Assembly**: 6-graph type hierarchy with quality-aware assembly algorithms
 - **Reinforcement Learning–Guided Assembly Optimization**
 - **Advanced Assembly Validation Metrics**
 - **Native Quality Control Implementations** (external tools currently integrated)
