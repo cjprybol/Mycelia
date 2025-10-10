@@ -87,6 +87,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
                         Test.@test quality isa Vector{Int}
                     end
                 end
+            elseif vertex_data isa Integer
+                total_coverage_entries += vertex_data
             end
         end
 
@@ -214,10 +216,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             reads = [FASTX.FASTA.Record("test", known_dna)]
             graph = Mycelia.build_kmer_graph_next(Kmers.DNAKmer{3}, reads; graph_mode=Mycelia.DoubleStrand)
 
-            # In DoubleStrand mode, k-mers are canonicalized
-            # This reduces vertices due to reverse complements being merged
-            expected_vertices = 2  # Actual observed: canonicalization reduces count
-            expected_edges = 2     # Canonical edges
+            # In DoubleStrand mode, k-mers are canonicalized which merges reverse complements
+            expected_vertices = 2  # Canonical ATC and CGA for this sequence
+            expected_edges = 4     # Two canonical transitions plus their reverse-oriented self loops
 
             validate_graph_comprehensive(graph, [known_dna], expected_vertices, expected_edges, "DNA K-mer DoubleStrand")
 
@@ -267,12 +268,12 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             multiple_observations_found = false
             for vertex_label in MetaGraphsNext.labels(graph)
                 vertex_data = graph[vertex_label]
-                if length(vertex_data.coverage) > 1
+                if vertex_data.coverage > 1
                     multiple_observations_found = true
-                    @info "Vertex $vertex_label observed $(length(vertex_data.coverage)) times"
+                    @info "Vertex $vertex_label observed $(vertex_data.coverage) times"
 
                     # Check that average quality reflects both observations
-                    Test.@test vertex_data.average_quality > 0.0
+                    Test.@test vertex_data.mean_quality > 0.0
                 end
             end
 
@@ -343,14 +344,11 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
         for vertex_label in MetaGraphsNext.labels(graph)
             vertex_data = graph[vertex_label]
 
-            # Each coverage entry should track the observation ID
-            for cov_entry in vertex_data.coverage
-                obs_id, pos, strand = cov_entry[1:3]  # First 3 elements are always present
-
-                Test.@test obs_id in [1, 2]
-                Test.@test pos >= 1
-
-                @info "Vertex $vertex_label: obs_id=$obs_id, pos=$pos, strand=$strand"
+            # Each observation should track the provenance metadata
+            for obs in vertex_data.observations
+                Test.@test obs.sequence_id in (1:2)
+                Test.@test obs.position >= 1
+                @info "Vertex $vertex_label: obs_id=$(obs.sequence_id), pos=$(obs.position)"
             end
         end
     end
