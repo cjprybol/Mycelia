@@ -366,4 +366,4 @@ This documentation corresponds to Mycelia version 0.1.0+.
 - **Deprecated functions** include migration guidance
 - **Experimental features** are clearly marked
 
-For the latest updates, see the [CHANGELOG](../CHANGELOG.md).
+For the latest updates, see the CHANGELOG in the repository root.

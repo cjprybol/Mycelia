@@ -134,6 +134,6 @@ Pkg.instantiate()
 ## Next Steps
 
 - Read the [Getting Started](getting-started.md) guide
-- Try the [5-minute assembly tutorial](../tutorials/00_assembly_in_5_minutes.jl)
+- Explore the tutorial examples in the documentation
 - Explore the [API Reference](api.md)
 - Review [Performance Guide](performance.md) for optimization tips

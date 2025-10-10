@@ -180,7 +180,8 @@ println("Unique k-mers: $(sum(length(v) for v in values(pangenome_result.unique_
 Explore the available features and help improve the package:
 
 ### Available Tutorials
-- See the [tutorials](tutorials.md) section for numbered examples
+- Tutorials are available but currently being reorganized
+- See the generated tutorial pages in the documentation sidebar
 - Focus on working examples that demonstrate current capabilities
 
 ### Research Features
@@ -198,14 +199,14 @@ Command-line interface tools are planned but not yet implemented.
 
 ### API Reference
 
-Browse the [complete API documentation](api.md) for detailed function references and examples.
+Browse the [complete API documentation](api-reference.md) for detailed function references and examples.
 
 ## Getting Help
 
 If you encounter issues:
 
 1. Check the [FAQ](faq.md) for common issues
-2. Browse [example workflows](examples.md)
+2. Browse the API reference for function documentation
 3. Report bugs on [GitHub Issues](https://github.com/cjprybol/Mycelia/issues)
 
 ## Memory and Performance
@@ -225,8 +226,8 @@ end
 
 ## Contributing
 
-Mycelia is open-source and welcomes contributions! See our [development guide](contributing.md) for details.
+Mycelia is open-source and welcomes contributions! Visit the [GitHub repository](https://github.com/cjprybol/Mycelia) for details on how to contribute.
 
 ---
 
-*Ready to dive deeper? Check out our [workflow tutorials](tutorials.md) for complete biological analyses with real datasets.*
+*Ready to dive deeper? Explore the documentation sidebar for tutorials and guides on biological analyses with real datasets.*
