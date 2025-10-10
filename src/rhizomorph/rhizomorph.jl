@@ -53,12 +53,12 @@ include("algorithms/path-finding.jl")
 include("algorithms/io.jl")
 include("algorithms/simplification.jl")
 
-# Load graph builders (to be implemented)
-# include("fixed-length/kmer-graphs.jl")
-# include("fixed-length/qualmer-graphs.jl")
-# include("fixed-length/ngram-graphs.jl")
-# include("variable-length/fasta-graphs.jl")
-# include("variable-length/fastq-graphs.jl")
-# include("variable-length/string-graphs.jl")
+# Load graph builders
+include("fixed-length/kmer-graphs.jl")
+include("fixed-length/qualmer-graphs.jl")
+include("fixed-length/ngram-graphs.jl")
+include("variable-length/string-graphs.jl")
+include("variable-length/fasta-graphs.jl")
+include("variable-length/fastq-graphs.jl")
 
 end  # module Rhizomorph
