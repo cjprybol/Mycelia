@@ -4,7 +4,21 @@
 CurrentModule = Mycelia
 ```
 
-This page provides comprehensive documentation for all public functions in Mycelia, automatically generated from docstrings.
+**Documentation Status**: This API reference is currently incomplete. The Mycelia package contains approximately 656 public functions, but only a subset are documented here. This page lists functions that have formal docstrings.
+
+!!! note "Discovering Functions"
+    To explore all available functions:
+    ```julia
+    using Mycelia
+    names(Mycelia)  # List all exported names
+    # Or use Julia's help system
+    ?Mycelia.function_name
+    ```
+
+!!! warning "Planned vs Implemented"
+    Some functions mentioned in workflow documentation are marked as "(planned)" and not yet implemented. If a @ref link doesn't resolve, the function may be planned for future releases.
+
+This page provides comprehensive documentation for documented public functions in Mycelia.
 
 ## Table of Contents
 
