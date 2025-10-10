@@ -1,6 +1,18 @@
 # Function Index
 
-Alphabetical listing of all Mycelia functions with brief descriptions and links to detailed documentation.
+**Status Note**: This index includes both implemented and planned functions. 
+- Functions with working @ref links are implemented
+- Functions marked as *(planned)* are not yet implemented
+- See the [Complete API Reference](../api-reference.md) for details on implemented functions
+
+For a full list of 656 public functions in the codebase, please use Julia's help system:
+```julia
+using Mycelia
+# List all functions
+names(Mycelia)
+```
+
+Alphabetical listing of key Mycelia functions with brief descriptions and links to detailed documentation.
 
 ## A
 
