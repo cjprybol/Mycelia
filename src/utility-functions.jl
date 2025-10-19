@@ -52,7 +52,7 @@ function read_xlsx(filename::AbstractString)
     symbols = Symbol[]
     
     for sheet_name in sheet_names
-        df = DataFrames.DataFrame(XLSX.readtable(filename, sheet_name)...)
+        df = DataFrames.DataFrame(XLSX.readtable(filename, sheet_name))
         push!(dataframes, df)
         push!(symbols, Symbol(sheet_name))
     end
