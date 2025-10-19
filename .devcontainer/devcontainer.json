@@ -2,13 +2,16 @@
 // README at: https://github.com/JuliaLang/devcontainer-templates/tree/main/src/julia
 {
     "name": "Mycelia Development Container",
-
-    // remote on codespaces
+    // https://hub.docker.com/r/microsoft/devcontainers-base
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    // can specify specific version if desired
+    // "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+    // also works
+    // "image": "mcr.microsoft.com/devcontainers/base:debian",
+    // "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+    // wasn't working on mac with M1 chip
     // "image": "mcr.microsoft.com/devcontainers/universal:2",
-    // local on mac
-    "image": "mcr.microsoft.com/devcontainers/base:debian-11",
-    // for when/if I need more configuration than the base images provide
-    // "build": {
+    // : {
     //     "dockerfile": "Dockerfile"
     // },
 	// Features to add to the dev container. More info: https://containers.dev/features.
