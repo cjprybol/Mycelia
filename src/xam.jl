@@ -764,23 +764,166 @@ function parse_xam_to_summary_table(xam)
     return record_table
 end
 
-function index_bam(bam_path::String)
-    # Default samtools index output is the input file with .bai appended
-    bai_path = bam_path * ".bai"
-    
-    # Check if index already exists
-    if isfile(bai_path)
-        @info "BAM index already exists at: $bai_path"
-        return bai_path
+"""
+Check if a BAM file is coordinate-sorted.
+
+First attempts a fast header check. If the header is missing or inconclusive,
+performs a thorough validation by reading through the file to verify sort order.
+
+Returns true if coordinate-sorted, false otherwise.
+"""
+function is_bam_coordinate_sorted(bam::String)
+    # Try fast header check first
+    try
+        Mycelia.add_bioconda_env("samtools")
+        header_lines = Base.readlines(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -H $(bam)`)
+        
+        # If we have a header with SO:coordinate, trust it
+        if Base.any(line -> Base.occursin(r"@HD.*SO:coordinate", line), header_lines)
+            @info "BAM header indicates coordinate sorting" bam
+            return true
+        end
+        
+        # If header explicitly says NOT coordinate sorted, trust that too
+        if Base.any(line -> Base.occursin(r"@HD.*SO:(queryname|unsorted)", line), header_lines)
+            @info "BAM header indicates NOT coordinate sorted" bam
+            return false
+        end
+        
+        # Header exists but no SO tag or empty header - need to validate
+        @info "BAM header missing or incomplete, validating sort order..." bam
+    catch e
+        @warn "Failed to read BAM header, validating sort order..." exception=e
     end
     
-    # Generate the index
-    # @info "ensuring samtools is installed..."
-    Mycelia.add_bioconda_env("samtools")
-    @info "Generating BAM index for: $bam_path"
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools index $bam_path`)
+    # Thorough check: read through file and verify sort order
+    try
+        reader = Mycelia.open_xam(bam)
+        prev_refid = -1
+        prev_pos = -1
+        record_count = 0
+        max_check = 100_000  # Only check first 100k records for performance
+        
+        for record in reader
+            record_count += 1
+            if record_count > max_check
+                @info "Validated first $max_check records, assuming sorted" bam
+                Base.close(reader)
+                return true
+            end
+            
+            # Skip unmapped reads
+            if !XAM.BAM.ismapped(record)
+                continue
+            end
+            
+            refid = XAM.BAM.refid(record)
+            pos = XAM.BAM.position(record)
+            
+            # Check if sort order is violated
+            if refid < prev_refid || (refid == prev_refid && pos < prev_pos)
+                @info "BAM file is NOT coordinate-sorted (violation at record $record_count)" bam
+                Base.close(reader)
+                return false
+            end
+            
+            prev_refid = refid
+            prev_pos = pos
+        end
+        
+        Base.close(reader)
+        @info "BAM file validated as coordinate-sorted" bam
+        return true
+    catch e
+        @warn "Failed to validate BAM sort order, assuming unsorted" exception=e bam
+        return false
+    end
+end
+
+"""
+Sort a BAM file by coordinate using samtools sort.
+
+Returns the path to the sorted BAM file. By default, creates a new file with .sorted.bam suffix,
+but can be customized with the output_path parameter.
+
+Keyword Arguments:
+- threads: Number of threads to use for sorting (default: all available CPUs)
+- output_path: Path for the sorted BAM file (default: input with .sorted.bam suffix)
+"""
+function sort_bam(input_bam::String; threads::Int=Sys.CPU_THREADS, output_path::Union{String,Nothing}=nothing)
+    sorted_bam = Base.isnothing(output_path) ? Base.replace(input_bam, ".bam" => ".sorted.bam") : output_path
+    if !isfile(sorted_bam)
+        Mycelia.add_bioconda_env("samtools")
+        @info "Sorting BAM file..." input_bam sorted_bam threads
+        Base.run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(sorted_bam).sort.tmp -o $(sorted_bam) $(input_bam)`)
+    else
+        @info "Target sorted BAM file already exists at: $(sorted_bam)"
+    end    
+    return sorted_bam
+end
+
+"""
+Ensure a BAM file is coordinate-sorted and indexed.
+Returns a tuple of (sorted_bam_path, index_path).
+
+If the BAM file is already sorted, it will be indexed in place.
+If the BAM file is not sorted, a new sorted BAM file will be created with a .sorted.bam suffix.
+
+This function attempts to index the BAM file directly. If indexing fails due to sort order issues,
+it will automatically sort the file and retry indexing.
+
+Keyword Arguments:
+- threads: Number of threads to use for sorting (default: all available CPUs)
+- skip_sort_check: Skip pre-check for sort order and attempt indexing directly (default: false)
+"""
+function index_bam(bam_path::String; threads::Int=Sys.CPU_THREADS, skip_sort_check::Bool=false)
+
+    bai_path = bam_path * ".bai"
+    # Check if index already exists
+    if Base.isfile(bai_path)
+        @info "BAM index already exists at: $bai_path"
+        return (current_bam, bai_path)
+    end
+
+    current_bam = bam_path
+    # Optionally check sort order first (useful for large files where we want to avoid failed index attempts)
+    if !skip_sort_check
+        if !is_bam_coordinate_sorted(current_bam)
+            current_bam = sort_bam(current_bam; threads=threads)
+        end
+    end
+    bai_path = current_bam * ".bai"
     
-    return bai_path
+    # Check if index already exists
+    if Base.isfile(bai_path)
+        @info "BAM index already exists at: $bai_path"
+        return (current_bam, bai_path)
+    end
+    
+    # Try to generate the index
+    Mycelia.add_bioconda_env("samtools")
+    @info "Generating BAM index for: $current_bam"
+    try
+        Base.run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools index $(current_bam)`)
+        return (current_bam, bai_path)
+    catch e
+        # Check if error is due to sort order
+        error_msg = Base.string(e)
+        if Base.occursin(r"NO_COOR.*not in a single block", error_msg) || 
+           Base.occursin(r"cannot be indexed", error_msg)
+            @warn "Indexing failed due to sort order, sorting BAM file now..." current_bam
+            current_bam = sort_bam(current_bam; threads=threads)
+            
+            # Try indexing the sorted file
+            bai_path = current_bam * ".bai"
+            @info "Generating BAM index for sorted file: $current_bam"
+            Base.run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools index $(current_bam)`)
+            return (current_bam, bai_path)
+        else
+            # Some other error occurred
+            Base.rethrow(e)
+        end
+    end
 end
 
 """
@@ -856,7 +999,7 @@ The function automatically:
 - `{prefix}.thresholds.bed.gz`: Threshold coverage (if thresholds is specified)
 """
 function run_mosdepth(bam::String;
-                      prefix::String=bam,
+                      prefix::String="",
                       threads::Int=0,
                       use_median::Bool=false,
                       fast_mode::Bool=false,
@@ -869,13 +1012,11 @@ function run_mosdepth(bam::String;
                       include_flag::Int=0,
                       fasta::String="",
                       force::Bool=false)
-    
-    # Ensure mosdepth is installed
-    Mycelia.add_bioconda_env("mosdepth")
-    
-    # Ensure BAM is indexed
-    Mycelia.index_bam(bam)
-    
+
+
+    if isempty(prefix)
+        prefix = bam
+    end
     # Check if output already exists
     summary_file = prefix * ".mosdepth.summary.txt"
     if isfile(summary_file) && !force
@@ -889,6 +1030,26 @@ function run_mosdepth(bam::String;
             quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
             thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
         )
+    end
+    
+    # Ensure BAM is sorted and indexed
+    sorted_bam, bai_path = Mycelia.index_bam(bam, threads=threads)
+    if isempty(prefix) || ((prefix == bam) && (sorted_bam != bam))
+        prefix = sorted_bam
+        # re-check if output already exists
+        summary_file = prefix * ".mosdepth.summary.txt"
+        if isfile(summary_file) && !force
+            @info "mosdepth output already exists at: $(summary_file)"
+            return (;
+                prefix=prefix,
+                global_dist=prefix * ".mosdepth.global.dist.txt",
+                summary=summary_file,
+                per_base=no_per_base ? "" : prefix * ".per-base.bed.gz",
+                regions=isempty(by) ? "" : prefix * ".regions.bed.gz",
+                quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
+                thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
+            )
+        end
     end
     
     # Build command arguments
@@ -929,10 +1090,12 @@ function run_mosdepth(bam::String;
     end
     
     # Add positional arguments
-    push!(cmd_args, prefix, bam)
+    push!(cmd_args, prefix, sorted_bam)
     
     # Run mosdepth
-    @info "Running mosdepth on $(bam)"
+    @info "Running mosdepth on $(sorted_bam)"
+    # Ensure mosdepth is installed
+    Mycelia.add_bioconda_env("mosdepth")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mosdepth $(cmd_args)`)
     
     return (;

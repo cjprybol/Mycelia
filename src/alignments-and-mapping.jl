@@ -495,12 +495,13 @@ Create a minimap2 index for the provided reference sequence.
 Named tuple `(cmd, outfile)` where `outfile` is the generated `.mmi` index path.
 """
 function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=Sys.CPU_THREADS, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
-    Mycelia.add_bioconda_env("minimap2")
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    index_file = "$(fasta).x" * replace(mapping_type, ":" => "-") * ".I$(index_size).mmi"
     # if lr:hq, deal with : in the name
-    # index_file = replace(mapping_type, ":" => "-")
+    index_file = "$(fasta).x" * replace(mapping_type, ":" => "-") * ".I$(index_size).mmi"
+    if !isfile(index_file)
+        Mycelia.add_bioconda_env("minimap2")
+    end
     if as_string
         cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)"
     else
@@ -776,13 +777,12 @@ function minimap_map_paired_end_with_index(;
     @assert isfile(forward) "$(forward) not found!!"
     @assert isfile(reverse) "$(reverse) not found!!"
     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
-    # temp_sam_outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.sam"
-    # outfile = temp_sam_outfile
-    # temp_sam_outfile = 
     outfile = joinpath(outdir, fastq_prefix) * "." * basename(index_file) * "." * "minimap2.bam"
-    Mycelia.add_bioconda_env("minimap2")
-    Mycelia.add_bioconda_env("samtools")
-    # Mycelia.add_bioconda_env("pigz")
+    # only run if we will need to do work
+    if !isfile(outfile)
+        Mycelia.add_bioconda_env("minimap2")
+        Mycelia.add_bioconda_env("samtools")
+    end
     if as_string
         cmd =
         """
