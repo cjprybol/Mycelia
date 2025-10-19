@@ -6,7 +6,11 @@
     // remote on codespaces
     // "image": "mcr.microsoft.com/devcontainers/universal:2",
     // local on mac
-    "image": "mcr.microsoft.com/devcontainers/base:debian-11",
+    // https://hub.docker.com/r/microsoft/devcontainers-base
+    // "image": "mcr.microsoft.com/devcontainers/base:debian",
+    // "image": "mcr.microsoft.com/devcontainers/base:debian-12",
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    // "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
     // for when/if I need more configuration than the base images provide
     // "build": {
     //     "dockerfile": "Dockerfile"
