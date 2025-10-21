@@ -213,7 +213,10 @@ end
         table::DataFrames.DataFrame;
         output_dir::String=".",
         output_basename::Union{String, Nothing}=nothing,
-        gzip::Bool=false
+        force::Bool=false,
+        verbose::Bool=false,
+        gzip::Bool=false,
+        deduplicate::Bool=true
     )
 
 Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP compression.
@@ -224,15 +227,19 @@ Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP 
 # Keyword Arguments
 - `output_dir::String="."`: The directory to save the file.
 - `output_basename::Union{String, Nothing}=nothing`: The base name for the output file (without extension). Defaults to the normalized fastx identifier in the table.
+- `force::Bool=false`: If `true`, overwrite existing files.
+- `verbose::Bool=false`: If `true`, print detailed progress information.
 - `gzip::Bool=false`: If `true`, the output file will be GZIP compressed.
+- `deduplicate::Bool=true`: If `true`, de-duplicate contigs to keep only one copy of each unique sequence.
 """
 function normalized_table2fastx(
     table::DataFrames.DataFrame;
     output_dir::AbstractString=".",
-    output_basename::Union{String, Nothing}=nothing,
+    output_basename::Union{AbstractString, Nothing}=nothing,
     force::Bool=false,
     verbose::Bool=false,
-    gzip::Bool=false # New keyword argument for compression
+    gzip::Bool=false,
+    deduplicate::Bool=true
 )
     # --- 1. Determine Output Format and Record Type ---
     is_fastq = !all(ismissing, table.record_quality)
@@ -273,14 +280,24 @@ function normalized_table2fastx(
             end
             push!(records, record)
         end
+
+        if deduplicate
+            n_initial_records = length(records)
+            unique!(records)
+            n_removed = n_initial_records - length(records)
+            if verbose && n_removed > 0
+                percent_duplication = round(n_removed / n_initial_records * 100, digits=3)
+                @warn "$(n_removed) duplicate records detected ($(percent_duplication)%); keeping $(length(records)) unique records"
+            end
+        end
         
         # --- 4. Call Your Existing Writer Function ---
         if is_fastq
-            writen_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+            written_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip)
         else
-            writen_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip) # Pass gzip flag
+            written_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip)
         end
-        @assert writen_outfile == final_outfile
+        @assert written_outfile == final_outfile
     
         verbose && Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
     else

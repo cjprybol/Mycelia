@@ -1,3 +1,67 @@
+"""
+Collapse duplicate rows in a DataFrame by consolidating non-missing values.
+
+For each group defined by `grouping_col`, this function attempts to merge rows
+by taking the first non-missing value for each column. If conflicting non-missing
+values are found in any column, a warning is issued and all conflicting rows are kept.
+"""
+function collapse_duplicates(df, grouping_col)
+    result_rows = DataFrames.DataFrame[]
+    conflicts = []
+    
+    for g in DataFrames.groupby(df, grouping_col)
+        if DataFrames.nrow(g) == 1
+            push!(result_rows, g)
+            continue
+        end
+        
+        # Check for conflicts across all columns
+        has_conflict = false
+        conflicting_cols = String[]
+        
+        for col in DataFrames.names(g)
+            if col == grouping_col
+                continue
+            end
+            
+            non_missing_values = filter(!ismissing, g[!, col])
+            unique_values = unique(non_missing_values)
+            
+            if length(unique_values) > 1
+                has_conflict = true
+                push!(conflicting_cols, col)
+            end
+        end
+        
+        if has_conflict
+            # Keep all rows due to conflict
+            group_id = g[1, grouping_col]
+            @warn "Conflict found in group $group_id in columns: $(join(conflicting_cols, ", ")). Keeping all rows."
+            push!(conflicts, (group_id, conflicting_cols))
+            push!(result_rows, g)
+        else
+            # Merge rows by taking first non-missing value
+            merged_row = DataFrames.DataFrame()
+            for col in DataFrames.names(g)
+                merged_row[!, col] = [Base.coalesce(g[!, col]...)]
+            end
+            push!(result_rows, merged_row)
+        end
+    end
+    
+    collapsed_df = DataFrames.vcat(result_rows...)
+    
+    if !isempty(conflicts)
+        println("\n=== Summary of Conflicts ===")
+        println("Total groups with conflicts: $(length(conflicts))")
+        for (group_id, cols) in conflicts
+            println("  - $group_id: conflicts in $(join(cols, ", "))")
+        end
+    end
+    
+    return collapsed_df
+end
+
 function recursively_list_directories(dir::AbstractString)
     directories_list = String[]
     for (root, directories, files) in Base.walkdir(dir)
