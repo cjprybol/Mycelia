@@ -94,8 +94,23 @@ const BLAST_K = 0.134
 # - Murphy et al. (2000) Protein Eng. 13(3):149-152
 # - Peterson et al. (2009) BMC Bioinformatics 10:228
 # - Zheng et al. (2019) Database (Oxford) baz131 (RAACBook)
+#
+# See Also:
+# - [`reduce_amino_acid_alphabet()`](@ref): Main conversion function
+# - [`list_reduced_alphabets()`](@ref): Get list of available schemes
+# - [`get_reduced_alphabet_info()`](@ref): Get scheme metadata
 
-# HP2: Binary hydrophobic/polar classification (simplest reduction)
+"""
+Binary hydrophobic/polar classification (simplest reduction).
+
+Maps each of the 20 standard amino acids to either:
+- 'H' (Hydrophobic): A, C, F, I, L, M, V, W
+- 'P' (Polar): G, T, S, Y, P, N, D, E, Q, K, R, H
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:HP2`
+- [`REDUCED_ALPHABET_HYDROPATHY3`](@ref): Three-class hydropathy
+"""
 const REDUCED_ALPHABET_HP2 = Dict(
     BioSymbols.AA_A => 'H', BioSymbols.AA_C => 'H', BioSymbols.AA_F => 'H', BioSymbols.AA_I => 'H',
     BioSymbols.AA_L => 'H', BioSymbols.AA_M => 'H', BioSymbols.AA_V => 'H', BioSymbols.AA_W => 'H',
@@ -104,8 +119,17 @@ const REDUCED_ALPHABET_HP2 = Dict(
     BioSymbols.AA_Q => 'P', BioSymbols.AA_K => 'P', BioSymbols.AA_R => 'P', BioSymbols.AA_H => 'P'
 )
 
-# HYDROPATHY3: Three-class hydropathy (hydrophobic/neutral/hydrophilic)
-# Based on IMGT hydropathy classification
+"""
+Three-class hydropathy (hydrophobic/neutral/hydrophilic) based on IMGT classification.
+
+Maps amino acids to:
+- 'H' (Hydrophobic): I, V, L, F, C, M, A, W
+- 'N' (Neutral): G, T, S, Y, P, H
+- 'P' (Polar/Hydrophilic): D, N, E, Q, K, R
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:HYDROPATHY3`
+"""
 const REDUCED_ALPHABET_HYDROPATHY3 = Dict(
     BioSymbols.AA_I => 'H', BioSymbols.AA_V => 'H', BioSymbols.AA_L => 'H', BioSymbols.AA_F => 'H',
     BioSymbols.AA_C => 'H', BioSymbols.AA_M => 'H', BioSymbols.AA_A => 'H', BioSymbols.AA_W => 'H',
@@ -115,8 +139,20 @@ const REDUCED_ALPHABET_HYDROPATHY3 = Dict(
     BioSymbols.AA_K => 'P', BioSymbols.AA_R => 'P'
 )
 
-# GBMR4: Four-class alphabet isolating Gly and Pro
-# Glycine is the smallest and most flexible, Proline is rigid and breaks secondary structure
+"""
+Four-class alphabet isolating Gly and Pro.
+
+Glycine is the smallest and most flexible, Proline is rigid and breaks secondary structure.
+
+Maps amino acids to:
+- 'G' (Glycine): G
+- 'P' (Proline): P
+- 'H' (Hydrophobic): Y, F, L, I, V, M, C, W, H
+- 'B' (Basic/polar): A, D, K, E, R, N, T, S, Q
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:GBMR4`
+"""
 const REDUCED_ALPHABET_GBMR4 = Dict(
     BioSymbols.AA_G => 'G',
     BioSymbols.AA_P => 'P',
@@ -128,8 +164,20 @@ const REDUCED_ALPHABET_GBMR4 = Dict(
     BioSymbols.AA_Q => 'B'
 )
 
-# CHEMICAL5: Five classes based on chemical/structural properties
-# A=Aliphatic, R=aRomatic, C=Charged, T=Tiny, D=Diverse
+"""
+Five classes based on chemical/structural properties.
+
+Maps amino acids to:
+- 'A' (Aliphatic): I, V, L
+- 'R' (aRomatic): F, Y, W, H
+- 'C' (Charged): K, R, D, E
+- 'T' (Tiny): G, A, C, S
+- 'D' (Diverse): T, M, Q, N, P
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:CHEMICAL5`
+- [`REDUCED_ALPHABET_CHEMICAL6`](@ref): Six-class with separated charges
+"""
 const REDUCED_ALPHABET_CHEMICAL5 = Dict(
     BioSymbols.AA_I => 'A', BioSymbols.AA_V => 'A', BioSymbols.AA_L => 'A',
     BioSymbols.AA_F => 'R', BioSymbols.AA_Y => 'R', BioSymbols.AA_W => 'R', BioSymbols.AA_H => 'R',
@@ -139,8 +187,21 @@ const REDUCED_ALPHABET_CHEMICAL5 = Dict(
     BioSymbols.AA_P => 'D'
 )
 
-# CHEMICAL6: Six classes separating positive and negative charges
-# A=Aliphatic, R=aRomatic, +=positive, -=negative, T=Tiny, D=Diverse
+"""
+Six classes separating positive and negative charges.
+
+Maps amino acids to:
+- 'A' (Aliphatic): I, V, L
+- 'R' (aRomatic): F, Y, W, H
+- '+' (Positive): K, R
+- '-' (Negative): D, E
+- 'T' (Tiny): G, A, C, S
+- 'D' (Diverse): T, M, Q, N, P
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:CHEMICAL6`
+- [`REDUCED_ALPHABET_CHEMICAL5`](@ref): Five-class with combined charges
+"""
 const REDUCED_ALPHABET_CHEMICAL6 = Dict(
     BioSymbols.AA_I => 'A', BioSymbols.AA_V => 'A', BioSymbols.AA_L => 'A',
     BioSymbols.AA_F => 'R', BioSymbols.AA_Y => 'R', BioSymbols.AA_W => 'R', BioSymbols.AA_H => 'R',
@@ -151,8 +212,31 @@ const REDUCED_ALPHABET_CHEMICAL6 = Dict(
     BioSymbols.AA_P => 'D'
 )
 
-# SDM12: Structure-dependent model with 12 groups (Murphy et al. 2000)
-# Maintains clusters for acidic/basic, polar, aromatic, and aliphatic groups
+"""
+Structure-dependent model with 12 groups (Murphy et al. 2000).
+
+Maintains clusters for acidic/basic, polar, aromatic, and aliphatic groups.
+
+Maps amino acids to:
+- 'A': A (Alanine alone)
+- 'D': D, E (Acidic)
+- 'K': K, R (Basic)
+- 'N': N, Q (Amide)
+- 'T': T, S (Hydroxyl)
+- 'Y': Y, F (Aromatic)
+- 'L': L, I, V, M (Aliphatic)
+- 'C': C (Cysteine alone)
+- 'W': W (Tryptophan alone)
+- 'H': H (Histidine alone)
+- 'G': G (Glycine alone)
+- 'P': P (Proline alone)
+
+# References
+Murphy et al. (2000) Protein Eng. 13(3):149-152
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:SDM12`
+"""
 const REDUCED_ALPHABET_SDM12 = Dict(
     BioSymbols.AA_A => 'A',
     BioSymbols.AA_D => 'D', BioSymbols.AA_E => 'D',
@@ -168,7 +252,25 @@ const REDUCED_ALPHABET_SDM12 = Dict(
     BioSymbols.AA_P => 'P'
 )
 
-# Map of all available reduced alphabets
+"""
+Dictionary mapping scheme names to their reduction dictionaries.
+
+Contains all available reduced amino acid alphabet schemes. Each scheme maps
+`BioSymbols.AminoAcid` symbols to reduced alphabet characters.
+
+# Available Schemes
+- `:HP2` - Binary hydrophobic/polar (2 classes)
+- `:HYDROPATHY3` - Three-class hydropathy (3 classes)
+- `:GBMR4` - Four-class with isolated Gly/Pro (4 classes)
+- `:CHEMICAL5` - Five-class chemical properties (5 classes)
+- `:CHEMICAL6` - Six-class with separated charges (6 classes)
+- `:SDM12` - Structure-dependent model (12 classes)
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Main conversion function
+- [`list_reduced_alphabets()`](@ref): Get list of available schemes
+- [`REDUCED_ALPHABET_INFO`](@ref): Metadata about each scheme
+"""
 const REDUCED_ALPHABETS = Dict{Symbol, Dict{BioSymbols.AminoAcid, Char}}(
     :HP2 => REDUCED_ALPHABET_HP2,
     :HYDROPATHY3 => REDUCED_ALPHABET_HYDROPATHY3,
@@ -178,7 +280,19 @@ const REDUCED_ALPHABETS = Dict{Symbol, Dict{BioSymbols.AminoAcid, Char}}(
     :SDM12 => REDUCED_ALPHABET_SDM12
 )
 
-# Metadata about each reduced alphabet scheme
+"""
+Metadata dictionary for all reduced alphabet schemes.
+
+Contains detailed information about each reduction scheme including:
+- `:name` - Full descriptive name
+- `:classes` - Number of classes/groups
+- `:description` - Purpose and usage description
+- `:groups` - Mapping of reduced characters to amino acid groups
+
+# See Also
+- [`get_reduced_alphabet_info()`](@ref): Access metadata for a specific scheme
+- [`REDUCED_ALPHABETS`](@ref): The actual reduction mappings
+"""
 const REDUCED_ALPHABET_INFO = Dict{Symbol, Dict{Symbol, Any}}(
     :HP2 => Dict(
         :name => "Binary Hydrophobic-Polar",

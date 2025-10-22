@@ -52,8 +52,16 @@ schemes = list_reduced_alphabets()
 - Zheng et al. (2019) Database (Oxford) baz131 (RAACBook)
 
 # See Also
-- `list_reduced_alphabets()`: Get list of available schemes
-- `get_reduced_alphabet_info()`: Get detailed information about a scheme
+- [`list_reduced_alphabets()`](@ref): Get list of available schemes
+- [`get_reduced_alphabet_info()`](@ref): Get detailed information about a scheme
+- [`Mycelia.REDUCED_ALPHABETS`](@ref): Dictionary of all reduction schemes
+- [`Mycelia.REDUCED_ALPHABET_INFO`](@ref): Metadata about each scheme
+- [`Mycelia.REDUCED_ALPHABET_HP2`](@ref): Binary hydrophobic/polar mapping
+- [`Mycelia.REDUCED_ALPHABET_HYDROPATHY3`](@ref): Three-class hydropathy mapping
+- [`Mycelia.REDUCED_ALPHABET_GBMR4`](@ref): Four-class GBMR mapping
+- [`Mycelia.REDUCED_ALPHABET_CHEMICAL5`](@ref): Five-class chemical mapping
+- [`Mycelia.REDUCED_ALPHABET_CHEMICAL6`](@ref): Six-class chemical mapping
+- [`Mycelia.REDUCED_ALPHABET_SDM12`](@ref): Twelve-class SDM mapping
 """
 function reduce_amino_acid_alphabet(sequence::BioSequences.LongAA, scheme::Symbol)::String
     ## Check if the scheme exists
@@ -98,6 +106,11 @@ for scheme in schemes
     println("$scheme: $reduced")
 end
 ```
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Convert sequences to reduced alphabets
+- [`get_reduced_alphabet_info()`](@ref): Get information about a specific scheme
+- [`Mycelia.REDUCED_ALPHABETS`](@ref): Dictionary of all reduction schemes
 """
 function list_reduced_alphabets()::Vector{Symbol}
     return sort(collect(keys(Mycelia.REDUCED_ALPHABETS)))
@@ -133,6 +146,11 @@ for scheme in list_reduced_alphabets()
     println("\$scheme (\$(info[:classes]) classes): \$(info[:description])")
 end
 ```
+
+# See Also
+- [`reduce_amino_acid_alphabet()`](@ref): Convert sequences to reduced alphabets
+- [`list_reduced_alphabets()`](@ref): Get list of all available schemes
+- [`Mycelia.REDUCED_ALPHABET_INFO`](@ref): Complete metadata dictionary
 """
 function get_reduced_alphabet_info(scheme::Symbol)::Dict{Symbol, Any}
     if !haskey(Mycelia.REDUCED_ALPHABET_INFO, scheme)
