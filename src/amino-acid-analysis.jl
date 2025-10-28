@@ -97,13 +97,18 @@ Get a list of all available reduced amino acid alphabet schemes.
 # Examples
 ```julia
 schemes = list_reduced_alphabets()
-## Returns: [:HP2, :HYDROPATHY3, :GBMR4, :CHEMICAL5, :CHEMICAL6, :SDM12]
+## Returns 36 schemes including:
+## Legacy: :HP2, :HYDROPATHY3, :GBMR4, :CHEMICAL5, :CHEMICAL6, :SDM12
+## Murphy: :MURPHY2, :MURPHY3, :MU4, :ML5, :MURPHY8, :MURPHY10, :MURPHY12, :MURPHY15
+## Prlić: :SDM12_PRLIC, :HSDM17
+## Solis: :SOLIS2 through :SOLIS19
+## Others: :WW5, :MM5
 
 ## Use with reduce_amino_acid_alphabet
 seq = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
 for scheme in schemes
     reduced = reduce_amino_acid_alphabet(seq, scheme)
-    println("$scheme: $reduced")
+    println("\$scheme: \$reduced")
 end
 ```
 

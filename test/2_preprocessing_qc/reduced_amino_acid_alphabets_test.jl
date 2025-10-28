@@ -1,3 +1,26 @@
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl", "test/2_preprocessing_qc", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
+import Test
+import Mycelia
+import BioSequences
+import BioSymbols
+
 Test.@testset "Reduced Amino Acid Alphabets" begin
 
     Test.@testset "list_reduced_alphabets" begin
@@ -6,7 +29,7 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## Should return a vector of symbols
         Test.@test isa(schemes, Vector{Symbol})
 
-        ## Should include all expected schemes
+        ## Should include all expected legacy schemes
         Test.@test :HP2 in schemes
         Test.@test :HYDROPATHY3 in schemes
         Test.@test :GBMR4 in schemes
@@ -14,11 +37,33 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         Test.@test :CHEMICAL6 in schemes
         Test.@test :SDM12 in schemes
 
+        ## Should include Murphy schemes
+        Test.@test :MURPHY2 in schemes
+        Test.@test :MURPHY3 in schemes
+        Test.@test :MU4 in schemes
+        Test.@test :ML5 in schemes
+        Test.@test :MURPHY8 in schemes
+        Test.@test :MURPHY10 in schemes
+        Test.@test :MURPHY12 in schemes
+        Test.@test :MURPHY15 in schemes
+
+        ## Should include Prlić schemes
+        Test.@test :SDM12_PRLIC in schemes
+        Test.@test :HSDM17 in schemes
+
+        ## Should include Solis schemes
+        Test.@test :SOLIS2 in schemes
+        Test.@test :SOLIS19 in schemes
+
+        ## Should include other validated schemes
+        Test.@test :WW5 in schemes
+        Test.@test :MM5 in schemes
+
         ## Should be sorted
         Test.@test issorted(schemes)
 
-        ## Should have exactly 6 schemes
-        Test.@test length(schemes) == 6
+        ## Should have exactly 36 schemes
+        Test.@test length(schemes) == 36
     end
 
     Test.@testset "get_reduced_alphabet_info" begin
@@ -54,13 +99,13 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## Expected mapping:
         ## Hydrophobic (H): A, C, F, I, L, M, V, W
         ## Polar (P): G, T, S, Y, P, N, D, E, Q, K, R, H
-        expected = "HHPPPPHHPPPPPPPPPHPP"
+        expected = "HHPPHPPHPHHPPPPPPHHP"
         Test.@test reduced == expected
 
         ## Test shorter sequences
         seq = BioSequences.LongAA("ACFIL")
         reduced = Mycelia.reduce_amino_acid_alphabet(seq, :HP2)
-        Test.@test reduced == "HHHHI"
+        Test.@test reduced == "HHHHH"
 
         seq = BioSequences.LongAA("GTSYP")
         reduced = Mycelia.reduce_amino_acid_alphabet(seq, :HP2)
@@ -75,7 +120,7 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## Hydrophobic (H): I, V, L, F, C, M, A, W
         ## Neutral (N): G, T, S, Y, P, H
         ## Polar (P): D, N, E, Q, K, R
-        expected = "HHPPPPNHPPNNPPPPNHNH"
+        expected = "HHPPHNNHPHHPNPPNNHHN"
         Test.@test reduced == expected
     end
 
@@ -88,7 +133,7 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## P: P
         ## Hydrophobic (H): Y, F, L, I, M, V, C, W, H
         ## Basic/polar (B): A, D, K, E, R, N, T, S, Q
-        expected = "BBBBBGHBBHHHPBBBHHHH"
+        expected = "BHBBHGHHBHHBPBBBBHHH"
         Test.@test reduced == expected
 
         ## Test glycine and proline specifically
@@ -107,7 +152,7 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## Charged (C): K, R, D, E
         ## Tiny (T): G, A, C, S
         ## Diverse (D): T, M, Q, N, P
-        expected = "TTCCCRTRACCADDCDDAAR"
+        expected = "TTCCRTRACADDDDCTDARR"
         Test.@test reduced == expected
     end
 
@@ -122,7 +167,7 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## Negative (-): D, E
         ## Tiny (T): G, A, C, S
         ## Diverse (D): T, M, Q, N, P
-        expected = "TT--RTRT+ADDDD+DDAAR"
+        expected = "TT--RTRA+ADDDD+TDARR"
         Test.@test reduced == expected
 
         ## Test charge separation
@@ -138,7 +183,7 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
         ## Expected mapping:
         ## A: A, D: D/E, K: K/R, N: N/Q, T: T/S, Y: Y/F
         ## L: L/I/V/M, C: C, W: W, H: H, G: G, P: P
-        expected = "ADDDDGHKLLLNNNKTTYWY"
+        expected = "ACDDYGHLKLLNPNKTTLWY"
         Test.@test reduced == expected
 
         ## Test that similar amino acids map to same letter
@@ -242,6 +287,81 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
             ## Verify correct number of amino acids mapped
             Test.@test length(alphabet_dict) == 20
         end
+    end
+
+    Test.@testset "New Murphy schemes - Expected outputs" begin
+        all_aa = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
+
+        ## MURPHY2
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :MURPHY2)
+        Test.@test reduced == "IIEEIIEIEIIEIEEIIIII"
+        Test.@test length(reduced) == 20
+
+        ## MURPHY3
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :MURPHY3)
+        Test.@test reduced == "LLEEFLELELLELEELLLFF"
+        Test.@test length(reduced) == 20
+
+        ## MU4
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :MU4)
+        Test.@test reduced == "SLEEFSELELLESEESSLFF"
+        Test.@test length(reduced) == 20
+
+        ## ML5
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :ML5)
+        Test.@test reduced == "ALEEFAKLKLLEAEKAALFF"
+        Test.@test length(reduced) == 20
+    end
+
+    Test.@testset "Other validated schemes - Expected outputs" begin
+        all_aa = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
+
+        ## WW5
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :WW5)
+        Test.@test reduced == "AIDDIGAIKIIKGKKKAIII"
+        Test.@test length(reduced) == 20
+
+        ## MM5
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :MM5)
+        Test.@test reduced == "ACDDIAHIDIIDDDDDDIII"
+        Test.@test length(reduced) == 20
+
+        ## MURPHY12
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :MURPHY12)
+        Test.@test reduced == "ACDEFGHLKLLDPEKSSLWF"
+        Test.@test length(reduced) == 20
+
+        ## SDM12_PRLIC
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :SDM12_PRLIC)
+        Test.@test reduced == "ACDKYGHLKLLNPTKTTLWY"
+        Test.@test length(reduced) == 20
+
+        ## HSDM17
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :HSDM17)
+        Test.@test reduced == "ACDKFGHLKLMNPQRSTLWY"
+        Test.@test length(reduced) == 20
+    end
+
+    Test.@testset "Solis hierarchical set - Sample tests" begin
+        all_aa = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
+
+        ## Test SOLIS2 (minimal reduction)
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :SOLIS2)
+        Test.@test length(reduced) == 20
+        ## Should only have 2 characters
+        Test.@test length(Set(reduced)) == 2
+
+        ## Test SOLIS10 (middle of range)
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :SOLIS10)
+        Test.@test length(reduced) == 20
+        ## Should have 10 unique characters
+        Test.@test length(Set(reduced)) == 10
+
+        ## Test SOLIS19 (nearly complete)
+        reduced = Mycelia.reduce_amino_acid_alphabet(all_aa, :SOLIS19)
+        Test.@test length(reduced) == 20
+        ## Should have 19 unique characters (only Q,S paired)
+        Test.@test length(Set(reduced)) == 19
     end
 
     Test.@testset "Reduced alphabet metadata verification" begin
