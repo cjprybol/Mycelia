@@ -340,7 +340,7 @@ Runs confusion_matrix, precision_recall_f1, and accuracy.
 Pretty-prints macro metrics and accuracy.
 Returns a named tuple with all results and plots.
 """
-function evaluate_classification(true_labels, pred_labels)
+function evaluate_classification(true_labels, pred_labels; verbose::Bool=true)
     cm_out = confusion_matrix(true_labels, pred_labels)
     prf_out = precision_recall_f1(true_labels, pred_labels)
     acc = accuracy(true_labels, pred_labels)
@@ -349,11 +349,13 @@ function evaluate_classification(true_labels, pred_labels)
     macro_precision = prf_out.macro_precision
     macro_recall = prf_out.macro_recall
 
-    println("==== Evaluation Results ====")
-    Printf.@printf("%-18s: %.4f\n", "Macro F1", macro_f1)
-    Printf.@printf("%-18s: %.4f\n", "Macro Precision", macro_precision)
-    Printf.@printf("%-18s: %.4f\n", "Macro Recall", macro_recall)
-    Printf.@printf("%-18s: %.4f\n", "Accuracy", acc)
+    if verbose
+        println("==== Evaluation Results ====")
+        Printf.@printf("%-18s: %.4f\n", "Macro F1", macro_f1)
+        Printf.@printf("%-18s: %.4f\n", "Macro Precision", macro_precision)
+        Printf.@printf("%-18s: %.4f\n", "Macro Recall", macro_recall)
+        Printf.@printf("%-18s: %.4f\n", "Accuracy", acc)
+    end
 
     return (
         confusion_matrix = cm_out.cm,
