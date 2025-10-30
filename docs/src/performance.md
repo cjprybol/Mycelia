@@ -110,4 +110,4 @@
 
 ---
 
-*This guide will be expanded with specific recommendations, benchmarks, and optimization strategies. For current performance information, see the [benchmarking documentation](../benchmarking/README.md).*
+*This guide will be expanded with specific recommendations, benchmarks, and optimization strategies. For current performance information, see the [benchmarking documentation](https://github.com/cjprybol/Mycelia/tree/main/benchmarking).*

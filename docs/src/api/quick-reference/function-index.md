@@ -2,6 +2,8 @@
 
 Alphabetical listing of all Mycelia functions with brief descriptions and links to detailed documentation.
 
+**Note**: Functions marked with `@ref` links have complete API documentation. Functions without links are planned or have incomplete documentation. Functions marked *(planned)* are not yet implemented.
+
 ## A
 
 ### `add_sequencing_errors` *(planned)*
@@ -10,7 +12,7 @@ Add realistic sequencing errors to simulated reads.
 - **Usage**: `add_sequencing_errors(reads, error_rate=0.01)`
 - **See**: [Data Acquisition](../workflows/data-acquisition.md#sequencing-read-simulation)
 
-### [`analyze_fastq_quality`](@ref)
+### [`Mycelia.analyze_fastq_quality`](@ref)
 Comprehensive quality analysis of FASTQ files.
 - **Module**: Quality Control
 - **Usage**: `analyze_fastq_quality("reads.fastq")`
@@ -40,7 +42,7 @@ Assign functional annotations to predicted genes.
 - **Usage**: `annotate_functions(proteins, database="uniprot")`
 - **See**: [Gene Annotation](../workflows/gene-annotation.md#functional-annotation)
 
-### [`assemble_genome`](@ref)
+### [`Mycelia.assemble_genome`](@ref)
 Main genome assembly function supporting multiple assemblers.
 - **Module**: Genome Assembly
 - **Usage**: `Mycelia.assemble_genome("reads.fastq", assembler="hifiasm")`
@@ -86,7 +88,7 @@ Analyze codon usage patterns in coding sequences.
 - **Usage**: `calculate_codon_usage("cds.fasta", genetic_code="standard")`
 - **See**: [Sequence Analysis](../workflows/sequence-analysis.md#codon-usage-analysis)
 
-### [`calculate_gc_content`](@ref)
+### [`Mycelia.calculate_gc_content`](@ref)
 Calculate GC content for sequences or sequence collections.
 - **Module**: Sequence Analysis
 - **Usage**: `calculate_gc_content("sequences.fasta")`
@@ -116,7 +118,7 @@ High-level phylogenetic tree construction interface.
 - **Usage**: `construct_phylogeny(core_genes, method="ml")`
 - **See**: [Comparative Genomics](../workflows/comparative-genomics.md#phylogenetic-analysis)
 
-### [`count_kmers`](@ref)
+### [`Mycelia.count_kmers`](@ref)
 Count k-mers in sequences with various options and optimizations.
 - **Module**: Sequence Analysis
 - **Usage**: `count_kmers("reads.fastq", k=21)`
@@ -142,7 +144,7 @@ Screen for host organism contamination in sequencing data.
 - **Usage**: `detect_host_contamination("reads.fastq", "host_genome.fasta")`
 - **See**: [Quality Control](../workflows/quality-control.md#host-contamination)
 
-### [`download_genome_by_accession`](@ref)
+### [`Mycelia.download_genome_by_accession`](@ref)
 Download genome sequences from NCBI by accession number.
 - **Module**: Data Acquisition
 - **Usage**: `Mycelia.download_genome_by_accession("NC_001422.1")`
@@ -150,7 +152,7 @@ Download genome sequences from NCBI by accession number.
 
 ## E
 
-### [`estimate_genome_size_from_kmers`](@ref)
+### [`Mycelia.estimate_genome_size_from_kmers`](@ref)
 Estimate genome size using k-mer frequency spectrum analysis.
 - **Module**: Sequence Analysis
 - **Usage**: `estimate_genome_size_from_kmers(kmer_counts)`
@@ -164,13 +166,13 @@ Comprehensive assembly quality evaluation.
 
 ## F
 
-### [`fasta_list_to_dense_kmer_counts`](@ref)
+### [`Mycelia.fasta_list_to_dense_kmer_counts`](@ref)
 Generate dense k-mer count matrices from multiple FASTA files.
 - **Module**: Sequence Analysis
 - **Usage**: `fasta_list_to_dense_kmer_counts(file_list, k=21)`
 - **See**: [Sequence Analysis](../workflows/sequence-analysis.md#basic-k-mer-counting)
 
-### [`fasta_list_to_sparse_kmer_counts`](@ref)
+### [`Mycelia.fasta_list_to_sparse_kmer_counts`](@ref)
 Generate sparse k-mer count matrices from multiple FASTA files.
 - **Module**: Sequence Analysis
 - **Usage**: `fasta_list_to_sparse_kmer_counts(file_list, k=21)`
@@ -216,7 +218,7 @@ Generate k-mer frequency spectrum from k-mer counts.
 
 ## N
 
-### [`ncbi_genome_download_accession`](@ref)
+### [`Mycelia.ncbi_genome_download_accession`](@ref)
 Download complete genome assembly packages from NCBI.
 - **Module**: Data Acquisition
 - **Usage**: `ncbi_genome_download_accession("GCF_000819615.1")`
@@ -250,11 +252,11 @@ Predict genes in genome assemblies.
 
 ## R
 
-### [`read_fasta`](@ref)
-Read sequences from FASTA files.
+### [`Mycelia.open_fastx`](@ref)
+Open and read sequences from FASTA or FASTQ files.
 - **Module**: File I/O
-- **Usage**: `read_fasta("sequences.fasta")`
-- **See**: [FASTA/FASTQ Data Types](../data-types/fasta-fastq.md#reading-files)
+- **Usage**: `for record in Mycelia.open_fastx("sequences.fasta"); ...; end`
+- **See**: [Data Acquisition](../workflows/data-acquisition.md#file-io)
 
 ### [`remove_adapters`](@ref)
 Remove adapter sequences from sequencing reads.
@@ -278,7 +280,7 @@ Generate random genome sequences for testing.
 
 ## V
 
-### [`validate_assembly`](@ref)
+### [`Mycelia.validate_assembly`](@ref)
 Validate genome assembly using multiple approaches.
 - **Module**: Assembly Validation
 - **Usage**: `validate_assembly("contigs.fasta", "reads.fastq")`
@@ -286,7 +288,7 @@ Validate genome assembly using multiple approaches.
 
 ## W
 
-### [`write_fastq`](@ref)
+### [`Mycelia.write_fastq`](@ref)
 Write sequences to FASTQ files.
 - **Module**: File I/O
 - **Usage**: `write_fastq("output.fastq", sequences)`

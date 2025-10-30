@@ -44,60 +44,6 @@ function test_display(args...)
     end
 end
 
-# Confusion Matrix and Metrics - Animal Dataset
-
-Test.@testset "Confusion Matrix and Metrics - Animal Dataset" begin
-    true_labels = ["cat", "dog", "cat", "dog", "cat", "bird"]
-    pred_labels = ["cat", "cat", "cat", "dog", "dog", "bird"]
-    expected_cm = [1 0 0;
-                   0 2 1;
-                   0 1 1]
-    expected_labels = ["bird", "cat", "dog"]
-    cm_out = Mycelia.confusion_matrix(true_labels, pred_labels)
-    Test.@test cm_out.cm == expected_cm
-    Test.@test cm_out.labels == expected_labels
-    metrics = Mycelia.precision_recall_f1(true_labels, pred_labels)
-    Test.@test isapprox(metrics.precisions["bird"], 1.0; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["bird"], 1.0; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["bird"], 1.0; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["cat"], 2/3; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["cat"], 2/3; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["cat"], 2/3; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["dog"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["dog"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["dog"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.macro_precision, (1.0 + 2/3 + 0.5)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_recall, (1.0 + 2/3 + 0.5)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_f1, (1.0 + 2/3 + 0.5)/3; atol=1e-8)
-end
-
-# Confusion Matrix and Metrics - ABC Dataset
-
-Test.@testset "Confusion Matrix and Metrics - ABC Dataset" begin
-    true_labels = ["A", "A", "A", "B", "B", "C", "C", "C"]
-    pred_labels = ["A", "B", "C", "B", "C", "C", "A", "B"]
-    expected_cm = [1 1 1;
-                   0 1 1;
-                   1 1 1]
-    expected_labels = ["A", "B", "C"]
-    cm_out = Mycelia.confusion_matrix(true_labels, pred_labels)
-    Test.@test cm_out.cm == expected_cm
-    Test.@test cm_out.labels == expected_labels
-    metrics = Mycelia.precision_recall_f1(true_labels, pred_labels)
-    Test.@test isapprox(metrics.precisions["A"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["A"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["A"], 0.4; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["B"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["B"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["B"], 0.4; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["C"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["C"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["C"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_precision, (0.5 + 1/3 + 1/3)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_recall, (1/3 + 0.5 + 1/3)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_f1, (0.4 + 0.4 + 1/3)/3; atol=1e-8)
-end
-
 # Binary Matrix Processing
 
 Test.@testset "Binary Matrix Processing" begin

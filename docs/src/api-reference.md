@@ -15,54 +15,63 @@ Depth = 3
 
 ## Assembly Functions
 
-### Intelligent Assembly
+### Main Assembly Interface
 
 ```@docs
-mycelia_assemble(::Vector{<:FASTX.FASTQ.Record})
-mycelia_assemble(::Union{String, Vector{String}})
+Mycelia.assemble_genome
 ```
 
-### Assembly Utilities
+### Third-Party Assembly Tool Wrappers
 
-```@docs
-dynamic_k_prime_pattern
-error_optimized_k_sequence
-calculate_assembly_reward
-```
+See [Assembly Suite](api/workflows/assembly-suite.md) for comprehensive documentation of production-ready assembly wrappers including:
+
+- Short-read assemblers: MEGAHIT, SPAdes, metaSPAdes, SKESA, Velvet
+- Long-read assemblers: Flye, metaFlye, Canu, hifiasm, MetaMDBG
+- Hybrid assemblers: Unicycler
+- Polishing tools: Apollo, HyPo, Strainy
+
+### Experimental Assembly Algorithms
+
+Mycelia includes experimental assembly algorithms in `src/development/` that are not currently part of the public API:
+
+- **Intelligent Assembly**: `mycelia_assemble` - Self-optimizing k-mer progression
+- **Assembly Utilities**: `dynamic_k_prime_pattern`, `error_optimized_k_sequence`, `calculate_assembly_reward`
+
+These are research implementations subject to change. For production use, see the third-party assembler wrappers above.
 
 ## Qualmer Analysis
 
 ### Core Qualmer Types
 
 ```@docs
-Qualmer
-QualmerVertexData
-QualmerEdgeData
+Mycelia.Qualmer
+Mycelia.QualmerVertexData
+Mycelia.QualmerEdgeData
 ```
 
 ### Qualmer Generation
 
 ```@docs
-qualmers_fw
-qualmers_canonical
-qualmers_unambiguous
-qualmers_unambiguous_canonical
+Mycelia.qualmers_fw
+Mycelia.qualmers_canonical
+Mycelia.qualmers_unambiguous
+Mycelia.qualmers_unambiguous_canonical
 ```
 
 ### Quality Analysis
 
 ```@docs
-phred_to_probability
-qualmer_correctness_probability
-joint_qualmer_probability
-position_wise_joint_probability
+Mycelia.phred_to_probability
+Mycelia.qualmer_correctness_probability
+Mycelia.joint_qualmer_probability
+Mycelia.position_wise_joint_probability
 ```
 
 ### Graph Construction
 
 ```@docs
-build_qualmer_graph
-get_qualmer_statistics
+Mycelia.build_qualmer_graph
+Mycelia.get_qualmer_statistics
 ```
 
 ## String Graphs
@@ -70,9 +79,9 @@ get_qualmer_statistics
 ### N-gram Analysis
 
 ```@docs
-ngrams
-string_to_ngram_graph
-plot_ngram_graph
+Mycelia.ngrams
+Mycelia.string_to_ngram_graph
+Mycelia.plot_ngram_graph
 ```
 
 ### Graph Simplification
@@ -80,8 +89,9 @@ plot_ngram_graph
 ```@docs
 Mycelia.collapse_unbranching_paths
 Mycelia.find_connected_components
-Mycelia.assemble_strings
 ```
+
+**Note**: Additional graph simplification function `assemble_strings` is available but currently lacks documentation.
 
 ## Sequence I/O
 
@@ -89,12 +99,14 @@ Mycelia.assemble_strings
 
 ```@docs
 Mycelia.open_fastx
+Mycelia.write_fastq
+Mycelia.write_fasta
 ```
 
 ### Format Conversion
 
 ```@docs
-convert_sequence
+Mycelia.convert_sequence
 ```
 
 ## K-mer Analysis
@@ -106,8 +118,14 @@ For k-mer counting functions, see [Sequence Analysis Workflow](api/workflows/seq
 ### Distance Metrics
 
 ```@docs
-jaccard_distance
-kmer_counts_to_js_divergence
+Mycelia.jaccard_distance
+Mycelia.kmer_counts_to_js_divergence
+```
+
+### Genome Size Estimation
+
+```@docs
+Mycelia.estimate_genome_size_from_kmers
 ```
 
 ## Simulation and Testing
@@ -116,11 +134,9 @@ kmer_counts_to_js_divergence
 
 See [Data Acquisition Workflow](api/workflows/data-acquisition.md) for read simulation functions.
 
-### Assembly Testing
+### Assembly Testing (Experimental)
 
-```@docs
-test_intelligent_assembly
-```
+Experimental assembly testing function `test_intelligent_assembly` is available in `src/development/` but not currently part of the public API.
 
 ## Quality Control
 
@@ -142,16 +158,16 @@ For quality control and filtering functions, see [Quality Control Workflow](api/
 ### Quality Assessment
 
 ```@docs
-assess_assembly_quality
-validate_assembly
+Mycelia.assess_assembly_quality
+Mycelia.validate_assembly
 ```
 
 ### External Validators
 
 ```@docs
-run_quast
-run_busco
-run_mummer
+Mycelia.run_quast
+Mycelia.run_busco
+Mycelia.run_mummer
 ```
 
 ## Annotation
@@ -169,13 +185,6 @@ Functions for gene prediction and annotation (using external tools):
 
 ## Comparative Genomics
 
-### Pangenome Analysis
-
-```@docs
-analyze_pangenome_kmers
-build_genome_distance_matrix
-```
-
 ## Visualization
 
 ### Plotting Functions
@@ -190,12 +199,9 @@ For k-mer frequency plotting, see [Sequence Analysis Workflow](api/workflows/seq
 
 ## Utility Functions
 
-### Memory Management
+### Memory Management (Experimental)
 
-```@docs
-estimate_memory_usage
-check_memory_limits
-```
+Experimental memory management functions (`estimate_memory_usage`, `check_memory_limits`) are available in `src/development/` but not currently part of the public API.
 
 ### File Operations
 
@@ -210,8 +216,8 @@ Functions for user feedback during long-running operations.
 ### Graph Modes
 
 ```@docs
-GraphMode
-StrandOrientation
+Mycelia.GraphMode
+Mycelia.StrandOrientation
 ```
 
 Used to control how graphs are constructed and oriented.
@@ -310,7 +316,7 @@ Set `JULIA_NUM_THREADS` environment variable for best performance.
 
 1. **Check inputs**: Use `typeof()` and `length()` 
 2. **Monitor memory**: Use `memory_limit` parameters
-3. **Enable logging**: Set `verbose=true` in functions
+3. **Enable logging**: Set `verbose=true` in functions where applicable
 4. **Test subset**: Use smaller datasets for debugging
 
 ## Integration Points
@@ -332,18 +338,6 @@ Supported formats:
 - **Output**: FASTA, CSV, JSON, JLD2
 - **Intermediate**: Graph formats, quality scores
 
-### Workflow Integration
-
-Functions are designed to work together in pipelines:
-
-```julia
-# Typical workflow
-data = open_fastx("reads.fastq")
-quality_report = analyze_fastq_quality(data)
-assembly = mycelia_assemble("reads.fastq")
-validation = assess_assembly_quality(assembly)
-```
-
 ## Version Compatibility
 
 This documentation corresponds to Mycelia version 0.1.0+. 
@@ -352,4 +346,4 @@ This documentation corresponds to Mycelia version 0.1.0+.
 - **Deprecated functions** include migration guidance
 - **Experimental features** are clearly marked
 
-For the latest updates, see the [CHANGELOG](../CHANGELOG.md).
+For the latest updates, see the [CHANGELOG](https://github.com/cjprybol/Mycelia/blob/main/CHANGELOG.md).

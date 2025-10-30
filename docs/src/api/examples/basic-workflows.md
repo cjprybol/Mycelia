@@ -1,17 +1,33 @@
 # Basic Workflows
 
-Complete examples of common bioinformatics analysis workflows using Mycelia functions. These examples show how to combine functions from different modules to accomplish typical research tasks.
+> **NOTE - API Design Documentation**: These workflows represent the intended API design for Mycelia. Many functions shown are planned but not yet implemented. This documentation serves as:
+> - A design specification for future development
+> - A record of planned functionality to maintain accountability
+> - Examples of how the API should work when implemented
+>
+> For currently available functionality, see the [Assembly Suite](../workflows/assembly-suite.md) which documents production-ready external tool wrappers.
+
+Examples of common bioinformatics analysis workflows using Mycelia functions. These examples show how to combine functions from different modules to accomplish typical research tasks.
 
 ## Overview
 
-These workflows demonstrate:
-- **Complete analysis pipelines** from start to finish
-- **Function integration** across different modules
-- **Parameter selection** for common use cases
-- **Error handling** and quality control
-- **Result interpretation** and next steps
+These workflows demonstrate the intended design for:
+- **Complete analysis pipelines** from start to finish *(planned)*
+- **Function integration** across different modules *(partially implemented)*
+- **Parameter selection** for common use cases *(planned)*
+- **Error handling** and quality control *(partially implemented)*
+- **Result interpretation** and next steps *(planned)*
 
-## Workflow 1: Bacterial Genome Assembly
+## Workflow 1: Bacterial Genome Assembly *(Planned API Design)*
+
+> **Implementation Status**: This workflow showcases the intended unified API. Currently:
+> - Data acquisition: Implemented (`download_genome_by_accession`)
+> - Basic quality analysis: Implemented (`analyze_fastq_quality`)
+> - Quality filtering: Planned (use `qc_filter_*` tool wrappers instead)
+> - K-mer analysis: Partially implemented (`count_kmers`, `estimate_genome_size_from_kmers`)
+> - Assembly: Implemented via external tools (see [Assembly Suite](../workflows/assembly-suite.md))
+> - Validation: Partially implemented
+> - Annotation: Implemented via external tools (`run_bakta`, `run_pgap`, `run_prokka`)
 
 Complete bacterial genome analysis from raw reads to annotated assembly.
 
@@ -451,11 +467,11 @@ After completing these basic workflows, you can:
 1. **Explore advanced techniques** in [Advanced Usage](advanced-usage.md)
 2. **Customize parameters** using the [Parameter Guide](../quick-reference/parameter-guide.md)
 3. **Integrate external tools** following Tool Integration *(planned)*
-4. **Scale to HPC systems** with [Deployment Guide](../../../deployment-guide.md)
+4. **Scale to HPC systems** (deployment guide coming soon)
 
 ## See Also
 
 - [Function Index](../quick-reference/function-index.md) - Complete function reference
-- [Workflow-Specific Guides](../workflows/) - Detailed workflow documentation
+- [Workflow-Specific Guides](../workflows/quality-control.md) - Detailed workflow documentation
 - [Tutorials](../../tutorials.md) - Step-by-step learning materials
 - [FAQ](../../faq.md) - Common questions and troubleshooting

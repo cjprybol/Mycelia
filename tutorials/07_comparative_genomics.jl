@@ -209,8 +209,8 @@ sequences = [FASTX.sequence(Mycelia.random_fasta_record(moltype=:DNA, seed=i, L=
 println("Sequence Graph Construction:")
 println("  K-mer size: $k")
 println("  Sequences: $(length(sequences))")
-# println("  Graph nodes: $(Graphs.nv(graph))")
-# println("  Graph edges: $(Graphs.ne(graph))")
+## println("  Graph nodes: \$(Graphs.nv(graph))")
+## println("  Graph edges: \$(Graphs.ne(graph))")
 
 # ### Variation Graphs
 #

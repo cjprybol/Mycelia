@@ -149,6 +149,11 @@ The package integrates with various bioinformatics tools:
 - **Use precise, technical language** rather than marketing language
 - **Focus on functionality and capabilities** rather than superlative claims
 
+### Writing Style
+- **Never use emojis** in code, documentation, or commit messages
+- **Use clear, professional language** without decorative elements
+- **Prefer plain text markers** (e.g., "NOTE:", "IMPORTANT:", "WARNING:") over emoji symbols
+
 ## Testing Standards
 
 ### Never Disable Tests

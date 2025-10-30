@@ -4,11 +4,14 @@ Functions for assessing and improving sequencing data quality before downstream 
 
 ## Overview
 
-Quality control is essential for reliable bioinformatics results. Mycelia integrates with external QC tools and is developing native Julia implementations for:
+Quality control is essential for reliable bioinformatics results. Mycelia currently provides:
 
-- **External tool integration** for quality filtering (fastp, filtlong, trim_galore)
-- **Basic FASTQ file operations** (reading/writing)
-- **Planned features**: Native quality assessment, contamination detection, and reporting
+- **External tool integration** for quality filtering (fastp, filtlong, fastplong, chopper, trim_galore) - Implemented
+- **Basic quality assessment** (`analyze_fastq_quality`) - Implemented
+- **FASTQ file operations** (reading/writing) - Implemented
+- **Planned features**: Comprehensive native quality assessment, contamination detection, and detailed reporting
+
+> **Implementation Status**: Quality control currently relies primarily on well-established external tools. Native Julia implementations for detailed quality analysis and filtering are planned.
 
 ## Common Workflows
 
@@ -153,7 +156,9 @@ end
 
 ### Quality-Based Filtering
 
-<!-- filter_by_quality, trim_low_quality_ends, remove_low_quality_reads, adaptive_quality_filtering not yet implemented as individual functions -->
+**Currently Available**: External tool wrappers (see below)
+
+**Planned**: Native Julia filtering functions
 
 ```@docs
 Mycelia.qc_filter_short_reads_fastp
@@ -162,9 +167,11 @@ Mycelia.qc_filter_long_reads_filtlong
 Mycelia.trim_galore_paired
 ```
 
-#### Example: Quality Filtering
+#### Example: Quality Filtering *(Planned native implementation)*
+
 ```julia
-# Filter reads by quality thresholds
+# Filter reads by quality thresholds (planned)
+# Currently use: qc_filter_short_reads_fastp() or qc_filter_long_reads_filtlong()
 filtered_reads = Mycelia.filter_by_quality(
     "reads.fastq",
     min_mean_quality=25,
@@ -181,14 +188,16 @@ println("Filtered reads: $(length(filtered_reads))")
 println("Retention rate: $(length(filtered_reads) / Mycelia.count_reads("reads.fastq") * 100)%")
 ```
 
-### Adapter and Contamination Removal
+### Adapter and Contamination Removal *(Planned)*
 
-<!-- remove_adapters, detect_adapter_contamination, remove_host_contamination, remove_vector_contamination not yet implemented as individual functions
-Adapter removal available through trim_galore_paired and QC filtering functions -->
+**Currently Available**: Adapter removal via `trim_galore_paired()` and QC filter functions
 
-#### Example: Adapter Removal
+**Planned**: Native contamination detection and removal functions
+
+#### Example: Adapter Removal *(Planned)*
+
 ```julia
-# Detect and remove adapters
+# Detect and remove adapters (planned)
 adapter_results = Mycelia.detect_adapter_contamination("reads.fastq")
 
 if adapter_results.contamination_detected
@@ -439,17 +448,12 @@ contamination_report = Mycelia.generate_contamination_report(contamination_scree
 ## Related Functions
 
 ### Data Input/Output
-- [`read_fastq`](@ref) - Read FASTQ files
-- [`write_fastq`](@ref) - Write filtered FASTQ files
-- [`compress_fastq`](@ref) - Compress output files
+- [`Mycelia.open_fastx`](@ref) - Read FASTQ (and FASTA) files
+- [`Mycelia.write_fastq`](@ref) - Write filtered FASTQ files
 
 ### Downstream Analysis
-- [`count_kmers`](@ref) - K-mer analysis of cleaned reads
-- [`assemble_genome`](@ref) - Genome assembly with quality-controlled reads
-
-### Visualization
-- [`plot_quality_metrics`](@ref) - Quality visualization
-- [`create_quality_dashboard`](@ref) - Interactive quality dashboard
+- [`Mycelia.count_kmers`](@ref) - K-mer analysis of cleaned reads
+- [`Mycelia.assemble_genome`](@ref) - Genome assembly with quality-controlled reads
 
 ## Related Workflows
 
@@ -461,6 +465,6 @@ contamination_report = Mycelia.generate_contamination_report(contamination_scree
 - Genome Assembly *(planned)* - Assembly with preprocessed reads
 
 ## See Also
-- [Tutorial 2: Quality Control](../../tutorials/02_quality_control.md)
+- [Tutorial 2: Quality Control](../../generated/tutorials/02_quality_control.md)
 - FASTA/FASTQ Data Types *(planned)*
 - [Performance Optimization Guide](../examples/advanced-usage.md)

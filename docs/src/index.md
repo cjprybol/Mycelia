@@ -2,7 +2,7 @@
 
 **An experimental Julia package for bioinformatics and computational biology**
 
-Mycelia is a research-oriented package exploring novel approaches to genomic analysis, with a focus on graph-based genome assembly and quality-aware sequence processing. Currently in early development, it provides both experimental algorithms and integrations with established bioinformatics tools.
+Mycelia is a research-oriented package exploring best-practice methodologies for pan-multi-omics analysis and graph-based assembly with quality-aware sequence processing. Currently in early development, it provides both experimental algorithms and integrations with established bioinformatics tools.
 
 ## Quick Start
 
@@ -10,21 +10,26 @@ New to Mycelia? Start with our [Getting Started Guide](getting-started.md) to in
 
 ## Key Features & Research Areas
 
-### Currently Available
-- **🧬 Sequence Processing**: Basic FASTA/FASTQ I/O and read simulation
-- **📊 K-mer Analysis**: Canonical k-mer counting and distance metrics
-- **🔧 Tool Integration**: Wrappers for established assemblers (MEGAHIT, SPAdes, hifiasm)
-- **⚡ HPC Support**: SLURM job submission and rclone integration
+### Production-Ready Features
+- **Third-Party Assembly Tools**: Stable wrappers for 15+ established assemblers including MEGAHIT, SPAdes, Flye, hifiasm, Canu, Unicycler, Velvet, and others
+- **Sequence Processing**: FASTA/FASTQ I/O and read simulation (Illumina, PacBio, Nanopore)
+- **K-mer Analysis**: Canonical k-mer counting and distance metrics
+- **Quality Control Tools**: Integration with fastp, filtlong, trim_galore
+- **Assembly Validation**: QUAST, BUSCO, CheckM/CheckM2, MUMmer integration
+- **Annotation Tools**: Pyrodigal, BLAST+, MMSeqs2, TransTerm, tRNAscan-SE, MLST integration
+- **HPC Support**: SLURM job submission and rclone cloud storage integration
 
-### In Active Development  
-- **🧪 Novel Assembly Algorithms**: Graph-based approaches with quality awareness
-- **🌐 Pangenome Analysis**: K-mer based comparative genomics
-- **📈 Quality Control**: Integration with QC tools (fastp, filtlong, trim_galore)
+### Experimental/Research Features
+- **Internal Assembly Algorithms**: Graph-based approaches with quality awareness (6-graph hierarchy)
+- **Intelligent Assembly**: Self-optimizing parameter selection and k-mer progression
+- **Qualmer Analysis**: Quality-aware k-mer assembly and probabilistic path selection
+- **Reinforcement Learning Assembly**: ML-guided assembly optimization (proof-of-concept)
+- **Pangenome Analysis**: K-mer based comparative genomics
 
 ### Planned Features
-- **🔍 Annotation**: Gene prediction and functional annotation
-- **🌳 Phylogenetics**: Tree construction from pangenome data
-- **📊 Visualization**: Interactive plots for genomic data
+- **Annotation**: Gene prediction and functional annotation
+- **Phylogenetics**: Tree construction from pangenome data
+- **Visualization**: Interactive plots for genomic data
 
 ## Documentation Contents
 
