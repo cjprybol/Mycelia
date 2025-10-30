@@ -265,6 +265,155 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Creates a CairoMakie plot of silhouette scores vs number of clusters.
+
+Args:
+    ks: Vector or range of k values tested.
+    avg_silhouette_scores: Vector of average silhouette scores corresponding to ks.
+    optimal_k: The optimal number of clusters identified.
+
+Returns:
+    A CairoMakie Figure object.
+"""
+function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
+    # Filter valid scores for y-axis limits
+    valid_indices = findall(s -> !isnan(s) && s != Float64(-Inf), avg_silhouette_scores)
+    if isempty(valid_indices)
+        error("No valid silhouette scores to plot.")
+    end
+    
+    valid_scores = avg_silhouette_scores[valid_indices]
+    min_val = minimum(valid_scores)
+    max_val = maximum(valid_scores)
+    range_val = max_val - min_val
+    
+    # Set sensible y-axis limits
+    ylims_lower = max(-1.05, min(0, min_val - range_val * 0.1))
+    ylims_upper = min(1.05, max_val + range_val * 0.1)
+    
+    if isapprox(ylims_lower, ylims_upper)
+        ylims_lower -= 0.1
+        ylims_upper += 0.1
+        ylims_lower = max(-1.05, ylims_lower)
+        ylims_upper = min(1.05, ylims_upper)
+    end
+    
+    # Create figure with higher resolution
+    # fig = CairoMakie.Figure(resolution = (1200, 800), fontsize = 16)
+    fig = CairoMakie.Figure(resolution = (900, 600), fontsize = 16)
+    ax = CairoMakie.Axis(
+        fig[1, 1],
+        xlabel = "Number of Clusters (k)",
+        ylabel = "Average Silhouette Score",
+        title = "Clustering Performance vs. Number of Clusters\n(higher is better)",
+        titlesize = 20
+    )
+    
+    # Plot scatter points
+    CairoMakie.scatter!(
+        ax,
+        collect(ks),
+        avg_silhouette_scores,
+        color = :steelblue,
+        markersize = 12,
+        strokewidth = 1.5,
+        strokecolor = :black,
+        label = "Avg Score"
+    )
+    
+    # Add line connecting points for better visualization
+    CairoMakie.lines!(
+        ax,
+        collect(ks),
+        avg_silhouette_scores,
+        color = (:steelblue, 0.3),
+        linewidth = 2
+    )
+    
+    # Add vertical line at optimal k
+    CairoMakie.vlines!(
+        ax,
+        [optimal_k],
+        color = :red,
+        linestyle = :dash,
+        linewidth = 2.5,
+        label = "Inferred optimum = $(optimal_k)"
+    )
+    
+    # Add horizontal reference line at y=0
+    CairoMakie.hlines!(
+        ax,
+        [0],
+        color = :gray,
+        linestyle = :dot,
+        linewidth = 1.5,
+        label = "Score = 0"
+    )
+    
+    # Set axis limits
+    CairoMakie.ylims!(ax, ylims_lower, ylims_upper)
+    
+    # Add legend
+    CairoMakie.axislegend(ax, position = :rt)
+    
+    return fig
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Creates a StatsPlots visualization of silhouette scores (legacy version).
+
+Args:
+    ks: Vector or range of k values tested.
+    avg_silhouette_scores: Vector of average silhouette scores corresponding to ks.
+    optimal_k: The optimal number of clusters identified.
+
+Returns:
+    A StatsPlots plot object.
+"""
+function plot_silhouette_scores_statsplots(ks, avg_silhouette_scores, optimal_k)
+    # Filter valid scores for y-axis limits
+    valid_indices = findall(s -> !isnan(s) && s != Float64(-Inf), avg_silhouette_scores)
+    if isempty(valid_indices)
+        error("No valid silhouette scores to plot.")
+    end
+    
+    valid_scores = avg_silhouette_scores[valid_indices]
+    min_val = minimum(valid_scores)
+    max_val = maximum(valid_scores)
+    range_val = max_val - min_val
+    
+    ylims_lower = max(-1.05, min(0, min_val - range_val * 0.1))
+    ylims_upper = min(1.05, max_val + range_val * 0.1)
+    
+    if isapprox(ylims_lower, ylims_upper)
+        ylims_lower -= 0.1
+        ylims_upper += 0.1
+        ylims_lower = max(-1.05, ylims_lower)
+        ylims_upper = min(1.05, ylims_upper)
+    end
+    
+    p = StatsPlots.scatter(
+        ks,
+        avg_silhouette_scores,
+        title = "Clustering Performance vs. Number of Clusters\n(higher is better)",
+        xlabel = "Number of Clusters (k)",
+        ylabel = "Average Silhouette Score",
+        label = "Avg Score",
+        markersize = 5,
+        markerstrokewidth = 0.5,
+    )
+    
+    StatsPlots.ylims!(p, (ylims_lower, ylims_upper))
+    StatsPlots.vline!(p, [optimal_k], color = :red, linestyle = :dash, label = "Inferred optimum = $(optimal_k)")
+    
+    return p
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Identifies the optimal number of clusters using hierarchical clustering
 and maximizing the average silhouette score, displaying progress.
 
@@ -272,137 +421,132 @@ Uses Clustering.clustering_quality for score calculation.
 
 Args:
     distance_matrix: A square matrix of pairwise distances between items.
+    ks: Optional pre-defined range or vector of k values to test. If provided, min_k and max_k are ignored.
+    min_k: Minimum number of clusters to test (default: max(floor(log10(n)), 2)).
+    max_k: Maximum number of clusters to test (default: min(n, ceil(sqrt(n)))).
+    plot_backend: Either :cairomakie (default) or :statsplots for visualization.
 
 Returns:
-    A tuple containing:
+    A named tuple containing:
     - hcl: The hierarchical clustering result object.
     - optimal_number_of_clusters: The inferred optimal number of clusters (k).
+    - assignments: Cluster assignments for the optimal k.
+    - figure: The plot figure.
+    - ks: The range/vector of k values tested.
+    - silhouette_scores: Vector of average silhouette scores for each k.
 """
 function identify_optimal_number_of_clusters(
         distance_matrix;
-        min_k = max(Int(floor(log10(size(distance_matrix, 2)))), 2),
-        max_k = min(size(distance_matrix, 2), Int(ceil(sqrt(size(distance_matrix, 2))))),
+        ks = nothing,
+        min_k = nothing,
+        max_k = nothing,
+        plot_backend = :cairomakie
     )
+    # Validate that user doesn't pass both ks and min_k/max_k
+    if !isnothing(ks) && (!isnothing(min_k) || !isnothing(max_k))
+        error("Cannot specify both 'ks' and 'min_k'/'max_k'. Choose one approach.")
+    end
+    
     # Ensure the input is a square matrix
     if size(distance_matrix, 1) != size(distance_matrix, 2)
-         error("Input distance_matrix must be square.")
+        error("Input distance_matrix must be square.")
     end
+    
     n_items = size(distance_matrix, 1)
     if n_items < 2
         error("Need at least 2 items to perform clustering.")
     end
 
-    # Compute hierarchical clustering using your custom function.
+    # Compute hierarchical clustering
     println("Performing hierarchical clustering...")
     hcl = heirarchically_cluster_distance_matrix(distance_matrix)
     println("Hierarchical clustering complete.")
 
-    # # Determine N based on hcl object or matrix size
-    # local N::Int
-    # if hasfield(typeof(hcl), :labels) && !isempty(hcl.labels)
     N = length(hcl.labels)
     if N != n_items
-         @warn "Number of labels in Hclust object ($(N)) does not match distance matrix size ($(n_items)). Using Hclust labels count."
+        @warn "Number of labels in Hclust object ($(N)) does not match distance matrix size ($(n_items)). Using Hclust labels count."
     end
-    # else
-    #      @warn "Hierarchical clustering result type $(typeof(hcl)) might not have a `.labels` field or it's empty. Using distance matrix size for N."
-    #      N = n_items
-    # end
     
-    # Define the range of k values to test: 2 to min(N-1, ceil(sqrt(N)))
-    # Cannot have more clusters than N items, and silhouette requires at least 1 item per cluster,
-    # implicitly k <= N. Silhouettes are ill-defined for k=1. Need k < N for non-trivial clustering.
-    if max_k < 2
-        println("Not enough items (N=$N) to test multiple cluster numbers (k >= 2). Cannot determine optimal k.")
-        # Optionally, plot a message or return a specific value indicating failure/trivial case
-        p_trivial = StatsPlots.plot(title="Cannot optimize k (N=$N, max tested k=$(max_k))", xlabel="Number of Clusters", ylabel="Avg Silhouette Score")
-        display(p_trivial)
-        # Returning N clusters (each item its own) might be misleading as optimal
-        # Consider returning nothing or throwing error, or returning k=N with a warning
-        @warn "Returning trivial clustering with k=$N as optimal k could not be determined."
-        return (hcl, N)
+    # Determine k range to test
+    if isnothing(ks)
+        # Use min_k and max_k with defaults
+        default_min_k = max(Int(floor(log10(N))), 2)
+        default_max_k = min(N, Int(ceil(sqrt(N))))
+        
+        actual_min_k = isnothing(min_k) ? default_min_k : min_k
+        actual_max_k = isnothing(max_k) ? default_max_k : max_k
+        
+        if actual_max_k < 2
+            println("Not enough items (N=$N) to test multiple cluster numbers (k >= 2). Cannot determine optimal k.")
+            @warn "Returning trivial clustering with k=$N as optimal k could not be determined."
+            return (hcl = hcl, optimal_number_of_clusters = N, assignments = Clustering.cutree(hcl, k=N), figure = nothing, ks = [N], silhouette_scores = [NaN])
+        end
+        
+        ks = actual_min_k:actual_max_k
+    else
+        # Validate user-provided ks
+        if isempty(ks)
+            error("Provided 'ks' range/vector is empty.")
+        end
+        if any(k -> k < 2 || k > N, ks)
+            error("All k values must be between 2 and $N (number of items).")
+        end
     end
-    ks = min_k:max_k
-    n_ks = length(ks)
-    println("Evaluating average silhouette scores for k from $(min_k) to $(max_k)...")
+    
+    k_vec = collect(ks)
+    n_ks = length(k_vec)
+    println("Evaluating average silhouette scores for k in range: $(minimum(k_vec)) to $(maximum(k_vec))...")
 
-    # Preallocate an array for average silhouette scores for each value of k.
+    # Preallocate array for silhouette scores
     avg_silhouette_scores = zeros(Float64, n_ks)
 
-    # --- ProgressMeter Setup ---
+    # Progress meter setup
     pm = ProgressMeter.Progress(n_ks, 1, "Calculating Avg Silhouette Scores: ", 50)
-    # --------------------------
 
-    # Parallel loop: each iteration computes the average silhouette score for a given k.
+    # Parallel computation of silhouette scores
     Threads.@threads for i in 1:n_ks
-        k = ks[i]
+        k = k_vec[i]
         avg_silhouette_scores[i] = Statistics.mean(Clustering.silhouettes(Clustering.cutree(hcl, k=k), distance_matrix))
         ProgressMeter.next!(pm)
     end
 
-    # Check if all scores resulted in errors
+    # Validate results
     if all(s -> s == Float64(-Inf) || isnan(s), avg_silhouette_scores)
         error("Failed to calculate valid average silhouette scores for all values of k.")
     end
 
-    # Determine the optimal number of clusters by finding the MAXIMUM average score
-    # Filter out -Inf/NaN before finding the maximum.
+    # Find optimal k
     valid_indices = findall(s -> !isnan(s) && s != Float64(-Inf), avg_silhouette_scores)
     if isempty(valid_indices)
         error("No valid average silhouette scores were computed.")
     end
 
-    # Find maximum among valid scores
     max_score_valid, local_max_idx_valid = findmax(avg_silhouette_scores[valid_indices])
-    # Map back to the original index in avg_silhouette_scores and ks
     max_idx_original = valid_indices[local_max_idx_valid]
-    optimal_number_of_clusters = ks[max_idx_original]
+    optimal_number_of_clusters = k_vec[max_idx_original]
 
     println("\nOptimal number of clusters inferred (max avg silhouette score): ", optimal_number_of_clusters)
     println("Maximum average silhouette score: ", max_score_valid)
 
-
-    # Plotting the average silhouette scores.
-    p = StatsPlots.scatter(
-        ks,
-        avg_silhouette_scores,
-        title = "Clustering Performance vs. Number of Clusters\n(higher is better)",
-        xlabel = "Number of Clusters (k)",
-        ylabel = "Average Silhouette Score", # Updated label
-        label = "Avg Score",
-        markersize = 5,
-        markerstrokewidth = 0.5,
-        # legend=:outertopright
-    )
-
-    # Adjust y-limits based on valid scores, keeping [-1, 1] range in mind
-    valid_scores = avg_silhouette_scores[valid_indices]
-    min_val = minimum(valid_scores)
-    max_val = maximum(valid_scores) # This is max_score_valid
-    range = max_val - min_val
-    # Set sensible limits slightly beyond observed range, but clamp to [-1.05, 1.05]
-    ylims_lower = max(-1.05, min(0, min_val - range * 0.1))
-    ylims_upper = min(1.05, max_val + range * 0.1)
-    # Ensure lower < upper, handle case where range is 0
-    if isapprox(ylims_lower, ylims_upper)
-         ylims_lower -= 0.1
-         ylims_upper += 0.1
-         # Clamp again if needed
-         ylims_lower = max(-1.05, ylims_lower)
-         ylims_upper = min(1.05, ylims_upper)
+    # Create visualization
+    if plot_backend == :cairomakie
+        fig = plot_silhouette_scores_makie(k_vec, avg_silhouette_scores, optimal_number_of_clusters)
+    elseif plot_backend == :statsplots
+        fig = plot_silhouette_scores_statsplots(k_vec, avg_silhouette_scores, optimal_number_of_clusters)
+    else
+        error("Unknown plot_backend: $(plot_backend). Choose :cairomakie or :statsplots.")
     end
-    StatsPlots.ylims!(p, (ylims_lower, ylims_upper))
+    
+    display(fig)
 
-    # Add reference line at y=0 (separation between reasonable/poor clusters)
-    # StatsPlots.hline!(p, [0], color=:gray, linestyle=:dot, label="Score = 0")
-
-    # Add vertical line for the optimum
-    StatsPlots.vline!(p, [optimal_number_of_clusters], color = :red, linestyle = :dash, label = "Inferred optimum = $(optimal_number_of_clusters)")
-
-    # Display the plot
-    display(p)
-
-    return (;hcl, optimal_number_of_clusters, assignments = Clustering.cutree(hcl, k=optimal_number_of_clusters), figure=p)
+    return (
+        hcl = hcl,
+        optimal_number_of_clusters = optimal_number_of_clusters,
+        assignments = Clustering.cutree(hcl, k=optimal_number_of_clusters),
+        figure = fig,
+        ks = k_vec,
+        silhouette_scores = avg_silhouette_scores
+    )
 end
 
 # """

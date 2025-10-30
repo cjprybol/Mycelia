@@ -1820,101 +1820,36 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily cache.
+Parse NCBI assembly summary metadata from a local file.
 
-Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
-Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
-from NCBI using `Downloads.download()`, caches the result (replacing any
-previous version for the *same day*), and then parses the cached file.
-
-Handles NCBI's header format and uses CSV.jl for parsing.
+This function handles the NCBI file format (comment line, header line, then data)
+and parses it into a DataFrame with appropriate column types.
 
 # Arguments
-- `db::String`: Database source ("genbank" or "refseq").
+- `filepath::String`: Path to the NCBI assembly summary file to parse.
 
 # Returns
 - `DataFrames.DataFrame`: Parsed metadata table.
 
 # Errors
-- Throws `ArgumentError` for invalid `db`.
-- Throws error if cache directory cannot be created.
-- Throws error if data cannot be obtained from cache or download.
-- Rethrows errors from `Downloads.download` or CSV parsing.
+- Throws error if file doesn't exist or cannot be read.
+- Rethrows errors from CSV parsing.
 """
-function load_ncbi_metadata(db::String)
-    # Validate database input
-    if !(db in ["genbank", "refseq"])
-        throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+function parse_ncbi_metadata_file(filepath::String)
+    if !isfile(filepath)
+        error("File not found: $filepath")
     end
-
-    # --- Cache Path Setup ---
-    todays_date_str = Dates.format(Dates.today(), "yyyy-mm-dd")
-    original_filename = "assembly_summary_$(db).txt"
-    cache_dir = joinpath(homedir(), "workspace", ".ncbi")
-    cached_filename = "$(todays_date_str).$(original_filename)"
-    cached_filepath = joinpath(cache_dir, cached_filename)
-    ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
-
-    # Ensure cache directory exists
-    try
-        mkpath(cache_dir)
-    catch e
-        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
-        rethrow(e)
+    
+    if filesize(filepath) == 0
+        error("File is empty: $filepath")
     end
-
-    # --- Data Acquisition Logic ---
-    local source_description::String = ""
-    data_needs_download = false
-
-    # 1. Attempt to use existing cache
-    if isfile(cached_filepath)
-        if filesize(cached_filepath) > 0
-            @info "Found valid cached file for today: $cached_filepath"
-            source_description = "cache file: $cached_filepath"
-        else
-            @warn "Cached file exists but is empty: $cached_filepath. Will attempt download to replace it."
-            data_needs_download = true
-        end
-    else
-        @info "No cached file found for today at: $cached_filepath. Attempting download."
-        data_needs_download = true
-    end
-
-    # 2. If cache is missing or empty, download
-    if data_needs_download
-        @info "Downloading NCBI assembly summary from $ncbi_summary_url to $cached_filepath"
-        try
-            # Downloads.download handles writing the file and overwriting if it exists
-            Downloads.download(ncbi_summary_url, cached_filepath)
-            # Verify download success by checking file existence and size again
-            if isfile(cached_filepath) && filesize(cached_filepath) > 0
-                 @info "Successfully downloaded and cached data to: $cached_filepath"
-                 source_description = "downloaded file: $cached_filepath (from $ncbi_summary_url)"
-            else
-                 # This case should ideally be caught by Downloads.download throwing an error,
-                 # but added as a safeguard (e.g., network issues leaving empty file).
-                 @error "Download completed but resulted in an empty or missing file at $cached_filepath."
-                 # We will hit the final check below and error out.
-            end
-        catch e
-            @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(e, catch_backtrace())
-            # Let the final check handle the error state if cache wasn't valid either
-        end
-    end
-
-    # 3. Final Check: Ensure a valid data file exists at the cached path
-    if !isfile(cached_filepath) || filesize(cached_filepath) == 0
-        @error "Failed to obtain valid data for '$db'. Could not use cache and download failed or resulted in empty file."
-        error("Could not load NCBI metadata for '$db' from cache or download. Check path '$cached_filepath', network connection, and permissions.")
-    end
-
-    # --- Parsing Logic ---
-    @info "Proceeding to parse data from $(source_description)."
+    
+    @info "Parsing NCBI metadata from: $filepath"
+    
     try
         # Manually read the first two lines to get the correct header
         header_symbols = Symbol[]
-        open(cached_filepath, "r") do io
+        open(filepath, "r") do io
             readline(io) # Skip ## comment line
             header_line_raw = readline(io) # Read # header line
             header_string = lstrip(header_line_raw, ['#', ' '])
@@ -1922,8 +1857,7 @@ function load_ncbi_metadata(db::String)
             header_symbols = Symbol.(header_names)
         end # File is automatically closed here
 
-        # --- CORRECTED and EXPANDED types_dict ---
-        # (Copied from your original code - assumed correct)
+        # Define column types
         types_dict = Dict(
             :assembly_accession => String, :bioproject => String, :biosample => String,
             :wgs_master => String, :refseq_category => String, :organism_name => String,
@@ -1941,42 +1875,141 @@ function load_ncbi_metadata(db::String)
             :non_coding_gene_count => Int,
             :gc_percent => Float64
         )
-        # --- End of types_dict ---
 
-        # Validate that headers derived match the keys expected (optional but good practice)
+        # Validate that headers derived match the keys expected
         if Set(header_symbols) != Set(keys(types_dict))
-             missing_in_dict = setdiff(Set(header_symbols), Set(keys(types_dict)))
-             extra_in_dict = setdiff(Set(keys(types_dict)), Set(header_symbols))
-             # Only warn if file has headers we didn't define types for.
-             # Extra types_dict entries are okay, CSV.jl ignores them if not in header.
-             if !isempty(missing_in_dict)
-                 @warn "Headers found in data file but not explicitly typed in types_dict (will be inferred by CSV.jl): $missing_in_dict"
-             end
+            missing_in_dict = setdiff(Set(header_symbols), Set(keys(types_dict)))
+            if !isempty(missing_in_dict)
+                @warn "Headers found in data file but not explicitly typed in types_dict (will be inferred by CSV.jl): $missing_in_dict"
+            end
         end
 
-        # Parse using CSV.File directly from the cached filepath
-        # skipto=3 skips the first two lines (# comment, # header) which we read manually
+        # Parse using CSV.File directly from the filepath
         csv_file = CSV.File(
-            cached_filepath;
+            filepath;
             skipto=3,             # Skip the comment and header lines we already processed
             header=header_symbols, # Provide the headers we extracted
             delim='\t',
             missingstring=["na", "NA", ""],
             types=types_dict,
             pool=true,
-            strict=true # Be strict about column count matching header after skipping lines
+            strict=true
         )
 
         # Materialize into a DataFrame
         ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols=true)
-        @info "Successfully parsed NCBI assembly summary into a DataFrame from $cached_filepath."
+        @info "Successfully parsed NCBI assembly summary into a DataFrame from $filepath"
 
         return ncbi_summary_table
 
     catch e
-        @error "Failed to parse NCBI metadata file: $cached_filepath" exception=(e, catch_backtrace())
-        rethrow(e) # Rethrow parsing error
+        @error "Failed to parse NCBI metadata file: $filepath" exception=(e, catch_backtrace())
+        rethrow(e)
     end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Load and parse NCBI assembly summary metadata (GenBank/RefSeq), using a daily cache.
+
+Checks for `homedir()/workspace/.ncbi/YYYY-MM-DD.assembly_summary_{db}.txt`.
+Uses the cache if valid (exists, readable, not empty). Otherwise, downloads
+from NCBI using `Downloads.download()`, caches the result (replacing any
+previous version for the *same day*), and then parses the cached file.
+
+# Arguments
+- `db::String`: Database source ("genbank" or "refseq").
+- `date::Union{Dates.Date,Nothing}=nothing`: Specific date to load from cache. 
+  If `nothing`, uses today's date. If specified, only uses cache (no download).
+
+# Returns
+- `DataFrames.DataFrame`: Parsed metadata table.
+
+# Errors
+- Throws `ArgumentError` for invalid `db`.
+- Throws error if cache directory cannot be created.
+- Throws error if data cannot be obtained from cache or download.
+- Throws error if specific date is requested but not found in cache.
+- Rethrows errors from `Downloads.download` or CSV parsing.
+"""
+function load_ncbi_metadata(db::String; date::Union{Dates.Date,Nothing}=nothing)
+    # Validate database input
+    if !(db in ["genbank", "refseq"])
+        throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
+    end
+
+    # --- Cache Path Setup ---
+    target_date = isnothing(date) ? Dates.today() : date
+    date_str = Dates.format(target_date, "yyyy-mm-dd")
+    original_filename = "assembly_summary_$(db).txt"
+    cache_dir = joinpath(homedir(), "workspace", ".ncbi")
+    cached_filename = "$(date_str).$(original_filename)"
+    cached_filepath = joinpath(cache_dir, cached_filename)
+    ncbi_summary_url = "https://ftp.ncbi.nih.gov/genomes/$(db)/assembly_summary_$(db).txt"
+
+    # Ensure cache directory exists
+    try
+        mkpath(cache_dir)
+    catch e
+        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+        rethrow(e)
+    end
+
+    # --- Data Acquisition Logic ---
+    local source_description::String = ""
+    data_needs_download = false
+
+    # If a specific date was requested, only use cache (no download)
+    if !isnothing(date)
+        if isfile(cached_filepath) && filesize(cached_filepath) > 0
+            @info "Found cached file for requested date ($date_str): $cached_filepath"
+            source_description = "cache file: $cached_filepath"
+        else
+            error("No valid cache file found for requested date $date_str at: $cached_filepath. Cannot download when specific date is requested.")
+        end
+    else
+        # Using today's date - can attempt download if needed
+        # 1. Attempt to use existing cache
+        if isfile(cached_filepath)
+            if filesize(cached_filepath) > 0
+                @info "Found valid cached file for today: $cached_filepath"
+                source_description = "cache file: $cached_filepath"
+            else
+                @warn "Cached file exists but is empty: $cached_filepath. Will attempt download to replace it."
+                data_needs_download = true
+            end
+        else
+            @info "No cached file found for today at: $cached_filepath. Attempting download."
+            data_needs_download = true
+        end
+
+        # 2. If cache is missing or empty, download
+        if data_needs_download
+            @info "Downloading NCBI assembly summary from $ncbi_summary_url to $cached_filepath"
+            try
+                Downloads.download(ncbi_summary_url, cached_filepath)
+                # Verify download success
+                if isfile(cached_filepath) && filesize(cached_filepath) > 0
+                    @info "Successfully downloaded and cached data to: $cached_filepath"
+                    source_description = "downloaded file: $cached_filepath (from $ncbi_summary_url)"
+                else
+                    @error "Download completed but resulted in an empty or missing file at $cached_filepath."
+                end
+            catch e
+                @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(e, catch_backtrace())
+            end
+        end
+
+        # 3. Final Check: Ensure a valid data file exists at the cached path
+        if !isfile(cached_filepath) || filesize(cached_filepath) == 0
+            @error "Failed to obtain valid data for '$db'. Could not use cache and download failed or resulted in empty file."
+            error("Could not load NCBI metadata for '$db' from cache or download. Check path '$cached_filepath', network connection, and permissions.")
+        end
+    end
+
+    # --- Parse the file ---
+    return parse_ncbi_metadata_file(cached_filepath)
 end
 
 """
@@ -1985,12 +2018,16 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Loads NCBI RefSeq metadata into a DataFrame. RefSeq is NCBI's curated collection 
 of genomic, transcript and protein sequences.
 
+# Arguments
+- `date::Union{Dates.Date,Nothing}=nothing`: Specific date to load from cache.
+  If `nothing`, uses today's date. If specified, only uses cache (no download).
+
 # Returns
-- `DataFrame`: Contains metadata columns including accession numbers, taxonomic information,
+- `DataFrames.DataFrame`: Contains metadata columns including accession numbers, taxonomic information,
 and sequence details from RefSeq.
 """
-function load_refseq_metadata()
-    return load_ncbi_metadata("refseq")
+function load_refseq_metadata(; date::Union{Dates.Date,Nothing}=nothing)
+    return load_ncbi_metadata("refseq"; date=date)
 end
 
 """
@@ -2001,12 +2038,16 @@ Load metadata for GenBank sequences into a DataFrame.
 This is a convenience wrapper around `load_ncbi_metadata("genbank")` that
 specifically loads metadata from the GenBank database.
 
+# Arguments
+- `date::Union{Dates.Date,Nothing}=nothing`: Specific date to load from cache.
+  If `nothing`, uses today's date. If specified, only uses cache (no download).
+
 # Returns
-- `DataFrame`: Contains metadata fields like accession numbers, taxonomy,
+- `DataFrames.DataFrame`: Contains metadata fields like accession numbers, taxonomy,
 and sequence information from GenBank.
 """
-function load_genbank_metadata()
-    return load_ncbi_metadata("genbank")
+function load_genbank_metadata(; date::Union{Dates.Date,Nothing}=nothing)
+    return load_ncbi_metadata("genbank"; date=date)
 end
 
 """
@@ -2452,67 +2493,148 @@ function setup_taxonkit_taxonomy(; force_update::Bool=false, max_age_days::Int=3
     end
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Load and parse BV-BRC (Bacterial and Viral Bioinformatics Resource Center) genome metadata using a daily cache.
+
+Checks for cached files at `homedir()/workspace/.bvbrc/YYYY-MM-DD.genome_summary.tsv` and
+`homedir()/workspace/.bvbrc/YYYY-MM-DD.genome_metadata.tsv`. Uses the cache if valid 
+(exists, readable, not empty). Otherwise, downloads from BV-BRC FTP server, caches the 
+results, and then parses the cached files. The two tables (genome_summary and genome_metadata) 
+are joined on the genome_id column.
+
+# Keyword Arguments
+- `date::Union{Dates.Date,Nothing}=nothing`: Specific date to load from cache. 
+  If `nothing`, uses today's date. If specified, only uses cache (no download).
+- `summary_url::String="ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary"`: URL for genome summary file.
+- `metadata_url::String="ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata"`: URL for genome metadata file.
+
+# Returns
+- `DataFrames.DataFrame`: Inner join of genome summary and metadata tables on genome_id.
+
+# Errors
+- Throws error if cache directory cannot be created.
+- Throws error if specific date is requested but not found in cache.
+- Throws error if data cannot be obtained from cache or download.
+- Rethrows errors from `Downloads.download` or CSV parsing.
+"""
 function load_bvbrc_genome_metadata(; 
-    summary_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
-    metadata_url = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata"
+    date::Union{Dates.Date,Nothing}=nothing,
+    summary_url::String="ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
+    metadata_url::String="ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata"
 )
     # --- Cache Path Setup ---
     cache_dir = joinpath(homedir(), "workspace", ".bvbrc")
-    mkpath(cache_dir)
-    today_str = Dates.format(Dates.today(), "yyyy-mm-dd")
-    summary_cache = joinpath(cache_dir, "$(today_str).genome_summary.tsv")
-    metadata_cache = joinpath(cache_dir, "$(today_str).genome_metadata.tsv")
+    
+    try
+        mkpath(cache_dir)
+    catch e
+        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+        rethrow(e)
+    end
+    
+    target_date = isnothing(date) ? Dates.today() : date
+    date_str = Dates.format(target_date, "yyyy-mm-dd")
+    summary_cache = joinpath(cache_dir, "$(date_str).genome_summary.tsv")
+    metadata_cache = joinpath(cache_dir, "$(date_str).genome_metadata.tsv")
 
     function is_valid_file(f)
         isfile(f) && filesize(f) > 0
     end
 
-    # Try today's cache first
+    # --- Data Acquisition Logic ---
     summary_file = summary_cache
     metadata_file = metadata_cache
-    used_cache = false
-
-    if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
-        @info "Using cached BVBRC metadata for today: $summary_cache, $metadata_cache"
-        used_cache = true
+    
+    # If a specific date was requested, only use cache (no download)
+    if !isnothing(date)
+        if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
+            @info "Found cached BVBRC metadata for requested date ($date_str): $summary_cache, $metadata_cache"
+        else
+            error("No valid cache files found for requested date $date_str at: $summary_cache, $metadata_cache. Cannot download when specific date is requested.")
+        end
     else
-        # Try to download and cache
-        try
-            @info "Downloading BVBRC genome summary from $summary_url"
-            Downloads.download(summary_url, summary_cache)
-            @info "Downloading BVBRC genome metadata from $metadata_url"
-            Downloads.download(metadata_url, metadata_cache)
-            if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
-                @info "Successfully downloaded and cached BVBRC metadata"
-            else
-                error("Downloaded files are missing or empty")
-            end
-        catch e
-            @warn "Failed to download BVBRC metadata: $e"
-            # Fallback: find most recent previous cache
-            cached_files = sort(filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_summary\.tsv", f), readdir(cache_dir; join=true)), rev=true)
-            cached_meta_files = sort(filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_metadata\.tsv", f), readdir(cache_dir; join=true)), rev=true)
-            if !isempty(cached_files) && !isempty(cached_meta_files)
-                summary_file = cached_files[1]
-                metadata_file = cached_meta_files[1]
-                @info "Falling back to most recent cached BVBRC metadata: $summary_file, $metadata_file"
-                used_cache = true
-            else
-                error("No valid BVBRC metadata cache available and download failed.")
+        # Using today's date - can attempt download if needed
+        if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
+            @info "Using cached BVBRC metadata for today: $summary_cache, $metadata_cache"
+        else
+            # Try to download and cache
+            try
+                @info "Downloading BVBRC genome summary from $summary_url"
+                Downloads.download(summary_url, summary_cache)
+                @info "Downloading BVBRC genome metadata from $metadata_url"
+                Downloads.download(metadata_url, metadata_cache)
+                
+                if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
+                    @info "Successfully downloaded and cached BVBRC metadata"
+                else
+                    @error "Downloaded files are missing or empty"
+                    error("Download completed but resulted in empty or missing files")
+                end
+            catch e
+                @warn "Failed to download BVBRC metadata" exception=(e, catch_backtrace())
+                
+                # Fallback: find most recent previous cache
+                cached_summary_files = sort(
+                    filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_summary\.tsv", f), 
+                           readdir(cache_dir; join=true)), 
+                    rev=true
+                )
+                cached_metadata_files = sort(
+                    filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_metadata\.tsv", f), 
+                           readdir(cache_dir; join=true)), 
+                    rev=true
+                )
+                
+                if !isempty(cached_summary_files) && !isempty(cached_metadata_files)
+                    summary_file = cached_summary_files[1]
+                    metadata_file = cached_metadata_files[1]
+                    @info "Falling back to most recent cached BVBRC metadata: $summary_file, $metadata_file"
+                else
+                    @error "No valid BVBRC metadata cache available and download failed"
+                    error("Could not load BVBRC metadata from cache or download. Check network connection and permissions.")
+                end
             end
         end
     end
 
-    # Read files into DataFrames
-    @info "Reading genome summary file: $summary_file"
-    genome_summary = CSV.read(summary_file, DataFrames.DataFrame, delim='\t', header=1, types=Dict("genome_id" => String))
-    @info "Reading genome metadata file: $metadata_file"
-    genome_metadata = CSV.read(metadata_file, DataFrames.DataFrame, delim='\t', header=1, types=Dict("genome_id" => String))
+    # --- Parse the files ---
+    try
+        @info "Reading genome summary file: $summary_file"
+        genome_summary = CSV.read(
+            summary_file, 
+            DataFrames.DataFrame, 
+            delim='\t', 
+            header=1, 
+            types=Dict("genome_id" => String)
+        )
+        
+        @info "Reading genome metadata file: $metadata_file"
+        genome_metadata = CSV.read(
+            metadata_file, 
+            DataFrames.DataFrame, 
+            delim='\t', 
+            header=1, 
+            types=Dict("genome_id" => String)
+        )
 
-    # Join the DataFrames
-    @info "Joining genome summary and metadata"
-    bvbrc_genome_summary = DataFrames.innerjoin(genome_summary, genome_metadata, on="genome_id", makeunique=true)
-    return bvbrc_genome_summary
+        # Join the DataFrames
+        @info "Joining genome summary and metadata on genome_id"
+        bvbrc_genome_summary = DataFrames.innerjoin(
+            genome_summary, 
+            genome_metadata, 
+            on="genome_id", 
+            makeunique=true
+        )
+        
+        @info "Successfully loaded and joined BVBRC genome metadata"
+        return bvbrc_genome_summary
+        
+    catch e
+        @error "Failed to parse BVBRC metadata files" exception=(e, catch_backtrace())
+        rethrow(e)
+    end
 end
 
 """
