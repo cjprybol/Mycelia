@@ -250,9 +250,9 @@ end
 #    - `method=:iterative` for maximum accuracy
 #    - `method=:quality_aware` for speed with good quality data
 # 3. **Learn more**:
-#    - [Understanding the algorithms](../docs/src/theoretical-foundations.md)
-#    - [Choosing assembly methods](../docs/src/assembly-method-selection.md)
-#    - [Advanced tutorials](../tutorials/)
+#    - [Understanding the algorithms](../../theoretical-foundations.md)
+#    - [Choosing assembly methods](../../assembly-method-selection.md)
+#    - [Advanced tutorials](../../tutorials.md)
 #
 # ### Using Your Own Data
 #
@@ -268,7 +268,7 @@ end
 #
 # ### Getting Help
 #
-# - Check the [FAQ](../docs/src/faq.md) for common questions and issues
+# - Check the [FAQ](../../faq.md) for common questions and issues
 # - Ask questions in [Discussions](https://github.com/cjprybol/Mycelia/discussions)
 # - Report issues on [GitHub](https://github.com/cjprybol/Mycelia/issues)
 #

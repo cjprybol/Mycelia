@@ -164,7 +164,7 @@ end
 
 ### Graph Distance Metrics
 
-**Novel Approach:** Use Jaccard similarity between k-mer sets and edge sets to quantify assembly accuracy.
+**Approach:** Use Jaccard similarity between k-mer sets and edge sets to quantify assembly accuracy.
 
 **Metrics:**
 ```julia

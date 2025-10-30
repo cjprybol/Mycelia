@@ -2,7 +2,7 @@
 
 Mycelia's probabilistic assembly approach combines probabilistic modelling with biological insight to deliver assemblies with confidence intervals.
 
-## 🧬 What is Probabilistic Assembly?
+## What is Probabilistic Assembly?
 
 ### Traditional Assembly
 Traditional assemblers make **deterministic decisions** at each step:
@@ -23,7 +23,7 @@ Traditional:  Reads → Graph → Heuristic Cleaning → Assembly
 Probabilistic: Reads → Quality-Aware Graph → Statistical Inference → Optimal Assembly
 ```
 
-## 🎯 Why Use Probabilistic Assembly?
+## Why Use Probabilistic Assembly?
 
 ### 1. **High Accuracy**
 - Preserves quality information throughout assembly
@@ -35,38 +35,10 @@ Probabilistic: Reads → Quality-Aware Graph → Statistical Inference → Optim
 - Adapts to your data's characteristics
 
 ### 3. **Quality-Aware**
-- First assembler to preserve per-base quality scores
+- Implements per-base quality score preservation
 - Handles varying coverage gracefully
 
-## 🚀 Quick Start (5 Minutes)
-
-Get your first assembly running in under 5 minutes:
-
-```julia
-# 1. Install Mycelia (one-time setup)
-import Pkg
-Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
-
-# 2. Load the package
-import Mycelia
-
-# 3. Assemble your genome
-assembly = Mycelia.assemble_genome("my_reads.fastq")
-
-# 4. Check your results
-println("Assembly complete! $(assembly.num_contigs) contigs, N50: $(assembly.n50)")
-
-# 5. Save the assembly
-Mycelia.write_fasta(assembly.contigs, "my_assembly.fasta")
-```
-
-That's it! Mycelia automatically:
-- ✓ Detects your data type
-- ✓ Selects optimal parameters
-- ✓ Performs quality-aware assembly
-- ✓ Validates results
-
-## 🗺️ Choose Your Path
+## Choose Your Path
 
 ### By Data Type
 
@@ -83,63 +55,63 @@ graph TD
 
 ### By Experience Level
 
-#### 🌱 **Beginner** - "I just want it to work"
-→ Start with [Assembly in 5 Minutes](../../tutorials/00_assembly_in_5_minutes.jl)
+#### **Beginner** - "I just want it to work"
+→ Start with [Assembly in 5 Minutes](generated/tutorials/00_assembly_in_5_minutes.md)
 - Automatic parameter selection
 - Simple one-function interface
 - Clear output interpretation
 
-#### 🌿 **Intermediate** - "I want to understand and optimize"
+#### **Intermediate** - "I want to understand and optimize"
 → Continue to [Understanding Assembly Methods](assembly-method-selection.md)
 - Compare different approaches
 - Tune for your specific needs
 - Interpret quality metrics
 
-#### 🌳 **Advanced** - "I want full control"
+#### **Advanced** - "I want full control"
 → Explore [Advanced Assembly Theory](theoretical-foundations.md)
 - Custom graph algorithms
 - Machine learning integration
 - Novel method development
 
-## 📊 Each Method
+## Each Method
 
 ### Intelligent Assembly
-- ✅ Automatic parameter optimization
-- ✅ Good for unknown data characteristics
-- ✅ Balances speed and accuracy
+- Automatic parameter optimization
+- Good for unknown data characteristics
+- Balances speed and accuracy
 
 ### Iterative Assembly
-- ✅ Best for low-quality data
-- ✅ Refines assembly through iterations
-- ⏱️ Takes more time
+- Best for low-quality data
+- Refines assembly through iterations
+- Takes more time
 
 ### Reinforcement Learning Assembly
-- ✅ Learns from experience
-- ✅ Adapts to new data types
-- 🧪 Experimental feature
+- Learns from experience
+- Adapts to new data types
+- Experimental feature
 
-## 🛠️ Next Steps
+## Next Steps
 
 ### Ready to Start?
 1. **[Install Mycelia](getting-started.md#installation)** - Multiple installation options
-2. **[Run the 5-minute tutorial](../../tutorials/00_assembly_in_5_minutes.jl)** - See it in action
+2. **[Run the quick start tutorial](generated/tutorials/00_assembly_in_5_minutes.md)** - See it in action
 3. **[Choose your workflow](assembly-method-selection.md)** - Find the best approach
 
 ### Need Help?
-- 📖 **[FAQ](faq.md)** - Common questions and troubleshooting
-- 💬 **[Community Forum](https://github.com/cjprybol/Mycelia/discussions)** - Ask questions
-- 🐛 **[Report Issues](https://github.com/cjprybol/Mycelia/issues)** - Help us improve
+- **[FAQ](faq.md)** - Common questions and troubleshooting
+- **[Community Forum](https://github.com/cjprybol/Mycelia/discussions)** - Ask questions
+- **[Report Issues](https://github.com/cjprybol/Mycelia/issues)** - Help us improve
 
 ### Want to Learn More?
-- 🧮 **[Mathematical Foundations](theoretical-foundations.md)** - The theory behind the methods
-- 📊 **[Benchmarks](benchmarks.md)** - Performance comparisons
-- 🔬 **[Case Studies](case-studies.md)** - Real-world applications
+- **[Mathematical Foundations](theoretical-foundations.md)** - The theory behind the methods
+- **[Benchmarks](benchmarks.md)** - Performance comparisons
+- **[Case Studies](case-studies.md)** - Real-world applications
 
-## 🌟 Why Mycelia?
+## Why Mycelia?
 
 ### Scientific Innovation
-- **Novel 6-graph hierarchy** - Unifies multiple assembly approaches
-- **Quality preservation** - First to maintain quality throughout assembly
+- **6-graph hierarchy** - Unifies multiple assembly approaches
+- **Quality preservation** - Maintains quality throughout assembly
 - **Principled algorithms** - Based on proven statistical methods
 
 ### Practical Benefits
@@ -154,4 +126,4 @@ graph TD
 
 ---
 
-Ready to experience the future of genome assembly? [Get started now →](../../tutorials/00_assembly_in_5_minutes.jl)
+Ready to get started? [Begin with the quick start tutorial →](generated/tutorials/00_assembly_in_5_minutes.md)

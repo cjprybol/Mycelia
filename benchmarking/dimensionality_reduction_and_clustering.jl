@@ -1,12 +1,12 @@
 # From the Mycelia base directory, run the tests with:
 # 
 # ```bash
-# julia --project=. -e 'include("test/2_preprocessing_qc/dimensionality_reduction_and_clustering.jl")'
+# julia --project=. -e 'include("benchmarking/dimensionality_reduction_and_clustering.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
 # ```bash
-# julia --project=. -e 'import Literate; Literate.notebook("test/2_preprocessing_qc/dimensionality_reduction_and_clustering.jl", "test/2_preprocessing_qc", execute=false)'
+# julia --project=. -e 'import Literate; Literate.notebook("benchmarking/dimensionality_reduction_and_clustering.jl", "benchmarking", execute=false)'
 # ```
 
 ## If running Literate notebook, ensure the package is activated:
@@ -44,60 +44,6 @@ function test_display(args...)
     end
 end
 
-# Confusion Matrix and Metrics - Animal Dataset
-
-Test.@testset "Confusion Matrix and Metrics - Animal Dataset" begin
-    true_labels = ["cat", "dog", "cat", "dog", "cat", "bird"]
-    pred_labels = ["cat", "cat", "cat", "dog", "dog", "bird"]
-    expected_cm = [1 0 0;
-                   0 2 1;
-                   0 1 1]
-    expected_labels = ["bird", "cat", "dog"]
-    cm_out = Mycelia.confusion_matrix(true_labels, pred_labels)
-    Test.@test cm_out.cm == expected_cm
-    Test.@test cm_out.labels == expected_labels
-    metrics = Mycelia.precision_recall_f1(true_labels, pred_labels)
-    Test.@test isapprox(metrics.precisions["bird"], 1.0; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["bird"], 1.0; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["bird"], 1.0; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["cat"], 2/3; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["cat"], 2/3; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["cat"], 2/3; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["dog"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["dog"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["dog"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.macro_precision, (1.0 + 2/3 + 0.5)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_recall, (1.0 + 2/3 + 0.5)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_f1, (1.0 + 2/3 + 0.5)/3; atol=1e-8)
-end
-
-# Confusion Matrix and Metrics - ABC Dataset
-
-Test.@testset "Confusion Matrix and Metrics - ABC Dataset" begin
-    true_labels = ["A", "A", "A", "B", "B", "C", "C", "C"]
-    pred_labels = ["A", "B", "C", "B", "C", "C", "A", "B"]
-    expected_cm = [1 1 1;
-                   0 1 1;
-                   1 1 1]
-    expected_labels = ["A", "B", "C"]
-    cm_out = Mycelia.confusion_matrix(true_labels, pred_labels)
-    Test.@test cm_out.cm == expected_cm
-    Test.@test cm_out.labels == expected_labels
-    metrics = Mycelia.precision_recall_f1(true_labels, pred_labels)
-    Test.@test isapprox(metrics.precisions["A"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["A"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["A"], 0.4; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["B"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["B"], 0.5; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["B"], 0.4; atol=1e-8)
-    Test.@test isapprox(metrics.precisions["C"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.recalls["C"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.f1s["C"], 1/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_precision, (0.5 + 1/3 + 1/3)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_recall, (1/3 + 0.5 + 1/3)/3; atol=1e-8)
-    Test.@test isapprox(metrics.macro_f1, (0.4 + 0.4 + 1/3)/3; atol=1e-8)
-end
-
 # Binary Matrix Processing
 
 Test.@testset "Binary Matrix Processing" begin
@@ -105,9 +51,9 @@ Test.@testset "Binary Matrix Processing" begin
     Random.seed!(42)
 
     ## Parameters
-    n_distributions = 3      # Number of distributions
-    n_samples = 3      # Number of samples per distribution
-    n_features = 3     # Length of each distribution (number of features)
+    n_distributions = 7      # Number of distributions
+    n_samples = 10      # Number of samples per distribution
+    n_features = 100     # Length of each distribution (number of features)
 
     ## Bernoulli (binary 0/1)
     binary_probabilities = [rand(n_features) for _ in 1:n_distributions]
@@ -144,11 +90,11 @@ Test.@testset "Binary Matrix Processing" begin
         binary_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(binary_distance_matrix)
         Test.@test binary_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, binary_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(binary_method_accuracies, ("Jaccard Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -163,11 +109,11 @@ Test.@testset "Binary Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(binary_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/3
-        Test.@test evaluation_result.macro_precision >= 1/3
-        Test.@test evaluation_result.macro_recall >= 1/3
-        Test.@test evaluation_result.accuracy >= 1/3
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("Jaccard Distance + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -181,11 +127,11 @@ Test.@testset "Binary Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(binary_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/3
-        Test.@test evaluation_result.macro_precision >= 1/3
-        Test.@test evaluation_result.macro_recall >= 1/3
-        Test.@test evaluation_result.accuracy >= 1/3
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 1/2
+        Test.@test evaluation_result.macro_precision >= 1/2
+        Test.@test evaluation_result.macro_recall >= 1/2
+        Test.@test evaluation_result.accuracy >= 1/2
         push!(binary_method_accuracies, ("Jaccard Distance + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -200,11 +146,11 @@ Test.@testset "Binary Matrix Processing" begin
         hclust_result = Clustering.hclust(binary_distance_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("Jaccard Distance + Hierarchical Clustering (fixed k)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -225,11 +171,11 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=pcoa_fit_binary_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_fit_binary_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/3
-        Test.@test evaluation_result.macro_precision >= 1/3
-        Test.@test evaluation_result.macro_recall >= 1/3
-        Test.@test evaluation_result.accuracy >= 1/3
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_fit_binary_labels)
+        Test.@test evaluation_result.macro_f1 >= .5
+        Test.@test evaluation_result.macro_precision >= .5
+        Test.@test evaluation_result.macro_recall >= .5
+        Test.@test evaluation_result.accuracy >= .5
         push!(binary_method_accuracies, ("Jaccard Distance + PCoA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -253,11 +199,11 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=pcoa_fit_binary_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_fit_binary_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/3
-        Test.@test evaluation_result.macro_precision >= 1/3
-        Test.@test evaluation_result.macro_recall >= 1/3
-        Test.@test evaluation_result.accuracy >= 1/3
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_fit_binary_labels)
+        Test.@test evaluation_result.macro_f1 >= 0.5
+        Test.@test evaluation_result.macro_precision >= 0.5
+        Test.@test evaluation_result.macro_recall >= 0.5
+        Test.@test evaluation_result.accuracy >= 0.5
         push!(binary_method_accuracies, ("Jaccard Distance + PCoA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -286,11 +232,11 @@ Test.@testset "Binary Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 0.5
+        Test.@test evaluation_result.macro_precision >= 0.5
+        Test.@test evaluation_result.macro_recall >= 0.5
+        Test.@test evaluation_result.accuracy >= 0.5
         push!(binary_method_accuracies, ("Jaccard Distance + PCoA + Hierarchical Clustering (fixed k)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -313,11 +259,11 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=pcoa_binary_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_binary_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/4
-        Test.@test evaluation_result.macro_precision >= 1/4
-        Test.@test evaluation_result.macro_recall >= 1/4
-        Test.@test evaluation_result.accuracy >= 1/4
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_binary_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("Jaccard Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -343,11 +289,11 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=pcoa_binary_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_binary_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/3
-        Test.@test evaluation_result.macro_precision >= 1/3
-        Test.@test evaluation_result.macro_recall >= 1/3
-        Test.@test evaluation_result.accuracy >= 1/3
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, pcoa_binary_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("Jaccard Distance + PCoA + UMAP + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -373,11 +319,11 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=hclust_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/3
-        Test.@test evaluation_result.macro_precision >= 1/3
-        Test.@test evaluation_result.macro_recall >= 1/3
-        Test.@test evaluation_result.accuracy >= 1/3
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("Jaccard Distance + PCoA + UMAP + Hierarchical Clustering (fixed k)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -398,7 +344,7 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 0.0
         Test.@test evaluation_result.macro_precision >= 0.0
         Test.@test evaluation_result.macro_recall >= 0.0
@@ -426,7 +372,7 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 0.0
         Test.@test evaluation_result.macro_precision >= 0.0
         Test.@test evaluation_result.macro_recall >= 0.0
@@ -454,7 +400,7 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 0.0
         Test.@test evaluation_result.macro_precision >= 0.0
         Test.@test evaluation_result.macro_recall >= 0.0
@@ -480,11 +426,11 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("logisticPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -510,7 +456,7 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -539,16 +485,22 @@ Test.@testset "Binary Matrix Processing" begin
                        true_labels=shuffled_binary_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binary_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binary_method_accuracies, ("logisticPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
         test_display(evaluation_result.precision_plot)
         test_display(evaluation_result.recall_plot)
+    end
+
+    ## Report ranked list by accuracy
+    test_println("\n[Binary] Accuracy ranking:")
+    for (i, (name, acc)) in enumerate(sort(binary_method_accuracies, by=x->-x[2]))
+        test_println("$(i). $(name): $(round(acc, digits=4))")
     end
 end
 
@@ -596,11 +548,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         poisson_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(poisson_distance_matrix)
         Test.@test poisson_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, poisson_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -615,11 +567,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(poisson_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -633,7 +585,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(poisson_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -652,11 +604,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         hclust_result = Clustering.hclust(poisson_distance_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -677,11 +629,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=pcoa_fit_poisson_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_fit_poisson_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_fit_poisson_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + PCoA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -710,11 +662,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        fit_labels=pcoa_fit_poisson_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_fit_poisson_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_fit_poisson_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + PCoA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -743,11 +695,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + PCoA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -770,11 +722,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=pcoa_poisson_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -807,7 +759,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        fit_labels=pcoa_poisson_umap_fit_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -844,11 +796,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -869,11 +821,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("PoissonPCA-EPCA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -897,11 +849,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("PoissonPCA-EPCA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -926,11 +878,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -952,7 +904,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -982,11 +934,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1013,11 +965,11 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
                        true_labels=shuffled_poisson_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1076,11 +1028,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         nb_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(nb_distance_matrix)
         Test.@test nb_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, nb_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(nb_method_accuracies, ("Bray-Curtis Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1095,11 +1047,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(nb_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1113,11 +1065,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(nb_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1132,11 +1084,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         hclust_result = Clustering.hclust(nb_distance_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1157,11 +1109,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
                        true_labels=shuffled_nb_labels,
                        fit_labels=pcoa_fit_nb_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_fit_nb_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_fit_nb_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + PCoA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1191,11 +1143,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
                        fit_labels=pcoa_fit_nb_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_fit_nb_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_fit_nb_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + PCoA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1225,11 +1177,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + PCoA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1252,11 +1204,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
                        true_labels=shuffled_nb_labels,
                        fit_labels=pcoa_nb_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_nb_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_nb_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1283,11 +1235,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
                        true_labels=shuffled_nb_labels,
                        fit_labels=pcoa_nb_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_nb_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, pcoa_nb_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1315,11 +1267,11 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
                        true_labels=shuffled_nb_labels,
                        fit_labels=hclust_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(nb_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1340,7 +1292,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     ##                    true_labels=shuffled_nb_labels,
     ##                    fit_labels=fit_labels)
     ##     test_display(plt)
-    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, fit_labels, verbose=false)
+    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, fit_labels)
     ##     Test.@test evaluation_result.macro_f1 >= 2/3
     ##     Test.@test evaluation_result.macro_precision >= 2/3
     ##     Test.@test evaluation_result.macro_recall >= 2/3
@@ -1364,7 +1316,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     ##                    true_labels=shuffled_nb_labels,
     ##                    fit_labels=fit_labels)
     ##     test_display(plt)
-    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, fit_labels, verbose=false)
+    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_nb_labels, fit_labels)
     ##     Test.@test evaluation_result.macro_f1 >= 2/3
     ##     Test.@test evaluation_result.macro_precision >= 2/3
     ##     Test.@test evaluation_result.macro_recall >= 2/3
@@ -1427,11 +1379,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         binom_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(binom_distance_matrix)
         Test.@test binom_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, binom_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(binom_method_accuracies, ("Bray-Curtis Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1446,11 +1398,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(binom_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1464,7 +1416,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(binom_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -1483,11 +1435,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         hclust_result = Clustering.hclust(binom_distance_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1508,11 +1460,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=pcoa_fit_binom_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_fit_binom_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_fit_binom_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + PCoA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1542,7 +1494,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        fit_labels=pcoa_fit_binom_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_fit_binom_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_fit_binom_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -1576,11 +1528,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + PCoA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1603,11 +1555,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=pcoa_binom_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_binom_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_binom_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1634,11 +1586,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=pcoa_binom_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_binom_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, pcoa_binom_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1666,11 +1618,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=hclust_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1691,11 +1643,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("PoissonPCA-EPCA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1719,11 +1671,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("PoissonPCA-EPCA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1748,11 +1700,11 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(binom_method_accuracies, ("PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1774,7 +1726,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -1804,7 +1756,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -1835,7 +1787,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
                        true_labels=shuffled_binom_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -1901,11 +1853,11 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         contb_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(contb_distance_matrix)
         Test.@test contb_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, contb_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(contb_method_accuracies, ("Cosine Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1921,7 +1873,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(contb_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -1940,11 +1892,11 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(contb_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(contb_method_accuracies, ("Cosine Distance + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -1960,7 +1912,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         hclust_result = Clustering.hclust(contb_distance_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -1985,7 +1937,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=pcoa_fit_contb_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_fit_contb_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_fit_contb_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -2019,7 +1971,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        fit_labels=pcoa_fit_contb_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_fit_contb_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_fit_contb_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -2053,7 +2005,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, hclust_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, hclust_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -2080,11 +2032,11 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=pcoa_contb_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_contb_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_contb_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(contb_method_accuracies, ("Cosine Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2111,7 +2063,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=pcoa_contb_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_contb_umap_fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, pcoa_contb_umap_fit_labels)
         Test.@test evaluation_result.macro_f1 >= 2/5
         Test.@test evaluation_result.macro_precision >= 2/5
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2143,11 +2095,11 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=hclust_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(contb_method_accuracies, ("Cosine Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2168,7 +2120,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -2196,7 +2148,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -2225,7 +2177,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -2251,11 +2203,11 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(contb_method_accuracies, ("ContBernoulliPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2281,7 +2233,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2312,11 +2264,11 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
                        true_labels=shuffled_contb_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_contb_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(contb_method_accuracies, ("ContBernoulliPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2379,11 +2331,11 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         gamma_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(gamma_distance_matrix)
         Test.@test gamma_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, gamma_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(gamma_method_accuracies, ("Cosine Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2399,7 +2351,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(gamma_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2418,7 +2370,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(gamma_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2438,7 +2390,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         hclust_result = Clustering.hclust(gamma_distance_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2463,11 +2415,11 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
                        true_labels=shuffled_gamma_labels,
                        fit_labels=pcoa_fit_gamma_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_fit_gamma_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_fit_gamma_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gamma_method_accuracies, ("Cosine Distance + PCoA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2492,7 +2444,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
                        true_labels=shuffled_gamma_labels,
                        fit_labels=pcoa_fit_gamma_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_fit_gamma_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_fit_gamma_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2526,11 +2478,11 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Step 6: Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gamma_method_accuracies, ("Cosine Distance + PCoA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2553,11 +2505,11 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
                        true_labels=shuffled_gamma_labels,
                        fit_labels=pcoa_gamma_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_gamma_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_gamma_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gamma_method_accuracies, ("Cosine Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2584,11 +2536,11 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
                        true_labels=shuffled_gamma_labels,
                        fit_labels=pcoa_gamma_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_gamma_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, pcoa_gamma_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gamma_method_accuracies, ("Cosine Distance + PCoA + UMAP + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2621,11 +2573,11 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Step 7: Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gamma_method_accuracies, ("Cosine Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2646,7 +2598,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     ##                    true_labels=shuffled_gamma_labels,
     ##                    fit_labels=fit_labels)
     ##     test_display(plt)
-    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, fit_labels, verbose=false)
+    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, fit_labels)
     ##     Test.@test evaluation_result.macro_f1 >= 2/3
     ##     Test.@test evaluation_result.macro_precision >= 2/3
     ##     Test.@test evaluation_result.macro_recall >= 2/3
@@ -2672,7 +2624,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     ##                    true_labels=shuffled_gamma_labels,
     ##                    fit_labels=fit_labels)
     ##     test_display(plt)
-    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, fit_labels, verbose=false)
+    ##     evaluation_result = Mycelia.evaluate_classification(shuffled_gamma_labels, fit_labels)
     ##     Test.@test evaluation_result.macro_f1 >= 2/3
     ##     Test.@test evaluation_result.macro_precision >= 2/3
     ##     Test.@test evaluation_result.macro_recall >= 2/3
@@ -2737,11 +2689,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         gauss_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(gauss_distance_matrix)
         Test.@test gauss_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, gauss_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .95
+        Test.@test evaluation_result.macro_precision >= .95
+        Test.@test evaluation_result.macro_recall >= .95
+        Test.@test evaluation_result.accuracy >= .95
         push!(gauss_method_accuracies, ("Euclidean Distance + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2757,11 +2709,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(gauss_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2776,7 +2728,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(gauss_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2800,11 +2752,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2825,11 +2777,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=pcoa_fit_gauss_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_fit_gauss_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_fit_gauss_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + PCoA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2854,11 +2806,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=pcoa_fit_gauss_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_fit_gauss_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_fit_gauss_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + PCoA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2888,11 +2840,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Step 6: Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + PCoA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2915,11 +2867,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=pcoa_gauss_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_gauss_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_gauss_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -2946,7 +2898,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=pcoa_gauss_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_gauss_umap_fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, pcoa_gauss_umap_fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -2978,11 +2930,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=hclust_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("Euclidean Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3003,11 +2955,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("GaussianPCA-EPCA + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3031,11 +2983,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("GaussianPCA-EPCA + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3060,11 +3012,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("GaussianPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3086,11 +3038,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("GaussianPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3116,7 +3068,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -3147,11 +3099,11 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
                        true_labels=shuffled_gauss_labels,
                        fit_labels=fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_gauss_labels, fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(gauss_method_accuracies, ("GaussianPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3213,11 +3165,11 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
         probvec_unsupervised_clustering_result = Mycelia.identify_optimal_number_of_clusters(probvec_distance_matrix)
         Test.@test probvec_unsupervised_clustering_result.optimal_number_of_clusters == n_distributions
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, probvec_unsupervised_clustering_result.assignments)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= .8
+        Test.@test evaluation_result.macro_precision >= .8
+        Test.@test evaluation_result.macro_recall >= .8
+        Test.@test evaluation_result.accuracy >= .8
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + Optimal Hierarchical Clustering", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3232,7 +3184,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
         pcoa_result = Mycelia.pcoa_from_dist(probvec_distance_matrix)
         kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, kmeans_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -3250,7 +3202,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
         kmedoids_result = Clustering.kmedoids(probvec_distance_matrix, n_distributions)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, kmedoids_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels)
         Test.@test evaluation_result.macro_f1 >= 1/3
         Test.@test evaluation_result.macro_precision >= 1/3
         Test.@test evaluation_result.macro_recall >= 1/3
@@ -3275,11 +3227,11 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
         hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
         hclust_labels = Clustering.cutree(hclust_result, k=n_distributions)
         remapped_pred_labels, mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, hclust_labels)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, remapped_pred_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3300,7 +3252,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
                        true_labels=shuffled_dirichlet_labels,
                        fit_labels=pcoa_fit_probvec_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_fit_probvec_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_fit_probvec_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -3334,7 +3286,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
                        fit_labels=pcoa_fit_probvec_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_fit_probvec_labels, verbose=false)
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_fit_probvec_labels)
         Test.@test evaluation_result.macro_f1 >= 1/2
         Test.@test evaluation_result.macro_precision >= 1/2
         Test.@test evaluation_result.macro_recall >= 1/2
@@ -3368,11 +3320,11 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
                        fit_labels=hclust_labels)
         test_display(plt)
         ## Evaluate clustering performance
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + PCoA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3395,11 +3347,11 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
                        true_labels=shuffled_dirichlet_labels,
                        fit_labels=pcoa_probvec_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_probvec_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_probvec_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + PCoA + UMAP + KMeans", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3426,11 +3378,11 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
                        true_labels=shuffled_dirichlet_labels,
                        fit_labels=pcoa_probvec_umap_fit_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_probvec_umap_fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, pcoa_probvec_umap_fit_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + PCoA + UMAP + KMedoids", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
@@ -3459,15 +3411,22 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
                        true_labels=shuffled_dirichlet_labels,
                        fit_labels=hclust_labels)
         test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, hclust_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
+        evaluation_result = Mycelia.evaluate_classification(shuffled_dirichlet_labels, hclust_labels)
+        Test.@test evaluation_result.macro_f1 >= 2/3
+        Test.@test evaluation_result.macro_precision >= 2/3
+        Test.@test evaluation_result.macro_recall >= 2/3
+        Test.@test evaluation_result.accuracy >= 2/3
         push!(probvec_method_accuracies, ("Jensen-Shannon Divergence + PCoA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
         test_display(evaluation_result.confusion_matrix_plot)
         test_display(evaluation_result.f1_plot)
         test_display(evaluation_result.precision_plot)
         test_display(evaluation_result.recall_plot)
+    end
+
+    ## No direct EPCA for compositional/probability data
+    ## Report ranked list by accuracy
+    test_println("\n[ProbVec] Accuracy ranking:")
+    for (i, (name, acc)) in enumerate(sort(probvec_method_accuracies, by=x->-x[2]))
+        test_println("$(i). $(name): $(round(acc, digits=4))")
     end
 end

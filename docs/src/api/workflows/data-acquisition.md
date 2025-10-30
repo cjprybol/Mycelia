@@ -6,10 +6,12 @@ Functions for downloading genomic data from public databases and simulating synt
 
 Data acquisition is the first step in any bioinformatics analysis. Mycelia provides tools for:
 
-- **Downloading reference genomes** from NCBI databases
-- **Simulating realistic sequencing data** for testing
-- **Managing data provenance** and metadata
-- **Handling multiple data formats** and sources
+- **Downloading reference genomes** from NCBI databases (implemented)
+- **Simulating realistic sequencing data** for testing (implemented)
+- **Managing data provenance** and metadata *(planned)*
+- **Handling multiple data formats** and sources (partially implemented)
+
+> **Implementation Status**: Core download and simulation functions are implemented. Advanced features like metadata management, validation, and batch processing helpers are planned.
 
 ## Common Workflows
 
@@ -31,11 +33,13 @@ reference = Mycelia.simulate_random_genome(length=100000, gc_content=0.45)
 reads = Mycelia.simulate_hifi_reads(reference, coverage=30, error_rate=0.001)
 ```
 
-### 3. Batch Download
+### 3. Batch Download *(Planned convenience wrapper)*
+
 ```julia
-# Download multiple genomes
+# Download multiple genomes (planned convenience function)
+# Currently use: Mycelia.download_genomes_by_ftp() with FTP paths
 accessions = ["GCF_000005825.2", "GCF_000009605.1", "GCF_000027325.1"]
-genomes = Mycelia.download_genomes_batch(accessions, output_dir="genomes/")
+genomes = Mycelia.download_genomes_batch(accessions, output_dir="genomes/")  # Planned
 ```
 
 ## Public Database Downloads
@@ -59,7 +63,7 @@ phix_file = Mycelia.download_genome_by_accession("NC_001422.1")
 @assert endswith(phix_file, ".fna.gz")
 
 # Read the genome
-genome_record = first(Mycelia.read_fasta(phix_file))
+genome_record = first(Mycelia.open_fastx(phix_file))
 sequence = String(FASTX.sequence(genome_record))
 println("Downloaded genome: $(length(sequence)) bp")
 ```
@@ -101,20 +105,21 @@ end
 
 ## Data Simulation
 
-### Genome Simulation
+### Genome Simulation *(Planned)*
 
-<!-- Genome simulation functions not yet implemented -->
+> **NOTE**: Genome simulation functions are planned but not yet implemented. For now, create test genomes manually or use external tools.
 
-#### Example: Create Test Genome
+#### Example: Create Test Genome *(Planned)*
+
 ```julia
-# Generate random genome with realistic GC content
+# Generate random genome with realistic GC content (planned)
 test_genome = Mycelia.simulate_random_genome(
     length=50000,
     gc_content=0.42,
     seed=123  # for reproducibility
 )
 
-# Add realistic features
+# Add realistic features (planned)
 genome_with_genes = Mycelia.simulate_genome_with_features(
     test_genome,
     n_genes=50,
@@ -166,52 +171,53 @@ Mycelia.write_fastq("illumina_R1.fastq", illumina_reads.read1)
 Mycelia.write_fastq("illumina_R2.fastq", illumina_reads.read2)
 ```
 
-## Data Validation
+## Data Validation *(Planned)*
 
-### Download Validation
+> **NOTE**: Data validation functions are planned but not yet implemented. Manual validation is recommended.
 
-<!-- Download validation functions not yet implemented -->
+### Download Validation *(Planned)*
 
-#### Example: Validate Downloaded Data
+#### Example: Validate Downloaded Data *(Planned)*
+
 ```julia
-# Check file integrity
+# Check file integrity (planned)
 integrity_ok = Mycelia.validate_download_integrity("genome.fna.gz")
 
-# Verify file format
+# Verify file format (planned)
 format_ok = Mycelia.check_file_format("genome.fna.gz", expected_format="fasta")
 
-# Check genome completeness
+# Check genome completeness (planned)
 completeness = Mycelia.verify_genome_completeness("genome.fna.gz")
 println("Genome completeness: $(completeness.complete_sequences)/$(completeness.total_sequences)")
 ```
 
-### Simulation Validation
+### Simulation Validation *(Planned)*
 
-<!-- Simulation validation functions not yet implemented -->
+#### Example: Validate Simulated Data *(Planned)*
 
-#### Example: Validate Simulated Data
 ```julia
-# Check simulation statistics
+# Check simulation statistics (planned)
 sim_stats = Mycelia.calculate_simulation_statistics(simulated_reads)
 println("Simulated reads: $(sim_stats.n_reads)")
 println("Mean length: $(sim_stats.mean_length)")
 println("Coverage: $(sim_stats.coverage)x")
 
-# Compare with real data characteristics
+# Compare with real data characteristics (planned)
 comparison = Mycelia.compare_simulated_vs_real(simulated_reads, real_reads)
 println("Length distribution similarity: $(comparison.length_similarity)")
 println("Quality distribution similarity: $(comparison.quality_similarity)")
 ```
 
-## Metadata Management
+## Metadata Management *(Planned)*
 
-### Data Provenance
+> **NOTE**: Metadata management functions are planned. For batch downloads, use `Mycelia.download_genomes_by_ftp()`.
 
-<!-- Metadata management functions not yet implemented -->
+### Data Provenance *(Planned)*
 
-#### Example: Track Data Sources
+#### Example: Track Data Sources *(Planned)*
+
 ```julia
-# Create manifest for downloaded data
+# Create manifest for downloaded data (planned)
 manifest = Mycelia.create_data_manifest(
     files=["genome.fna.gz", "annotations.gff3"],
     sources=["NCBI:NC_001422.1", "NCBI:GCF_000819615.1"],
@@ -219,19 +225,18 @@ manifest = Mycelia.create_data_manifest(
     version="1.0"
 )
 
-# Save manifest
+# Save manifest (planned)
 Mycelia.save_manifest(manifest, "data_manifest.json")
 ```
 
-### Batch Processing
+### Batch Processing *(Planned convenience wrapper)*
 
-<!-- Batch processing functions not yet implemented
-Available: Mycelia.download_genomes_by_ftp for batch downloads
--->
+> **NOTE**: Batch download with error handling is planned. Currently use `download_genomes_by_ftp()` for batch downloads.
 
-#### Example: Batch Download with Error Handling
+#### Example: Batch Download with Error Handling *(Planned)*
+
 ```julia
-# Download multiple genomes with retry logic
+# Download multiple genomes with retry logic (planned)
 accession_list = ["GCF_000005825.2", "GCF_000009605.1", "GCF_000027325.1"]
 
 results = Mycelia.parallel_download(
@@ -297,19 +302,19 @@ Mycelia.validate_simulation_parameters(
 ## Related Functions
 
 ### File I/O
-- [`read_fasta`](@ref) - Read FASTA files
-- [`write_fastq`](@ref) - Write FASTQ files
-- [`compress_file`](@ref) - Compress downloaded files
+- [`Mycelia.open_fastx`](@ref) - Read FASTA/FASTQ files
+- [`Mycelia.write_fastq`](@ref) - Write FASTQ files
+- [`Mycelia.write_fasta`](@ref) - Write FASTA files
 
 ### Quality Control
-- [`analyze_fastq_quality`](@ref) - Assess downloaded read quality
-- [`calculate_genome_stats`](@ref) - Analyze genome characteristics
+- [`Mycelia.analyze_fastq_quality`](@ref) - Assess downloaded read quality
+- [`Mycelia.calculate_gc_content`](@ref) - Calculate GC content
 
 ### Next Steps
 - [Quality Control](quality-control.md) - Assess data quality
 - [Sequence Analysis](sequence-analysis.md) - Analyze sequence composition
 
 ## See Also
-- [Tutorial 1: Data Acquisition](../../tutorials/01_data_acquisition.md)
+- [Tutorial 1: Data Acquisition](../../generated/tutorials/01_data_acquisition.md)
 - FASTA/FASTQ Data Types *(planned)*
 - [Basic Workflows](../examples/basic-workflows.md)

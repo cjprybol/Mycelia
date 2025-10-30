@@ -1,34 +1,62 @@
 # Assembly Suite Overview
 
-Mycelia provides a comprehensive assembly suite with multiple approaches for genome assembly optimization. This document provides an overview of the assembly ecosystem and guidance on choosing the right approach for your data.
+Mycelia provides a comprehensive assembly suite with multiple approaches for genome assembly. This document provides an overview of the assembly ecosystem and guidance on choosing the right approach for your data.
 
-> **Development Status**: The assembly suite includes both stable implementations and experimental features. Features are clearly marked with their current status throughout this documentation.
+> **Important Distinction**: Mycelia provides two categories of assembly functionality:
+>
+> **Production-Ready**: Stable wrappers for 15+ established third-party assemblers (MEGAHIT, SPAdes, Flye, hifiasm, Canu, Unicycler, Velvet, MetaMDBG, and others). These are tested, documented, and ready for production use.
+>
+> **Experimental/Research**: Internal graph-based assembly algorithms, intelligent self-optimizing approaches, and reinforcement learning methods. These are research implementations that may require additional configuration and are subject to change.
 
-## Assembly Philosophy
+## Third-Party Assembler Wrappers [Production-Ready]
 
-Mycelia's assembly suite is built on several core principles:
+Mycelia provides production-ready wrappers for established assembly tools:
 
-- **Accuracy First**: Prioritize assembly accuracy over contiguity or speed
-- **Quality Awareness**: Utilize quality scores for better assembly decisions
-- **Graph Hierarchy**: Support 6 complementary graph types for different use cases
-- **Type Safety**: Maintain proper BioSequence types throughout (no string conversions)
-- **Modular Design**: Choose components based on your specific needs
+### Short-Read Assemblers
+- **MEGAHIT** (`run_megahit`) - Fast metagenome assembler
+- **SPAdes** (`run_spades`) - Isolate genome assembler
+- **metaSPAdes** (`run_metaspades`) - Metagenome assembler
+- **SKESA** (`run_skesa`) - Strategic K-mer Extension for Scrupulous Assemblies
+- **Velvet/MetaVelvet** (`run_velvet`, `run_metavelvet`) - Classic de Bruijn graph assemblers
 
-## Graph Type Hierarchy
+### Long-Read Assemblers
+- **Flye** (`run_flye`) - Long-read assembler for single genomes
+- **metaFlye** (`run_metaflye`) - Long-read metagenome assembler
+- **Canu** (`run_canu`) - Long-read assembler with error correction
+- **hifiasm** (`run_hifiasm`) - Haplotype-resolved assembler for HiFi reads
+- **MetaMDBG** (`run_metamdbg`) - Metagenomic de Bruijn graph assembler
 
-### Fixed-Length Graphs (Assembly Foundation)
+### Hybrid Assemblers
+- **Unicycler** (`run_unicycler`) - Hybrid short+long read assembler
+
+### Polishing/Refinement Tools
+- **Apollo** (`run_apollo`) - Assembly polishing
+- **HyPo** (`run_hylight`) - Hybrid polishing
+- **Strainy** (`run_strainy`) - Strain phasing and separation
+
+## Internal Assembly Algorithms [Experimental]
+
+The following algorithms are research implementations currently in experimental status:
+
+## Internal Assembly Approaches [Experimental]
+
+The following assembly approaches use Mycelia's internal graph-based algorithms. These are research implementations:
+
+### 1. Standard K-mer Assembly [Experimental]
+
+**Fixed-Length Graphs (Assembly Foundation)**
 1. **N-gram Graphs** (`build_ngram_graph`) - Unicode character analysis
 2. **K-mer Graphs** (`build_kmer_graph_next`) - Standard k-mer assembly
 3. **Qualmer Graphs** (`build_qualmer_graph`) - Quality-aware k-mer assembly
 
-### Variable-Length Graphs (Simplified Products)
+**Variable-Length Graphs (Simplified Products)**
 4. **String Graphs** (`string_to_ngram_graph`) - Variable unicode strings
 5. **FASTA Graphs** (`build_biosequence_graph`) - Variable BioSequences
 6. **FASTQ Graphs** (`build_quality_biosequence_graph`) - Quality-aware BioSequences
 
-## Assembly Approaches
+### Graph Type Hierarchy [Experimental]
 
-### 1. Standard Assembly (Traditional)
+Mycelia implements a 6-level graph hierarchy for assembly research:
 
 For basic k-mer assembly without quality awareness:
 
@@ -45,12 +73,14 @@ seq_graph = Mycelia.kmer_graph_to_biosequence_graph(graph, 31)
 contigs = Mycelia.extract_contigs_from_graph(seq_graph)
 ```
 
-**Use Cases:**
+**Status**: Experimental - Basic graph construction implemented, contig extraction in development
+
+**Use Cases (when fully implemented)**:
 - High-quality FASTA data
 - Simple genomes without complex repeats
-- When computational speed is critical
+- Research into graph-based assembly
 
-### 2. Quality-Aware Assembly
+### 2. Quality-Aware Assembly [Experimental]
 
 For assembly utilizing FASTQ quality scores:
 
@@ -83,13 +113,14 @@ fastq_graph = Mycelia.build_quality_biosequence_graph(fastq_records)
 contigs = Mycelia.quality_biosequence_graph_to_fastq(fastq_graph, "contigs")
 ```
 
-**Use Cases:**
-- Illumina short reads
-- Error-prone long reads  
-- When maximum accuracy is required
-- Complex genomes with repeats
+**Status**: Experimental - Quality-aware graph construction implemented, assembly pipeline in development
 
-### 3. Intelligent Self-Optimizing Assembly ✅ **Implemented**
+**Use Cases (when fully implemented)**:
+- Illumina short reads
+- Error-prone long reads
+- Research into quality-aware assembly
+
+### 3. Intelligent Self-Optimizing Assembly [Experimental]
 
 For automated parameter optimization:
 
@@ -111,18 +142,20 @@ validation_results = Mycelia.mycelia_cross_validation(
 )
 ```
 
-**Features:**
-- ✅ Automatic prime k-mer progression
-- ✅ Sparsity-based k-mer selection
-- ✅ Memory monitoring and limits
-- ✅ Cross-validation for quality assessment
+**Status**: Experimental - Core functionality implemented, requires further testing and validation
 
-**Use Cases:**
-- Unknown optimal parameters
-- Production assembly pipelines
-- When manual optimization is impractical
+**Features**:
+- Automatic prime k-mer progression
+- Sparsity-based k-mer selection
+- Memory monitoring and limits
+- Cross-validation for quality assessment
 
-### 4. Iterative Statistical Assembly ✅ **Implemented**
+**Use Cases (when fully validated)**:
+- Research into parameter optimization
+- Comparison with established assemblers
+- Algorithm development
+
+### 4. Iterative Statistical Assembly [Experimental]
 
 For statistical path improvement:
 
@@ -137,22 +170,24 @@ results = Mycelia.mycelia_iterative_assemble(fastq_file;
 )
 ```
 
-**Features:**
-- ✅ Read-level likelihood optimization
-- ✅ Statistical path resampling
-- ✅ Timestamped output for tracking evolution
-- 🚧 Viterbi integration for optimal paths (partially implemented)
+**Status**: Experimental - Core functionality implemented, requires further testing and validation
 
-**Use Cases:**
-- When individual read optimization is beneficial
-- Datasets with systematic errors
-- Research applications requiring detailed tracking
+**Features**:
+- Read-level likelihood optimization
+- Statistical path resampling
+- Timestamped output for tracking evolution
+- Viterbi integration (partially implemented)
 
-### 5. Reinforcement Learning Guided Assembly 🧪 **Experimental**
+**Use Cases (when fully validated)**:
+- Research into statistical assembly approaches
+- Algorithm development and comparison
+- Detailed assembly process tracking
+
+### 5. Reinforcement Learning Guided Assembly [Research/Proof-of-Concept]
 
 For machine learning optimization (four experimental implementations available):
 
-#### Custom RL Framework 🧪 **Experimental - Under Development**
+#### Custom RL Framework **[Experimental - Under Development]**
 ```julia
 import Mycelia
 
@@ -165,7 +200,7 @@ trained_agent = Mycelia.train_assembly_agent(env, agent; episodes=1000)
 results = Mycelia.apply_learned_policy(trained_agent, "genome.fastq")
 ```
 
-#### ReinforcementLearning.jl Integration 🧪 **Experimental - Basic Implementation**
+#### ReinforcementLearning.jl Integration **[Experimental - Basic Implementation]**
 ```julia
 import Mycelia
 
@@ -177,7 +212,7 @@ assembly, history = Mycelia.intelligent_assembly_rljl(
 )
 ```
 
-#### POMDPs.jl Integration 🧪 **Experimental - Basic Implementation**
+#### POMDPs.jl Integration **[Experimental - Basic Implementation]**
 ```julia
 import Mycelia
 
@@ -189,7 +224,7 @@ assembly, history = Mycelia.intelligent_assembly_pomdp(
 )
 ```
 
-#### Monte Carlo Tree Search (MCTS) 🧪 **Experimental - Game-Based Approach**
+#### Monte Carlo Tree Search (MCTS) **[Experimental - Game-Based Approach]**
 ```julia
 import Mycelia
 
@@ -201,7 +236,7 @@ assembly, trajectory = Mycelia.intelligent_assembly_mcts(
 )
 ```
 
-#### Comparison Framework 🧪 **Experimental - Proof of Concept**
+#### Comparison Framework **[Experimental - Proof of Concept]**
 ```julia
 import Mycelia
 
@@ -215,10 +250,14 @@ comparison = Mycelia.compare_rl_approaches(
 )
 ```
 
-**Use Cases:**
-- Research into assembly optimization
-- When you have training data for optimization
-- Automated parameter learning from experience
+**Status**: Proof-of-concept - Four experimental RL approaches implemented for research purposes
+
+**Use Cases (research only)**:
+- Algorithm development and exploration
+- Comparative studies of RL approaches to assembly
+- Academic research into ML-guided assembly optimization
+
+**Note**: These are research prototypes not recommended for production use. For production assembly, use the third-party assembler wrappers listed above.
 
 ## Quality Assessment and Metrics
 
@@ -226,13 +265,13 @@ comparison = Mycelia.compare_rl_approaches(
 ```julia
 import Mycelia
 
-# Comprehensive quality assessment ✅ **Implemented**
+# Comprehensive quality assessment [Implemented]
 metrics = Mycelia.calculate_assembly_quality_metrics(qualmer_graph)
 
-# Error detection 🚧 **Partially Implemented**
+# Error detection [Partially Implemented]
 potential_errors = Mycelia.identify_potential_errors(graph)
 
-# Cross-validation comparison ✅ **Implemented**
+# Cross-validation comparison [Implemented]
 comparison = Mycelia.compare_assembly_statistics(
     intelligent_results,
     iterative_results
@@ -240,35 +279,45 @@ comparison = Mycelia.compare_assembly_statistics(
 ```
 
 ### Available Metrics
-- ✅ Mean k-mer coverage and quality
-- ✅ Joint probability confidence scores
-- ✅ Low-confidence k-mer fraction
-- 🚧 Assembly accuracy (when reference available - basic implementation)
-- 📋 Read mapping statistics (planned)
-- 📋 Contig N50 and other contiguity metrics (planned)
+- Mean k-mer coverage and quality (implemented)
+- Joint probability confidence scores (implemented)
+- Low-confidence k-mer fraction (implemented)
+- Assembly accuracy when reference available (basic implementation)
+- Read mapping statistics (planned)
+- Contig N50 and other contiguity metrics (planned)
 
 ## Choosing the Right Approach
 
-### Decision Matrix
+### Recommended Assembly Tools by Use Case
 
-| Data Type | Quality | Complexity | Recommended Approach |
-|-----------|---------|------------|---------------------|
-| FASTA, High Quality | N/A | Simple | Standard K-mer |
-| FASTQ, High Quality | >Q30 | Simple | Direct Quality-Aware |
-| FASTQ, Medium Quality | Q20-Q30 | Medium | Qualmer-Mediated |
-| FASTQ, Low Quality | <Q20 | Complex | Intelligent + Iterative |
-| Unknown Parameters | Any | Any | Intelligent Assembly |
-| Research/Optimization | Any | Any | RL-Guided |
+**For Production Assembly** - Use third-party assembler wrappers:
+
+| Data Type | Read Length | Organism | Recommended Tool |
+|-----------|-------------|----------|------------------|
+| Illumina PE | Short | Isolate | SPAdes (`run_spades`) |
+| Illumina PE | Short | Metagenome | MEGAHIT (`run_megahit`) or metaSPAdes (`run_metaspades`) |
+| PacBio HiFi | Long | Isolate | hifiasm (`run_hifiasm`) or Flye (`run_flye`) |
+| PacBio/ONT | Long | Metagenome | metaFlye (`run_metaflye`) or MetaMDBG (`run_metamdbg`) |
+| Hybrid PE+Long | Mixed | Isolate | Unicycler (`run_unicycler`) |
+
+**For Assembly Research** - Internal experimental algorithms:
+
+| Research Goal | Recommended Approach |
+|---------------|---------------------|
+| Quality-aware assembly methods | Qualmer graphs and quality-aware assembly |
+| Parameter optimization | Intelligent assembly |
+| Statistical assembly approaches | Iterative assembly |
+| ML-guided assembly | RL-guided assembly (proof-of-concept) |
 
 ### Performance Considerations
 
 | Approach | Speed | Memory | Accuracy | Automation | Status |
 |----------|-------|---------|----------|------------|--------|
-| Standard | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ✅ Stable |
-| Quality-Aware | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ✅ Stable |
-| Intelligent | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ✅ Stable |
-| Iterative | ⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ✅ Stable |
-| RL-Guided | ⭐ | ⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 🧪 Experimental |
+| Standard | Fastest | Moderate | Good | Limited | Stable |
+| Quality-Aware | Fast | Moderate | High | Moderate | Stable |
+| Intelligent | Moderate | Moderate | Very High | Very High | Stable |
+| Iterative | Slow | High | High | Very High | Stable |
+| RL-Guided | Very Slow | Very High | Very High | Very High | Experimental |
 
 ## Integration Examples
 
@@ -332,13 +381,13 @@ benchmark_results = Mycelia.benchmark_assembly_approaches(
 ## Implementation Status and Future Directions
 
 ### Current Status
-- ✅ **Stable**: Core graph-based assembly algorithms, quality-aware assembly, intelligent assembly
-- 🚧 **In Development**: Error correction algorithms, advanced validation metrics
-- 🧪 **Experimental**: Reinforcement learning approaches, POMDP integration
-- 📋 **Planned**: Enhanced parallel processing, cloud integration, long-read optimizations
+- **Stable**: Core graph-based assembly algorithms, quality-aware assembly, intelligent assembly
+- **In Development**: Error correction algorithms, advanced validation metrics
+- **Experimental**: Reinforcement learning approaches, POMDP integration
+- **Planned**: Enhanced parallel processing, cloud integration, long-read optimizations
 
 ### Experimental Features Notice
-🧪 **Experimental features** are research implementations that may:
+**Experimental features** are research implementations that may:
 - Require additional dependencies
 - Have limited testing coverage
 - Change significantly between versions
@@ -346,10 +395,10 @@ benchmark_results = Mycelia.benchmark_assembly_approaches(
 
 ### Future Directions
 The Mycelia assembly suite continues to evolve with:
-- 🚧 Enhanced machine learning integration
-- 📋 Improved parallel processing capabilities
-- 🚧 Additional quality-aware algorithms
-- 📋 Extended support for long-read technologies
-- 📋 Integration with cloud computing platforms
+- Enhanced machine learning integration (in development)
+- Improved parallel processing capabilities (planned)
+- Additional quality-aware algorithms (in development)
+- Extended support for long-read technologies (planned)
+- Integration with cloud computing platforms (planned)
 
-For the latest developments, see the [Assembly Roadmap](../../ASSEMBLY_ROADMAP.md).
+For the latest developments, see the [Assembly Roadmap](https://github.com/cjprybol/Mycelia/blob/main/ASSEMBLY_ROADMAP.md).
