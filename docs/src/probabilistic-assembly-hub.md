@@ -56,7 +56,7 @@ graph TD
 ### By Experience Level
 
 #### **Beginner** - "I just want it to work"
-→ Start with [Assembly in 5 Minutes](../generated/tutorials/00_assembly_in_5_minutes.md)
+→ Start with [Assembly in 5 Minutes](generated/tutorials/00_assembly_in_5_minutes.md)
 - Automatic parameter selection
 - Simple one-function interface
 - Clear output interpretation
@@ -94,7 +94,7 @@ graph TD
 
 ### Ready to Start?
 1. **[Install Mycelia](getting-started.md#installation)** - Multiple installation options
-2. **[Run the quick start tutorial](../generated/tutorials/00_assembly_in_5_minutes.md)** - See it in action
+2. **[Run the quick start tutorial](generated/tutorials/00_assembly_in_5_minutes.md)** - See it in action
 3. **[Choose your workflow](assembly-method-selection.md)** - Find the best approach
 
 ### Need Help?
@@ -126,4 +126,4 @@ graph TD
 
 ---
 
-Ready to get started? [Begin with the quick start tutorial →](../generated/tutorials/00_assembly_in_5_minutes.md)
+Ready to get started? [Begin with the quick start tutorial →](generated/tutorials/00_assembly_in_5_minutes.md)

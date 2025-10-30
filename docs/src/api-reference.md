@@ -128,7 +128,20 @@ Mycelia.kmer_counts_to_js_divergence
 Mycelia.estimate_genome_size_from_kmers
 ```
 
+### K-mer Result Storage
+
+```@docs
+Mycelia.save_kmer_results
+Mycelia.load_kmer_results
+```
+
 ## Simulation and Testing
+
+### Sequence Generation
+
+```@docs
+Mycelia.generate_test_sequences
+```
 
 ### Read Simulation
 

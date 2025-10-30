@@ -416,15 +416,15 @@ println("Recommended k-mer size: $(optimal_k)")
 
 ## Related Functions
 
-### Data Structures
-- [`KmerCounts`](@ref) - K-mer count data structure
-- [`KmerSpectrum`](@ref) - Frequency spectrum representation
-- [`KmerGraph`](@ref) - K-mer overlap graph
+### Data Structures *(planned)*
+- `KmerCounts` - K-mer count data structure *(planned)*
+- `KmerSpectrum` - Frequency spectrum representation *(planned)*
+- `KmerGraph` - K-mer overlap graph *(planned)*
 
 ### File I/O
-- [`read_fastq`](@ref) - Read sequence files
-- [`save_kmer_counts`](@ref) - Save k-mer counts
-- [`load_kmer_counts`](@ref) - Load saved counts
+- [`Mycelia.open_fastx`](@ref) - Read sequence files
+- [`Mycelia.save_kmer_results`](@ref) - Save k-mer counts
+- [`Mycelia.load_kmer_results`](@ref) - Load saved counts
 
 ### Related Workflows
 
