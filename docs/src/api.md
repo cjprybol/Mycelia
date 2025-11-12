@@ -2,7 +2,7 @@
 
 Welcome to the Mycelia API documentation! This guide organizes both **implemented functions** and **planned features** by biological workflows. Mycelia provides substantial functionality for bioinformatics analysis with extensive tool integration, while continuing to expand with experimental algorithms and additional features.
 
-## 🧬 Quick Start
+## Quick Start
 
 New to Mycelia? Start with our workflow-based guides:
 
@@ -10,7 +10,7 @@ New to Mycelia? Start with our workflow-based guides:
 - **[Function Index](api/quick-reference/function-index.md)** - Alphabetical function list
 - **[Parameter Guide](api/quick-reference/parameter-guide.md)** - Common parameters explained
 
-## 📋 By Workflow Stage
+## By Workflow Stage
 
 Follow the typical bioinformatics analysis workflow:
 
@@ -76,7 +76,7 @@ Create plots, figures, and reports for analysis results.
 **Working Functions:** `plot_kmer_frequency_spectra`, `visualize_genome_coverage`, `plot_embeddings`, `plot_taxa_abundances`, coverage plots, taxonomic visualizations  
 **Planned:** Per-base quality plots, assembly statistics visualization, phylogenetic tree plotting
 
-## 📁 By Data Type
+## By Data Type
 
 Working with specific file formats and data structures:
 
@@ -108,7 +108,7 @@ Processing BAM/SAM files and alignment results.
 ### Phylogenetic Trees *(planned)*
 Tree construction, manipulation, and visualization.
 
-## 🎯 By Analysis Goal
+## By Analysis Goal
 
 Cross-cutting concerns and specific use cases:
 
@@ -134,7 +134,7 @@ Alphabetical listing of all functions with brief descriptions.
 ### [Parameter Guide](api/quick-reference/parameter-guide.md)
 Common parameters and their usage across functions.
 
-## 🔍 Finding What You Need
+## Finding What You Need
 
 ### By Task
 - **"I want to assemble a genome"** → Genome Assembly *(planned)*
@@ -152,61 +152,7 @@ Common parameters and their usage across functions.
 - **Intermediate** → Workflow-specific guides
 - **Advanced** → [Advanced Usage](api/examples/advanced-usage.md)
 
-## 💡 Usage Patterns
-
-### Function Documentation Format
-Each function is documented with:
-
-```julia
-"""
-    function_name(required_param, optional_param="default")
-
-Brief description of what the function does.
-
-## Purpose
-When and why to use this function in your workflow.
-
-## Arguments
-- `required_param`: Description and expected data type
-- `optional_param`: Description, default value, and alternatives
-
-## Returns
-Description of return value and structure.
-
-## Examples
-```julia
-# Basic usage
-result = function_name("input.fasta")
-
-# Advanced usage with options
-result = function_name("input.fasta", 
-                      optional_param="custom_value",
-                      threads=4)
-```
-
-## Related Functions
-- [`related_function`](@ref) - What it does
-- [`workflow_next_step`](@ref) - Next step in workflow
-
-## Performance Notes
-- Memory usage: ~X GB for typical datasets
-- Runtime: ~X minutes for Y-sized genomes
-- Scaling: Linear/quadratic with input size
-
-## See Also
-- [Workflow Guide](../workflows/relevant-workflow.md)
-- [Data Type Guide](../data-types/relevant-type.md)
-"""
-```
-
-### Cross-References
-Functions are linked to:
-- **Workflow context** - Where they fit in analysis pipelines
-- **Related functions** - What to use before/after
-- **Data types** - What formats they accept/produce
-- **Examples** - Real usage scenarios
-
-## 🚀 Integration with Tutorials
+## Integration with Tutorials
 
 This API documentation integrates with the tutorial system:
 
@@ -214,7 +160,7 @@ This API documentation integrates with the tutorial system:
 - **API docs** provide detailed function reference
 - **Examples** bridge the gap with focused use cases
 
-For hands-on learning, see the [Tutorials](../tutorials.md) which use these functions in complete bioinformatics workflows.
+For hands-on learning, see the [Tutorials](tutorials.md) which use these functions in complete bioinformatics workflows.
 
 ---
 

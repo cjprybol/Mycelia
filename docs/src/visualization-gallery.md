@@ -1,35 +1,45 @@
 # Visualization Gallery
 
-This gallery showcases the plotting and visualization capabilities of Mycelia across different bioinformatics analysis workflows. Each example includes the code to generate the visualization and explanation of biological interpretation.
+> **NOTE - API Design Documentation**: This gallery represents the intended visualization API for Mycelia. Most plotting functions shown are planned but not yet implemented. This serves as:
+> - A design specification for visualization features
+> - A record of planned capabilities
+> - Examples of the intended API when implemented
+>
+> **Currently Available**: Limited plotting functions including `plot_kmer_frequency_spectra`, `plot_per_base_quality`, `bandage_visualize`, tree visualization, and taxonomic abundance plots. See source code in `src/plotting-and-visualization.jl` for implemented functions.
+
+This gallery showcases the intended plotting and visualization capabilities of Mycelia across different bioinformatics analysis workflows.
 
 ## Overview
 
-Mycelia provides comprehensive visualization capabilities for:
-- **Data Quality Assessment** - Evaluate sequencing data quality
-- **Sequence Analysis** - K-mer analysis and composition
-- **Assembly Visualization** - Assembly statistics and comparisons  
-- **Annotation Plots** - Gene features and functional summaries
-- **Comparative Analysis** - Phylogenetics and pangenome visualization
-- **Performance Monitoring** - Benchmark and resource usage plots
+Mycelia plans to provide comprehensive visualization capabilities for:
+- **Data Quality Assessment** - Evaluate sequencing data quality *(partially implemented)*
+- **Sequence Analysis** - K-mer analysis and composition *(partially implemented)*
+- **Assembly Visualization** - Assembly statistics and comparisons *(planned)*
+- **Annotation Plots** - Gene features and functional summaries *(planned)*
+- **Comparative Analysis** - Phylogenetics and pangenome visualization *(partially implemented)*
+- **Performance Monitoring** - Benchmark and resource usage plots *(planned)*
 
-## Data Quality & Preprocessing
+## Data Quality & Preprocessing *(Partially Implemented)*
 
 ### FASTQ Quality Assessment
 
-#### Per-Base Quality Scores
+#### Per-Base Quality Scores *(Implemented: plot_per_base_quality)*
+
 ```julia
 # Plot quality scores across read positions
-quality_data = Mycelia.analyze_fastq_quality("reads.fastq")
-Mycelia.plot_base_quality_scores(quality_data)
+Mycelia.plot_per_base_quality("reads.fastq")
 ```
+
 *Shows quality degradation patterns typical in sequencing data*
 
-#### Read Length Distribution
+#### Read Length Distribution *(Planned)*
+
 ```julia
-# Visualize read length characteristics
+# Visualize read length characteristics (planned)
 length_dist = Mycelia.calculate_read_lengths("reads.fastq")
 Mycelia.plot_read_length_distribution(length_dist)
 ```
+
 *Identifies sequencing platform characteristics and potential issues*
 
 #### GC Content Analysis
@@ -48,15 +58,16 @@ Mycelia.plot_coverage_uniformity(coverage_data)
 ```
 *Identifies coverage bias and potential assembly issues*
 
-## Sequence Analysis & K-mers
+## Sequence Analysis & K-mers *(Partially Implemented)*
 
-### K-mer Frequency Spectra
+### K-mer Frequency Spectra *(Implemented: plot_kmer_frequency_spectra)*
+
 ```julia
 # Generate k-mer frequency histograms
 kmer_counts = Mycelia.count_kmers("reads.fastq", k=21)
-spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
-Mycelia.plot_kmer_spectrum(spectrum, title="21-mer Frequency Spectrum")
+Mycelia.plot_kmer_frequency_spectra(kmer_counts, title="21-mer Frequency Spectrum")
 ```
+
 *Enables genome size estimation and error detection*
 
 ### K-mer Composition Heatmaps
@@ -75,9 +86,9 @@ Mycelia.plot_genome_size_estimation(estimation_data)
 ```
 *Provides independent genome size validation*
 
-## Assembly Visualization
+## Assembly Visualization *(Planned)*
 
-### Assembly Statistics
+### Assembly Statistics *(Planned)*
 ```julia
 # Comprehensive assembly quality metrics
 assembly_stats = Mycelia.evaluate_assembly("contigs.fasta")
@@ -109,9 +120,9 @@ Mycelia.plot_coverage_vs_length(coverage_length_data)
 ```
 *Detects potential contamination and assembly artifacts*
 
-## Annotation & Gene Features
+## Annotation & Gene Features *(Planned)*
 
-### Genome Browser Tracks
+### Genome Browser Tracks *(Planned)*
 ```julia
 # Create genome browser-style visualization
 annotations = Mycelia.load_gff3("annotations.gff3")
@@ -144,14 +155,17 @@ Mycelia.plot_go_enrichment(enrichment_results, top_n=20)
 ```
 *Identifies overrepresented biological processes*
 
-## Comparative Genomics
+## Comparative Genomics *(Partially Implemented)*
 
-### Phylogenetic Trees
+### Phylogenetic Trees *(Partially Implemented)*
+
 ```julia
 # Multiple tree layouts and styles
+# Tree visualization functions available: draw_dendrogram_tree, draw_radial_tree
 tree = Mycelia.build_phylogenetic_tree(core_genes)
 Mycelia.plot_phylogenetic_tree(tree, layout="circular", show_support=true)
 ```
+
 *Publication-ready phylogenetic trees with branch support*
 
 ### Pangenome Heatmaps
@@ -186,9 +200,9 @@ Mycelia.plot_pangenome_curves(accumulation_data, fit_model=true)
 ```
 *Determines if pangenome is open or closed*
 
-## Performance & Benchmarking
+## Performance & Benchmarking *(Planned)*
 
-### Performance Scaling
+### Performance Scaling *(Planned)*
 ```julia
 # Benchmark performance across different scales
 benchmark_data = Mycelia.run_scaling_benchmark(data_sizes, n_replicates=5)
@@ -238,4 +252,4 @@ Each visualization includes:
 
 ## Interactive Examples
 
-For hands-on exploration, see the [Tutorial Notebooks](tutorials.md) which include executable visualization examples with real data.
+For hands-on exploration, see the [Tutorials](tutorials.md) which include executable visualization examples with real data.

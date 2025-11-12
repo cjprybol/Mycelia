@@ -135,7 +135,7 @@ makedocs(
     sitename = "Mycelia",
     modules = [Mycelia],
     authors = "Cameron Prybol <cameron.prybol@gmail.com> and contributors",
-    repo = "https://github.com/cjprybol/Mycelia/blob/{commit}{path}#L{line}",
+    repo = Documenter.Remotes.GitHub("cjprybol", "Mycelia"),
     format = Documenter.HTMLWriter.HTML(size_threshold = 1_000_000),
     build = joinpath(@__DIR__, "build"),
     source = joinpath(@__DIR__, "src"),
@@ -161,12 +161,12 @@ makedocs(
             "Complete API Reference" => "api-reference.md",
             "Workflows" => [
                 "Assembly Suite" => "api/workflows/assembly-suite.md",
-                # "Data Acquisition" => "api/workflows/data-acquisition.md",  # Has broken refs
-                # "Quality Control" => "api/workflows/quality-control.md",    # Has broken refs
-                # "Sequence Analysis" => "api/workflows/sequence-analysis.md" # Has broken refs
+                "Data Acquisition" => "api/workflows/data-acquisition.md",
+                "Quality Control" => "api/workflows/quality-control.md",
+                "Sequence Analysis" => "api/workflows/sequence-analysis.md"
             ],
             "Quick Reference" => [
-                # "Function Index" => "api/quick-reference/function-index.md",  # Temporarily disabled - needs function docstrings
+                "Function Index" => "api/quick-reference/function-index.md",
                 "Parameter Guide" => "api/quick-reference/parameter-guide.md"
             ],
             "Examples" => [

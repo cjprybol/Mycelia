@@ -1337,7 +1337,7 @@ function generate_test_fastq_data(n_reads::Int, read_length::Int, filename::Stri
 end
 
 """
-    generate_test_sequences(genome_size::Int, n_sequences::Int=1)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Generate test DNA sequences for k-mer analysis benchmarking.
 

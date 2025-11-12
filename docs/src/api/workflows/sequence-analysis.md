@@ -4,13 +4,16 @@ Functions for analyzing sequence composition, counting k-mers, and extracting ge
 
 ## Overview
 
-Sequence analysis forms the foundation of many bioinformatics algorithms. Mycelia provides comprehensive tools for:
+Sequence analysis forms the foundation of many bioinformatics algorithms. Mycelia provides:
 
-- **K-mer counting and analysis** using efficient algorithms
-- **Genome size estimation** from k-mer frequency spectra
-- **Error detection and correction** using k-mer patterns
-- **Sequence composition analysis** and bias detection
-- **Memory-efficient processing** of large datasets
+- **K-mer counting and analysis** using efficient algorithms (implemented)
+- **Genome size estimation** from k-mer frequency spectra (implemented)
+- **Graph-based k-mer analysis** for assembly (implemented)
+- **Error detection and correction** using k-mer patterns *(planned)*
+- **Sequence composition analysis** and bias detection *(planned)*
+- **Memory-efficient processing** of large datasets (partially implemented)
+
+> **Implementation Status**: Core k-mer counting, canonical k-mer analysis, and basic genome size estimation are implemented. Advanced analysis features, error correction, and comprehensive visualization are planned.
 
 ## Common Workflows
 
@@ -23,15 +26,17 @@ kmer_counts = Mycelia.count_kmers("reads.fastq", k=21)
 spectrum = Mycelia.kmer_frequency_spectrum(kmer_counts)
 ```
 
-### 2. Genome Size Estimation
+### 2. Genome Size Estimation (Implemented)
+
 ```julia
 # Estimate genome size from k-mer spectrum
 genome_size = Mycelia.estimate_genome_size_from_kmers(kmer_counts, coverage_peak=30)
 ```
 
-### 3. Contamination Detection
+### 3. Contamination Detection *(Planned)*
+
 ```julia
-# Detect contamination using k-mer profiles
+# Detect contamination using k-mer profiles (planned)
 contamination = Mycelia.detect_contamination_kmers("reads.fastq", expected_profile)
 ```
 
@@ -70,9 +75,9 @@ println("Canonical k-mers: $(length(canonical_counts))")
 
 ```@docs
 Mycelia.build_kmer_graph_next
-Mycelia.build_stranded_kmer_graph
-Mycelia.build_directed_kmer_graph
 ```
+
+**Note**: Additional k-mer graph construction functions (`build_stranded_kmer_graph`, `build_directed_kmer_graph`) have been deprecated and moved to `sequence-graphs.jl.deprecated`.
 
 #### Example: K-mer Graph Construction
 ```julia
@@ -147,15 +152,16 @@ println("Corrected genome size: $(corrected_estimate.size) bp")
 println("Confidence interval: $(corrected_estimate.confidence_interval)")
 ```
 
-## Error Detection and Correction
+## Error Detection and Correction *(Planned)*
 
-### K-mer Based Error Detection
+### K-mer Based Error Detection *(Planned)*
 
-<!-- identify_error_kmers, correct_sequencing_errors, validate_error_correction not yet implemented as documented -->
+> **NOTE**: K-mer based error detection and correction functions are planned but not yet implemented.
 
-#### Example: Error Detection
+#### Example: Error Detection *(Planned)*
+
 ```julia
-# Identify likely error k-mers
+# Identify likely error k-mers (planned)
 error_kmers = Mycelia.identify_error_kmers(
     kmer_counts,
     min_coverage=3,
@@ -181,15 +187,16 @@ validation = Mycelia.validate_error_correction(
 println("Error reduction: $(validation.error_reduction_percent)%")
 ```
 
-## Sequence Composition Analysis
+## Sequence Composition Analysis *(Planned)*
 
-### Nucleotide Composition
+### Nucleotide Composition *(Planned)*
 
-<!-- calculate_nucleotide_frequencies, analyze_dinucleotide_frequencies, calculate_codon_usage, detect_sequence_bias not yet implemented as documented -->
+> **NOTE**: Comprehensive composition analysis functions are planned but not yet implemented.
 
-#### Example: Comprehensive Composition Analysis
+#### Example: Comprehensive Composition Analysis *(Planned)*
+
 ```julia
-# Analyze nucleotide composition
+# Analyze nucleotide composition (planned)
 composition = Mycelia.calculate_nucleotide_frequencies("sequences.fasta")
 println("GC content: $(composition.gc_content)%")
 println("AT content: $(composition.at_content)%")
@@ -282,15 +289,16 @@ for read in Mycelia.stream_fastq("huge_dataset.fastq")
 end
 ```
 
-## Comparative K-mer Analysis
+## Comparative K-mer Analysis *(Planned)*
 
-### Multi-Sample Analysis
+### Multi-Sample Analysis *(Planned)*
 
-<!-- compare_kmer_profiles, build_kmer_distance_matrix, cluster_by_kmer_similarity, identify_sample_specific_kmers not yet implemented as documented -->
+> **NOTE**: Multi-sample k-mer comparison functions are planned but not yet implemented.
 
-#### Example: Multi-Sample K-mer Comparison
+#### Example: Multi-Sample K-mer Comparison *(Planned)*
+
 ```julia
-# Compare k-mer profiles across multiple samples
+# Compare k-mer profiles across multiple samples (planned)
 sample_files = ["sample1.fastq", "sample2.fastq", "sample3.fastq"]
 
 # Build k-mer profiles for each sample
@@ -408,15 +416,15 @@ println("Recommended k-mer size: $(optimal_k)")
 
 ## Related Functions
 
-### Data Structures
-- [`KmerCounts`](@ref) - K-mer count data structure
-- [`KmerSpectrum`](@ref) - Frequency spectrum representation
-- [`KmerGraph`](@ref) - K-mer overlap graph
+### Data Structures *(planned)*
+- `KmerCounts` - K-mer count data structure *(planned)*
+- `KmerSpectrum` - Frequency spectrum representation *(planned)*
+- `KmerGraph` - K-mer overlap graph *(planned)*
 
 ### File I/O
-- [`read_fastq`](@ref) - Read sequence files
-- [`save_kmer_counts`](@ref) - Save k-mer counts
-- [`load_kmer_counts`](@ref) - Load saved counts
+- [`Mycelia.open_fastx`](@ref) - Read sequence files
+- [`Mycelia.save_kmer_results`](@ref) - Save k-mer counts
+- [`Mycelia.load_kmer_results`](@ref) - Load saved counts
 
 ### Related Workflows
 
@@ -428,6 +436,6 @@ println("Recommended k-mer size: $(optimal_k)")
 - Comparative Genomics *(planned)* - Compare k-mer profiles
 
 ## See Also
-- [Tutorial 3: K-mer Analysis](../../tutorials/03_kmer_analysis.md)
+- [Tutorial 3: K-mer Analysis](../../generated/tutorials/03_kmer_analysis.md)
 - Assembly Workflows *(planned)*
 - [Performance Optimization](../examples/advanced-usage.md)
