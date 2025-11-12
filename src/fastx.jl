@@ -1937,29 +1937,82 @@ Writes FASTA records to a file, optionally gzipped.
 - `outfile::AbstractString`: Path to the output FASTA file.  Will append ".gz" if `gzip` is true and ".gz" isn't already the extension.
 - `records::Vector{FASTX.FASTA.Record}`: A vector of FASTA records.
 - `gzip::Bool`: Optionally force compression of the output with gzip. By default will use the file name to infer.
+- `show_progress::Union{Bool,Nothing}`: Whether to show a progress meter. If `nothing` (default), automatically shows progress for ≥1000 records.
+- `use_pigz::Union{Bool,Nothing}`: If `true`, uses external pigz for compression (faster for large files). If `nothing` (default), automatically uses pigz for files estimated to be ≥50 MB if pigz is available. Requires pigz to be installed and in PATH.
+- `pigz_threads::Int`: Number of threads for pigz to use. Defaults to all available cores.
 
 # Returns
 - `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
 """
-function write_fasta(;outfile::AbstractString=tempname()*".fna", records::Vector{FASTX.FASTA.Record}, gzip::Bool=false)
+function write_fasta(;
+    outfile::AbstractString=tempname()*".fna",
+    records::Vector{FASTX.FASTA.Record},
+    gzip::Bool=false,
+    show_progress::Union{Bool,Nothing}=nothing,
+    use_pigz::Union{Bool,Nothing}=nothing,
+    pigz_threads::Int=Sys.CPU_THREADS
+)
     # Determine if gzip compression should be used based on both the filename and the gzip argument
     gzip = occursin(r"\.gz$", outfile) || gzip
 
     # Append ".gz" to the filename if gzip is true and the extension isn't already present
-    outfile = gzip && !occursin(r"\.gz$", outfile) ? outfile * ".gz" : outfile  # More concise way to handle filename modification
+    outfile = gzip && !occursin(r"\.gz$", outfile) ? outfile * ".gz" : outfile
 
-    # Use open with do block for automatic resource management (closing the file)
-    open(outfile, "w") do io
-        if gzip
-            io = CodecZlib.GzipCompressorStream(io)  # Wrap the io stream for gzip compression
+    # Determine whether to show progress meter
+    display_progress = isnothing(show_progress) ? length(records) >= 1000 : show_progress
+
+    # Estimate file size based on record lengths (approximate)
+    # Average FASTA overhead: ~60 bytes per record (identifier line + newlines)
+    estimated_size_bytes = sum(length(FASTX.FASTA.sequence(record)) for record in records) + (length(records) * 60)
+
+    # Auto-detect pigz usage: use for files ≥50 MB if pigz is available
+    use_pigz_compression = if isnothing(use_pigz) && gzip
+        # Check if pigz is available and file is large enough
+        estimated_size_bytes >= 50_000_000
+    elseif !isnothing(use_pigz)
+        use_pigz
+    else
+        false
+    end
+
+    # If using pigz, write to temporary uncompressed file first
+    temp_file = if gzip && use_pigz_compression
+        # Remove .gz extension for temporary file
+        replace(outfile, r"\.gz$" => "")
+    else
+        outfile
+    end
+
+    # Write the FASTA file
+    open(temp_file, "w") do io
+        if gzip && !use_pigz_compression
+            io = CodecZlib.GzipCompressorStream(io)
         end
 
-        FASTX.FASTA.Writer(io) do fastx_io  # Use do block for automatic closing of the FASTA writer
-            for record in records
-                write(fastx_io, record)
+        FASTX.FASTA.Writer(io) do fastx_io
+            if display_progress
+                progress = ProgressMeter.Progress(length(records); desc="Writing FASTA records: ")
+                for record in records
+                    Base.write(fastx_io, record)
+                    ProgressMeter.next!(progress)
+                end
+            else
+                for record in records
+                    Base.write(fastx_io, record)
+                end
             end
-        end # fastx_io automatically closed here
-    end # io automatically closed here
+        end
+    end
+
+    # Compress with pigz if requested
+    if gzip && use_pigz_compression
+        Mycelia.add_bioconda_env("pigz")
+        if display_progress
+            println("Compressing with pigz using $pigz_threads threads...")
+        end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --processes $pigz_threads $temp_file`)
+        # pigz automatically adds .gz extension and removes original
+    end
 
     return outfile
 end

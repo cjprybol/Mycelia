@@ -3098,7 +3098,6 @@ Creates the following files in `outdir`:
 - Cleans up partially generated files if the `tRNAscan-SE` command fails.
 """
 function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan", model::String="G", force::Bool=false, verbose::Bool=false)
-    Mycelia.add_bioconda_env("trnascan-se")
 
     if !ispath(outdir)
         mkpath(outdir)
@@ -3171,6 +3170,7 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
         end
 
         try
+            Mycelia.add_bioconda_env("trnascan-se")
             if verbose
                 run(trnascan_cmd)
             else
