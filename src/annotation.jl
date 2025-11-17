@@ -1,3 +1,79 @@
+"""
+    extract_proteins_from_genbank(genbank_path::String; output_path::Union{String, Nothing}=nothing) -> String
+
+Extract protein sequences from a GenBank file and write them to a FASTA file.
+
+For each CDS (coding sequence) feature in the GenBank file, this function:
+1. Skips pseudogenes (features with the `pseudo` attribute)
+2. Uses the `translation` attribute if available
+3. Otherwise extracts and translates the nucleotide sequence from the genome
+4. Creates a unique identifier combining the source filename, sequence hash, and protein name
+
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+# Arguments
+- `genbank_path::String`: Path to the input GenBank file
+- `output_path::Union{String, Nothing}=nothing`: Path for output FASTA file. If `nothing`, appends ".extracted.faa" to the input filename.
+
+# Returns
+- `String`: Path to the output FASTA file
+
+# Details
+Each protein record identifier follows the format: `basename_hash_proteinname` where:
+- `basename`: The input GenBank filename without extension
+- `hash`: MD5 hash of the protein sequence (hexadecimal encoding)
+- `proteinname`: The product or label attribute with whitespace replaced by underscores
+
+For CDS features without a translation attribute, the function:
+- Extracts the nucleotide sequence from the genome using the locus position
+- Applies reverse complement if the feature is on the complement strand
+- Translates the nucleotide sequence to protein sequence
+
+# Example
+```julia
+fasta_path = extract_proteins_from_genbank("genome.gbk")
+fasta_path = extract_proteins_from_genbank("genome.gbk", output_path="proteins.faa")
+```
+"""
+function extract_proteins_from_genbank(genbank_path::String; output_path::Union{String, Nothing}=nothing)
+    output_fasta = isnothing(output_path) ? genbank_path * ".extracted.faa" : output_path
+    
+    genbank_records = GenomicAnnotations.readgbk(genbank_path)
+    protein_records = FASTX.FASTA.Record[]
+    
+    for chromosome in genbank_records
+        for cds_gene in filter(gene -> GenomicAnnotations.feature(gene) == :CDS, chromosome.genes)
+            ## Skip pseudogenes
+            if haskey(GenomicAnnotations.attributes(cds_gene), :pseudo) && GenomicAnnotations.attributes(cds_gene).pseudo
+                continue
+            elseif haskey(GenomicAnnotations.attributes(cds_gene), :translation) && !haskey(GenomicAnnotations.attributes(cds_gene), :pseudo)
+                ## Use existing translation if available
+                protein_name = replace(GenomicAnnotations.attributes(cds_gene).product, r"\s+" => "_")
+                protein_sequence = GenomicAnnotations.attributes(cds_gene).translation
+            else
+                ## Extract and translate nucleotide sequence
+                if GenomicAnnotations.iscomplement(cds_gene)
+                    extracted_gene_sequence = BioSequences.reverse_complement(chromosome.sequence[GenomicAnnotations.locus(cds_gene).position])
+                else
+                    extracted_gene_sequence = chromosome.sequence[GenomicAnnotations.locus(cds_gene).position]
+                end
+                protein_name = replace(GenomicAnnotations.attributes(cds_gene).label, r"\s+" => "_")
+                protein_sequence = BioSequences.translate(extracted_gene_sequence)
+            end
+            
+            ## Create unique identifier with sequence hash
+            protein_hash = Mycelia.create_sequence_hash(protein_sequence, hash_function=:md5, encoding=:hex)
+            this_protein_record_identifier = join([basename(genbank_path), protein_hash, protein_name], "_")
+            this_protein_record = FASTX.FASTA.Record(this_protein_record_identifier, protein_sequence)
+            push!(protein_records, this_protein_record)
+        end
+    end
+    
+    Mycelia.write_fasta(outfile=output_fasta, records=protein_records)
+    
+    return output_fasta
+end
+
 # """
 #     build_exact_match_table(uniref_df::DataFrames.DataFrame,
 #                             observed_df::DataFrames.DataFrame;
