@@ -39,6 +39,7 @@ include("4_assembly/string-graph-helpers.jl")
 # include("4_assembly/end_to_end_graph_tests.jl")
 
 # include_all_tests(joinpath(@__DIR__, "5_validation"))
+include("5_validation/mosdepth_coverage_qc.jl")
 # include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 
