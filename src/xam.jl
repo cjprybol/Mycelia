@@ -882,7 +882,7 @@ function index_bam(bam_path::String; threads::Int=Sys.CPU_THREADS, skip_sort_che
     # Check if index already exists
     if Base.isfile(bai_path)
         @info "BAM index already exists at: $bai_path"
-        return (current_bam, bai_path)
+        return (bam_path, bai_path)
     end
 
     current_bam = bam_path
@@ -1250,10 +1250,10 @@ function summarize_mosdepth_qc(dist_df::DataFrames.DataFrame;
     # Get unique chromosomes
     chroms = unique(dist_df.chromosome)
     
-    # Initialize result dataframe
+    # Initialize result dataframe with columns that can hold missing values
     result = DataFrames.DataFrame(chromosome=String[])
     for threshold in thresholds
-        result[!, Symbol("coverage_$(threshold)X")] = Float64[]
+        result[!, Symbol("coverage_$(threshold)X")] = Union{Float64, Missing}[]
     end
     
     # For each chromosome, find the proportion at each threshold
@@ -1266,21 +1266,11 @@ function summarize_mosdepth_qc(dist_df::DataFrames.DataFrame;
             # Find the row with this exact coverage value
             matching_rows = DataFrames.subset(chrom_data, :coverage => x -> x .== threshold)
             
-            if nrow(matching_rows) > 0
+            if DataFrames.nrow(matching_rows) > 0
                 row_data[Symbol("coverage_$(threshold)X")] = matching_rows[1, :proportion]
             else
-                # If exact threshold not found, interpolate from nearby values
-                lower = DataFrames.subset(chrom_data, :coverage => x -> x .< threshold)
-                higher = DataFrames.subset(chrom_data, :coverage => x -> x .> threshold)
-                
-                if nrow(lower) > 0 && nrow(higher) > 0
-                    # Use the closest lower value as conservative estimate
-                    row_data[Symbol("coverage_$(threshold)X")] = maximum(lower.proportion)
-                elseif nrow(lower) > 0
-                    row_data[Symbol("coverage_$(threshold)X")] = maximum(lower.proportion)
-                else
-                    row_data[Symbol("coverage_$(threshold)X")] = 0.0
-                end
+                # If exact threshold not found, use missing value
+                row_data[Symbol("coverage_$(threshold)X")] = missing
             end
         end
         
