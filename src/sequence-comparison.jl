@@ -1,3 +1,99 @@
+"""
+    skani_triangle(fasta_files::Vector{String}; 
+                   small_genomes::Bool=false,
+                   sparse::Bool=true,
+                   threads::Int=3,
+                   min_af::Union{Nothing,Float64}=nothing,
+                   output_file::Union{Nothing,String}=nothing,
+                   additional_args::Vector{String}=String[])
+
+Perform pairwise all-vs-all ANI/AF comparison using skani triangle.
+
+# Arguments
+- `fasta_files::Vector{String}`: Vector of paths to FASTA files to compare
+- `small_genomes::Bool=false`: Use `--small-genomes` flag for viral/plasmid genomes
+- `sparse::Bool=true`: Output sparse matrix format (like `skani dist` output). If false, outputs dense triangular matrix
+- `threads::Int=3`: Number of threads to use
+- `min_af::Union{Nothing,Float64}=nothing`: Minimum aligned fraction threshold
+- `output_file::Union{Nothing,String}=nothing`: Output file path. If nothing, returns stdout as string
+- `additional_args::Vector{String}=String[]`: Additional command-line arguments to pass to skani
+
+# Returns
+- If `output_file` is specified: writes to file and returns the file path
+- If `output_file` is nothing: returns the output as a String
+"""
+function skani_triangle(fasta_files::Vector{String}; 
+                       small_genomes::Bool=false,
+                       sparse::Bool=true,
+                       threads::Int=3,
+                       min_af::Union{Nothing,Float64}=nothing,
+                       output_file::Union{Nothing,String}=nothing,
+                       additional_args::Vector{String}=String[])
+
+    Mycelia.add_bioconda_env("mash")
+    # Validate input files exist
+    for file in fasta_files
+        if !isfile(file)
+            error("File not found: $file")
+        end
+    end
+
+    Mycelia.add_bioconda_env("skani")
+    
+    # Create temporary directory for file list
+    temp_dir = mktempdir()
+    list_file = joinpath(temp_dir, "skani_input_list.txt")
+    
+    try
+        # Write file list
+        open(list_file, "w") do io
+            for file in fasta_files
+                println(io, abspath(file))
+            end
+        end
+        
+        # Build command
+        cmd_args = ["triangle", "-l", list_file, "-t", string(threads)]
+        
+        # Add optional arguments
+        if small_genomes
+            push!(cmd_args, "--small-genomes")
+        end
+        
+        if sparse
+            push!(cmd_args, "-E")
+        end
+        
+        if !isnothing(min_af)
+            push!(cmd_args, "--min-af", string(min_af))
+        end
+        
+        if !isnothing(output_file)
+            push!(cmd_args, "-o", output_file)
+        end
+        
+        # Add any additional arguments
+        append!(cmd_args, additional_args)
+        
+        # Execute skani
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n skani skani $cmd_args`
+        
+        if isnothing(output_file)
+            # Capture and return stdout
+            result = read(cmd, String)
+            return result
+        else
+            # Write to file
+            run(cmd)
+            return output_file
+        end
+        
+    finally
+        # Clean up temporary directory
+        rm(temp_dir; recursive=true, force=true)
+    end
+end
+
 
 """
     shannon_entropy(seq; k::Int=1, base::Real=2, alphabet=nothing)
@@ -347,15 +443,17 @@ function run_mash_comparison(fasta1::String, fasta2::String; k::Int=21, s::Int=1
         error("One or both FASTA files not found.")
     end
 
+    Mycelia.add_bioconda_env("mash")
+
     # --- Step 2: Create sketch files for each genome ---
     sketch1 = fasta1 * ".msh"
     sketch2 = fasta2 * ".msh"
 
     println("Sketching $fasta1 (k=$k, s=$s)...")
-    sketch_cmd1 = pipeline(`$mash_path sketch -k $k -s $s -o $sketch1 $fasta1`, stdout=devnull, stderr=devnull)
+    sketch_cmd1 = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash sketch -k $k -s $s -o $sketch1 $fasta1`, stdout=devnull, stderr=devnull)
 
     println("Sketching $fasta2 (k=$k, s=$s)...")
-    sketch_cmd2 = pipeline(`$mash_path sketch -k $k -s $s -o $sketch2 $fasta2`, stdout=devnull, stderr=devnull)
+    sketch_cmd2 = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash sketch -k $k -s $s -o $sketch2 $fasta2`, stdout=devnull, stderr=devnull)
 
     try
         run(sketch_cmd1)
@@ -453,19 +551,20 @@ function pairwise_minimap_fasta_comparison(;reference_fasta, query_fasta)
         "Mapping quality",
         "Cigar",
         "CS tag"]
-    
+
+    Mycelia.add_bioconda_env("minimap2")
 #     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
-    results5 = read(`minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
+    results5 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
     if !isempty(results5)
         results = results5
     else
         @warn "no hit with asm5, trying asm10"
-        results10 = read(`minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
+        results10 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
         if !isempty(results10)
             results = results10
         else
             @warn "no hits with asm5 or asm10, trying asm20"
-            results20 = read(`minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
+            results20 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
             if !isempty(results20)
                 results = results20
             end
