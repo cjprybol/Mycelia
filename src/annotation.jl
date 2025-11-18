@@ -618,12 +618,13 @@ end
         min_seq_length,
         filter_short,
         ignore_all_errors,
+        no_internet,
     )
 
 Run the PGAP (Prokaryotic Genome Annotation Pipeline) tool on a FASTA file.
 
 This function:
-- Ensures PGAP is present/updated.
+- Ensures PGAP is present/updated (unless `no_internet=true` skips update checks).
 - Materializes a temporary FASTA for execution by reading the input with `Mycelia.open_fastx`,
   filtering out sequences shorter than `min_seq_length` (default 200 nt), and writing the
   result with `Mycelia.write_fasta`.
@@ -647,6 +648,7 @@ Arguments:
 - `min_seq_length::Int=200`: Minimum sequence length (nt) retained in the filtered FASTA.
 - `filter_short::Bool=true`: If true, sequences shorter than `min_seq_length` are removed prior to PGAP.
 - `ignore_all_errors::Bool=false`: If true, adds `--ignore-all-errors` to the PGAP run to ignore non-essential QC errors.
+- `no_internet::Bool=false`: If true, adds `--no-internet --no-self-update` to skip internet-based updates and checks.
 
 Returns:
 - `String`: Path to `outdir` when `as_string=false`, or the bash command string when `as_string=true`.
@@ -663,6 +665,7 @@ function run_pgap(;
     min_seq_length::Int = 200,
     filter_short::Bool = true,
     ignore_all_errors::Bool = false,
+    no_internet::Bool = false,
 )
     # Expected outputs from a successful run (accept either prefix.fna or prefixprefix.fna)
     function _expected_complete(outdir_::AbstractString, prefix_::AbstractString)
@@ -702,7 +705,8 @@ function run_pgap(;
         run(`wget -O $(pgap_py_script) https://github.com/ncbi/pgap/raw/prod/scripts/pgap.py`)
         @assert isfile(pgap_py_script)
     end
-    if isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
+    # Skip update check when no_internet is enabled
+    if !no_internet && isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
         @time run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
     end
 
@@ -728,6 +732,9 @@ function run_pgap(;
         if ignore_all_errors
             base_cmd *= " --ignore-all-errors"
         end
+        if no_internet
+            base_cmd *= " --no-internet --no-self-update"
+        end
         return base_cmd
     end
 
@@ -752,6 +759,9 @@ function run_pgap(;
         cmd = `python3 $(pgap_py_script) --output $(outdir) --genome $(filtered_fasta) --report-usage-true --taxcheck --auto-correct-tax --organism $(organism) --cpu $(threads) --prefix $(prefix)`
         if ignore_all_errors
             cmd = `$cmd --ignore-all-errors`
+        end
+        if no_internet
+            cmd = `$cmd --no-internet --no-self-update`
         end
 
         try
