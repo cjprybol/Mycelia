@@ -5,6 +5,12 @@
 #   Benchmarks: julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:  julia --project=. tutorials/run_all_tutorials.jl
 
+# Aqua.jl quality assurance tests
+include("aqua.jl")
+
+# JET.jl static analysis - uncomment to enable (can be slow)
+include("jet.jl")
+
 # Helper function to include all test files in a directory
 function include_all_tests(dir)
     test_count = 0
