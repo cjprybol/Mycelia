@@ -140,7 +140,7 @@ Mycelia.load_kmer_results
 ### Sequence Generation
 
 ```@docs
-Mycelia.generate_test_sequences
+Mycelia.random_fasta_record
 ```
 
 ### Read Simulation

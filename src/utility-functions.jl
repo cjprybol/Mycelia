@@ -98,6 +98,76 @@ function collapse_duplicates(df, grouping_col)
     return collapsed_df
 end
 
+"""
+    with_retry(f; max_attempts=3, initial_delay=5.0, max_delay=120.0, backoff_factor=2.0, on_retry=nothing)
+
+Execute a function with automatic retry logic and exponential backoff.
+
+Useful for wrapping unreliable operations like network requests or API calls
+that may fail due to transient issues.
+
+# Arguments
+- `f`: Zero-argument function to execute
+
+# Keywords
+- `max_attempts::Int=3`: Maximum number of attempts before giving up
+- `initial_delay::Float64=5.0`: Initial delay in seconds between retries
+- `max_delay::Float64=120.0`: Maximum delay between retries (caps exponential growth)
+- `backoff_factor::Float64=2.0`: Multiplier for delay after each failed attempt
+- `on_retry::Union{Function,Nothing}=nothing`: Optional callback `(attempt, exception, delay) -> nothing` 
+  called before each retry sleep
+
+# Returns
+- Result of `f()` on success
+
+# Throws
+- Rethrows the last exception if all attempts fail
+
+# Example
+```julia
+# Retry a download up to 3 times with exponential backoff
+result = with_retry(max_attempts=5, initial_delay=10.0) do
+    run(`curl -O https://example.com/large_file.zip`)
+end
+
+# With custom retry callback for logging
+with_retry(on_retry=(att, ex, delay) -> @warn "Attempt \$att failed, retrying in \$(delay)s") do
+    unreliable_api_call()
+end
+```
+
+See also: [`ncbi_genome_download_accession`](@ref) which uses this for robust genome downloads.
+"""
+function with_retry(f; 
+                    max_attempts::Int=3, 
+                    initial_delay::Float64=5.0, 
+                    max_delay::Float64=120.0, 
+                    backoff_factor::Float64=2.0,
+                    on_retry::Union{Function,Nothing}=nothing)
+    local last_exception
+    delay = initial_delay
+    
+    for attempt in 1:max_attempts
+        try
+            return f()
+        catch e
+            last_exception = e
+            if attempt < max_attempts
+                if on_retry !== nothing
+                    on_retry(attempt, e, delay)
+                else
+                    @warn "Attempt $attempt/$max_attempts failed, retrying in $(delay)s..." exception=(e, catch_backtrace())
+                end
+                sleep(delay)
+                delay = min(delay * backoff_factor, max_delay)
+            end
+        end
+    end
+    
+    @error "All $max_attempts attempts failed" exception=(last_exception, catch_backtrace())
+    throw(last_exception)
+end
+
 function recursively_list_directories(dir::AbstractString)
     directories_list = String[]
     for (root, directories, files) in Base.walkdir(dir)

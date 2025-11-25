@@ -155,6 +155,7 @@ remaining_files = [
     "simulation.jl",
     "slurm-sbatch.jl",
     "taxonomy-and-trees.jl",
+    "testing-utilities.jl",
     "variant-analysis.jl",
     "viterbi-polishing-and-error-correction.jl",
     "xam.jl"

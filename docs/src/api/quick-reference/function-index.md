@@ -272,11 +272,12 @@ Simulate PacBio HiFi sequencing reads.
 - **Usage**: `Mycelia.simulate_pacbio_reads(fasta="genome.fasta", quantity="30x")`
 - **See**: [Data Acquisition](../workflows/data-acquisition.md#sequencing-read-simulation)
 
-### [`Mycelia.generate_test_sequences`](@ref) *(enhanced configurability planned)*
-Generate random genome sequences for testing. Currently generates random DNA sequences; additional configurability options (GC content control, gene features, realistic structure) are planned.
+### [`Mycelia.random_fasta_record`](@ref)
+Generate random FASTA records with DNA, RNA, or amino acid sequences.
 - **Module**: Data Simulation
-- **Usage**: `Mycelia.generate_test_sequences(genome_size=100000, n_sequences=1)`
+- **Usage**: `Mycelia.random_fasta_record(moltype=:DNA, seed=42, L=1000)`
 - **See**: [Data Acquisition](../workflows/data-acquisition.md#genome-simulation)
+- **Note**: For file output, combine with `write_fasta()`: `write_fasta(outfile="out.fa", records=[random_fasta_record()])`
 
 ## V
 

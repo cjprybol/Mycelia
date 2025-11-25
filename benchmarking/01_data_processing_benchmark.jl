@@ -80,19 +80,35 @@ println("Files: $(config["n_files"]), Reads per file: $(config["reads_per_file"]
 
 # ## Data Generation
 #
-# Generate realistic test datasets
+# Generate realistic test datasets using NCBI reference genomes and read simulation
 
 println("\n--- Generating Test Data ---")
 
-# Generate test datasets using existing Mycelia simulation functions
+# Generate test datasets using proper read simulation from reference genomes
 test_data_dir = "test_data"
 mkpath(test_data_dir)
 
+# Create a temporary reference genome for read simulation
+# Using random_fasta_record for reproducible test data generation
+ref_fasta_path = joinpath(test_data_dir, "reference_genome.fasta")
+ref_record = Mycelia.random_fasta_record(moltype=:DNA, seed=42, L=10000)
+Mycelia.write_fasta(outfile=ref_fasta_path, records=[ref_record])
+
 test_files = []
 for i in 1:min(5, config["n_files"])  # Limit to 5 files for testing
+    # Use simulate_illumina_reads for realistic FASTQ generation
+    result = Mycelia.simulate_illumina_reads(
+        fasta=ref_fasta_path, 
+        read_count=config["reads_per_file"],
+        len=config["read_length"],
+        quiet=true
+    )
+    # Rename to our expected pattern
     filename = joinpath(test_data_dir, "test_reads_$(i).fastq")
-    Mycelia.generate_test_fastq_data(config["reads_per_file"], config["read_length"], filename)
-    push!(test_files, filename)
+    if isfile(result.fastq1)
+        cp(result.fastq1, filename, force=true)
+        push!(test_files, filename)
+    end
 end
 
 println("Generated $(length(test_files)) test FASTQ files")
@@ -343,8 +359,16 @@ if length(test_files) >= 2
     small_file = test_files[1]
     large_file_path = joinpath(test_data_dir, "large_test.fastq")
     
-    # Generate a larger test file
-    generate_test_fastq_data(config["reads_per_file"] * 3, config["read_length"], large_file_path)
+    # Generate a larger test file using simulate_illumina_reads
+    large_result = Mycelia.simulate_illumina_reads(
+        fasta=ref_fasta_path,
+        read_count=config["reads_per_file"] * 3,
+        len=config["read_length"],
+        quiet=true
+    )
+    if isfile(large_result.fastq1)
+        cp(large_result.fastq1, large_file_path, force=true)
+    end
     
     mixed_files = [small_file, large_file_path]
     
