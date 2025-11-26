@@ -2286,6 +2286,8 @@ Downloads and extracts a genome from NCBI using the datasets command line tool.
 - `outdir`: Directory where files will be downloaded (defaults to current directory)
 - `outpath`: Full path for the temporary zip file (defaults to `outdir/accession.zip`)
 - `include_string`: Data types to download (defaults to all "gff3,rna,cds,protein,genome,seq-report").
+- `max_attempts`: Maximum number of download retry attempts (default 3)
+- `initial_retry_delay`: Initial delay in seconds between retries (default 10.0)
   
 # Returns
 - Path to the extracted genome data directory
@@ -2295,12 +2297,20 @@ Downloads and extracts a genome from NCBI using the datasets command line tool.
 - Downloaded zip file is automatically removed after extraction
 - If output folder already exists, download is skipped
 - Data is extracted to `outdir/accession/ncbi_dataset/data/accession`
+- Uses exponential backoff retry logic to handle transient NCBI API failures
+
+# TODO: Apply similar retry logic to other NCBI download functions:
+# - `download_genome_by_accession` in this file
+# - `load_ncbi_metadata` in this file  
+# - taxonomy functions in `taxonomy-and-trees.jl` that use ncbi-datasets-cli
 """
 function ncbi_genome_download_accession(;
         accession,
         outdir = pwd(),
         outpath = joinpath(outdir, accession * ".zip"),
-        include_string = "gff3,rna,cds,protein,genome,seq-report"
+        include_string = "gff3,rna,cds,protein,genome,seq-report",
+        max_attempts::Int = 3,
+        initial_retry_delay::Float64 = 10.0
     )
     outfolder = joinpath(outdir, accession)
     if !isdir(outfolder)
@@ -2309,7 +2319,14 @@ function ncbi_genome_download_accession(;
             @info "$(outpath) already exists, skipping download..."
         else
             mkpath(outdir)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath) --no-progressbar`)
+            # Use retry logic to handle transient NCBI API failures
+            with_retry(
+                max_attempts=max_attempts, 
+                initial_delay=initial_retry_delay,
+                on_retry=(attempt, ex, delay) -> @warn "NCBI download attempt $attempt/$max_attempts for $accession failed, retrying in $(delay)s..." exception=ex
+            ) do
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath) --no-progressbar`)
+            end
         end
         run(`unzip -q -d $(outfolder) $(outpath)`)
     end

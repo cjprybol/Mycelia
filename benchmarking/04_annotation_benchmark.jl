@@ -79,14 +79,56 @@ println("Annotation methods: $(config["annotation_methods"])")
 
 # ## Test Data Generation
 #
-# Generate test genomes for annotation benchmarking
+# Download real reference genomes with pre-existing annotations from NCBI
 
-println("\n--- Generating Test Data ---")
+println("\n--- Downloading Reference Genomes from NCBI ---")
 
 # Include benchmark utilities
 include("benchmark_utils.jl")
 
-# Use existing Mycelia simulation functions for genome generation
+# Define reference genomes from multiple taxa/kingdoms/domains
+# These are small, well-annotated genomes suitable for benchmarking
+REFERENCE_GENOMES = Dict(
+    # Bacteria - E. coli K-12 MG1655 (well-studied model organism)
+    "bacterial" => Dict(
+        "accession" => "GCF_000005845.2",
+        "name" => "Escherichia coli K-12 MG1655",
+        "expected_size" => 4_641_652  # ~4.6 Mb
+    ),
+    # Virus - PhiX174 (classic model phage)
+    "viral" => Dict(
+        "accession" => "GCF_000819615.1",
+        "name" => "Enterobacteria phage phiX174",
+        "expected_size" => 5386  # ~5.4 kb
+    ),
+    # Archaea - Methanocaldococcus jannaschii (first archaeal genome sequenced)
+    "archaeal" => Dict(
+        "accession" => "GCF_000091665.1",
+        "name" => "Methanocaldococcus jannaschii DSM 2661",
+        "expected_size" => 1_664_970  # ~1.7 Mb
+    ),
+    # Fungal - Saccharomyces cerevisiae S288C (yeast model)
+    "fungal" => Dict(
+        "accession" => "GCF_000146045.2",
+        "name" => "Saccharomyces cerevisiae S288C",
+        "expected_size" => 12_157_105  # ~12 Mb (only run in medium/large configs)
+    ),
+    # Plant organelle - Arabidopsis thaliana chloroplast (small plant genome proxy)
+    "plant_organelle" => Dict(
+        "accession" => "NC_000932.1",  
+        "name" => "Arabidopsis thaliana chloroplast",
+        "expected_size" => 154_478  # ~154 kb
+    )
+)
+
+# Select which genomes to use based on configuration
+genomes_to_download = if config == large_config
+    ["bacterial", "viral", "archaeal", "fungal", "plant_organelle"]
+elseif config == medium_config
+    ["bacterial", "viral", "archaeal", "plant_organelle"]
+else  # small_config
+    ["bacterial", "viral"]
+end
 
 # Generate test datasets
 test_data_dir = "annotation_test_data"
@@ -94,37 +136,61 @@ mkpath(test_data_dir)
 
 test_genomes = []
 
-for (idx, genome_size) in enumerate(config["genome_sizes"][1:min(3, length(config["genome_sizes"]))])
-    # Generate different organism types with different gene densities
-    if genome_size <= 1000000
-        gene_density = 0.03  # Higher density for smaller bacterial genomes
-        organism_type = "bacterial"
-    elseif genome_size <= 10000000
-        gene_density = 0.02  # Medium density for larger bacterial/fungal
-        organism_type = "fungal"
-    else
-        gene_density = 0.01  # Lower density for larger genomes
-        organism_type = "plant"
+for genome_type in genomes_to_download
+    genome_info = REFERENCE_GENOMES[genome_type]
+    accession = genome_info["accession"]
+    
+    println("\nDownloading $(genome_info["name"]) ($(accession))...")
+    
+    try
+        # Use ncbi_genome_download_accession with retry logic
+        dataset = Mycelia.with_retry(
+            max_attempts=3,
+            initial_delay=10.0,
+            on_retry=(attempt, ex, delay) -> @warn "Download attempt $attempt/3 for $accession failed, retrying in $(delay)s..." exception=ex
+        ) do
+            Mycelia.ncbi_genome_download_accession(
+                accession=accession,
+                outdir=test_data_dir,
+                include_string="gff3,cds,protein,genome,seq-report",
+                max_attempts=1  # Disable internal retry since we have outer retry
+            )
+        end
+        
+        if dataset.genome !== nothing && isfile(dataset.genome)
+            # Count genes from existing GFF3 annotation as ground truth
+            expected_genes = 0
+            if dataset.gff3 !== nothing && isfile(dataset.gff3)
+                # Count CDS features in GFF3 as proxy for gene count
+                gff_content = read(dataset.gff3, String)
+                expected_genes = count(r"\tCDS\t", gff_content)
+            end
+            
+            push!(test_genomes, Dict(
+                "name" => "$(genome_type)_$(accession)",
+                "organism_type" => genome_type,
+                "organism_name" => genome_info["name"],
+                "accession" => accession,
+                "genome_size" => filesize(dataset.genome),
+                "fasta_path" => dataset.genome,
+                "gff3_path" => dataset.gff3,
+                "cds_path" => dataset.cds,
+                "protein_path" => dataset.protein,
+                "expected_genes" => expected_genes,
+                "has_reference_annotation" => dataset.gff3 !== nothing
+            ))
+            println("  ✓ Downloaded: $(dataset.genome)")
+            println("    Genome size: $(round(filesize(dataset.genome) / 1e6, digits=2)) MB")
+            println("    Reference genes (CDS count): $(expected_genes)")
+        else
+            @warn "Failed to download genome for $accession"
+        end
+    catch e
+        @warn "Failed to download $accession after all retries" exception=e
     end
-    
-    genome, gene_positions = Mycelia.generate_test_genome_with_genes(genome_size, gene_density)
-    
-    # Save genome as FASTA
-    genome_name = "$(organism_type)_genome$(idx)_size$(genome_size)"
-    fasta_path = joinpath(test_data_dir, "$(genome_name).fasta")
-    Mycelia.save_genome_as_fasta(genome, fasta_path)
-    
-    push!(test_genomes, Dict(
-        "name" => genome_name,
-        "organism_type" => organism_type,
-        "genome_size" => genome_size,
-        "fasta_path" => fasta_path,
-        "expected_genes" => length(gene_positions),
-        "gene_positions" => gene_positions
-    ))
 end
 
-println("Generated $(length(test_genomes)) test genomes")
+println("\nSuccessfully downloaded $(length(test_genomes)) reference genomes")
 
 # ## Gene Prediction Benchmarks
 #

@@ -30,76 +30,6 @@ const TEST_LENGTHS = [10, 100, 1000]
 const ERROR_RATES = [0.0, 0.001, 0.01, 0.1]  # 0%, 0.1%, 1%, 10%
 const COVERAGE_DEPTHS = [10, 100, 1000]
 
-"""
-Helper function to create FASTQ records from sequences with error simulation.
-"""
-function create_test_reads(reference_sequence::Union{String, BioSequences.LongDNA{4}}, coverage::Int, error_rate::Float64)
-    records = FASTX.FASTQ.Record[]
-
-    for i in 1:coverage
-        # Use the observe function to introduce errors
-        bio_seq = reference_sequence isa String ? BioSequences.LongDNA{4}(reference_sequence) : reference_sequence
-        observed_seq, quality_scores = Mycelia.observe(bio_seq, error_rate=error_rate)
-        
-        # Convert quality scores to string format
-        quality_string = String([Char(q + 33) for q in quality_scores])
-        
-        record = FASTX.FASTQ.Record("read_$i", string(observed_seq), quality_string)
-        push!(records, record)
-    end
-    
-    return records
-end
-
-"""
-Helper function to create FASTQ records from RNA sequences.
-"""
-function create_test_rna_reads(reference_sequence::String, coverage::Int, error_rate::Float64)
-    records = FASTX.FASTQ.Record[]
-    
-    for i in 1:coverage
-        # Use the observe function to introduce errors
-        bio_seq = BioSequences.LongRNA{4}(reference_sequence)
-        observed_seq, quality_scores = Mycelia.observe(bio_seq, error_rate=error_rate)
-        
-        # Convert quality scores to string format
-        quality_string = String([Char(q + 33) for q in quality_scores])
-        
-        record = FASTX.FASTQ.Record("read_$i", string(observed_seq), quality_string)
-        push!(records, record)
-    end
-    
-    return records
-end
-
-"""
-Helper function to create FASTQ records from amino acid sequences.
-"""
-function create_test_aa_reads(reference_sequence::Union{String, BioSequences.LongAA}, coverage::Int, error_rate::Float64)
-    records = FASTX.FASTQ.Record[]
-
-    for i in 1:coverage
-        # Use the observe function to introduce errors
-        bio_seq = reference_sequence isa String ? BioSequences.LongAA(reference_sequence) : reference_sequence
-        observed_seq, quality_scores = Mycelia.observe(bio_seq, error_rate=error_rate)
-
-        ## Validate that no termination characters (*) are present in amino acid sequences
-        ## This ensures compatibility with FASTQ format
-        observed_seq_str = string(observed_seq)
-        if occursin('*', observed_seq_str)
-            error("Amino acid sequence contains termination character '*' which is invalid for FASTQ format: $observed_seq_str")
-        end
-
-        # Convert quality scores to string format
-        quality_string = String([Char(q + 33) for q in quality_scores])
-
-        record = FASTX.FASTQ.Record("read_$i", observed_seq_str, quality_string)
-        push!(records, record)
-    end
-    
-    return records
-end
-
 Test.@testset "End-to-End Assembly Tests" begin
     
     Test.@testset "Base Case: Reference Sequence Graph Round-trip" begin
@@ -395,7 +325,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
                         # Create simulated reads
-                        reads = create_test_rna_reads(reference_seq, coverage, error_rate)
+                        reads = Mycelia.create_test_rna_reads(reference_seq, coverage, error_rate)
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.RNAKmer{5}
@@ -473,7 +403,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
                         # Create simulated reads
-                        reads = create_test_aa_reads(reference_seq, coverage, error_rate)
+                        reads = Mycelia.create_test_aa_reads(reference_seq, coverage, error_rate)
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.AAKmer{3}  # Shorter k-mers for AA
@@ -611,7 +541,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
                         # Create simulated reads
-                        reads = create_test_rna_reads(reference_seq, coverage, error_rate)
+                        reads = Mycelia.create_test_rna_reads(reference_seq, coverage, error_rate)
 
                         # Build k-mer graph in DoubleStrand mode (canonical)
                         kmer_type = Kmers.RNAKmer{5}

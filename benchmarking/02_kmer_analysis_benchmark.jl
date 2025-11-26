@@ -87,10 +87,11 @@ println("Number of genomes: $(config["n_genomes"])")
 
 println("\n--- Generating Test Data ---")
 
-# Generate test data using existing Mycelia simulation functions
+# Generate test sequences directly using BioSequences.randdnaseq
+# (replaces the removed generate_test_sequences wrapper)
 test_sequences = Dict()
 for genome_size in config["genome_sizes"]
-    test_sequences[genome_size] = Mycelia.generate_test_sequences(genome_size, config["n_genomes"])
+    test_sequences[genome_size] = [BioSequences.randdnaseq(genome_size) for _ in 1:config["n_genomes"]]
 end
 
 println("Generated test sequences for genome sizes: $(config["genome_sizes"])")

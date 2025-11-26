@@ -719,6 +719,23 @@ We welcome contributions in these areas:
 - Use type-stable implementations
 - Prioritize biological correctness
 
+## Known Issues and Future Improvements
+
+### Network/API Reliability (Added Nov 2025)
+
+The following functions rely on external APIs and may experience transient failures:
+
+**Completed (with retry logic):**
+- `ncbi_genome_download_accession()` in `src/reference-databases.jl` - now uses `with_retry()` with exponential backoff
+
+**TODO - Apply similar retry logic:**
+- `download_genome_by_accession()` in `src/reference-databases.jl` (line ~1143)
+- `load_ncbi_metadata()` in `src/reference-databases.jl` (lines ~1950-2000)
+- Taxonomy functions using `ncbi-datasets-cli` in `src/taxonomy-and-trees.jl` (line ~1298)
+- Any other functions using `Downloads.download()` or external CLI tools
+
+The centralized `with_retry()` utility in `src/utility-functions.jl` should be used to wrap these network operations for consistent error handling and logging.
+
 ## Contact and Support
 
 - GitHub Issues: Bug reports and feature requests

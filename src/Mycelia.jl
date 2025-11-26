@@ -133,6 +133,7 @@ include("viterbi-next.jl")
 # Load remaining files in alphabetical order (no critical dependencies)
 remaining_files = [
     "alignments-and-mapping.jl",
+    "amino-acid-analysis.jl",
     "annotation.jl",
     "bioconda.jl",
     "classification.jl",
@@ -154,6 +155,7 @@ remaining_files = [
     "simulation.jl",
     "slurm-sbatch.jl",
     "taxonomy-and-trees.jl",
+    "testing-utilities.jl",
     "variant-analysis.jl",
     "viterbi-polishing-and-error-correction.jl",
     "xam.jl"

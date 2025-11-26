@@ -150,8 +150,11 @@ for (idx, genome_size) in enumerate(config["genome_sizes"][1:min(2, length(confi
         fastq1_path = joinpath(test_data_dir, "$(dataset_name)_R1.fastq")
         fastq2_path = joinpath(test_data_dir, "$(dataset_name)_R2.fastq")
         
-        Mycelia.save_reads_as_fastq(reads_1, fastq1_path)
-        Mycelia.save_reads_as_fastq(reads_2, fastq2_path)
+        # Convert BioSequences to FASTQ records with quality scores
+        fastq_records_1 = [FASTX.FASTQ.Record("read_$i", reads_1[i], String([Char(30 + 33) for _ in 1:length(reads_1[i])])) for i in 1:length(reads_1)]
+        fastq_records_2 = [FASTX.FASTQ.Record("read_$i", reads_2[i], String([Char(30 + 33) for _ in 1:length(reads_2[i])])) for i in 1:length(reads_2)]
+        Mycelia.write_fastq(records=fastq_records_1, filename=fastq1_path)
+        Mycelia.write_fastq(records=fastq_records_2, filename=fastq2_path)
         
         push!(test_datasets, Dict(
             "name" => dataset_name,
