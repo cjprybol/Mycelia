@@ -40,7 +40,7 @@ function build_kmer_graph_singlestrand(
     dataset_id::String="dataset_01"
 )
     if isempty(records)
-        error("Cannot build graph from empty record set")
+        throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # Convert FASTQ to FASTA if needed (k-mer graphs don't use quality)
@@ -184,6 +184,46 @@ function _build_kmer_graph_core(
     return graph
 end
 
+"""
+Build doublestrand k-mer de Bruijn graph from FASTA/FASTQ records.
+
+Creates a directed graph containing both forward and reverse complement k-mers
+as separate vertices. Each observed k-mer and its RC are added with properly
+oriented evidence. Edges are directed with RC edges having reversed direction.
+
+# Arguments
+- `records::Vector{<:FASTX.Record}`: Input records
+- `k::Int`: K-mer size
+- `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: DoubleStrand k-mer graph (DiGraph with 2x vertices/edges)
+
+# Example
+```julia
+records = [FASTX.FASTA.Record("seq1", dna"ATGATG")]
+graph = build_kmer_graph_doublestrand(records, 3)
+
+# Graph contains: ATG, TGA, TG, CAT (rc ATG), TCA (rc TGA), CA (rc AT)
+# With directed edges in both orientations
+```
+"""
+function build_kmer_graph_doublestrand(
+    records::Vector{<:FASTX.Record},
+    k::Int;
+    dataset_id::String="dataset_01"
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot build graph from empty record set"))
+    end
+
+    # First build singlestrand graph
+    singlestrand_graph = build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+
+    # Convert to doublestrand representation (replicate vertices/edges)
+    return convert_to_doublestrand(singlestrand_graph)
+end
+
 # ============================================================================
 # Qualmer Graph Construction (Quality-aware)
 # ============================================================================
@@ -210,7 +250,7 @@ function build_qualmer_graph_singlestrand(
     dataset_id::String="dataset_01"
 )
     if isempty(records)
-        error("Cannot build graph from empty record set")
+        throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # Detect sequence type from first record
@@ -349,6 +389,37 @@ function _build_qualmer_graph_core(
     end
 
     return graph
+end
+
+"""
+Build doublestrand qualmer de Bruijn graph from FASTQ records.
+
+Creates a directed graph containing both forward and reverse complement qualmers
+as separate vertices, preserving quality information. Each observed qualmer and its
+RC are added with properly oriented evidence and quality scores.
+
+# Arguments
+- `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records
+- `k::Int`: K-mer size
+- `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: DoubleStrand qualmer graph (DiGraph with 2x vertices/edges)
+"""
+function build_qualmer_graph_doublestrand(
+    records::Vector{FASTX.FASTQ.Record},
+    k::Int;
+    dataset_id::String="dataset_01"
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot build graph from empty record set"))
+    end
+
+    # First build singlestrand qualmer graph
+    singlestrand_graph = build_qualmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+
+    # Convert to doublestrand representation (replicate vertices/edges)
+    return convert_to_doublestrand(singlestrand_graph)
 end
 
 # ============================================================================
@@ -534,7 +605,7 @@ function get_dataset_id_from_file(filepath::String)
 end
 
 # ============================================================================
-# Doublestrand Graph Construction (Canonical K-mers)
+# Canonical Graph Construction (Undirected, Merged RC Pairs)
 # ============================================================================
 
 """
@@ -557,31 +628,31 @@ This constructs a graph where:
 ```julia
 # DNA reads
 records = [FASTX.FASTA.Record("read1", "ATGCAT")]
-graph = build_kmer_graph_doublestrand(records, 3)
+graph = build_kmer_graph_canonical(records, 3)
 
 # Both ATG and its RC (CAT) map to the canonical form
 ```
 """
-function build_kmer_graph_doublestrand(
+function build_kmer_graph_canonical(
     records::Vector{<:FASTX.Record},
     k::Int;
     dataset_id::String="dataset_01"
 )
     if isempty(records)
-        error("Cannot build graph from empty record set")
+        throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # First build singlestrand graph
     singlestrand_graph = build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
 
-    # Convert to canonical (doublestrand) representation
-    return convert_to_doublestrand(singlestrand_graph)
+    # Convert to canonical representation
+    return convert_to_canonical(singlestrand_graph)
 end
 
 """
 Build canonical (doublestrand) qualmer graph from FASTQ records.
 
-Similar to `build_kmer_graph_doublestrand` but preserves quality information.
+Similar to `build_kmer_graph_canonical` but preserves quality information.
 
 # Arguments
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records
@@ -591,37 +662,174 @@ Similar to `build_kmer_graph_doublestrand` but preserves quality information.
 # Returns
 - `MetaGraphsNext.MetaGraph`: Canonical qualmer graph with merged evidence
 """
-function build_qualmer_graph_doublestrand(
+function build_qualmer_graph_canonical(
     records::Vector{FASTX.FASTQ.Record},
     k::Int;
     dataset_id::String="dataset_01"
 )
     if isempty(records)
-        error("Cannot build graph from empty record set")
+        throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # First build singlestrand qualmer graph
     singlestrand_graph = build_qualmer_graph_singlestrand(records, k; dataset_id=dataset_id)
 
-    # Convert to canonical (doublestrand) representation
-    return convert_to_doublestrand(singlestrand_graph)
+    # Convert to canonical representation
+    return convert_to_canonical(singlestrand_graph)
 end
 
 """
     convert_to_doublestrand(singlestrand_graph)
 
-Convert a singlestrand graph to doublestrand (canonical) representation.
+Convert a singlestrand graph to doublestrand representation.
 
-Merges forward and reverse complement k-mers into their canonical forms.
-Evidence from both strands is combined.
+Replicates all vertices and edges in both forward and reverse complement orientations.
+Creates a DIRECTED graph with 2x vertices and 2x directed edges.
 
 # Arguments
 - `singlestrand_graph`: Graph with strand-specific k-mers
 
 # Returns
-- New graph with canonical k-mers and merged evidence
+- New graph with both forward and RC k-mers as separate vertices (directed edges)
+
+# Example
+```julia
+# If singlestrand has: ATG→TGC
+# Doublestrand will have:
+#   Vertices: {ATG, TGC, CAT (rc of ATG), GCA (rc of TGC)}
+#   Edges: ATG→TGC, GCA→CAT (both directed)
+```
 """
 function convert_to_doublestrand(singlestrand_graph)
+    # Get graph type information
+    if isempty(MetaGraphsNext.labels(singlestrand_graph))
+        return singlestrand_graph  # Empty graph stays empty
+    end
+
+    first_label = first(MetaGraphsNext.labels(singlestrand_graph))
+    first_vertex = singlestrand_graph[first_label]
+    KmerType = typeof(first_label)
+    VertexDataType = typeof(first_vertex)
+
+    # Amino acids don't have reverse complement
+    if KmerType <: Kmers.AAKmer
+        error("Cannot create doublestrand graph for amino acid sequences (no reverse complement)")
+    end
+
+    # Determine edge data type
+    EdgeDataType = if !isempty(MetaGraphsNext.edge_labels(singlestrand_graph))
+        src, dst = first(MetaGraphsNext.edge_labels(singlestrand_graph))
+        typeof(singlestrand_graph[src, dst])
+    else
+        KmerEdgeData
+    end
+
+    # Create new doublestrand graph (still DiGraph!)
+    doublestrand_graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type=KmerType,
+        vertex_data_type=VertexDataType,
+        edge_data_type=EdgeDataType
+    )
+
+    # Add all forward vertices
+    for kmer in MetaGraphsNext.labels(singlestrand_graph)
+        doublestrand_graph[kmer] = singlestrand_graph[kmer]
+    end
+
+    # Add all reverse complement vertices
+    for kmer in MetaGraphsNext.labels(singlestrand_graph)
+        rc_kmer = BioSequences.reverse_complement(kmer)
+
+        # Skip if RC is same as forward (palindrome) - already added
+        if rc_kmer == kmer
+            continue
+        end
+
+        # Create RC vertex with flipped evidence
+        vertex_data = singlestrand_graph[kmer]
+
+        # Create new vertex for RC kmer
+        rc_vertex_data = if VertexDataType <: KmerVertexData
+            KmerVertexData(rc_kmer)
+        elseif VertexDataType <: QualmerVertexData
+            QualmerVertexData(rc_kmer)
+        else
+            error("Unsupported vertex data type: $(VertexDataType)")
+        end
+
+        # Copy and flip all evidence from forward to RC
+        for (dataset_id, observations) in vertex_data.evidence
+            for (obs_id, evidence_set) in observations
+                for evidence in evidence_set
+                    flipped_evidence = flip_evidence_strand(evidence)
+                    add_evidence!(rc_vertex_data, dataset_id, obs_id, flipped_evidence)
+                end
+            end
+        end
+
+        doublestrand_graph[rc_kmer] = rc_vertex_data
+    end
+
+    # Add all forward edges
+    for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
+        doublestrand_graph[src_kmer, dst_kmer] = singlestrand_graph[src_kmer, dst_kmer]
+    end
+
+    # Add all reverse complement edges (with reversed direction!)
+    for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
+        # RC edge: reverse_complement(dst) → reverse_complement(src)
+        # Note the REVERSED direction!
+        rc_src = BioSequences.reverse_complement(dst_kmer)
+        rc_dst = BioSequences.reverse_complement(src_kmer)
+
+        # Create RC edge with flipped evidence
+        edge_data = singlestrand_graph[src_kmer, dst_kmer]
+
+        # Create new edge data for RC
+        rc_edge_data = if EdgeDataType <: KmerEdgeData
+            KmerEdgeData()
+        elseif EdgeDataType <: QualmerEdgeData
+            QualmerEdgeData()
+        else
+            error("Unsupported edge data type: $(EdgeDataType)")
+        end
+
+        # Copy and flip all evidence from forward edge to RC edge
+        for (dataset_id, observations) in edge_data.evidence
+            for (obs_id, evidence_set) in observations
+                for evidence in evidence_set
+                    flipped_evidence = flip_evidence_strand(evidence)
+                    add_evidence!(rc_edge_data, dataset_id, obs_id, flipped_evidence)
+                end
+            end
+        end
+
+        doublestrand_graph[rc_src, rc_dst] = rc_edge_data
+    end
+
+    return doublestrand_graph
+end
+
+"""
+    convert_to_canonical(singlestrand_graph)
+
+Convert a singlestrand graph to canonical representation.
+
+Merges forward and reverse complement k-mers into their canonical forms.
+Evidence from both strands is combined. Creates an UNDIRECTED graph where
+edges represent bidirectional relationships.
+
+Note: Canonical graphs require on-the-fly validation of traversal directions
+using find_valid_canonical_traversal() since edges are undirected.
+
+# Arguments
+- `singlestrand_graph`: Graph with strand-specific k-mers
+
+# Returns
+- New graph with canonical k-mers and merged evidence (undirected edges)
+"""
+function convert_to_canonical(singlestrand_graph)
     # Get graph type information from first vertex
     if isempty(MetaGraphsNext.labels(singlestrand_graph))
         return singlestrand_graph  # Empty graph stays empty
@@ -1285,7 +1493,7 @@ function build_fasta_graph_olc(
     min_overlap::Int=3
 )
     if isempty(records)
-        error("Cannot build graph from empty record set")
+        throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     if min_overlap < 1
@@ -1488,7 +1696,7 @@ function build_fastq_graph_olc(
     min_overlap::Int=3
 )
     if isempty(records)
-        error("Cannot build graph from empty record set")
+        throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     if min_overlap < 1

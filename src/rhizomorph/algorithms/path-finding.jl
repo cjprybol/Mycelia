@@ -155,82 +155,87 @@ Hierholzer's algorithm for finding Eulerian paths:
 5. Continue until all edges are used
 """
 function _find_eulerian_path_hierholzer(graph::Graphs.AbstractGraph, start_vertex::Int)
-    # Create adjacency list with edge usage tracking
-    adj_list = Dict{Int, Vector{Tuple{Int, Bool}}}()  # vertex -> [(neighbor, used)]
+    # Create mutable adjacency lists (using Sets for easier removal)
+    adj_list = Dict{Int, Set{Int}}()
 
     for v in Graphs.vertices(graph)
-        adj_list[v] = [(dst, false) for dst in Graphs.outneighbors(graph, v)]
+        adj_list[v] = Set(Graphs.outneighbors(graph, v))
     end
 
-    circuit = Int[start_vertex]
-    current_vertex = start_vertex
+    # Stack-based Hierholzer's algorithm
+    path = Int[]
+    stack = [start_vertex]
 
-    while !isempty(circuit)
-        if any(!used for (_, used) in adj_list[current_vertex])
-            # Find unused edge
-            for (i, (neighbor, used)) in enumerate(adj_list[current_vertex])
-                if !used
-                    # Mark edge as used
-                    adj_list[current_vertex][i] = (neighbor, true)
-                    push!(circuit, neighbor)
-                    current_vertex = neighbor
-                    break
-                end
-            end
+    while !isempty(stack)
+        v = stack[end]
+
+        if !isempty(adj_list[v])
+            # Take an edge (any edge) from v
+            next_v = pop!(adj_list[v])
+            push!(stack, next_v)
         else
-            # No unused edges - backtrack
-            if length(circuit) == 1
-                break
-            end
-            current_vertex = circuit[end-1]
-
-            # Check if we can extend from any vertex in current path
-            extended = false
-            for (i, v) in enumerate(circuit[end:-1:1])
-                if any(!used for (_, used) in adj_list[v])
-                    # Found vertex with unused edges - create subcircuit
-                    subcircuit_start = length(circuit) - i + 1
-                    temp_circuit = Int[v]
-                    temp_current = v
-
-                    while any(!used for (_, used) in adj_list[temp_current])
-                        for (j, (neighbor, used)) in enumerate(adj_list[temp_current])
-                            if !used
-                                adj_list[temp_current][j] = (neighbor, true)
-                                push!(temp_circuit, neighbor)
-                                temp_current = neighbor
-                                break
-                            end
-                        end
-                    end
-
-                    # Insert subcircuit into main circuit
-                    if length(temp_circuit) > 1
-                        splice!(circuit, subcircuit_start:subcircuit_start, temp_circuit[2:end])
-                        current_vertex = temp_circuit[end]
-                        extended = true
-                        break
-                    end
-                end
-            end
-
-            if !extended
-                break
-            end
+            # No more edges from v - add to path
+            push!(path, pop!(stack))
         end
     end
 
+    # Path is built in reverse order
+    reverse!(path)
+
     # Verify all edges were used
-    total_edges_used = 0
-    for v in keys(adj_list)
-        total_edges_used += count(used for (_, used) in adj_list[v])
-    end
+    total_edges_used = Graphs.ne(graph) - sum(length(neighbors) for neighbors in values(adj_list))
 
     if total_edges_used != Graphs.ne(graph)
         return Int[]  # Failed to find Eulerian path
     end
 
-    return circuit
+    return path
+end
+
+"""
+    _find_eulerian_path_dfs(graph, start_vertex) -> Vector{Int}
+
+Alternative Eulerian path finder using depth-first search with backtracking.
+
+This is a simpler alternative to Hierholzer's algorithm that may handle
+certain graph structures more robustly. Uses recursive DFS with edge removal.
+
+# Algorithm
+1. Start from the given vertex
+2. Recursively follow edges, removing them as we go
+3. Add vertices to path in post-order (after exploring all edges)
+4. Reverse the final path
+"""
+function _find_eulerian_path_dfs(graph::Graphs.AbstractGraph, start_vertex::Int)
+    # Create mutable adjacency lists
+    adj_list = Dict{Int, Vector{Int}}()
+
+    for v in Graphs.vertices(graph)
+        adj_list[v] = collect(Graphs.outneighbors(graph, v))
+    end
+
+    # DFS with edge removal
+    path = Int[]
+
+    function dfs(v::Int)
+        while !isempty(adj_list[v])
+            next_v = pop!(adj_list[v])
+            dfs(next_v)
+        end
+        push!(path, v)
+    end
+
+    dfs(start_vertex)
+    reverse!(path)
+
+    # Verify all edges used
+    total_edges_remaining = sum(length(neighbors) for neighbors in values(adj_list))
+
+    if total_edges_remaining > 0
+        return Int[]  # Failed - not all edges used
+    end
+
+    return path
 end
 
 # ============================================================================

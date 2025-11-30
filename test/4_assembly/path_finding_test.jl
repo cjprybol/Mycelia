@@ -21,15 +21,15 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         records = [FASTX.FASTA.Record("seq1", sequence)]
 
         # Build k=3 DNA k-mer graph
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{3},
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
             records,
+            3;
             dataset_id="test_dataset",
-            graph_mode=:singlestrand
+            mode=:singlestrand
         )
 
         # Find Eulerian paths
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
         # Should find at least one path
         Test.@test !isempty(paths)
@@ -64,28 +64,23 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             FASTX.FASTA.Record("seq2", seq2)
         ]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{4},
-            records,
-            dataset_id="multi_seq",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id="multi_seq", mode=:singlestrand)
 
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
-        Test.@test !isempty(paths) "Should find paths in multi-sequence graph"
+        Test.@test !isempty(paths)
 
         # Check that paths are valid
         for path in paths
             if !isempty(path)
                 # Verify type
-                Test.@test all(k -> k isa Kmers.DNAKmer{4}, path) "All k-mers should be DNAKmer{4}"
+                Test.@test all(k -> k isa Kmers.DNAKmer{4}, path)
 
                 # Verify connectivity
                 for i in 1:(length(path)-1)
                     suffix = string(path[i])[2:end]
                     prefix = string(path[i+1])[1:end-1]
-                    Test.@test suffix == prefix "Path should be connected"
+                    Test.@test suffix == prefix
                 end
             end
         end
@@ -97,22 +92,17 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.dna"ATCATCATC"
         records = [FASTX.FASTA.Record("circular", sequence)]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{3},
-            records,
-            dataset_id="circular_test",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="circular_test", mode=:singlestrand)
 
         # Check graph has cycle
         vertex_count = length(MetaGraphsNext.labels(graph))
         edge_count = length(MetaGraphsNext.edge_labels(graph))
 
-        Test.@test vertex_count > 0 "Graph should have vertices"
-        Test.@test edge_count >= vertex_count "Circular graph should have edges >= vertices"
+        Test.@test vertex_count > 0
+        Test.@test edge_count >= vertex_count
 
         # Find paths
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
         # May or may not find Eulerian path depending on graph structure
         # (Eulerian path exists only if at most 2 vertices have odd degree)
@@ -126,15 +116,19 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             for i in 1:(length(path)-1)
                 suffix = string(path[i])[2:end]
                 prefix = string(path[i+1])[1:end-1]
-                Test.@test suffix == prefix "Circular path should be connected"
+                Test.@test suffix == prefix
             end
         end
     end
 
     Test.@testset "Branching Structure (Bubble)" begin
-        # Create bubble: common prefix, two alternatives, common suffix
-        # seq1: ATCGAT
-        # seq2: ATCCAT (SNP: G->C)
+        # Note: A bubble from two separate sequences does NOT have an Eulerian path!
+        # Two sequences with SNP create disconnected endpoints, violating Eulerian conditions.
+        # seq1: ATCGAT creates ATC→TCG→CGA→GAT
+        # seq2: ATCCAT creates ATC→TCC→CCA→CAT
+        # Result: ATC has out-degree 2, GAT and CAT both have in-degree 1 (two sinks!)
+        # This correctly has NO Eulerian path.
+
         seq1 = BioSequences.dna"ATCGAT"
         seq2 = BioSequences.dna"ATCCAT"
         records = [
@@ -142,22 +136,17 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             FASTX.FASTA.Record("path2", seq2)
         ]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{3},
-            records,
-            dataset_id="bubble_test",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="bubble_test", mode=:singlestrand)
 
         # Should have branching structure
         vertex_count = length(MetaGraphsNext.labels(graph))
-        Test.@test vertex_count > 2 "Bubble should have multiple vertices"
+        Test.@test vertex_count > 2
 
         # Find paths
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
-        # Should find multiple paths through bubble
-        Test.@test length(paths) >= 1 "Should find at least one path through bubble"
+        # Correctly returns no Eulerian path (bubble from two sequences violates Eulerian conditions)
+        Test.@test length(paths) == 0
 
         # Verify paths are valid
         for path in paths
@@ -165,7 +154,7 @@ Test.@testset "Path Finding - Eulerian Paths" begin
                 for i in 1:(length(path)-1)
                     suffix = string(path[i])[2:end]
                     prefix = string(path[i+1])[1:end-1]
-                    Test.@test suffix == prefix "Bubble paths should be connected"
+                    Test.@test suffix == prefix
                 end
             end
         end
@@ -180,15 +169,10 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             FASTX.FASTA.Record("comp2", seq2)
         ]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{3},
-            records,
-            dataset_id="disconnected",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="disconnected", mode=:singlestrand)
 
         # Find paths
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
         # Should find separate paths for each component
         # Or may find no paths if neither component has Eulerian path
@@ -200,7 +184,7 @@ Test.@testset "Path Finding - Eulerian Paths" begin
                 for i in 1:(length(path)-1)
                     suffix = string(path[i])[2:end]
                     prefix = string(path[i+1])[1:end-1]
-                    Test.@test suffix == prefix "Disconnected component paths should be valid"
+                    Test.@test suffix == prefix
                 end
             end
         end
@@ -211,26 +195,21 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.rna"AUCGAUCG"
         records = [FASTX.FASTA.Record("rna_seq", sequence)]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.RNAKmer{3},
-            records,
-            dataset_id="rna_test",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="rna_test", mode=:singlestrand)
 
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
-        Test.@test !isempty(paths) "Should find RNA k-mer paths"
+        Test.@test !isempty(paths)
 
         path = first(paths)
         if !isempty(path)
-            Test.@test all(k -> k isa Kmers.RNAKmer{3}, path) "RNA paths should contain RNAKmer"
+            Test.@test all(k -> k isa Kmers.RNAKmer{3}, path)
 
             # Verify connectivity
             for i in 1:(length(path)-1)
                 suffix = string(path[i])[2:end]
                 prefix = string(path[i+1])[1:end-1]
-                Test.@test suffix == prefix "RNA path should be connected"
+                Test.@test suffix == prefix
             end
         end
     end
@@ -240,26 +219,21 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.aa"MKKLAVAA"
         records = [FASTX.FASTA.Record("protein", sequence)]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.AAKmer{3},
-            records,
-            dataset_id="aa_test",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="aa_test", mode=:singlestrand)
 
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
-        Test.@test !isempty(paths) "Should find AA k-mer paths"
+        Test.@test !isempty(paths)
 
         path = first(paths)
         if !isempty(path)
-            Test.@test all(k -> k isa Kmers.AAKmer{3}, path) "AA paths should contain AAKmer"
+            Test.@test all(k -> k isa Kmers.AAKmer{3}, path)
 
             # Verify connectivity
             for i in 1:(length(path)-1)
                 suffix = string(path[i])[2:end]
                 prefix = string(path[i+1])[1:end-1]
-                Test.@test suffix == prefix "AA path should be connected"
+                Test.@test suffix == prefix
             end
         end
     end
@@ -269,27 +243,22 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.dna"ATCGATCGATCGATCGATCGATCGATCGATCGATCG"
         records = [FASTX.FASTA.Record("long_seq", sequence)]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{31},
-            records,
-            dataset_id="large_k",
-            graph_mode=:singlestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 31; dataset_id="large_k", mode=:singlestrand)
 
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
         # Should find path even with large k
-        Test.@test !isempty(paths) "Should find paths with k=31"
+        Test.@test !isempty(paths)
 
         path = first(paths)
         if !isempty(path)
-            Test.@test all(k -> k isa Kmers.DNAKmer{31}, path) "Paths should contain DNAKmer{31}"
+            Test.@test all(k -> k isa Kmers.DNAKmer{31}, path)
 
             # Verify connectivity with k=31
             for i in 1:(length(path)-1)
                 suffix = string(path[i])[2:end]
                 prefix = string(path[i+1])[1:end-1]
-                Test.@test suffix == prefix "Large k-mer path should be connected"
+                Test.@test suffix == prefix
             end
         end
     end
@@ -299,15 +268,10 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.dna"ATCGAT"
         records = [FASTX.FASTA.Record("ds_test", sequence)]
 
-        graph = Mycelia.build_kmer_graph(
-            Kmers.DNAKmer{3},
-            records,
-            dataset_id="doublestrand_test",
-            graph_mode=:doublestrand
-        )
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="doublestrand_test", mode=:doublestrand)
 
         # DoubleStrand graph includes both forward and reverse complement
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
         # Should find paths (behavior may differ from singlestrand)
         @info "DoubleStrand mode found $(length(paths)) path(s)"
@@ -315,13 +279,13 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         # Verify any paths found are valid
         for path in paths
             if !isempty(path)
-                Test.@test all(k -> k isa Kmers.DNAKmer{3}, path) "DoubleStrand paths should contain valid k-mers"
+                Test.@test all(k -> k isa Kmers.DNAKmer{3}, path)
 
                 # Verify connectivity
                 for i in 1:(length(path)-1)
                     suffix = string(path[i])[2:end]
                     prefix = string(path[i+1])[1:end-1]
-                    Test.@test suffix == prefix "DoubleStrand path should be connected"
+                    Test.@test suffix == prefix
                 end
             end
         end
@@ -330,11 +294,11 @@ Test.@testset "Path Finding - Eulerian Paths" begin
     Test.@testset "Empty Graph Error Handling" begin
         # Test with empty input
         Test.@test_throws ArgumentError begin
-            Mycelia.build_kmer_graph(
-                Kmers.DNAKmer{3},
+            Mycelia.Rhizomorph.build_kmer_graph(
                 FASTX.FASTA.Record[],
+                3;
                 dataset_id="empty",
-                graph_mode=:singlestrand
+                mode=:singlestrand
             )
         end
     end

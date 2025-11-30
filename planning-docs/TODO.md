@@ -1,8 +1,17 @@
 # Mycelia Rhizomorph Implementation TODO
 
-**Created**: 2025-01-25
-**Status**: In Progress
-**Branch**: rhizomorph-graph-suite
+## 🚨 CRITICAL FINDING
+
+**Test-First Approach Validates Concerns**: Initial testing reveals that claiming work "complete" without tests was premature. First comprehensive test run discovered:
+
+1. **API Mismatch**: Rhizomorph functions exist but weren't accessible (no exports, wrong API assumptions)
+2. **Real Bugs Found**: 4/42 path finding tests fail, revealing:
+   - Bubble/branching graph algorithm issues
+   - DoubleStrand mode k-mer connectivity broken
+   - Incorrect error handling
+3. **Documentation Gap**: Planning docs claimed Phase 1-3 "complete" but ~50% was actually untested
+
+**Conclusion**: The rigorous test-first approach was absolutely necessary. Without it, we would have moved forward with broken implementations.
 
 ---
 
@@ -80,6 +89,67 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 ---
 
+## 🔍 OLD PLANNING DOCUMENT VERIFICATION (2025-01-25)
+
+**See**: `planning-docs/VERIFICATION_FINDINGS.md` for full details
+
+**Key Discoveries from Systematic Verification**:
+
+### ✅ Good News - More Code Than Expected
+- Most claimed implementations DO exist with substantial code (900-1,200+ lines each)
+- intelligent-assembly.jl (964 lines) EXISTS
+- iterative-assembly.jl (1,218 lines) EXISTS and is ACCESSIBLE
+- 4 reinforcement learning implementations (1,253+ lines each) EXIST
+- cross-validation.jl EXISTS
+- Simulation, quality control, and algorithm files EXIST
+
+### 🚨 Critical Issues Discovered
+1. **Many implementations are COMMENTED OUT** in src/Mycelia.jl:
+   - Line 120: intelligent-assembly.jl (DISABLED despite existing)
+   - Line 129: cross-validation.jl (DISABLED)
+   - Lines 133-137: ALL 4 reinforcement learning files (DISABLED)
+
+2. **Zero Tests for Most Claimed Features**:
+   - No tests for intelligent-assembly.jl (claimed "complete")
+   - No tests for iterative-assembly.jl (accessible but untested!)
+   - No tests for cross-validation.jl (claimed "89/89 tests passing" - FALSE!)
+
+3. **ALL Tool Integration Claims Are False**:
+   - ❌ QUAST, BUSCO, MUMmer - NOT FOUND
+   - ❌ GATK, Freebayes, Clair3, BCFtools - NOT FOUND
+   - ❌ PGGB, Cactus, vg toolkit - NOT FOUND
+   - ❌ metaFlye, hifiasm-meta, SKESA, IDBA-UD - NOT FOUND
+   - ❌ HyLight, STRONG, Strainy - NOT FOUND
+   - **Total**: 17+ claimed tool wrappers, 0 actually exist
+
+### 📊 Verification Summary
+- **Implementations**: Higher quality than expected (many are substantial, not placeholders)
+- **Accessibility**: Lower than claimed (~40% commented out and inaccessible)
+- **Testing**: Even accessible code often has zero tests
+- **False Claims**: Tool integrations and "89/89 tests" demonstrably false
+
+### 🎯 Immediate Actions Added to Roadmap
+1. **Test Accessible Implementations** (before continuing with Rhizomorph):
+   - [ ] Create tests for iterative-assembly.jl (1,218 lines, accessible but untested)
+   - [ ] Verify viterbi-next.jl has tests
+   - [ ] Test simulation functions
+   - [ ] Test quality control functions
+
+2. **Test and Uncomment High-Value Code**:
+   - [ ] Create tests for intelligent-assembly.jl (964 lines)
+   - [ ] If tests pass, uncomment in src/Mycelia.jl:120
+   - [ ] Create tests for cross-validation.jl
+   - [ ] If tests pass, uncomment in src/Mycelia.jl:129
+
+3. **Documentation Cleanup**:
+   - [ ] Remove false tool integration claims from old planning docs
+   - [ ] Correct "89/89 tests passing" claim
+   - [ ] Add warnings about commented-out code
+
+**Conclusion**: Old planning docs overstated completion. Code quality is good, but accessibility and testing are the gaps.
+
+---
+
 ## Approach: Rigorous Test-First Validation
 
 **Philosophy**: Test everything, fix failures, then update docs based on tested reality.
@@ -97,10 +167,16 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 **Priority**: HIGHEST - Core assembly functionality cannot be trusted without tests
 
-### 1.1 Path Finding Tests
-**File**: `test/4_assembly/path_finding_test.jl` (CREATE)
+**STATUS UPDATE (2025-01-25)**: Path finding tests created and run. **38/42 tests passing!** Discovered 3 real bugs:
+1. ❌ Bubble/branching graphs: No Eulerian paths found (algorithm issue)
+2. ❌ DoubleStrand mode: Path connectivity broken (k-mer overlap incorrect)
+3. ❌ Error handling: Wrong exception type thrown
 
-- [ ] Test Eulerian path detection on simple linear graph
+### 1.1 Path Finding Tests ✅ CREATED, ⚠️ ISSUES FOUND
+**File**: `test/4_assembly/path_finding_test.jl` ✅ Created!
+
+**Tests Passing (38):**
+- [x] Test Eulerian path detection on simple linear graph ✅
 - [ ] Test multiple valid paths (branching structures)
 - [ ] Test disconnected components (multiple separate subgraphs)
 - [ ] Test circular paths (cycles)
