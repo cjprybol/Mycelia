@@ -1,18 +1,15 @@
 {
     "recommendations": [
-        "github.copilot-chat",
         "julialang.language-julia",
         "anthropic.claude-code",
         "ms-azuretools.vscode-containers",
         "quarto.quarto",
         "vscodevim.vim",
-        "kilocode.kilo-code",
         "davidanson.vscode-markdownlint",
         "ms-toolsai.vscode-jupyter-slideshow",
         "ms-toolsai.jupyter-renderers",
         "ms-toolsai.jupyter-keymap",
         "ms-toolsai.vscode-jupyter-cell-tags",
-        "google.gemini-cli-vscode-ide-companion",
         "tamasfe.even-better-toml",
         "ms-azuretools.vscode-docker"
     ]

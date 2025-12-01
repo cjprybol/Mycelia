@@ -217,7 +217,7 @@ Run Flye assembler for long read assembly.
 # Returns
 Named tuple containing:
 - `outdir::String`: Path to output directory
-- `assembly::String`: Path to final assembly file
+- `contigs::String`: Path to final assembly file
 
 # Details
 - Automatically creates and uses a conda environment with flye
@@ -228,7 +228,7 @@ Named tuple containing:
 function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi")
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
-    
+
     if !isfile(joinpath(outdir, "assembly.fasta"))
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
         if !isnothing(genome_size)
@@ -236,7 +236,7 @@ function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="
         end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
-    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
+    return (;outdir, contigs=joinpath(outdir, "assembly.fasta"))
 end
 
 """
@@ -255,7 +255,7 @@ Run metaFlye assembler for long-read metagenomic assembly.
 # Returns
 Named tuple containing:
 - `outdir::String`: Path to output directory
-- `assembly::String`: Path to final assembly file
+- `contigs::String`: Path to final assembly file
 
 # Details
 - Uses metaFlye's repeat graph approach optimized for metagenomic data
@@ -268,7 +268,7 @@ Named tuple containing:
 function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, read_type="pacbio-hifi", meta=true, min_overlap=nothing)
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
-    
+
     if !isfile(joinpath(outdir, "assembly.fasta"))
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(Sys.CPU_THREADS)]
 
@@ -283,10 +283,10 @@ function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, rea
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
         end
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
-    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
+    return (;outdir, contigs=joinpath(outdir, "assembly.fasta"))
 end
 
 """
@@ -304,7 +304,7 @@ Run Canu assembler for long read assembly.
 # Returns
 Named tuple containing:
 - `outdir::String`: Path to output directory
-- `assembly::String`: Path to final assembly file
+- `contigs::String`: Path to final assembly file
 
 # Details
 - Automatically creates and uses a conda environment with canu
@@ -316,7 +316,7 @@ Named tuple containing:
 function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10)
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
-    
+
     prefix = splitext(basename(fastq))[1]
     if !isfile(joinpath(outdir, "$(prefix).contigs.fasta"))
         if read_type == "pacbio"
@@ -327,7 +327,7 @@ function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio",
             error("Unsupported read type: $(read_type). Use 'pacbio' or 'nanopore'.")
         end
     end
-    return (;outdir, assembly=joinpath(outdir, "$(prefix).contigs.fasta"))
+    return (;outdir, contigs=joinpath(outdir, "$(prefix).contigs.fasta"))
 end
 
 """

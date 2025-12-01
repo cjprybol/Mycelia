@@ -393,6 +393,46 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 ---
 
+## Phase 3.5: Third-Party Assembler Benchmarking 🟡 IN PROGRESS
+
+**Priority**: MEDIUM - Establish baseline before adding Rhizomorph to comparisons
+
+### 3.5.1 PhiX174 Benchmarking Framework
+**File**: `benchmarking/phix174_assembler_comparison.jl` ✅ COMPLETE
+
+**Status**: Core framework implemented, bugs identified and partially fixed
+
+**Completed**:
+- [x] PhiX174 reference download using `Mycelia.download_genome_by_accession()`
+- [x] Read simulation (ART Illumina 100x, Badread PacBio 50x)
+- [x] Platform detection and filtering (macOS vs Linux)
+- [x] Comparison framework for 8 assemblers:
+  - Short-read: SPAdes, SKESA, MEGAHIT (Linux-only), metaSPAdes
+  - Long-read: Flye, Canu, metaFlye, metaMDBG
+- [x] Metrics calculation (N50, contig count, total length, runtime)
+- [x] FastANI integration for genome comparison
+- [x] Plots generation (N50, runtime, identity)
+- [x] CSV export
+
+**Issues Fixed**:
+- [x] Wrapper return values (Flye, Canu, metaFlye) - changed `assembly=` to `contigs=`
+- [x] metaMDBG function signature - added `hifi_reads` parameter handling
+- [x] Platform checks - MEGAHIT filtered for Linux-only
+- [x] Refactored to use existing Mycelia functions instead of duplicating code
+
+**Known Issues** (deferred to next session):
+- [ ] Short-read assemblers failing on macOS (SPAdes, SKESA, metaSPAdes)
+- [ ] metaMDBG errors on PhiX174 (likely genome size too small)
+- [ ] Some assemblers may have platform-specific issues
+
+**Next Steps**:
+- [ ] Debug remaining assembler failures
+- [ ] Validate all assemblers complete successfully
+- [ ] Expand to larger genomes (bacterial, archaeal)
+- [ ] Add Rhizomorph to comparison suite
+
+---
+
 ## Phase 4: Cleanup & Documentation (Week 4) 🟡 PLANNED
 
 **Priority**: MEDIUM - Only after all tests pass
