@@ -114,13 +114,11 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - No tests for iterative-assembly.jl (accessible but untested!)
    - No tests for cross-validation.jl (claimed "89/89 tests passing" - FALSE!)
 
-3. **ALL Tool Integration Claims Are False**:
-   - ❌ QUAST, BUSCO, MUMmer - NOT FOUND
-   - ❌ GATK, Freebayes, Clair3, BCFtools - NOT FOUND
-   - ❌ PGGB, Cactus, vg toolkit - NOT FOUND
-   - ❌ metaFlye, hifiasm-meta, SKESA, IDBA-UD - NOT FOUND
-   - ❌ HyLight, STRONG, Strainy - NOT FOUND
-   - **Total**: 17+ claimed tool wrappers, 0 actually exist
+3. **Tool Wrapper Reality (verified in TOOL_WRAPPER_STATUS.md, 2025-01-25)**:
+   - ✅ 13 wrappers implemented **and tested**: megahit, metaspades, skesa, spades, velvet, flye, metaflye, canu, hifiasm, metamdbg, minimap2, diamond, mmseqs
+   - ✅ 9 wrappers implemented but **untested**: QUAST, BUSCO, HyLight, STRONG, Strainy, apollo, homopolish, unicycler, metavelvet
+   - ⚠️ hifiasm-meta wrapper exists but is commented out
+   - ❌ Still missing: classification (sourmash, metaphlan, metabuli, mosdepth), binning/post-binning (VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit)
 
 ### 📊 Verification Summary
 - **Implementations**: Higher quality than expected (many are substantial, not placeholders)
@@ -146,6 +144,13 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - [ ] Correct "89/89 tests passing" claim
    - [ ] Add warnings about commented-out code
 
+### Active Verification Notes (moved from archive for visibility)
+- `src/development/intelligent-assembly.jl` (~964 lines) exists but is commented out in `src/Mycelia.jl`; no tests exist.
+- `src/iterative-assembly.jl` is included in `src/Mycelia.jl` but has no dedicated tests.
+- `src/development/cross-validation.jl` is commented out; the "89/89 tests passing" claim is false because no tests exist.
+- Four reinforcement learning implementations under `src/development/` are all commented out; associated tests live in `test/in_development/` and are not part of the main suite.
+- Tool wrapper status: 22 wrappers exist (13 tested, 9 untested, 1 commented out) but classification/binning/variant-calling/pangenome tools are still missing.
+
 **Conclusion**: Old planning docs overstated completion. Code quality is good, but accessibility and testing are the gaps.
 
 ---
@@ -163,30 +168,42 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 ---
 
+## Verification Policy (migrated from OLD_DOCS_VERIFICATION)
+
+- Treat any historical “✅ COMPLETE” claims as unverified until code is located, tests are written, and those tests pass.
+- Check accessibility as well as existence: several files exist but are commented out in `src/Mycelia.jl` (intelligent-assembly, cross-validation, RL).
+- Prefer reality-checked status in this TODO over older planning docs; retire older claims once they are captured here.
+
+---
+
 ## Phase 1: Critical Algorithm Testing (Week 1) 🔴 IN PROGRESS
 
 **Priority**: HIGHEST - Core assembly functionality cannot be trusted without tests
 
-**STATUS UPDATE (2025-01-25)**: Path finding tests created and run. **38/42 tests passing!** Discovered 3 real bugs:
-1. ❌ Bubble/branching graphs: No Eulerian paths found (algorithm issue)
-2. ❌ DoubleStrand mode: Path connectivity broken (k-mer overlap incorrect)
-3. ❌ Error handling: Wrong exception type thrown
+**STATUS UPDATE (2025-02-xx)**: The repository currently has **10 basic testsets (~38 @test statements)** in `test/4_assembly/path_finding_test.jl`. Coverage is smoke-level only; no assertions on degree validation, multiple valid paths, or reverse-complement handling. Treat 1.1 as **PARTIAL** until the planned cases are written and verified.
 
-### 1.1 Path Finding Tests ✅ CREATED, ⚠️ ISSUES FOUND
-**File**: `test/4_assembly/path_finding_test.jl` ✅ Created!
+### 1.1 Path Finding Tests ⚠️ PARTIAL COVERAGE (10 testsets in repo)
+**File**: `test/4_assembly/path_finding_test.jl` ✅ Exists
 
-**Tests Passing (38):**
-- [x] Test Eulerian path detection on simple linear graph ✅
-- [ ] Test multiple valid paths (branching structures)
-- [ ] Test disconnected components (multiple separate subgraphs)
-- [ ] Test circular paths (cycles)
-- [ ] Test error cases (no valid Eulerian paths)
-- [ ] Test degree validation (even in-degree/out-degree requirements)
-- [ ] Test with DNA k-mer graphs (k=3, k=31)
-- [ ] Test with RNA k-mer graphs
-- [ ] Test with AA k-mer graphs
-- [ ] Verify path_vector contains correct vertex labels
-- [ ] Verify path_vector order preserves graph connectivity
+**Current coverage (~38 assertions):**
+- [x] Simple linear DNA k=3
+- [x] Two overlapping sequences (k=4)
+- [x] Basic cycle smoke test (k=3)
+- [x] SNP bubble expecting 0 Eulerian paths
+- [x] Disconnected components (no expected counts)
+- [x] RNA k-mer path smoke test (k=3)
+- [x] AA k-mer path smoke test (k=3)
+- [x] Large k DNA (k=31)
+- [x] DoubleStrand mode smoke test (no assertions on canonicalization)
+- [x] Empty input throws `ArgumentError`
+
+**Missing to reach planned scope:**
+- [ ] Degree validation and multiple valid path enumeration
+- [ ] Explicit expectations for disconnected graphs and cycles
+- [ ] Reverse-complement/DoubleStrand correctness beyond smoke test
+- [ ] Path vector label/type/order verification
+- [ ] Error handling cases beyond empty input (no-path, invalid graph)
+- [ ] Multi-dataset and multi-read evidence scenarios
 
 ### 1.2 Sequence Reconstruction Tests
 **File**: `test/4_assembly/sequence_reconstruction_test.jl` (CREATE)
@@ -525,12 +542,38 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 ## Progress Tracking
 
-**Phase 1**: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/10 complete
+**Phase 1**: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/10 complete (1.1 partial: 10 smoke tests, planned coverage outstanding)
 **Phase 2**: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/10 complete
 **Phase 3**: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/10 complete
 **Phase 4**: ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/10 complete
 
 **Overall**: 0% → Target: 100%
+
+---
+
+## Verification Backlog (migrated from archived docs)
+
+- **Commented-out but implemented (needs tests before enabling)**:
+  - `src/development/intelligent-assembly.jl` (~964 lines) – uncomment in `src/Mycelia.jl` after tests.
+  - `src/development/cross-validation.jl` – “89/89 tests passing” claim was false; no tests exist.
+  - Four RL implementations under `src/development/` – all commented out; tests live only in `test/in_development/`.
+- **Accessible but untested**:
+  - `src/iterative-assembly.jl`
+  - `src/viterbi-next.jl` (confirm dedicated tests exist)
+  - `src/simulation.jl` functions: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_illumina_paired_reads`
+  - Quality/QC/visualization functions: `plot_per_base_quality`, `analyze_fastq_quality`, `calculate_gc_content`, `plot_embeddings`, `plot_optimal_cluster_assessment_results`, `plot_taxa_abundances`, `visualize_many_timeseries`
+- **Algorithm verification (exists; test status unknown)**:
+  - `src/coverage-clustering.jl` (k-medoids coverage clustering)
+  - `src/kmer-saturation-analysis.jl` (saturation curves and thresholds)
+  - `src/graph-cleanup.jl` (statistical cleanup)
+  - `src/development/genomic-graph-algorithms.jl`
+  - `src/development/pangenome-core-genome.jl`
+- **Tutorial/docs checks**:
+  - Run `tutorials/00_assembly_in_5_minutes.jl` end-to-end.
+  - Inspect `src/development/intelligent-assembly.jl` for the k=5 loop issue noted historically.
+  - Verify any “probabilistic-assembly-hub” doc page if referenced elsewhere.
+- **Tool wrappers**:
+  - Authoritative inventory: `planning-docs/TOOL_WRAPPER_STATUS.md` (13 tested, 9 untested, 1 commented out). Missing categories: classification, binning/post-binning, variant calling, pangenome. Add tests for the 9 untested wrappers; decide on enabling hifiasm-meta.
 
 ---
 
