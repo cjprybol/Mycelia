@@ -1,12 +1,12 @@
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run MEGAHIT assembler for metagenomic short read assembly.
+Run MEGAHIT assembler for metagenomic short read assembly and downstream graph export.
 
 # Arguments
 - `fastq1::String`: Path to first paired-end FASTQ file
 - `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
-- `outdir::String`: Output directory path (default: "megahit_output")
+- `outdir::Union{Nothing,String}`: Output directory path (default: inferred from FASTQ prefix + "_megahit")
 - `min_contig_len::Int`: Minimum contig length (default: 200)
 - `k_list::String`: k-mer sizes to use (default: "21,29,39,59,79,99,119,141")
 
@@ -14,18 +14,52 @@ Run MEGAHIT assembler for metagenomic short read assembly.
 Named tuple containing:
 - `outdir::String`: Path to output directory
 - `contigs::String`: Path to final contigs file
+- `fastg::String`: Path to MEGAHIT FASTG export
+- `gfa::String`: Path to Bandage-reduced GFA
 
 # Details
 - Automatically creates and uses a conda environment with megahit
+- Exports both FASTG and reduced GFA via Bandage
 - Optimized for metagenomic assemblies with varying coverage
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_megahit(;fastq1, fastq2=nothing, outdir="megahit_output", min_contig_len=200, k_list="21,29,39,59,79,99,119,141")
+function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200, k_list="21,29,39,59,79,99,119,141")
     Mycelia.add_bioconda_env("megahit")
+    # Default output directory derived from FASTQ prefix
+    if isnothing(outdir)
+        cleaned1 = replace(fastq1, Mycelia.FASTQ_REGEX => "")
+        if isnothing(fastq2)
+            prefix = cleaned1
+        else
+            cleaned2 = replace(fastq2, Mycelia.FASTQ_REGEX => "")
+            prefix = Mycelia.find_matching_prefix(cleaned1, cleaned2)
+            if isempty(prefix)
+                prefix = cleaned1
+            end
+        end
+        outdir = prefix * "_megahit"
+    end
+    # Infer the final k-mer size from contig identifiers produced by MEGAHIT
+    infer_final_k(contigs_path) = begin
+        ks = Int[]
+        open(contigs_path) do io
+            for record in FASTX.FASTA.Reader(io)
+                id = FASTX.identifier(record)
+                m = match(r"^k(\d+)", id)
+                m === nothing && continue
+                push!(ks, parse(Int, m.captures[1]))
+            end
+        end
+        @assert !isempty(ks) "Could not infer k-mer size from contig identifiers in $(contigs_path)"
+        unique_ks = unique(ks)
+        @assert length(unique_ks) == 1 "Expected a single final k-mer size, found $(unique_ks)"
+        return first(unique_ks)
+    end
     
     # MEGAHIT requires the output directory to not exist, so check output file first
-    if !isfile(joinpath(outdir, "final.contigs.fa"))
+    contigs_path = joinpath(outdir, "final.contigs.fa")
+    if !isfile(contigs_path)
         # Remove output directory if it exists (MEGAHIT will create it)
         if isdir(outdir)
             rm(outdir, recursive=true)
@@ -40,7 +74,17 @@ function run_megahit(;fastq1, fastq2=nothing, outdir="megahit_output", min_conti
         # If output already exists, ensure directory exists for return value
         mkpath(outdir)
     end
-    return (;outdir, contigs=joinpath(outdir, "final.contigs.fa"))
+
+    # Derive FASTG and GFA outputs
+    fastg_path = replace(contigs_path, ".fa" => ".fastg")
+    if !isfile(fastg_path)
+        final_k = infer_final_k(contigs_path)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit_toolkit contig2fastg $(final_k) $(contigs_path) $(fastg_path)`)
+    end
+
+    gfa_path = Mycelia.bandage_reduce(fastg=fastg_path, gfa=fastg_path * ".gfa")
+
+    return (;outdir, contigs=contigs_path, fastg=fastg_path, gfa=gfa_path)
 end
 
 """

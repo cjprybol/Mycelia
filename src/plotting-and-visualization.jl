@@ -1271,6 +1271,26 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Reduce a FASTG to a simplified GFA using Bandage.
+
+# Arguments
+- `fastg`: Path to input FASTG file
+- `gfa`: Optional output GFA path (defaults to `fastg * ".gfa"`)
+
+# Returns
+- Path to the reduced GFA file
+"""
+function bandage_reduce(;fastg, gfa=fastg*".gfa")
+    bandage = Mycelia.download_bandage()
+    if !isfile(gfa)
+        run(`$(bandage) reduce $(fastg) $(gfa)`)
+    end
+    return gfa
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Generate `n` colors that are maximally distinguishable from each other.
 
 # Arguments
