@@ -73,7 +73,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 **Missing Algorithm Implementations**
 - ❌ remove_tips() - Not found
 - ❌ collapse_linear_chains() - Not found
-- ❌ Strand conversion algorithms - Not found (algorithms/strand-conversions.jl planned)
+- ✅ Strand conversion implemented for fixed-length and variable-length graphs (convert_* in core/graph-construction.jl and variable-length/strand-conversions.jl)
 - ❌ Error correction - Not found (algorithms/error-correction.jl planned)
 - ❌ Graph type conversions - Not found (core/graph-type-conversions.jl planned)
 
@@ -165,6 +165,38 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - ✅ Remove old code only after new code proven
 
 **Timeline**: 4 weeks to production-ready status
+
+---
+
+## Today's Priority Actions (Third-Party + Rhizomorph Coverage)
+
+**Third-party assemblers (end-to-end with QC + benchmarks)**
+- Re-enable and validate all shipped wrappers: un-comment `run_hifiasm_meta` in `src/assembly.jl` and corresponding tests; make sure HyLight/STRONG/Strainy tests run instead of being commented out.
+- Wire wrappers into a repeatable QC pipeline: after each assembler run, auto-run `run_quast` and `run_busco` (where applicable) and capture runtime/memory so benchmarks report both accuracy and efficiency.
+- Stabilize the PhiX comparison harness (`benchmarking/phix174_assembler_comparison.jl`): fix macOS failures for SPAdes/SKESA/metaSPAdes, address metaMDBG errors on small genomes, and add a Linux CI-friendly smoke dataset.
+- Expand coverage: add PLASS/penguin (missing wrapper), and surface classification/binning gaps (metaphlan/metabuli, mosdepth, VAMB/MetaBAT2/etc.) so the workflow is complete from reads → assembly → QC → binning.
+
+**Rhizomorph graph types (single, double, canonical across 6 graph variants)**
+- Verify Singlestrand/Doublestrand/Canonical construction for all BioSequence graph variants (k-mer, qualmer, FASTA, FASTQ) across DNA/RNA/AA; add tests that walk paths and canonicalize to catch strand bugs.
+- Patch correctness gaps already visible in code: `build_kmer_graph_from_files` ignores `mode` and always builds singlestrand; N-gram/string graphs document why RC/canonical modes are N/A or add the conversions if required.
+- Ensure path-finding/simplification functions operate on canonical graphs and have coverage for all alphabets (DNA/RNA/AA) and quality-aware variants.
+- Update documentation to explicitly list the 3×6×alphabet matrix and current support status so we can checkpoint progress if interrupted.
+- Make strand-mode interconversion rules explicit (Single → Double → Canonical and reverse), including evidence handling and directed vs undirected storage; see updated section in `planning-docs/rhizomorph-graph-ecosystem-plan.md`.
+- Add reduced amino acid alphabet coverage to graph-creation tests (AA graphs and Unicode/string graphs) to validate integration beyond preprocessing.
+- Clarify current status of variable-length graphs (FASTA/FASTQ): singlestrand only; doublestrand/canonical conversion still pending.
+- Rhizomorph 100% plan (remaining):
+  - Fixed-length k-mer/qualmer: add doublestrand traversal/reconstruction tests for DNA/RNA; add canonical traversal tests for DNA/RNA qualmers; AA/string already error on doublestrand/canonical.
+- Variable-length FASTA/FASTQ: implement doublestrand/canonical converters for DNA/RNA OR add explicit errors+tests if deferring; currently singlestrand only.
+  - N-gram/string: keep singlestrand-only; ensure doc/tests cover non-applicable conversions (errors).
+  - Algorithms: add quality-aware traversal edge cases (mixed datasets, RC evidence) and verify path_to_sequence on canonical for DNA/RNA k-mer/qualmer.
+- Matrix: add/refresh 3×6×alphabet support matrix (supported vs not-applicable vs pending).
+- Implemented: variable-length strand conversions for DNA/RNA (convert_variable_length_to_doublestrand / convert_variable_length_to_canonical) + tests; update matrix/docs accordingly.
+- Added support matrix: planning-docs/RHIZOMORPH_SUPPORT_MATRIX.md (✅/🚫/⏳ by graph type/alphabet/strand mode).
+- Next up (recommended):
+  - Add quality-aware traversal edge cases (mixed datasets, RC evidence) for doublestrand/canonical qualmer graphs.
+  - Add perf/scale benchmarks for Rhizomorph builders/traversal (optional; after correctness).
+  - Keep BUSCO enabled for benchmarks; retain `--skip-busco` for CI.
+- Implement doublestrand/canonical support for variable-length FASTA/FASTQ OLC graphs (or add explicit converters) and add traversal tests once available.
 
 ---
 

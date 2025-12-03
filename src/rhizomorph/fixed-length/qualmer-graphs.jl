@@ -197,7 +197,11 @@ function build_qualmer_graph_from_files(
         error("No files provided")
     end
 
-    # Build graph from first file
+    if !(mode in (:singlestrand, :doublestrand))
+        error("Invalid mode: $mode. Must be :singlestrand or :doublestrand")
+    end
+
+    # Build graph from first file (strand-specific) and convert later if needed
     graph = build_qualmer_graph_from_file(filepaths[1], k; mode=:singlestrand)
 
     # Get Mycelia module for open_fastx

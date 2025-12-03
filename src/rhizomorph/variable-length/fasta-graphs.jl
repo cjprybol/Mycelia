@@ -1,4 +1,4 @@
-# Variable-length FASTA Graph Construction
+# Variable-length FASTA Graph Construction (Singlestrand with conversions)
 #
 # Overlap-Layout-Consensus (OLC) graphs for variable-length FASTA sequences.
 #
@@ -18,6 +18,10 @@
 # - Reference-free assembly
 #
 # Based on rhizomorph-graph-ecosystem-plan.md Section 2.2
+#
+# Note: Variable-length FASTA graphs are constructed singlestrand; doublestrand
+# and canonical conversions are provided in `variable-length/strand-conversions.jl`
+# for DNA/RNA sequences.
 
 # ============================================================================
 # Public API - Variable-length FASTA Graph Construction

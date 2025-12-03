@@ -1,5 +1,6 @@
 # PhiX174 Assembler Comparison Benchmark
 # Head-to-head comparison of 8 third-party assemblers on PhiX174 reference genome
+# Set `--skip-busco` or `MYCELIA_SKIP_BUSCO=true` to disable BUSCO in constrained environments (CI); BUSCO runs by default for benchmarking.
 
 import Pkg
 if isinteractive()
@@ -14,6 +15,9 @@ import Dates
 import DataFrames
 import CSV
 import Plots
+
+# Optional: skip BUSCO for constrained environments (CI). Default: run BUSCO.
+skip_busco = "--skip-busco" in ARGS || lowercase(get(ENV, "MYCELIA_SKIP_BUSCO", "false")) in ["1", "true", "yes"]
 
 println("=== PhiX174 Assembler Comparison ===")
 println("Start time: $(Dates.now())")
@@ -81,17 +85,20 @@ try
     # Define assemblers to compare
     # Note: Some assemblers are platform-specific
     all_short_read_assemblers = [
-        (name="SPAdes", func=Mycelia.run_spades, platforms=[:linux, :macos]),
-        (name="SKESA", func=Mycelia.run_skesa, platforms=[:linux, :macos]),
-        (name="MEGAHIT", func=Mycelia.run_megahit, platforms=[:linux]),  # Linux only
-        (name="metaSPAdes", func=Mycelia.run_metaspades, platforms=[:linux, :macos]),
+        (name="SPAdes", func=Mycelia.run_spades, platforms=[:linux, :macos], is_protein=false),
+        (name="SKESA", func=Mycelia.run_skesa, platforms=[:linux, :macos], is_protein=false),
+        (name="MEGAHIT", func=Mycelia.run_megahit, platforms=[:linux], is_protein=false),  # Linux only
+        (name="metaSPAdes", func=Mycelia.run_metaspades, platforms=[:linux, :macos], is_protein=false),
+        (name="PenguiN (guided)", func=Mycelia.run_penguin_guided_nuclassemble, platforms=[:linux, :macos], is_protein=false),
+        (name="PenguiN", func=Mycelia.run_penguin_nuclassemble, platforms=[:linux, :macos], is_protein=false),
+        (name="PLASS", func=Mycelia.run_plass_assemble, platforms=[:linux, :macos], is_protein=true),
     ]
 
     all_long_read_assemblers = [
-        (name="Flye", func=Mycelia.run_flye, platforms=[:linux, :macos]),
-        (name="Canu", func=Mycelia.run_canu, platforms=[:linux, :macos]),
-        (name="metaFlye", func=Mycelia.run_metaflye, platforms=[:linux, :macos]),
-        (name="metaMDBG", func=Mycelia.run_metamdbg, platforms=[:linux, :macos]),
+        (name="Flye", func=Mycelia.run_flye, platforms=[:linux, :macos], is_protein=false),
+        (name="Canu", func=Mycelia.run_canu, platforms=[:linux, :macos], is_protein=false),
+        (name="metaFlye", func=Mycelia.run_metaflye, platforms=[:linux, :macos], is_protein=false),
+        (name="metaMDBG", func=Mycelia.run_metamdbg, platforms=[:linux, :macos], is_protein=false),
     ]
 
     # Filter assemblers based on current platform
@@ -104,16 +111,20 @@ try
     println("  Testing $(length(long_read_assemblers)) long-read assemblers")
 
     # Storage for comparison results
-    comparison_results = DataFrames.DataFrame(
-        assembler = String[],
-        read_type = String[],
-        runtime_s = Float64[],
-        n_contigs = Int[],
-        total_length = Int[],
-        n50 = Int[],
-        longest_contig = Int[],
-        identity_vs_ref = Float64[]
-    )
+comparison_results = DataFrames.DataFrame(
+    assembler = String[],
+    read_type = String[],
+    runtime_s = Float64[],
+    qc_quast_runtime_s = Float64[],
+    qc_quast_outdir = Vector{Union{String,Missing}}(),
+    qc_busco_runtime_s = Float64[],
+    qc_busco_outdir = Vector{Union{String,Missing}}(),
+    n_contigs = Vector{Union{Int,Missing}}(),
+    total_length = Vector{Union{Int,Missing}}(),
+    n50 = Vector{Union{Int,Missing}}(),
+    longest_contig = Vector{Union{Int,Missing}}(),
+    identity_vs_ref = Vector{Union{Float64,Missing}}()
+)
 
     # Helper function to calculate assembly metrics
     function calculate_assembly_metrics(contigs_file, reference_file)
@@ -164,24 +175,67 @@ try
         outdir = joinpath(phix_dir, "assembly_$(assembler.name)")
 
         try
+            is_protein = get(assembler, :is_protein, false)
             # Time the assembly
             start_time = time()
-            result = assembler.func(
-                fastq1=short_fastq1,
-                fastq2=short_fastq2,
-                outdir=outdir
-            )
+            result = if is_protein
+                assembler.func(
+                    reads1=short_fastq1,
+                    reads2=short_fastq2,
+                    outdir=outdir
+                )
+            else
+                assembler.func(
+                    fastq1=short_fastq1,
+                    fastq2=short_fastq2,
+                    outdir=outdir
+                )
+            end
             runtime = time() - start_time
 
-            # Calculate metrics
-            contigs_file = result.contigs
-            metrics = calculate_assembly_metrics(contigs_file, phix_ref)
+            # Calculate metrics (skip for protein-only assemblies)
+            contigs_file = get(result, :contigs, nothing)
+            metrics = if !is_protein && contigs_file !== nothing
+                calculate_assembly_metrics(contigs_file, phix_ref)
+            else
+                (; n_contigs=missing, total_length=missing, n50=missing, longest=missing, identity=missing)
+            end
+
+            # QUAST (with reference) and BUSCO (best-effort, optional skip)
+            quast_outdir = missing
+            quast_runtime = 0.0
+            busco_outdir = missing
+            busco_runtime = 0.0
+
+            if !is_protein && contigs_file !== nothing
+                try
+                    quast_start = time()
+                    quast_outdir = Mycelia.run_quast(contigs_file; reference=phix_ref, outdir=joinpath(outdir, "quast"))
+                    quast_runtime = time() - quast_start
+                catch e
+                    @warn "QUAST failed for $(assembler.name): $e"
+                end
+
+                if !skip_busco
+                    try
+                        busco_start = time()
+                        busco_outdir = Mycelia.run_busco([contigs_file]; outdir=joinpath(outdir, "busco"), lineage="auto", mode="genome")
+                        busco_runtime = time() - busco_start
+                    catch e
+                        @warn "BUSCO failed for $(assembler.name): $e"
+                    end
+                end
+            end
 
             # Store results
             push!(comparison_results, (
                 assembler = assembler.name,
                 read_type = "short",
                 runtime_s = runtime,
+                qc_quast_runtime_s = quast_runtime,
+                qc_quast_outdir = quast_outdir,
+                qc_busco_runtime_s = busco_runtime,
+                qc_busco_outdir = busco_outdir,
                 n_contigs = metrics.n_contigs,
                 total_length = metrics.total_length,
                 n50 = metrics.n50,
@@ -190,11 +244,18 @@ try
             ))
 
             println("  Runtime: $(round(runtime, digits=2)) seconds")
-            println("  Contigs: $(metrics.n_contigs)")
-            println("  Total length: $(metrics.total_length) bp")
-            println("  N50: $(metrics.n50) bp")
-            println("  Longest contig: $(metrics.longest) bp")
-            println("  Identity vs ref: $(round(metrics.identity, digits=2))%")
+            println("  Contigs: $(something(metrics.n_contigs, \"n/a\"))")
+            println("  Total length: $(something(metrics.total_length, \"n/a\")) bp")
+            println("  N50: $(something(metrics.n50, \"n/a\")) bp")
+            println("  Longest contig: $(something(metrics.longest, \"n/a\")) bp")
+            identity_str = isnothing(metrics.identity) || metrics.identity === missing ? "n/a" : "$(round(metrics.identity, digits=2))%"
+            println("  Identity vs ref: $identity_str")
+            if quast_runtime > 0 && quast_outdir !== missing
+                println("  QUAST runtime: $(round(quast_runtime, digits=2)) seconds (outdir=$(quast_outdir))")
+            end
+            if busco_runtime > 0 && busco_outdir !== missing
+                println("  BUSCO runtime: $(round(busco_runtime, digits=2)) seconds (outdir=$(busco_outdir))")
+            end
 
         catch e
             @warn "$(assembler.name) failed: $e"
@@ -203,11 +264,15 @@ try
                 assembler = assembler.name,
                 read_type = "short",
                 runtime_s = 0.0,
-                n_contigs = 0,
-                total_length = 0,
-                n50 = 0,
-                longest_contig = 0,
-                identity_vs_ref = 0.0
+                qc_quast_runtime_s = 0.0,
+                qc_quast_outdir = missing,
+                qc_busco_runtime_s = 0.0,
+                qc_busco_outdir = missing,
+                n_contigs = missing,
+                total_length = missing,
+                n50 = missing,
+                longest_contig = missing,
+                identity_vs_ref = missing
             ))
         end
     end
@@ -219,6 +284,7 @@ try
         outdir = joinpath(phix_dir, "assembly_$(assembler.name)")
 
         try
+            is_protein = get(assembler, :is_protein, false)
             # Time the assembly
             start_time = time()
             result = if assembler.name == "Canu"
@@ -243,13 +309,47 @@ try
 
             # Calculate metrics
             contigs_file = result.contigs
-            metrics = calculate_assembly_metrics(contigs_file, phix_ref)
+            metrics = if !is_protein
+                calculate_assembly_metrics(contigs_file, phix_ref)
+            else
+                (; n_contigs=missing, total_length=missing, n50=missing, longest=missing, identity=missing)
+            end
+
+            # QUAST (with reference) and BUSCO (best-effort)
+            quast_outdir = missing
+            quast_runtime = 0.0
+            busco_outdir = missing
+            busco_runtime = 0.0
+
+            if !is_protein
+                try
+                    quast_start = time()
+                    quast_outdir = Mycelia.run_quast(contigs_file; reference=phix_ref, outdir=joinpath(outdir, "quast"))
+                    quast_runtime = time() - quast_start
+                catch e
+                    @warn "QUAST failed for $(assembler.name): $e"
+                end
+
+                if !skip_busco
+                    try
+                        busco_start = time()
+                        busco_outdir = Mycelia.run_busco([contigs_file]; outdir=joinpath(outdir, "busco"), lineage="auto", mode="genome")
+                        busco_runtime = time() - busco_start
+                    catch e
+                        @warn "BUSCO failed for $(assembler.name): $e"
+                    end
+                end
+            end
 
             # Store results
             push!(comparison_results, (
                 assembler = assembler.name,
                 read_type = "long",
                 runtime_s = runtime,
+                qc_quast_runtime_s = quast_runtime,
+                qc_quast_outdir = quast_outdir,
+                qc_busco_runtime_s = busco_runtime,
+                qc_busco_outdir = busco_outdir,
                 n_contigs = metrics.n_contigs,
                 total_length = metrics.total_length,
                 n50 = metrics.n50,
@@ -258,11 +358,18 @@ try
             ))
 
             println("  Runtime: $(round(runtime, digits=2)) seconds")
-            println("  Contigs: $(metrics.n_contigs)")
-            println("  Total length: $(metrics.total_length) bp")
-            println("  N50: $(metrics.n50) bp")
-            println("  Longest contig: $(metrics.longest) bp")
-            println("  Identity vs ref: $(round(metrics.identity, digits=2))%")
+            println("  Contigs: $(something(metrics.n_contigs, \"n/a\"))")
+            println("  Total length: $(something(metrics.total_length, \"n/a\")) bp")
+            println("  N50: $(something(metrics.n50, \"n/a\")) bp")
+            println("  Longest contig: $(something(metrics.longest, \"n/a\")) bp")
+            identity_str = isnothing(metrics.identity) || metrics.identity === missing ? "n/a" : "$(round(metrics.identity, digits=2))%"
+            println("  Identity vs ref: $identity_str")
+            if quast_runtime > 0 && quast_outdir !== missing
+                println("  QUAST runtime: $(round(quast_runtime, digits=2)) seconds (outdir=$(quast_outdir))")
+            end
+            if busco_runtime > 0 && busco_outdir !== missing
+                println("  BUSCO runtime: $(round(busco_runtime, digits=2)) seconds (outdir=$(busco_outdir))")
+            end
 
         catch e
             @warn "$(assembler.name) failed: $e"
@@ -271,11 +378,15 @@ try
                 assembler = assembler.name,
                 read_type = "long",
                 runtime_s = 0.0,
-                n_contigs = 0,
-                total_length = 0,
-                n50 = 0,
-                longest_contig = 0,
-                identity_vs_ref = 0.0
+                qc_quast_runtime_s = 0.0,
+                qc_quast_outdir = missing,
+                qc_busco_runtime_s = 0.0,
+                qc_busco_outdir = missing,
+                n_contigs = missing,
+                total_length = missing,
+                n50 = missing,
+                longest_contig = missing,
+                identity_vs_ref = missing
             ))
         end
     end

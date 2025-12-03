@@ -1,7 +1,8 @@
-# Tool Wrapper Implementation Status
+# Tool Wrapper Implementation Status (Archived)
 
-**Date**: 2025-01-25
-**Purpose**: Comprehensive verification of external tool integrations in Mycelia
+**Date**: 2025-01-25 (historical snapshot)
+**Current source of truth**: `planning-docs/TODO.md` (assembler/QC status) and `planning-docs/TODO.md` “Today's Priority Actions” for next steps.
+**Purpose**: Historical verification of external tool integrations in Mycelia. Retained for provenance; do not rely on counts here.
 
 ---
 

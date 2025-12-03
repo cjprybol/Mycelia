@@ -1,4 +1,4 @@
-# Variable-length FASTQ Graph Construction
+# Variable-length FASTQ Graph Construction (Singlestrand with conversions)
 #
 # Overlap-Layout-Consensus (OLC) graphs for variable-length FASTQ sequences with quality.
 #
@@ -17,6 +17,10 @@
 # - Quality-aware read assembly
 # - High-confidence overlap detection
 # - Error-aware sequence assembly
+#
+# Note: Variable-length FASTQ graphs are constructed singlestrand; doublestrand
+# and canonical conversions are provided in `variable-length/strand-conversions.jl`
+# for DNA/RNA sequences.
 #
 # Based on rhizomorph-graph-ecosystem-plan.md Section 2.2
 

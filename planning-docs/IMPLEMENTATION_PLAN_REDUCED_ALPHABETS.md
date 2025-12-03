@@ -1,14 +1,19 @@
-# Implementation Plan: Reduced Amino Acid Alphabets
+# Implementation Plan: Reduced Amino Acid Alphabets (Archived)
 
-## Status: IN PROGRESS
-**Last Updated**: 2025-10-25
-**Branch**: `reduced-amino-acid-alphabets`
+## Status: ✅ COMPLETE — authoritative status now tracked in `planning-docs/TODO.md`
+**Last Updated**: 2026-XX-XX (synced post-rebase)
+**Branch**: `main`
+**Authoritative implementation**: `src/constants.jl` (`REDUCED_ALPHABET_*` maps) and `reduce_amino_acid_alphabet()`
+**Tests**: `test/2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl` covers all shipped schemes; add graph-creation coverage (Unicode + AA graphs) if gaps are found.
+**Note**: This document is retained for literature references only; do not use it as a status tracker.
 
 ---
 
 ## Overview
 
 Adding 30 new reduced amino acid alphabet schemes from validated literature sources. These schemes have been extensively studied and validated for protein structure analysis, fold recognition, sequence alignment, and contact interaction preservation.
+
+> **Current status (2026)**: All schemes in this document are implemented in `src/constants.jl` and exposed via `reduce_amino_acid_alphabet`. The detailed lists below are historical reference only (not work items). If new schemes are added, update `planning-docs/TODO.md` and the tests, not this archived plan.
 
 **Sources:**
 - Murphy et al. (2000): 12 alphabets (sizes 2, 3, 4, 5, 8, 10, 12, 15)

@@ -711,6 +711,10 @@ function convert_to_doublestrand(singlestrand_graph)
     KmerType = typeof(first_label)
     VertexDataType = typeof(first_vertex)
 
+    # Only DNA/RNA k-mers support doublestrand conversion
+    if !(KmerType <: Kmers.DNAKmer || KmerType <: Kmers.RNAKmer)
+        error("Cannot create doublestrand graph for non-nucleotide k-mer labels: $(KmerType)")
+    end
     # Amino acids don't have reverse complement
     if KmerType <: Kmers.AAKmer
         error("Cannot create doublestrand graph for amino acid sequences (no reverse complement)")
@@ -840,6 +844,10 @@ function convert_to_canonical(singlestrand_graph)
     KmerType = typeof(first_label)
     VertexDataType = typeof(first_vertex)
 
+    # Only DNA/RNA k-mers support canonical conversion
+    if !(KmerType <: Kmers.DNAKmer || KmerType <: Kmers.RNAKmer)
+        error("Cannot create canonical graph for non-nucleotide k-mer labels: $(KmerType)")
+    end
     # Amino acids don't have reverse complement
     if KmerType <: Kmers.AAKmer
         error("Cannot create doublestrand graph for amino acid sequences (no reverse complement)")
@@ -989,6 +997,11 @@ function convert_to_singlestrand(doublestrand_graph)
     # Determine graph type from first vertex
     first_kmer = first(MetaGraphsNext.labels(doublestrand_graph))
     first_vertex = doublestrand_graph[first_kmer]
+
+    # Only DNA/RNA k-mers support doublestrand/canonical modes
+    if !(first_kmer isa Kmers.DNAKmer || first_kmer isa Kmers.RNAKmer)
+        error("Cannot convert non-nucleotide canonical graph to singlestrand: $(typeof(first_kmer))")
+    end
 
     VertexDataType = typeof(first_vertex)
     EdgeDataType = if VertexDataType <: KmerVertexData

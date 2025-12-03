@@ -56,6 +56,37 @@ These are **independent** choices:
 
 ---
 
+## Graph Representation Modes (Single, Double, Canonical) — Explicit Definitions
+
+All graphs are constructed first as **strand-specific single-strand directed graphs** that record only what is observed. DNA/RNA graphs can be transformed into double-strand (directed) or canonical (undirected) representations; amino acid and string graphs remain single-strand.
+
+- **Single-strand (directed; all alphabets)**: Vertices/edges exactly as observed; evidence is strand-aware but only forward observations exist. This is the default construction.
+- **Double-strand (directed; DNA/RNA only)**: Forward and reverse-complement vertices/edges both exist. Evidence is the joint set from forward and reverse, but strand flags are preserved so forward and reverse entries are equal-and-opposite in orientation.
+- **Canonical (undirected storage; DNA/RNA only)**: Forward/RC vertices are merged into canonical labels and edges are undirected. Evidence is merged but retains strand flags to recover direction during traversal.
+
+### Interconversion Rules
+- **Single → Double**: Add reverse-complement vertices and directed edges; merge evidence; keep strand flags.
+- **Single → Canonical**: Merge RC pairs into canonical labels; make edges undirected; keep strand flags for traversal validation.
+- **Double → Single**: Filter to forward/+ vertices, edges, and evidence (drop RC copies).
+- **Canonical → Single**: Expand canonical vertices into forward/RC directed copies; emit only forward-supported vertices/edges/evidence.
+- **Double ↔ Canonical**: Merge RC pairs into canonical labels (Double → Canonical) or split canonical labels back into forward/RC directed pairs (Canonical → Double) while preserving strand-aware evidence.
+
+### Flow Diagram (text)
+```
+Single-strand (directed, all alphabets)
+    |-- add RC vertices/edges + merge evidence --> Double-strand (directed, DNA/RNA)
+    |-- canonicalize labels + undirected edges --> Canonical (undirected, DNA/RNA)
+
+Double-strand (directed, DNA/RNA)
+    |-- keep only forward vertices/edges/evidence --> Single-strand (directed)
+    |-- merge RC pairs into canonical labels ------> Canonical (undirected)
+
+Canonical (undirected, DNA/RNA)
+    |-- expand to forward/RC directed copies (keep strand flags) --> Double-strand (directed)
+    |-- expand then keep only forward copies --------------------> Single-strand (directed)
+```
+
+
 ## 📁 Proposed Module Organization
 
 **File Structure and Organization Clarification:**

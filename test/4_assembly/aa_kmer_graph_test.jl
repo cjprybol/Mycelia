@@ -195,6 +195,19 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         count_gpg = Mycelia.Rhizomorph.get_vertex_observation_count(graph, kmer_gpg)
         Test.@test count_gpg == 1  # 1 observation (same read), multiple positions in evidence
     end
+
+    Test.@testset "AA Graph - Reduced Alphabet Input (MURPHY2)" begin
+        full_seq = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
+        reduced_seq = Mycelia.reduce_amino_acid_alphabet(full_seq, :MURPHY2)
+        records = [FASTX.FASTA.Record("protein_reduced", reduced_seq)]
+
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="reduced")
+
+        # Graph should build and contain only reduced alphabet symbols (I/E) in labels
+        Test.@test Mycelia.Rhizomorph.vertex_count(graph) > 0
+        vertex_labels = collect(Mycelia.Rhizomorph.get_all_vertices(graph))
+        Test.@test all(label -> all(c -> c in ('I','E'), String(label)), vertex_labels)
+    end
 end
 
 println("✓ AA k-mer graph tests completed")

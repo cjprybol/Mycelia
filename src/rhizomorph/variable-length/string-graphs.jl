@@ -1,4 +1,4 @@
-# Variable-length String Graph Construction
+# Variable-length String Graph Construction (Singlestrand only)
 #
 # Overlap-Layout-Consensus (OLC) graphs for variable-length strings.
 #
@@ -16,6 +16,9 @@
 # - Read assembly from sequencing data (after string conversion)
 # - Text fragment reconstruction
 # - Sequence overlap analysis
+#
+# Note: Variable-length string graphs are singlestrand only; doublestrand/canonical
+# conversions are not defined for generic strings.
 #
 # Based on rhizomorph-graph-ecosystem-plan.md Section 2.2
 

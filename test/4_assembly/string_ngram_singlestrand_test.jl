@@ -58,4 +58,18 @@ Test.@testset "String N-gram SingleStrand Graph" begin
         end
     end
     Test.@test reconstruction_success
+
+    Test.@testset "Reduced Amino Acid Alphabet as Unicode Input" begin
+        # Use reduced alphabet that includes non-standard symbols to ensure Unicode graph support
+        full_seq = "ACDEFGHIKLMNPQRSTVWY"
+        reduced = Mycelia.reduce_amino_acid_alphabet(full_seq, :CHEMICAL6)  # includes '-' and '+'
+        records = [FASTX.FASTA.Record("reduced_seq", reduced)]
+
+        graph_reduced = Mycelia.build_string_ngram_graph_next(records, 3; graph_mode=Mycelia.SingleStrand)
+        vertices_reduced = collect(MetaGraphsNext.labels(graph_reduced))
+
+        Test.@test !isempty(vertices_reduced)
+        # Ensure characters from reduced alphabet appear in labels
+        Test.@test any(label -> occursin("+", String(label)) || occursin("-", String(label)), vertices_reduced)
+    end
 end

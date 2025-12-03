@@ -60,5 +60,6 @@ include("fixed-length/ngram-graphs.jl")
 include("variable-length/string-graphs.jl")
 include("variable-length/fasta-graphs.jl")
 include("variable-length/fastq-graphs.jl")
+include("variable-length/strand-conversions.jl")
 
 end  # module Rhizomorph

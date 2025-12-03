@@ -427,40 +427,51 @@ end
 # - `bloom_filter::Int`: Bloom filter flag (default: -1 for automatic, 0 to disable 16GB filter)
 # - `read_selection::Bool`: Enable read selection for mock/small datasets (default: false)
 
-# # Returns
-# Named tuple containing:
-# - `outdir::String`: Path to output directory
-# - `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-# # Details
-# - Uses hifiasm-meta's string graph approach for metagenomic strain resolution
-# - Automatically creates and uses a conda environment with hifiasm_meta
-# - Skips assembly if output files already exist at the specified prefix
-# - Utilizes all available CPU threads
-# - Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
-# - Read selection (-S) can be enabled for mock/small datasets to handle low complexity data
-# """
-# function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloom_filter=-1, read_selection=false)
-#     Mycelia.add_bioconda_env("hifiasm_meta")
-#     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
-#     # Check if output directory exists before trying to read it
-#     hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
-    
-#     if isempty(hifiasm_outputs)
-#         mkpath(outdir)
-#         # Build command with optional flags
-#         cmd_args = ["hifiasm_meta", "-t", string(Sys.CPU_THREADS), "-o", hifiasm_outprefix]
-#         if bloom_filter >= 0
-#             push!(cmd_args, "-f$(bloom_filter)")
-#         end
-#         if read_selection
-#             push!(cmd_args, "-S")
-#         end
-#         push!(cmd_args, fastq)
-#         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`)
-#     end
-#     return (;outdir, hifiasm_outprefix)
-# end
+Run hifiasm-meta for metagenomic long-read assembly.
+
+# Arguments
+- `fastq::String`: Input long-read FASTQ
+- `outdir::String`: Output directory path (default: "`basename(fastq)_hifiasm_meta`")
+- `bloom_filter::Int`: Bloom filter size; use -1 to leave default, 0 to disable for small genomes
+- `read_selection::Bool`: Enable `-S` read selection for low-complexity/mock datasets
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Path to output directory
+- `hifiasm_outprefix::String`: Prefix used for hifiasm-meta output files
+
+# Details
+- Uses hifiasm-meta's string graph approach for metagenomic strain resolution
+- Automatically creates and uses a conda environment with `hifiasm_meta`
+- Skips assembly if output files already exist at the specified prefix
+- Utilizes all available CPU threads
+- Bloom filter can be disabled (`-f0`) for small genomes to reduce memory usage from ~16GB
+- Read selection (`-S`) can be enabled for mock/small datasets to handle low complexity data
+"""
+function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloom_filter=-1, read_selection=false)
+    Mycelia.add_bioconda_env("hifiasm_meta")
+    hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
+    # Check if output directory exists before trying to read it
+    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
+
+    if isempty(hifiasm_outputs)
+        mkpath(outdir)
+        # Build command with optional flags
+        cmd_args = ["hifiasm_meta", "-t", string(Sys.CPU_THREADS), "-o", hifiasm_outprefix]
+        if bloom_filter >= 0
+            push!(cmd_args, "-f$(bloom_filter)")
+        end
+        if read_selection
+            push!(cmd_args, "-S")
+        end
+        push!(cmd_args, fastq)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`)
+    end
+    return (;outdir, hifiasm_outprefix)
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -504,6 +515,164 @@ function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_
         mkpath(outdir)
     end
     return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
+end
+
+# ============================================================================
+# PLASS / PenguiN Assemblers (protein and nucleotide)
+# ============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Assemble proteins with PLASS.
+
+# Arguments
+- `reads1::String`: Path to first reads file (FASTQ/FASTA)
+- `reads2::Union{String,Nothing}`: Optional paired-end mate
+- `outdir::String`: Output directory (default: "plass_output")
+- `min_seq_id::Union{Real,Nothing}`: Overlap identity threshold (e.g., 0.9)
+- `min_length::Union{Int,Nothing}`: Minimum codon length for ORF prediction (default in tool: 40)
+- `evalue::Union{Real,Nothing}`: E-value threshold for overlaps
+- `num_iterations::Union{Int,Nothing}`: Number of assembly iterations
+- `filter_proteins::Bool`: Whether to keep the neural network protein filter on (default true)
+
+# Returns
+Named tuple with:
+- `outdir::String`: Output directory
+- `assembly::String`: Protein assembly output path
+- `tmpdir::String`: Temporary working directory used by PLASS
+"""
+function run_plass_assemble(;reads1::String, reads2::Union{String,Nothing}=nothing, outdir::String="plass_output",
+    min_seq_id::Union{Real,Nothing}=nothing, min_length::Union{Int,Nothing}=nothing, evalue::Union{Real,Nothing}=nothing,
+    num_iterations::Union{Int,Nothing}=nothing, filter_proteins::Bool=true)
+
+    Mycelia.add_bioconda_env("plass")
+
+    if !isfile(reads1)
+        error("reads1 not found: $reads1")
+    end
+    if !isnothing(reads2) && !isfile(reads2)
+        error("reads2 not found: $reads2")
+    end
+
+    mkpath(outdir)
+    tmpdir = joinpath(outdir, "tmp")
+    mkpath(tmpdir)
+    assembly_out = joinpath(outdir, "assembly.fas")
+
+    cmd = ["plass", "assemble"]
+    push!(cmd, reads1)
+    if !isnothing(reads2)
+        push!(cmd, reads2)
+    end
+    push!(cmd, assembly_out, tmpdir)
+
+    if !isnothing(min_seq_id)
+        push!(cmd, "--min-seq-id", string(min_seq_id))
+    end
+    if !isnothing(min_length)
+        push!(cmd, "--min-length", string(min_length))
+    end
+    if !isnothing(evalue)
+        push!(cmd, "-e", string(evalue))
+    end
+    if !isnothing(num_iterations)
+        push!(cmd, "--num-iterations", string(num_iterations))
+    end
+    # Tool default is filter on; allow disabling
+    if !filter_proteins
+        push!(cmd, "--filter-proteins", "0")
+    end
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
+
+    return (;outdir, assembly=assembly_out, tmpdir)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Assemble nucleotides with PenguiN using protein-guided mode.
+
+# Arguments
+- `reads1::String`: Path to first reads file (FASTQ/FASTA)
+- `reads2::Union{String,Nothing}`: Optional paired-end mate
+- `outdir::String`: Output directory (default: "penguin_guided_output")
+
+# Returns
+Named tuple with:
+- `outdir::String`: Output directory
+- `assembly::String`: Nucleotide assembly output path
+- `tmpdir::String`: Temporary working directory
+"""
+function run_penguin_guided_nuclassemble(;reads1::String, reads2::Union{String,Nothing}=nothing, outdir::String="penguin_guided_output")
+    Mycelia.add_bioconda_env("plass")
+
+    if !isfile(reads1)
+        error("reads1 not found: $reads1")
+    end
+    if !isnothing(reads2) && !isfile(reads2)
+        error("reads2 not found: $reads2")
+    end
+
+    mkpath(outdir)
+    tmpdir = joinpath(outdir, "tmp")
+    mkpath(tmpdir)
+    assembly_out = joinpath(outdir, "assembly.fasta")
+
+    cmd = ["penguin", "guided_nuclassemble"]
+    push!(cmd, reads1)
+    if !isnothing(reads2)
+        push!(cmd, reads2)
+    end
+    push!(cmd, assembly_out, tmpdir)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
+
+    return (;outdir, assembly=assembly_out, tmpdir)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Assemble nucleotides with PenguiN (nucleotide-only mode).
+
+# Arguments
+- `reads1::String`: Path to first reads file (FASTQ/FASTA)
+- `reads2::Union{String,Nothing}`: Optional paired-end mate
+- `outdir::String`: Output directory (default: "penguin_output")
+
+# Returns
+Named tuple with:
+- `outdir::String`: Output directory
+- `assembly::String`: Nucleotide assembly output path
+- `tmpdir::String`: Temporary working directory
+"""
+function run_penguin_nuclassemble(;reads1::String, reads2::Union{String,Nothing}=nothing, outdir::String="penguin_output")
+    Mycelia.add_bioconda_env("plass")
+
+    if !isfile(reads1)
+        error("reads1 not found: $reads1")
+    end
+    if !isnothing(reads2) && !isfile(reads2)
+        error("reads2 not found: $reads2")
+    end
+
+    mkpath(outdir)
+    tmpdir = joinpath(outdir, "tmp")
+    mkpath(tmpdir)
+    assembly_out = joinpath(outdir, "assembly.fasta")
+
+    cmd = ["penguin", "nuclassemble"]
+    push!(cmd, reads1)
+    if !isnothing(reads2)
+        push!(cmd, reads2)
+    end
+    push!(cmd, assembly_out, tmpdir)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
+
+    return (;outdir, assembly=assembly_out, tmpdir)
 end
 
 # ============================================================================
