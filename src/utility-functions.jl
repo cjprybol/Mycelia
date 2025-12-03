@@ -1502,44 +1502,87 @@ function calculate_v(s,p)
     return v
 end
 
-#outdir="$(homedir())/software/bandage"
-# I don't think that this is very portable - assumes sudo and linux
-# can make a bandage_jll to fix this longer term
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Downloads and installs Bandage, a bioinformatics visualization tool for genome assembly graphs.
 
 # Arguments
-- `outdir="/usr/local/bin"`: Target installation directory for the Bandage executable
+- `outdir`: Target installation directory for the Bandage executable. Defaults to a writable bin directory inside the first depot.
 
 # Returns
 - Path to the installed Bandage executable
 
 # Details
-- Downloads Bandage v0.8.1 for Ubuntu
-- Installs required system dependencies (libxcb-glx0, libx11-xcb-dev, libfontconfig, libgl1-mesa-glx)
-- Attempts installation with sudo, falls back to root if sudo fails
+- Prefers an existing `BandageNG` or `Bandage` on PATH
+- Accepts overrides via `ENV["MYCELIA_BANDAGE_CMD"]` (absolute path) or `ENV["MYCELIA_BANDAGE_URL"]` (archive URL)
+- Defaults to BandageNG: Linux AppImage or macOS DMG
+- Installs into a user-writable directory without requiring sudo or apt packages
 - Skips download if Bandage is already installed at target location
 
 # Dependencies
-Requires system commands: wget, unzip, apt
+Requires system commands: unzip (for zip archives), hdiutil on macOS (for DMG)
 """
-function download_bandage(outdir="/usr/local/bin")
+function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
+    # Prefer a pre-installed BandageNG or Bandage on PATH
+    existing = something(Sys.which("BandageNG"), Sys.which("Bandage"), nothing)
+    if existing !== nothing
+        return existing
+    end
+
+    # Download a static build
+    mkpath(outdir)
     bandage_executable = joinpath(outdir, "Bandage")
-    if !isfile(bandage_executable)
-        run(`wget https://github.com/rrwick/Bandage/releases/download/v0.8.1/Bandage_Ubuntu_static_v0_8_1.zip`)
-        run(`unzip Bandage_Ubuntu_static_v0_8_1.zip`)
-        isfile("sample_LastGraph") && rm("sample_LastGraph")
-        isfile("Bandage_Ubuntu_static_v0_8_1.zip") && rm("Bandage_Ubuntu_static_v0_8_1.zip")
-        try # not root
-            run(`sudo mv Bandage $(outdir)`)
-            run(`sudo apt install libxcb-glx0 libx11-xcb-dev libfontconfig libgl1-mesa-glx -y`)
-        catch # root
-            run(`mv Bandage $(outdir)`)
-            run(`apt install libxcb-glx0 libx11-xcb-dev libfontconfig libgl1-mesa-glx -y`)
+    if isfile(bandage_executable)
+        return bandage_executable
+    end
+
+    url = get(ENV, "MYCELIA_BANDAGE_URL", nothing)
+    if url === nothing
+        if Sys.islinux()
+            url = "https://github.com/asl/BandageNG/releases/download/v2025.12.1/BandageNG-Linux-e80ad3a.AppImage"
+        elseif Sys.isapple()
+            url = "https://github.com/asl/BandageNG/releases/download/v2025.12.1/BandageNG-macOS-e80ad3a.dmg"
+        else
+            error("Bandage download is only automated for Linux and macOS.")
         end
     end
+
+    mktempdir() do tmp
+        archive_path = joinpath(tmp, basename(url))
+        Downloads.download(url, archive_path)
+        if endswith(lowercase(url), ".appimage")
+            cp(archive_path, bandage_executable; force=true)
+            chmod(bandage_executable, 0o755)
+        elseif endswith(lowercase(url), ".dmg")
+            Sys.isapple() || error("DMG installs are only supported on macOS")
+            mountpoint = joinpath(tmp, "mnt")
+            mkpath(mountpoint)
+            run(`hdiutil attach -nobrowse -mountpoint $(mountpoint) $(archive_path)`)
+            candidate = joinpath(mountpoint, "BandageNG.app", "Contents", "MacOS", "BandageNG")
+            isfile(candidate) || error("BandageNG executable not found in DMG")
+            cp(candidate, bandage_executable; force=true)
+            chmod(bandage_executable, 0o755)
+            run(`hdiutil detach $(mountpoint)`)
+        else
+            run(`unzip $(archive_path) -d $(tmp)`)
+            candidate = nothing
+            for (root, _, files) in walkdir(tmp)
+                for file in files
+                    path = joinpath(root, file)
+                    if basename(path) in ("Bandage", "BandageNG") && isfile(path)
+                        candidate = path
+                        break
+                    end
+                end
+                candidate === nothing || break
+            end
+            candidate === nothing && error("Bandage archive did not contain an executable")
+            cp(candidate, bandage_executable; force=true)
+            chmod(bandage_executable, 0o755)
+        end
+    end
+
     return bandage_executable
 end
 
