@@ -1525,7 +1525,8 @@ Requires system commands: unzip (for zip archives), hdiutil on macOS (for DMG)
 """
 function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
     # Prefer a pre-installed BandageNG or Bandage on PATH
-    existing = something(Sys.which("BandageNG"), Sys.which("Bandage"), nothing)
+    existing = Sys.which("BandageNG")
+    existing === nothing && (existing = Sys.which("Bandage"))
     if existing !== nothing
         return existing
     end
