@@ -15,11 +15,11 @@ Named tuple containing:
 - `outdir::String`: Path to output directory
 - `contigs::String`: Path to final contigs file
 - `fastg::String`: Path to MEGAHIT FASTG export
-- `gfa::String`: Path to Bandage-reduced GFA
+- `gfa::String`: Path to GFA converted with gfatools
 
 # Details
 - Automatically creates and uses a conda environment with megahit
-- Exports both FASTG and reduced GFA via Bandage
+- Exports both FASTG and GFA via gfatools
 - Optimized for metagenomic assemblies with varying coverage
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
@@ -82,7 +82,13 @@ function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit_toolkit contig2fastg $(final_k) $(contigs_path) $(fastg_path)`)
     end
 
-    gfa_path = Mycelia.bandage_reduce(fastg=fastg_path, gfa=fastg_path * ".gfa")
+    gfa_path = fastg_path * ".gfa"
+    if !isfile(gfa_path)
+        Mycelia.add_bioconda_env("gfatools")
+        open(gfa_path, "w") do io
+            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools view $(fastg_path)`, stdout=io))
+        end
+    end
 
     return (;outdir, contigs=contigs_path, fastg=fastg_path, gfa=gfa_path)
 end
