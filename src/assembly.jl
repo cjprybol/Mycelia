@@ -114,6 +114,7 @@ Named tuple containing:
 - `outdir::String`: Path to output directory
 - `contigs::String`: Path to contigs file
 - `scaffolds::String`: Path to scaffolds file
+- `graph::String`: Path to assembly graph in GFA format
 
 # Details
 - Automatically creates and uses a conda environment with spades
@@ -132,7 +133,7 @@ function run_metaspades(;fastq1, fastq2=nothing, outdir="metaspades_output", k_l
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades metaspades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
         end
     end
-    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"))
+    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"), graph=joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
 end
 
 """
@@ -151,6 +152,7 @@ Named tuple containing:
 - `outdir::String`: Path to output directory
 - `contigs::String`: Path to assembled contigs file
 - `scaffolds::String`: Path to scaffolds file
+- `graph::String`: Path to assembly graph in GFA format
 
 # Details
 - Automatically creates and uses a conda environment with spades
@@ -170,7 +172,7 @@ function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(Sys.CPU_THREADS)`)
         end
     end
-    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"))
+    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"), graph=joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
 end
 
 """
@@ -272,7 +274,8 @@ Run Flye assembler for long read assembly.
 # Returns
 Named tuple containing:
 - `outdir::String`: Path to output directory
-- `contigs::String`: Path to final assembly file
+- `assembly::String`: Path to final assembly FASTA file
+- `graph::String`: Path to assembly graph in GFA format
 
 # Details
 - Automatically creates and uses a conda environment with flye
@@ -291,7 +294,7 @@ function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="
         end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
-    return (;outdir, contigs=joinpath(outdir, "assembly.fasta"))
+    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"), graph=joinpath(outdir, "assembly_graph.gfa"))
 end
 
 """
@@ -310,7 +313,8 @@ Run metaFlye assembler for long-read metagenomic assembly.
 # Returns
 Named tuple containing:
 - `outdir::String`: Path to output directory
-- `contigs::String`: Path to final assembly file
+- `assembly::String`: Path to final assembly FASTA file
+- `graph::String`: Path to assembly graph in GFA format
 
 # Details
 - Uses metaFlye's repeat graph approach optimized for metagenomic data
@@ -341,7 +345,7 @@ function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, rea
 
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
-    return (;outdir, contigs=joinpath(outdir, "assembly.fasta"))
+    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"), graph=joinpath(outdir, "assembly_graph.gfa"))
 end
 
 """
@@ -359,7 +363,8 @@ Run Canu assembler for long read assembly.
 # Returns
 Named tuple containing:
 - `outdir::String`: Path to output directory
-- `contigs::String`: Path to final assembly file
+- `assembly::String`: Path to final assembly FASTA file
+- `graph::String`: Path to assembly graph in GFA format
 
 # Details
 - Automatically creates and uses a conda environment with canu
@@ -367,6 +372,7 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 - Can reduce `stopOnLowCoverage` for CI environments or low-coverage datasets
+- Uses `saveReads=false` to skip saving intermediate corrected/trimmed reads (avoids gzip issues on some filesystems)
 """
 function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10)
     Mycelia.add_bioconda_env("canu")
@@ -375,14 +381,14 @@ function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio",
     prefix = splitext(basename(fastq))[1]
     if !isfile(joinpath(outdir, "$(prefix).contigs.fasta"))
         if read_type == "pacbio"
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage) saveReads=false`)
         elseif read_type == "nanopore"
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage)`)
+            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(Sys.CPU_THREADS) stopOnLowCoverage=$(stopOnLowCoverage) saveReads=false`)
         else
             error("Unsupported read type: $(read_type). Use 'pacbio' or 'nanopore'.")
         end
     end
-    return (;outdir, contigs=joinpath(outdir, "$(prefix).contigs.fasta"))
+    return (;outdir, assembly=joinpath(outdir, "$(prefix).contigs.fasta"), graph=joinpath(outdir, "$(prefix).contigs.gfa"))
 end
 
 """
@@ -499,6 +505,7 @@ Run hybrid assembly combining short and long reads using Unicycler.
 Named tuple containing:
 - `outdir::String`: Path to output directory
 - `assembly::String`: Path to final assembly file
+- `graph::String`: Path to assembly graph in GFA format
 
 # Details
 - Automatically creates and uses a conda environment with unicycler
@@ -525,7 +532,7 @@ function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_
         # If output already exists, ensure directory exists for return value
         mkpath(outdir)
     end
-    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"))
+    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"), graph=joinpath(outdir, "assembly.gfa"))
 end
 
 # ============================================================================
