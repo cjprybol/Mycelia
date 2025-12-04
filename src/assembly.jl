@@ -79,15 +79,20 @@ function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200
     fastg_path = replace(contigs_path, ".fa" => ".fastg")
     if !isfile(fastg_path)
         final_k = infer_final_k(contigs_path)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit_toolkit contig2fastg $(final_k) $(contigs_path) $(fastg_path)`)
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit_core contig2fastg $(final_k) $(contigs_path)`, fastg_path))
+        @assert isfile(fastg_path)
+        @assert filesize(fastg_path) > 0
     end
 
     gfa_path = fastg_path * ".gfa"
     if !isfile(gfa_path)
+        # if isfile(fastg_path) && (filesize(fastg_path) > 0)
         Mycelia.add_bioconda_env("gfatools")
-        open(gfa_path, "w") do io
-            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools view $(fastg_path)`, stdout=io))
-        end
+        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools view $(fastg_path)`, gfa_path))
+        # else
+        #     @warn "final.contigs.fastg not found, skipping gfatools step"
+        #     gfa_path = missing
+        # end
     end
 
     return (;outdir, contigs=contigs_path, fastg=fastg_path, gfa=gfa_path)
