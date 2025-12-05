@@ -1,6 +1,6 @@
 # DNA BioSequence Graph - DoubleStrand Mode Test
 #
-# Run with: julia --project=. -e 'include("test/4_assembly/dna_biosequence_doublestrand_test.jl")'
+# Run with: julia --project=. -e 'include("test/4_assembly/dna_fasta_doublestrand_test.jl")'
 
 import Test
 import Mycelia

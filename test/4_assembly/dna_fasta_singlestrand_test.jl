@@ -1,6 +1,6 @@
 # DNA BioSequence Graph - SingleStrand Mode Test
 #
-# Run with: julia --project=. -e 'include("test/4_assembly/dna_biosequence_singlestrand_test.jl")'
+# Run with: julia --project=. -e 'include("test/4_assembly/dna_fasta_singlestrand_test.jl")'
 
 import Test
 import Mycelia

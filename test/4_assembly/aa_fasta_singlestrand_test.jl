@@ -1,6 +1,6 @@
 # Amino Acid BioSequence Graph - SingleStrand Mode Test
 #
-# Run with: julia --project=. -e 'include("test/4_assembly/aa_biosequence_singlestrand_test.jl")'
+# Run with: julia --project=. -e 'include("test/4_assembly/aa_fasta_singlestrand_test.jl")'
 
 import Test
 import Mycelia
