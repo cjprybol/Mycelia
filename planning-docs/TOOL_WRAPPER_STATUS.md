@@ -34,9 +34,9 @@
 
 **Status**:
 - ❌ sourmash: Commented out in `src/bioconda.jl:299`, NOT implemented
-- ❌ sylph: NOT FOUND
+- ✅ sylph: Implemented and tested (`run_sylph_profile` in `src/sequence-comparison.jl`, integration test in `test/7_comparative_pangenomics/sequence_comparison.jl`)
 
-**Verdict**: ❌ **MISSING** - Need wrappers for both tools
+**Verdict**: ⚠️ **PARTIAL** - sylph now wrapped and covered by tests; sourmash still missing
 
 ---
 
@@ -46,6 +46,7 @@
 - minimap (DNA alignment) + mosdepth (coverage analysis)
 - metaphlan (marker gene classification)
 - metabuli (DNA + AA classification)
+- skani (reference ANI)
 
 **Status**:
 - ✅ minimap: **FOUND** in `src/alignments-and-mapping.jl`
@@ -54,8 +55,9 @@
 - ❌ mosdepth: NOT FOUND
 - ❌ metaphlan: NOT FOUND (metagenomic-classification.jl is entirely commented out)
 - ❌ metabuli: NOT FOUND
+- ✅ skani: Implemented and tested (`skani_triangle`/`skani_dist` in `src/sequence-comparison.jl`, test in `test/7_comparative_pangenomics/sequence_comparison.jl`)
 
-**Verdict**: ⚠️ **PARTIAL** - minimap works, but missing mosdepth, metaphlan, metabuli
+**Verdict**: ⚠️ **PARTIAL** - minimap and skani work; mosdepth, metaphlan, metabuli remain missing
 
 ---
 
@@ -268,10 +270,9 @@
 
 **Classification & Profiling**:
 1. sourmash (commented in bioconda.jl)
-2. sylph
-3. metaphlan
-4. metabuli
-5. mosdepth
+2. metaphlan
+3. metabuli
+4. mosdepth
 
 **Assembly**:
 6. PLASS/penguin

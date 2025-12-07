@@ -754,6 +754,36 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Concatenate FASTQ/FASTA files (gz or plain) into a single gzipped output file.
+Maintains input order and works for both single-end and paired-end files (one stream).
+"""
+function concatenate_fastx(inputs::Vector{String}; output_path::String)
+    if isempty(inputs)
+        error("No input files provided for concatenation")
+    end
+    for f in inputs
+        if !isfile(f)
+            error("Input file not found: $(f)")
+        end
+    end
+    mkpath(dirname(output_path))
+    out_io = CodecZlib.GzipCompressorStream(open(output_path, "w"))
+    for f in inputs
+        if endswith(f, ".gz")
+            in_io = CodecZlib.GzipDecompressorStream(open(f, "r"))
+            write(out_io, read(in_io))
+            close(in_io)
+        else
+            write(out_io, read(f))
+        end
+    end
+    close(out_io)
+    return output_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Run FastQC on FASTQ files. Supports both single-end and paired-end reads.
 
 # Arguments

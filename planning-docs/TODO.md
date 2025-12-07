@@ -140,7 +140,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - [ ] If tests pass, uncomment in src/Mycelia.jl:129
 
 3. **Documentation Cleanup**:
-   - [ ] Remove false tool integration claims from old planning docs
+   - [x] Remove false tool integration claims from old planning docs (updated Sylph/Skani status)
    - [ ] Correct "89/89 tests passing" claim
    - [ ] Add warnings about commented-out code
 
@@ -149,7 +149,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - `src/iterative-assembly.jl` is included in `src/Mycelia.jl` but has no dedicated tests.
 - `src/development/cross-validation.jl` is commented out; the "89/89 tests passing" claim is false because no tests exist.
 - Four reinforcement learning implementations under `src/development/` are all commented out; associated tests live in `test/in_development/` and are not part of the main suite.
-- Tool wrapper status: 22 wrappers exist (13 tested, 9 untested, 1 commented out) but classification/binning/variant-calling/pangenome tools are still missing.
+- Tool wrapper status: 22 wrappers exist (13 tested, 9 untested, 1 commented out) but classification/binning/variant-calling/pangenome tools are still missing. Sylph and Skani are now implemented and tested.
 
 **Conclusion**: Old planning docs overstated completion. Code quality is good, but accessibility and testing are the gaps.
 

@@ -9,6 +9,7 @@ import BioSequences
 import FASTX
 import SHA
 import DelimitedFiles
+import StableRNGs
 
 Test.@testset "Sequence Comparison Tests" begin
     Test.@testset "Mash Distance Calculation" begin
@@ -246,5 +247,118 @@ Test.@testset "Sequence Comparison Tests" begin
         string_seq = "ATCGATCG"
         
         Test.@test Mycelia.seq2sha256(dna_seq) == Mycelia.seq2sha256(string_seq)
+    end
+
+    Test.@testset "Sylph profiling with simulated coverage ratios" begin
+        rng = StableRNGs.StableRNG(42)
+        workdir = mktempdir()
+
+        ref_a = Mycelia.download_genome_by_accession(accession="NC_001422.1", outdir=workdir, compressed=false)
+        fasta_records = collect(Mycelia.open_fastx(ref_a))
+        Test.@test length(fasta_records) == 1
+        seq_record = first(fasta_records)
+        seq_str = String(FASTX.sequence(seq_record))
+
+        mutated_seq = Mycelia.mutate_dna_substitution_fraction(seq_str; fraction=0.05, rng=rng)
+        ref_b = joinpath(workdir, "phix_mutated.fasta")
+        Mycelia.write_fasta(outfile=ref_b, records=[FASTX.FASTA.Record("phix_mutated", BioSequences.LongDNA{4}(mutated_seq))])
+
+        reads_a = Mycelia.simulate_illumina_reads(fasta=ref_a, coverage=12, read_length=100, quiet=true, paired=true, rndSeed=123)
+        reads_b = Mycelia.simulate_illumina_reads(fasta=ref_b, coverage=6, read_length=100, quiet=true, paired=true, rndSeed=456)
+
+        combined_r1 = Mycelia.concatenate_fastx([reads_a.forward_reads, reads_b.forward_reads];
+            output_path=joinpath(workdir, "combined_R1.fq.gz"))
+        combined_r2 = Mycelia.concatenate_fastx([reads_a.reverse_reads, reads_b.reverse_reads];
+            output_path=joinpath(workdir, "combined_R2.fq.gz"))
+
+        result = Mycelia.run_sylph_profile([ref_a, ref_b];
+            first_pairs=[combined_r1],
+            second_pairs=[combined_r2],
+            threads=2,
+            k=31,
+            min_ani=90.0,
+            quiet=true,
+            outdir=workdir)
+
+        df = result.table
+        lower_cols = Dict(lowercase(string(c)) => c for c in names(df))
+
+        ref_col_key = something(findfirst(k -> occursin("reference", k) || occursin("genome", k), keys(lower_cols)), nothing)
+        abundance_col_key = something(findfirst(k -> occursin("sequence_abundance", k) || occursin("abundance", k), keys(lower_cols)), nothing)
+        ani_col_key = something(findfirst(k -> occursin("ani", k), keys(lower_cols)), nothing)
+        Test.@test !isnothing(ref_col_key) "Expected a reference column in Sylph output"
+        Test.@test !isnothing(abundance_col_key) "Expected an abundance column in Sylph output"
+        Test.@test !isnothing(ani_col_key) "Expected an ANI column in Sylph output"
+
+        ref_col = lower_cols[ref_col_key]
+        abundance_col = lower_cols[abundance_col_key]
+        ani_col = lower_cols[ani_col_key]
+
+        ref_to_abundance = Dict{String,Float64}()
+        ref_to_ani = Dict{String,Float64}()
+        for row in eachrow(df)
+            ref_name = basename(String(row[ref_col]))
+            ref_to_abundance[ref_name] = float(row[abundance_col])
+            ref_to_ani[ref_name] = float(row[ani_col])
+        end
+
+        ref_a_name = basename(ref_a)
+        ref_b_name = basename(ref_b)
+        Test.@test ref_to_abundance[ref_a_name] > ref_to_abundance[ref_b_name]
+        expected_ratio = 12 / (12 + 6)
+        observed_ratio = ref_to_abundance[ref_a_name] / (ref_to_abundance[ref_a_name] + ref_to_abundance[ref_b_name])
+        Test.@test isapprox(observed_ratio, expected_ratio; atol=0.15)
+        Test.@test ref_to_ani[ref_a_name] ≥ 0.9
+        Test.@test ref_to_ani[ref_b_name] ≥ 0.85
+
+        rm(workdir; recursive=true, force=true)
+    end
+
+    Test.@testset "Skani ANI estimates on synthetic variants" begin
+        rng = StableRNGs.StableRNG(1234)
+        workdir = mktempdir()
+
+        ref_a = Mycelia.download_genome_by_accession(accession="NC_001422.1", outdir=workdir, compressed=false)
+        fasta_records = collect(Mycelia.open_fastx(ref_a))
+        seq_record = first(fasta_records)
+        seq_str = String(FASTX.sequence(seq_record))
+
+        mutated_seq = Mycelia.mutate_dna_substitution_fraction(seq_str; fraction=0.05, rng=rng)
+        ref_b = joinpath(workdir, "phix_95ani.fasta")
+        Mycelia.write_fasta(outfile=ref_b, records=[FASTX.FASTA.Record("phix_95ani", BioSequences.LongDNA{4}(mutated_seq))])
+
+        df = Mycelia.skani_dist([ref_a, ref_b]; small_genomes=true, threads=2)
+        lower_cols = Dict(lowercase(string(c)) => c for c in names(df))
+        ani_key = something(findfirst(k -> occursin("ani", k), keys(lower_cols)), nothing)
+        af_key = something(findfirst(k -> occursin("af", k), keys(lower_cols)), nothing)
+        ref1_key = something(findfirst(k -> occursin("ref", k) || occursin("genome1", k) || occursin("query", k), keys(lower_cols)), nothing)
+        ref2_key = something(findfirst(k -> occursin("genome2", k) || occursin("target", k) || occursin("reference", k), keys(lower_cols)), nothing)
+        Test.@test !isnothing(ani_key) "Expected an ANI column from skani dist"
+        Test.@test !isnothing(af_key) "Expected an aligned-fraction column from skani dist"
+
+        ani_col = lower_cols[ani_key]
+        af_col = lower_cols[af_key]
+        ref1_col = isnothing(ref1_key) ? nothing : lower_cols[ref1_key]
+        ref2_col = isnothing(ref2_key) ? nothing : lower_cols[ref2_key]
+
+        ref_a_base = lowercase(basename(ref_a))
+        ref_b_base = lowercase(basename(ref_b))
+
+        found = false
+        for row in eachrow(df)
+            lhs = ref1_col === nothing ? "" : lowercase(string(row[ref1_col]))
+            rhs = ref2_col === nothing ? "" : lowercase(string(row[ref2_col]))
+            same_pair = (occursin(ref_a_base, lhs) && occursin(ref_b_base, rhs)) ||
+                        (occursin(ref_b_base, lhs) && occursin(ref_a_base, rhs))
+            ani_val = float(row[ani_col])
+            af_val = float(row[af_col])
+            if (ref1_col === nothing || ref2_col === nothing || same_pair) && 0.9 < ani_val < 0.99 && af_val > 0.8
+                found = true
+                break
+            end
+        end
+        Test.@test found "Expected skani dist to report a comparison between the two genomes with ANI/AF in expected ranges"
+
+        rm(workdir; recursive=true, force=true)
     end
 end

@@ -52,4 +52,19 @@ include("5_validation/mosdepth_coverage_qc.jl")
 # include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 
+# Comparative pangenomics: enable lightweight, synthetic-only suites by default.
+include("7_comparative_pangenomics/distance_metrics.jl")
+include("7_comparative_pangenomics/pangenome.jl")
+include("7_comparative_pangenomics/panproteome.jl")
+include("7_comparative_pangenomics/pantranscriptome.jl")
+include("7_comparative_pangenomics/phylogenetics.jl")
+include("7_comparative_pangenomics/sequence_classification.jl")
+
+# Network/tooling heavy suites (NCBI downloads, conda tools) are opt-in.
+# if get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+include("7_comparative_pangenomics/sequence_comparison.jl")   # sylph/skani, ART reads, NCBI fetch
+include("7_comparative_pangenomics/multiomics_alignment.jl")  # badread + minimap2
+include("7_comparative_pangenomics/blastdb_integration.jl")   # BLAST DB downloads
+# end
+
 include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
