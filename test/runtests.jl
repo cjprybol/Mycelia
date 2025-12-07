@@ -43,6 +43,7 @@ include("4_assembly/comprehensive_type_stable_corrected_tests.jl")
 include("4_assembly/string-graph-helpers.jl")
 include("4_assembly/end_to_end_graph_tests.jl") # may not yet be fully complete - review and confirm
 include("4_assembly/comprehensive_correctness_tests.jl")
+include("4_assembly/bandage_integration.jl")
 # MEGAHIT/Bandage/Qualimap end-to-end workflow on PhiX
 include("4_assembly/megahit_phix_workflow.jl")
 # include("4_assembly/end_to_end_assembly_tests.jl")

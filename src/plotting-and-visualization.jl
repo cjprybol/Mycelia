@@ -1254,18 +1254,24 @@ Generate a visualization of a genome assembly graph using Bandage.
 
 # Arguments
 - `gfa`: Path to input GFA (Graphical Fragment Assembly) file
-- `img`: Optional output image path. Defaults to GFA filename with .png extension
+- `img`: Optional output image path. Defaults to `gfa * ".png"` or `format` extension
+- `format`: Optional image format extension (e.g., `png`, `svg`) used when `img` is not provided
+- `extra_args`: Additional CLI flags passed directly to Bandage (e.g., layout or label options)
+- `force`: Re-render even if the output already exists
 
 # Returns
 - Path to the generated image file
 """
-function bandage_visualize(;gfa, img=gfa*".png")
+function bandage_visualize(; gfa, img=nothing, format::Union{Nothing, String}=nothing, extra_args::AbstractVector{<:AbstractString}=String[], force::Bool=false)
     # run(`$(bandage) image --helpall`)
     bandage = Mycelia.download_bandage()
-    if !isfile(img)
-        run(`$(bandage) image $(gfa) $(img)`)
+    target_img = something(img, gfa * "." * (format === nothing ? "png" : format))
+    if force || !isfile(target_img)
+        cmd_parts = [bandage, "image", gfa, target_img]
+        append!(cmd_parts, extra_args)
+        run(Cmd(cmd_parts))
     end
-    return img
+    return target_img
 end
 
 """

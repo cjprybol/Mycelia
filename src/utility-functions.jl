@@ -1524,6 +1524,11 @@ Downloads and installs Bandage, a bioinformatics visualization tool for genome a
 Requires system commands: unzip (for zip archives), hdiutil on macOS (for DMG)
 """
 function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
+    cmd_override = get(ENV, "MYCELIA_BANDAGE_CMD", nothing)
+    if cmd_override !== nothing
+        return cmd_override
+    end
+
     # Prefer a pre-installed BandageNG or Bandage on PATH
     existing = Sys.which("BandageNG")
     existing === nothing && (existing = Sys.which("Bandage"))
