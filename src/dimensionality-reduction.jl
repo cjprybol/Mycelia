@@ -1,8 +1,12 @@
+const EXP_FAMILY_PCA_ENABLED = false  # ExpFamilyPCA removed due to circular deps and poor perf
+
 """
     sanity_check_matrix(M::AbstractMatrix)
 
 Checks matrix shape, value types, and distributional properties.
-Suggests the most appropriate ePCA function and distance metric.
+Suggests the most appropriate ePCA function and distance metric. When
+`EXP_FAMILY_PCA_ENABLED == false`, `suggested_epca` will be `nothing`
+for ExpFamilyPCA-backed methods.
 
 Returns a NamedTuple with fields:
 - `n_features`, `n_samples`
@@ -83,7 +87,9 @@ function sanity_check_matrix(M::AbstractMatrix)
         suggested_epca = :pca_transform
         suggested_distance = :euclidean_distance
     end
-    summary[:suggested_epca] = suggested_epca
+    summary[:suggested_epca_raw] = suggested_epca
+    summary[:suggested_epca] = EXP_FAMILY_PCA_ENABLED || suggested_epca == :pca_transform ? suggested_epca : nothing
+    summary[:exp_family_pca_enabled] = EXP_FAMILY_PCA_ENABLED
     summary[:suggested_distance] = suggested_distance
 
     # Print warnings for assumption violations
@@ -177,6 +183,11 @@ function pca_transform(
     chosen_k = chosen_k
   )
 end
+
+#=
+ExpFamilyPCA-backed transforms are disabled due to dependency issues and
+performance concerns. The original implementations are left here for
+reference and can be re-enabled once the dependency is restored.
 
 """
     logistic_pca_epca(M::AbstractMatrix{Bool}; k::Int=0)
@@ -314,6 +325,7 @@ function negbin_pca_epca(
       loadings = model.V        # (k × n_features)
     )
 end
+=#
 
 
 # ── 4. PCoA from a distance matrix ───────────────────────────────────────────
@@ -383,6 +395,11 @@ function umap_embed(X::AbstractMatrix{<:Real};
 
     return model
 end
+
+#=
+Additional ExpFamilyPCA transforms (binomial, continuous Bernoulli,
+gamma, Gaussian) were here prior to disabling the dependency. Re-enable
+when ExpFamilyPCA is reinstated.
 
 # ── Binomial EPCA ──────────────────────────────────────────────────────────
 """
@@ -546,3 +563,4 @@ function gaussian_pca_epca(
       loadings = model.V        # (k × n_features)
     )
 end
+=#

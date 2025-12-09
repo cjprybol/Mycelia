@@ -205,6 +205,98 @@ function get_all_sinks(graph)
 end
 
 # ============================================================================
+# Source and Sink Sequence Helpers
+# ============================================================================
+
+"""
+    find_source_sequences(graph::MetaGraphsNext.MetaGraph)
+
+Return labels for vertices with no incoming edges (assembly start points).
+"""
+function find_source_sequences(graph::MetaGraphsNext.MetaGraph)
+    return get_all_sources(graph)
+end
+
+"""
+    find_sink_sequences(graph::MetaGraphsNext.MetaGraph)
+
+Return labels for vertices with no outgoing edges (assembly end points).
+"""
+function find_sink_sequences(graph::MetaGraphsNext.MetaGraph)
+    return get_all_sinks(graph)
+end
+
+# """
+#     find_source_sequences(graph)
+
+# Find sequences that have no incoming edges (potential assembly starting points).
+
+# # Returns
+# - `Vector`: Sequences with no predecessors
+
+# # Examples
+# ```julia
+# sources = find_source_sequences(graph)
+# println("Found \$(length(sources)) source sequences")
+# ```
+# """
+# function find_source_sequences(graph::MetaGraphsNext.MetaGraph)
+#     sources = []
+
+#     for seq_label in MetaGraphsNext.labels(graph)
+#         # Check if this vertex has any incoming edges
+#         has_incoming = false
+#         for (src, dst) in MetaGraphsNext.edge_labels(graph)
+#             if dst == seq_label
+#                 has_incoming = true
+#                 break
+#             end
+#         end
+
+#         if !has_incoming
+#             push!(sources, seq_label)
+#         end
+#     end
+
+#     return sources
+# end
+
+# """
+#     find_sink_sequences(graph)
+
+# Find sequences that have no outgoing edges (potential assembly ending points).
+
+# # Returns
+# - `Vector`: Sequences with no successors
+
+# # Examples
+# ```julia
+# sinks = find_sink_sequences(graph)
+# println("Found \$(length(sinks)) sink sequences")
+# ```
+# """
+# function find_sink_sequences(graph::MetaGraphsNext.MetaGraph)
+#     sinks = []
+
+#     for seq_label in MetaGraphsNext.labels(graph)
+#         # Check if this vertex has any outgoing edges
+#         has_outgoing = false
+#         for (src, dst) in MetaGraphsNext.edge_labels(graph)
+#             if src == seq_label
+#                 has_outgoing = true
+#                 break
+#             end
+#         end
+
+#         if !has_outgoing
+#             push!(sinks, seq_label)
+#         end
+#     end
+
+#     return sinks
+# end
+
+# ============================================================================
 # Unitig Extension
 # ============================================================================
 

@@ -75,12 +75,12 @@ function mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=
 end
 
 """
-    mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA{4}}; fraction::Float64, rng::AbstractRNG=Random.default_rng())
+    mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA{4}}; fraction::Float64, rng::Random.AbstractRNG=Random.default_rng())
 
 Introduce substitutions at approximately `fraction` of positions (no indels) for DNA sequences.
 Returns the mutated sequence in the same type as provided.
 """
-function mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA{4}}; fraction::Float64, rng::AbstractRNG=Random.default_rng())
+function mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA{4}}; fraction::Float64, rng::Random.AbstractRNG=Random.default_rng())
     if !(0.0 ≤ fraction ≤ 1.0)
         error("fraction must be between 0 and 1, got $(fraction)")
     end
