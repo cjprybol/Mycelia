@@ -5,12 +5,6 @@
 #   Benchmarks: julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:  julia --project=. tutorials/run_all_tutorials.jl
 
-# Aqua.jl quality assurance tests
-include("aqua.jl")
-
-# JET.jl static analysis - uncomment to enable (can be slow)
-include("jet.jl")
-
 # Helper function to include all test files in a directory
 function include_all_tests(dir)
     test_count = 0
@@ -24,6 +18,12 @@ function include_all_tests(dir)
     end
     return test_count
 end
+
+# Aqua.jl quality assurance tests
+include("aqua.jl")
+
+# JET.jl static analysis - uncomment to enable (can be slow)
+include("jet.jl")
 
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
@@ -44,15 +44,15 @@ include("4_assembly/string-graph-helpers.jl")
 include("4_assembly/end_to_end_graph_tests.jl") # may not yet be fully complete - review and confirm
 include("4_assembly/comprehensive_correctness_tests.jl")
 include("4_assembly/bandage_integration.jl")
-# MEGAHIT/Bandage/Qualimap end-to-end workflow on PhiX
-include("4_assembly/megahit_phix_workflow.jl")
+include("4_assembly/megahit_phix_workflow.jl") # MEGAHIT/Bandage/Qualimap end-to-end workflow on PhiX
 # include("4_assembly/end_to_end_assembly_tests.jl")
 
 # include_all_tests(joinpath(@__DIR__, "5_validation"))
 include("5_validation/mosdepth_coverage_qc.jl")
-# include_all_tests(joinpath(@__DIR__, "6_annotation"))
-# include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 
+# include_all_tests(joinpath(@__DIR__, "6_annotation"))
+
+# include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # Comparative pangenomics: enable lightweight, synthetic-only suites by default.
 include("7_comparative_pangenomics/distance_metrics.jl")
 include("7_comparative_pangenomics/pangenome.jl")

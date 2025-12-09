@@ -2659,6 +2659,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
     gauss_stds = [rand(0.5:0.1:2.0, n_features) for _ in 1:n_distributions]
     gauss_samples = [hcat([rand.(Distributions.Normal.(μ, σ)) for _ in 1:n_samples]...) for (μ, σ) in zip(gauss_means, gauss_stds)]
     gauss_matrix = hcat(gauss_samples...)
+    gauss_matrix .-= Statistics.mean(gauss_matrix; dims=2)  # center features for PCA expectations
     gauss_labels = repeat(1:n_distributions, inner=n_samples)
     perm = Random.shuffle(1:length(gauss_labels))
     shuffled_gauss_matrix = gauss_matrix[:, perm]

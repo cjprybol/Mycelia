@@ -86,7 +86,7 @@ function mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA
     end
     chars = seq isa String ? collect(seq) : collect(String(seq))
     n_mut = ceil(Int, fraction * length(chars))
-    idxs = randperm(rng, length(chars))[1:n_mut]
+    idxs = Random.randperm(rng, length(chars))[1:n_mut]
     for idx in idxs
         current = chars[idx]
         choices = setdiff(['A','C','G','T'], [current])

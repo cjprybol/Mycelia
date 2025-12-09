@@ -11,11 +11,11 @@
 # julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/phylogenetics.jl", "test/7_comparative_pangenomics", execute=false)'
 # ````
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
-import Revise
+# import Pkg
+# if isinteractive()
+#     Pkg.activate("..")
+# end
+# import Revise
 import Test
 import Mycelia
 import FASTX
@@ -26,7 +26,9 @@ Test.@testset "phylogenetic analyses" begin
     recs = [Mycelia.random_fasta_record(moltype = :DNA, seed = i, L = 12) for i in 1:3]
     counts_list = [Mycelia.count_canonical_kmers(Kmers.DNAKmer{3}, [r]) for r in recs]
 
-    all_kmers = sort(collect(union(vcat(map(keys, counts_list)...))))
+    # Gather unique k-mers across all sequences in a concrete vector
+    all_kmers = unique(vcat([collect(keys(counts)) for counts in counts_list]...))
+    sort!(all_kmers)
     matrix = zeros(Int, length(all_kmers), length(recs))
     for (j, counts) in enumerate(counts_list)
         for (kmer, count) in counts

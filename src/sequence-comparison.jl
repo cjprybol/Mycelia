@@ -510,6 +510,7 @@ function merge_and_map_single_end_samples(;
     # Determine file paths for .tsv.gz and .jld2
     tsv_file = ".tsv.gz" in outformats ? outbase * ".tsv.gz" : nothing
     jld2_file = ".jld2" in outformats ? outbase * ".jld2" : nothing
+    results_table = nothing
     if !all(isfile, results_table_outfiles) || any(x -> filesize(x) == 0, results_table_outfiles)
         # Read tables
         read_id_mapping_table = CSV.read(
@@ -535,10 +536,18 @@ function merge_and_map_single_end_samples(;
                 @warn "Unknown output format: $fmt"
             end
         end
+    else
+        if !isnothing(jld2_file) && isfile(jld2_file)
+            results_table = JLD2_read_table(jld2_file)
+        elseif !isnothing(tsv_file) && isfile(tsv_file)
+            io = CodecZlib.GzipDecompressorStream(open(tsv_file))
+            results_table = CSV.read(io, DataFrames.DataFrame; delim='\t')
+            close(io)
+        end
     end
 
     return (
-        # results_table = results_table,
+        results_table = results_table,
         joint_fastq_file = fastq_out,
         fastq_id_mapping_table = tsv_out,
         bam_file = minimap_result.outfile,
