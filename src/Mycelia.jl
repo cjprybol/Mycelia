@@ -1,7 +1,7 @@
 module Mycelia
 
-# Enable precompilation for faster loading
-__precompile__(false)  # Disabled for testing framework fix
+# Enable precompilation for faster loading; set JULIA_PKG_PRECOMPILE=0 to skip
+__precompile__()
 
 import AlgebraOfGraphics
 import Arrow
