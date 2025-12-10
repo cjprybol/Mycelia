@@ -15,6 +15,7 @@ import Mycelia
 
 const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
 const RUN_EXTERNAL = RUN_ALL || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+# const RUN_EXTERNAL = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
 Test.@testset "Binning Tools Integration" begin
 

@@ -53,6 +53,15 @@ include("4_assembly/megahit_phix_workflow.jl") # MEGAHIT/Bandage/Qualimap end-to
 # TODO: fix
 # include("4_assembly/end_to_end_assembly_tests.jl")
 
+# # Rhizomorph graph ecosystem tests (added 2025-12-10)
+# # Path finding and sequence reconstruction
+# include("4_assembly/path_finding_test.jl")
+# include("4_assembly/rhizomorph_doublestrand_traversal_test.jl")
+# include("4_assembly/rhizomorph_canonical_path_test.jl")
+# include("4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl")
+# include("4_assembly/rhizomorph_qualmer_rc_evidence_test.jl")
+# include("4_assembly/rhizomorph_doublestrand_files_test.jl")
+# include("4_assembly/rhizomorph_conversion_errors_test.jl")
 # Rhizomorph graph ecosystem tests (added 2025-12-10)
 # Path finding and sequence reconstruction
 include("4_assembly/path_finding_test.jl")
@@ -62,6 +71,20 @@ include("4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl")
 include("4_assembly/rhizomorph_qualmer_rc_evidence_test.jl")
 include("4_assembly/rhizomorph_doublestrand_files_test.jl")
 include("4_assembly/rhizomorph_conversion_errors_test.jl")
+
+# K-mer graph construction tests
+include("4_assembly/dna_kmer_singlestrand_test.jl")
+include("4_assembly/dna_kmer_doublestrand_test.jl")
+include("4_assembly/rna_kmer_singlestrand_test.jl")
+include("4_assembly/rna_kmer_doublestrand_test.jl")
+include("4_assembly/rna_kmer_graph_test.jl")
+include("4_assembly/aa_kmer_singlestrand_test.jl")
+include("4_assembly/aa_kmer_graph_test.jl")
+include("4_assembly/kmer_vertex_data_test.jl")
+include("4_assembly/kmer_edge_data_test.jl")
+
+# include_all_tests(joinpath(@__DIR__, "5_validation"))
+include("5_validation/mosdepth_coverage_qc.jl")
 
 # K-mer graph construction tests
 include("4_assembly/dna_kmer_singlestrand_test.jl")
@@ -87,6 +110,16 @@ include("5_validation/coverm_wrappers.jl")
 include("5_validation/coverm_integration_extended.jl")
 include("5_validation/mosdepth_coverage_qc.jl")
 include("5_validation/quast_busco_wrappers_test.jl")
+# include("5_validation/mosdepth_coverage_qc.jl")
+# include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
+# Comparative pangenomics: enable lightweight, synthetic-only suites by default.
+include("7_comparative_pangenomics/distance_metrics.jl")
+include("7_comparative_pangenomics/pangenome.jl")
+include("7_comparative_pangenomics/panproteome.jl")
+include("7_comparative_pangenomics/pantranscriptome.jl")
+include("7_comparative_pangenomics/phylogenetics.jl")
+include("7_comparative_pangenomics/sequence_classification.jl")
+include("7_comparative_pangenomics/pangenome_wrappers.jl")
 
 include_all_tests(joinpath(@__DIR__, "6_annotation"))
 
