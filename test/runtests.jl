@@ -72,19 +72,19 @@ include("4_assembly/rhizomorph_qualmer_rc_evidence_test.jl")
 include("4_assembly/rhizomorph_doublestrand_files_test.jl")
 include("4_assembly/rhizomorph_conversion_errors_test.jl")
 
-# K-mer graph construction tests
-include("4_assembly/dna_kmer_singlestrand_test.jl")
-include("4_assembly/dna_kmer_doublestrand_test.jl")
-include("4_assembly/rna_kmer_singlestrand_test.jl")
-include("4_assembly/rna_kmer_doublestrand_test.jl")
-include("4_assembly/rna_kmer_graph_test.jl")
-include("4_assembly/aa_kmer_singlestrand_test.jl")
-include("4_assembly/aa_kmer_graph_test.jl")
-include("4_assembly/kmer_vertex_data_test.jl")
-include("4_assembly/kmer_edge_data_test.jl")
+# # K-mer graph construction tests
+# include("4_assembly/dna_kmer_singlestrand_test.jl")
+# include("4_assembly/dna_kmer_doublestrand_test.jl")
+# include("4_assembly/rna_kmer_singlestrand_test.jl")
+# include("4_assembly/rna_kmer_doublestrand_test.jl")
+# include("4_assembly/rna_kmer_graph_test.jl")
+# include("4_assembly/aa_kmer_singlestrand_test.jl")
+# include("4_assembly/aa_kmer_graph_test.jl")
+# include("4_assembly/kmer_vertex_data_test.jl")
+# include("4_assembly/kmer_edge_data_test.jl")
 
-# include_all_tests(joinpath(@__DIR__, "5_validation"))
-include("5_validation/mosdepth_coverage_qc.jl")
+# # include_all_tests(joinpath(@__DIR__, "5_validation"))
+# include("5_validation/mosdepth_coverage_qc.jl")
 
 # K-mer graph construction tests
 include("4_assembly/dna_kmer_singlestrand_test.jl")
@@ -135,6 +135,22 @@ include("7_comparative_pangenomics/pangenome_wrappers.jl")
 
 include("7_comparative_pangenomics/sequence_comparison.jl")   # sylph/skani, ART reads, NCBI fetch
 include("7_comparative_pangenomics/multiomics_alignment.jl")  # badread + minimap2
+# # include_all_tests(joinpath(@__DIR__, "6_annotation"))
+
+# # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
+# # Comparative pangenomics: enable lightweight, synthetic-only suites by default.
+# include("7_comparative_pangenomics/distance_metrics.jl")
+# include("7_comparative_pangenomics/pangenome.jl")
+# include("7_comparative_pangenomics/panproteome.jl")
+# include("7_comparative_pangenomics/pantranscriptome.jl")
+# include("7_comparative_pangenomics/phylogenetics.jl")
+# include("7_comparative_pangenomics/sequence_classification.jl")
+# include("7_comparative_pangenomics/pangenome_wrappers.jl")
+
+# # Network/tooling heavy suites (NCBI downloads, conda tools) are opt-in.
+# # if get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+# include("7_comparative_pangenomics/sequence_comparison.jl")   # sylph/skani, ART reads, NCBI fetch
+# include("7_comparative_pangenomics/multiomics_alignment.jl")  # badread + minimap2
 include("7_comparative_pangenomics/blastdb_integration.jl")   # BLAST DB downloads
 
 include_all_tests(joinpath(@__DIR__, "8_tool_integration"))

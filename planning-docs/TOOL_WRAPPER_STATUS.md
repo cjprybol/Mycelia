@@ -31,6 +31,7 @@
 **2025-12-10 Update**:
 - Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
 - mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
+- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications
 
 ---
 
