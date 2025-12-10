@@ -21,10 +21,12 @@
 | **Classification** | 5/5 | 1/5 | 0 |
 | **Binning** | 0/7 | 0/7 | 7 |
 | **Post-Binning** | 0/2 | 0/2 | 2 |
+| **Sequence Encoding** | 1/1 | 1/1 | 0 |
 
 **2025-12-10 Update**:
 - Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
 - mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
+- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications
 
 ---
 
@@ -197,7 +199,24 @@
 
 ---
 
-### 7. Strain-Aware Tools
+### 7. Sequence Encoding/Tokenization
+
+**Tools**:
+- SentencePiece (subword tokenization for ML/NLP applications)
+
+**Status**:
+- ✅ SentencePiece: **IMPLEMENTED & TESTED** in `src/sentencepiece.jl` (2025-12-10)
+  - Functions: `train_sentencepiece_model()`, `train_sentencepiece_model_from_sequences()`, `train_sentencepiece_model_from_fasta()`, `train_sentencepiece_model_from_fastq()`, `encode_sentencepiece()`, `decode_sentencepiece()`, `load_sentencepiece_model()`, `get_sentencepiece_vocab()`, `sentencepiece_vocab_size()`, `is_valid_sentencepiece_model()`
+  - Auto-installs via pip in conda environment on first use
+  - Supports DNA, RNA, AA sequences, ASCII, and Unicode text
+  - Supports subword regularization/sampling for neural network training
+  - Tests: `test/8_tool_integration/sentencepiece.jl`
+
+**Verdict**: ✅ **COMPLETE** - SentencePiece implemented with comprehensive wrapper
+
+---
+
+### 8. Strain-Aware Tools
 
 **Tools** (from old planning docs):
 - HyLight
@@ -288,6 +307,10 @@
 7. homopolish - `src/assembly.jl:2236`
 8. unicycler - `src/assembly.jl:443`
 9. metavelvet - `src/assembly.jl:2540`
+
+### ✅ IMPLEMENTED & TESTED - Sequence Encoding (1 tool)
+
+1. sentencepiece - `src/sentencepiece.jl` + `test/8_tool_integration/sentencepiece.jl`
 
 ### ⚠️ COMMENTED OUT (1 tool)
 

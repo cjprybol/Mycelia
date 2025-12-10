@@ -78,12 +78,12 @@ function run_sylph_profile(reference_fastas::Vector{String};
     syldb_path = db_prefix * ".syldb"
     sample_dir = workdir
 
-    list_inputs = String[]
-    append!(list_inputs, reference_fastas)
-    append!(list_inputs, sample_reads)
-
     sketch_args = ["sketch", "-t", string(threads), "-c", string(subsampling), "-k", string(k),
                    "--min-spacing", string(min_spacing), "-o", db_prefix, "-d", sample_dir]
+    for fasta in reference_fastas
+        push!(sketch_args, "-g")
+        push!(sketch_args, fasta)
+    end
     if !isempty(first_pairs)
         push!(sketch_args, "-1")
         append!(sketch_args, first_pairs)
@@ -92,7 +92,7 @@ function run_sylph_profile(reference_fastas::Vector{String};
         push!(sketch_args, "-2")
         append!(sketch_args, second_pairs)
     end
-    append!(sketch_args, list_inputs)
+    append!(sketch_args, sample_reads)
 
     sketch_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sylph sylph $sketch_args`
     if quiet
@@ -178,7 +178,7 @@ function skani_triangle(fasta_files::Vector{String};
             end
         end
         
-        cmd_args = ["triangle", "-l", list_file, "-t", string(threads)]
+        cmd_args = ["triangle", "--ql", list_file, "-t", string(threads)]
         
         if small_genomes
             push!(cmd_args, "--small-genomes")
@@ -249,7 +249,7 @@ function skani_dist(fasta_files::Vector{String};
             end
         end
 
-        cmd_args = ["dist", "-l", list_file, "-t", string(threads), "-o", out_path]
+        cmd_args = ["dist", "--ql", list_file, "--rl", list_file, "-t", string(threads), "-o", out_path]
         if small_genomes
             push!(cmd_args, "--small-genomes")
         end

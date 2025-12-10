@@ -199,25 +199,27 @@ end
 
 """
     run_metaphlan(;input_file, outdir, input_type="fastq",
-                  nprocs=Sys.CPU_THREADS, bowtie2db=nothing,
-                  unknown_estimation=false, stat_q=0.2)
+                  nprocs=Sys.CPU_THREADS, db_dir=nothing,
+                  unknown_estimation=true, stat_q=0.2,
+                  long_reads=false)
 
 Run MetaPhlAn for marker-based taxonomic profiling.
 
 # Arguments
 - `input_file::String`: Input file (FASTQ, FASTA, or BAM)
 - `outdir::String`: Output directory
-- `input_type::String`: Input type - "fastq", "fasta", "bowtie2out", "sam" (default: "fastq")
+- `input_type::String`: Input type - "fastq", "fasta", "mapout", "sam" (default: "fastq")
 - `nprocs::Int`: Number of threads (default: Sys.CPU_THREADS)
-- `bowtie2db::Union{Nothing, String}`: Path to bowtie2 database (default: auto-download)
-- `unknown_estimation::Bool`: Include unknown fraction estimation (default: false)
+- `db_dir::Union{Nothing, String}`: Path to database directory (passed to MetaPhlAn `--db_dir`)
+- `unknown_estimation::Bool`: Include unknown/unclassified fraction estimation (default: true)
 - `stat_q::Float64`: Quantile for robust average (default: 0.2)
+- `long_reads::Bool`: Use long-read mode (MetaPhlAn `--long_reads`, uses minimap2)
 
 # Returns
 Named tuple with:
 - `outdir`: Output directory path
 - `profile_txt`: Path to taxonomic profile output
-- `bowtie2_out`: Path to bowtie2 alignment output
+- `mapout`: Path to mapping output (also returned as `bowtie2_out` for compatibility)
 
 # Example
 ```julia
@@ -233,19 +235,20 @@ function run_metaphlan(;
         outdir::String,
         input_type::String="fastq",
         nprocs::Int=Sys.CPU_THREADS,
-        bowtie2db::Union{Nothing, String}=nothing,
-        unknown_estimation::Bool=false,
-        stat_q::Float64=0.2)
+        db_dir::Union{Nothing, String}=nothing,
+        unknown_estimation::Bool=true,
+        stat_q::Float64=0.2,
+        long_reads::Bool=false)
 
     isfile(input_file) || error("Input file not found: $(input_file)")
-    input_type in ["fastq", "fasta", "bowtie2out", "sam"] || error("Invalid input_type: $(input_type)")
+    input_type in ["fastq", "fasta", "mapout", "sam"] || error("Invalid input_type: $(input_type)")
 
     Mycelia.add_bioconda_env("metaphlan")
     mkpath(outdir)
 
     input_basename = replace(basename(input_file), r"\.(fa|fasta|fq|fastq|bam|sam)(\.gz)?$"i => "")
     profile_txt = joinpath(outdir, "$(input_basename)_profile.txt")
-    bowtie2_out = joinpath(outdir, "$(input_basename)_bowtie2.bz2")
+    mapout_file = joinpath(outdir, "$(input_basename)_mapout.bz2")
 
     if !isfile(profile_txt)
         cmd_args = String[
@@ -253,25 +256,29 @@ function run_metaphlan(;
             "metaphlan",
             input_file,
             "--input_type", input_type,
-            "--nprocs", string(nprocs),
+            "--nproc", string(nprocs),
             "-o", profile_txt,
-            "--bowtie2out", bowtie2_out,
+            "--mapout", mapout_file,
             "--stat_q", string(stat_q)
         ]
 
-        if !isnothing(bowtie2db)
-            push!(cmd_args, "--bowtie2db")
-            push!(cmd_args, bowtie2db)
+        if !isnothing(db_dir)
+            push!(cmd_args, "--db_dir")
+            push!(cmd_args, db_dir)
         end
 
-        if unknown_estimation
-            push!(cmd_args, "--unknown_estimation")
+        if !unknown_estimation
+            push!(cmd_args, "--skip_unclassified_estimation")
+        end
+
+        if long_reads
+            push!(cmd_args, "--long_reads")
         end
 
         run(Cmd(cmd_args))
     end
 
-    return (; outdir, profile_txt, bowtie2_out)
+    return (; outdir, profile_txt, mapout=mapout_file)
 end
 
 """

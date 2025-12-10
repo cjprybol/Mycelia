@@ -286,6 +286,12 @@ function benchmark_quality_aware_assembly(qualmer_vs_kmer)
 ### 4.7. Strategic Tool Integration & Functionality Gaps
 **Source:** `ROADMAP.md`
 
+#### Completed Integrations (2025-12-10)
+*   [x] **SentencePiece** - Subword tokenization for ML/NLP applications on biological sequences
+    *   Implementation: `src/sentencepiece.jl`
+    *   Tests: `test/8_tool_integration/sentencepiece.jl`
+    *   Features: Train models, encode/decode DNA/RNA/AA/text, subword regularization
+
 #### Gap Analysis and Tool Integration
 *   [ ] **Comprehensive functionality audit**: Identify missing functions vs available tools.
 *   [ ] **Tool integration opportunities**: Find external tools for remaining gaps.

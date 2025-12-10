@@ -618,7 +618,8 @@ Convert a BLAST database to an in-memory table with sequence and taxonomy inform
 - `DataFrame`: DataFrame containing the requested columns from the BLAST database
 """
 function blastdb2table(;
-    blastdb::String, 
+    blastdb::String,
+    blastdbs_dir::Union{Nothing, String}=nothing,
     # Master field selection flag
     ALL_FIELDS::Bool=true,
     # Individual field selection flags
@@ -667,22 +668,6 @@ function blastdb2table(;
     end
 
     Mycelia.add_bioconda_env("blast")
-    blast_db_info = Mycelia.local_blast_database_info()
-    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
-    @assert DataFrames.nrow(filtered) == 1
-    blast_db_info = filtered[1, :]
-    @show blast_db_info
-
-    # Determine database type
-    if blast_db_info["BLAST database molecule type"] == "Protein"
-        extension = ".faa"
-    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
-        extension = ".fna"
-    else
-        @show blast_db_info["BLAST database molecule type"]
-        error("unexpected blast database molecule type")
-    end
-
     # Check if sequence needs to be extracted for SHA256 calculation
     needs_sequence = sequence || sequence_sha256
 
@@ -729,6 +714,43 @@ function blastdb2table(;
 
     if sequence
         push!(output_columns, "sequence")
+    end
+
+    # If no columns were requested, return an empty table early.
+    if isempty(output_columns)
+        @info "No BLAST fields requested; returning empty table"
+        return DataFrames.DataFrame()
+    end
+
+    # Decide which directory to scan for BLAST databases. Prefer the provided
+    # directory, otherwise use the directory component of `blastdb` when given,
+    # and finally fall back to the default BLASTDB path.
+    db_dir = if blastdbs_dir !== nothing
+        blastdbs_dir
+    elseif occursin('/', blastdb) || occursin('\\', blastdb)
+        dirname(blastdb)
+    else
+        Mycelia.DEFAULT_BLASTDB_PATH
+    end
+    db_dir = abspath(db_dir)
+    target_db = isabspath(blastdb) ? blastdb : joinpath(db_dir, basename(blastdb))
+
+    blast_db_info = Mycelia.local_blast_database_info(; blastdbs_dir=db_dir)
+    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== target_db, :]
+    if DataFrames.nrow(filtered) != 1
+        @info "BLAST database not found in local listing; returning empty table" blastdb target_db DataFrames.nrow(filtered)
+        return DataFrames.DataFrame(Dict(Symbol(col) => String[] for col in output_columns))
+    end
+    blast_db_info = filtered[1, :]
+
+    # Determine database type
+    if blast_db_info["BLAST database molecule type"] == "Protein"
+        extension = ".faa"
+    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+        extension = ".fna"
+    else
+        @show blast_db_info["BLAST database molecule type"]
+        error("unexpected blast database molecule type")
     end
 
     # Use dynamic storage for all columns
@@ -1363,7 +1385,13 @@ function local_blast_database_info(;blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH)
     outfmt_string = join(collect(keys(symbol_header_map)), "\t")
     data, header = uCSV.read(open(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`), delim='\t')
     header = collect(values(symbol_header_map))
-    df = DataFrames.DataFrame(data, header)
+    if isempty(data)
+        # Return empty DataFrame with expected columns to avoid DimensionMismatch when no DBs are present
+        empty_cols = Dict(Symbol(h) => String[] for h in header)
+        df = DataFrames.DataFrame(empty_cols)
+    else
+        df = DataFrames.DataFrame(data, header)
+    end
     # remove numbered database fragments from summary results
     df = df[map(x -> !occursin(r"\.\d+$", x), df[!, "BLAST database path"]), :]
     df[!, "human readable size"] = Base.format_bytes.(df[!, "number of bytes"])
