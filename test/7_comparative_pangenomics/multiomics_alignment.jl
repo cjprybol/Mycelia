@@ -9,11 +9,11 @@
 # julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/multiomics_alignment.jl", "test/7_comparative_pangenomics", execute=false)'
 # ````
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
-import Revise
+# import Pkg
+# if isinteractive()
+#     Pkg.activate("..")
+# end
+# import Revise
 import Test
 import Mycelia
 import Random
@@ -54,9 +54,9 @@ Test.@testset "Test merging and mapping long-read pacbio data with re-identifica
         Mycelia.simulate_pacbio_reads(fasta = fasta_file, quantity = q) for q in ["5x", "10x", "20x"]
     ]
     Test.@test fastq_list == [
-        "test_fasta.badread.pacbio2021.5x.fq.gz",
-        "test_fasta.badread.pacbio2021.10x.fq.gz",
-        "test_fasta.badread.pacbio2021.20x.fq.gz"
+        "test_fasta.badread.pacbio_hifi.5x.fq.gz",
+        "test_fasta.badread.pacbio_hifi.10x.fq.gz",
+        "test_fasta.badread.pacbio_hifi.20x.fq.gz"
     ]
     Test.@test all(filesize.(fastq_list) .> 0)
     

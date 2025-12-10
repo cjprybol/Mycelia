@@ -172,7 +172,8 @@ makedocs(
             "Examples" => [
                 "Basic Workflows" => "api/examples/basic-workflows.md"
             ],
-            "Legacy API Documentation" => "api.md"
+            "Legacy API Documentation" => "api.md",
+            "Related Projects" => "related-projects.md"
         ],
         # "Visualization Gallery" => "visualization-gallery.md"  # Has broken refs
     ]

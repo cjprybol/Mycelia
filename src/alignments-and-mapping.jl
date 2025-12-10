@@ -274,6 +274,43 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Run Qualimap BAM QC on an alignment file.
+
+# Arguments
+- `bam::String`: Path to input BAM file
+- `outdir::String`: Output directory (default: sibling `qualimap` folder)
+- `threads::Int`: Number of threads to use (default: all available)
+- `outformat::String`: Output formats (default: "PDF:HTML")
+- `java_mem::String`: Java memory string (default: "4G")
+
+# Returns
+Named tuple with `report_pdf`, `report_txt`, and `coverage` file paths.
+"""
+function run_qualimap_bamqc(;
+    bam::String,
+    outdir::String = joinpath(dirname(bam), "qualimap"),
+    threads::Int = Sys.CPU_THREADS,
+    outformat::String = "PDF:HTML",
+    java_mem::String = "4G"
+)
+    @assert isfile(bam) "BAM file does not exist: $(bam)"
+    Mycelia.add_bioconda_env("qualimap")
+    mkpath(outdir)
+
+    report_pdf = joinpath(outdir, "report.pdf")
+    report_txt = joinpath(outdir, "genome_results.txt")
+    coverage_txt = bam * ".genome_coverage.txt"
+
+    if !isfile(report_pdf) || !isfile(report_txt)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n qualimap qualimap bamqc -nt $(threads) -bam $(bam) -outdir $(outdir) -outformat $(outformat) --output-genome-coverage $(coverage_txt) --java-mem-size=$(java_mem)`)
+    end
+
+    return (;report_pdf, report_txt, coverage=coverage_txt)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Return proportion of matched bases in alignment to total matches + edits.
 
 Calculate the accuracy of a sequence alignment by computing the ratio of matched bases 

@@ -9,9 +9,10 @@
     // also works
     // "image": "mcr.microsoft.com/devcontainers/base:debian",
     // "image": "mcr.microsoft.com/devcontainers/base:debian-12",
-    // wasn't working on mac with M1 chip
+    // default in GitHub codespaces but wasn't working on mac with M1 chip
     // "image": "mcr.microsoft.com/devcontainers/universal:2",
-    // : {
+    // for when/if I need more configuration than the base images provide
+    // "build": {
     //     "dockerfile": "Dockerfile"
     // },
 	// Features to add to the dev container. More info: https://containers.dev/features.

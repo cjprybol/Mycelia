@@ -2,6 +2,10 @@
 
 Mycelia's assembly algorithms are built on rigorous mathematical foundations derived from extensive research documented in the Mycelia-Dev notebooks. This document provides the theoretical background, design rationales, and mathematical principles that guide the implementation choices in Mycelia.
 
+> **Note:**  
+> Genetic code is a comma free code/grammar.  
+> 3 letters, 4 bases, 20 words is the ideal mathematical solution.
+
 ## Mathematical Framework for Assembly
 
 ### Core Assembly Paradigm: Probabilistic Expectation-Maximization

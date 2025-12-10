@@ -1,3 +1,133 @@
+struct SylphProfileResult
+    syldb::String
+    sample_sketches::Vector{String}
+    output_tsv::String
+    table::DataFrames.DataFrame
+end
+
+"""
+    run_sylph_profile(reference_fastas::Vector{String};
+                      sample_reads::Vector{String}=String[],
+                      first_pairs::Vector{String}=String[],
+                      second_pairs::Vector{String}=String[],
+                      threads::Int=3,
+                      subsampling::Int=200,
+                      k::Int=31,
+                      min_spacing::Int=30,
+                      min_ani::Float64=95.0,
+                      min_kmers::Int=50,
+                      estimate_unknown::Bool=false,
+                      outdir::Union{Nothing,String}=nothing,
+                      output_prefix::String="sylph_db",
+                      output_tsv::Union{Nothing,String}=nothing,
+                      additional_args::Vector{String}=String[],
+                      quiet::Bool=true)
+
+Sketch references and samples with Sylph and run `sylph profile`, returning the parsed TSV.
+
+# Arguments
+- `reference_fastas`: Reference FASTA files to build the Sylph database.
+- `sample_reads`: Single-end read files (FASTQ/FASTA, gz accepted).
+- `first_pairs`/`second_pairs`: Paired-end read files. Lengths must match.
+- `threads`: Thread count for sketching/profile.
+- `subsampling`: Sylph `-c` subsampling rate (default 200).
+- `k`: k-mer size (Sylph supports 21 or 31).
+- `min_spacing`: Minimum spacing between sampled k-mers.
+- `min_ani`: Minimum adjusted ANI threshold for reporting (passed via `-m`).
+- `min_kmers`: Minimum sampled k-mers required (`-M`).
+- `estimate_unknown`: Pass `-u` to estimate unknown content.
+- `outdir`: Output directory (created if missing). Defaults to `mktempdir()`.
+- `output_prefix`: Prefix for generated `.syldb`.
+- `output_tsv`: Optional explicit path for profile output TSV.
+- `additional_args`: Extra CLI args appended to `sylph profile`.
+- `quiet`: Suppress Sylph stdout/stderr when true.
+
+# Returns
+`SylphProfileResult` containing paths to the database, sample sketches, TSV, and parsed DataFrame.
+"""
+function run_sylph_profile(reference_fastas::Vector{String};
+        sample_reads::Vector{String}=String[],
+        first_pairs::Vector{String}=String[],
+        second_pairs::Vector{String}=String[],
+        threads::Int=3,
+        subsampling::Int=200,
+        k::Int=31,
+        min_spacing::Int=30,
+        min_ani::Float64=95.0,
+        min_kmers::Int=50,
+        estimate_unknown::Bool=false,
+        outdir::Union{Nothing,String}=nothing,
+        output_prefix::String="sylph_db",
+        output_tsv::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[],
+        quiet::Bool=true)
+
+    if length(first_pairs) != length(second_pairs)
+        error("first_pairs and second_pairs must have the same length")
+    end
+    for file in vcat(reference_fastas, sample_reads, first_pairs, second_pairs)
+        if !isfile(file)
+            error("File not found: $(file)")
+        end
+    end
+
+    Mycelia.add_bioconda_env("sylph")
+
+    workdir = isnothing(outdir) ? mktempdir() : mkpath(outdir)
+    db_prefix = joinpath(workdir, output_prefix)
+    syldb_path = db_prefix * ".syldb"
+    sample_dir = workdir
+
+    list_inputs = String[]
+    append!(list_inputs, reference_fastas)
+    append!(list_inputs, sample_reads)
+
+    sketch_args = ["sketch", "-t", string(threads), "-c", string(subsampling), "-k", string(k),
+                   "--min-spacing", string(min_spacing), "-o", db_prefix, "-d", sample_dir]
+    if !isempty(first_pairs)
+        push!(sketch_args, "-1")
+        append!(sketch_args, first_pairs)
+    end
+    if !isempty(second_pairs)
+        push!(sketch_args, "-2")
+        append!(sketch_args, second_pairs)
+    end
+    append!(sketch_args, list_inputs)
+
+    sketch_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sylph sylph $sketch_args`
+    if quiet
+        run(pipeline(sketch_cmd, stdout=devnull, stderr=devnull))
+    else
+        run(sketch_cmd)
+    end
+
+    sample_sketches = filter(f -> endswith(f, ".sylsp"), readdir(sample_dir; join=true))
+    if isempty(sample_sketches)
+        error("No sample sketches (*.sylsp) were produced by sylph")
+    end
+    if !isfile(syldb_path)
+        error("Sylph database not found at $(syldb_path)")
+    end
+
+    profile_out = isnothing(output_tsv) ? joinpath(workdir, "sylph_profile.tsv") : output_tsv
+    profile_args = ["profile", "-t", string(threads), "-o", profile_out, "-m", string(min_ani), "-M", string(min_kmers)]
+    if estimate_unknown
+        push!(profile_args, "-u")
+    end
+    append!(profile_args, additional_args)
+    append!(profile_args, vcat(syldb_path, sample_sketches))
+
+    profile_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sylph sylph $profile_args`
+    if quiet
+        run(pipeline(profile_cmd, stdout=devnull, stderr=devnull))
+    else
+        run(profile_cmd)
+    end
+
+    table = CSV.read(profile_out, DataFrames.DataFrame; delim='\t', normalizenames=true)
+    return SylphProfileResult(syldb_path, sample_sketches, profile_out, table)
+end
+
 """
     skani_triangle(fasta_files::Vector{String}; 
                    small_genomes::Bool=false,
@@ -30,8 +160,6 @@ function skani_triangle(fasta_files::Vector{String};
                        output_file::Union{Nothing,String}=nothing,
                        additional_args::Vector{String}=String[])
 
-    Mycelia.add_bioconda_env("mash")
-    # Validate input files exist
     for file in fasta_files
         if !isfile(file)
             error("File not found: $file")
@@ -40,22 +168,18 @@ function skani_triangle(fasta_files::Vector{String};
 
     Mycelia.add_bioconda_env("skani")
     
-    # Create temporary directory for file list
     temp_dir = mktempdir()
     list_file = joinpath(temp_dir, "skani_input_list.txt")
     
     try
-        # Write file list
         open(list_file, "w") do io
             for file in fasta_files
                 println(io, abspath(file))
             end
         end
         
-        # Build command
         cmd_args = ["triangle", "-l", list_file, "-t", string(threads)]
         
-        # Add optional arguments
         if small_genomes
             push!(cmd_args, "--small-genomes")
         end
@@ -72,24 +196,74 @@ function skani_triangle(fasta_files::Vector{String};
             push!(cmd_args, "-o", output_file)
         end
         
-        # Add any additional arguments
         append!(cmd_args, additional_args)
         
-        # Execute skani
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n skani skani $cmd_args`
         
         if isnothing(output_file)
-            # Capture and return stdout
             result = read(cmd, String)
             return result
         else
-            # Write to file
             run(cmd)
             return output_file
         end
         
     finally
-        # Clean up temporary directory
+        rm(temp_dir; recursive=true, force=true)
+    end
+end
+
+"""
+    skani_dist(fasta_files::Vector{String};
+               threads::Int=3,
+               small_genomes::Bool=false,
+               min_af::Union{Nothing,Float64}=nothing,
+               output_file::Union{Nothing,String}=nothing,
+               additional_args::Vector{String}=String[])
+
+Run `skani dist` on a list of FASTA files and return the parsed TSV as a DataFrame.
+"""
+function skani_dist(fasta_files::Vector{String};
+        threads::Int=3,
+        small_genomes::Bool=false,
+        min_af::Union{Nothing,Float64}=nothing,
+        output_file::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    for file in fasta_files
+        if !isfile(file)
+            error("File not found: $file")
+        end
+    end
+
+    Mycelia.add_bioconda_env("skani")
+
+    temp_dir = mktempdir()
+    list_file = joinpath(temp_dir, "skani_input_list.txt")
+    out_path = isnothing(output_file) ? joinpath(temp_dir, "skani_dist.tsv") : output_file
+
+    try
+        open(list_file, "w") do io
+            for file in fasta_files
+                println(io, abspath(file))
+            end
+        end
+
+        cmd_args = ["dist", "-l", list_file, "-t", string(threads), "-o", out_path]
+        if small_genomes
+            push!(cmd_args, "--small-genomes")
+        end
+        if !isnothing(min_af)
+            push!(cmd_args, "--min-af", string(min_af))
+        end
+        append!(cmd_args, additional_args)
+
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n skani skani $cmd_args`
+        run(cmd)
+
+        df = CSV.read(out_path, DataFrames.DataFrame; delim='\t', normalizenames=true)
+        return df
+    finally
         rm(temp_dir; recursive=true, force=true)
     end
 end
@@ -336,6 +510,7 @@ function merge_and_map_single_end_samples(;
     # Determine file paths for .tsv.gz and .jld2
     tsv_file = ".tsv.gz" in outformats ? outbase * ".tsv.gz" : nothing
     jld2_file = ".jld2" in outformats ? outbase * ".jld2" : nothing
+    results_table = nothing
     if !all(isfile, results_table_outfiles) || any(x -> filesize(x) == 0, results_table_outfiles)
         # Read tables
         read_id_mapping_table = CSV.read(
@@ -361,10 +536,18 @@ function merge_and_map_single_end_samples(;
                 @warn "Unknown output format: $fmt"
             end
         end
+    else
+        if !isnothing(jld2_file) && isfile(jld2_file)
+            results_table = JLD2_read_table(jld2_file)
+        elseif !isnothing(tsv_file) && isfile(tsv_file)
+            io = CodecZlib.GzipDecompressorStream(open(tsv_file))
+            results_table = CSV.read(io, DataFrames.DataFrame; delim='\t')
+            close(io)
+        end
     end
 
     return (
-        # results_table = results_table,
+        results_table = results_table,
         joint_fastq_file = fastq_out,
         fastq_id_mapping_table = tsv_out,
         bam_file = minimap_result.outfile,

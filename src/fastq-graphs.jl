@@ -145,6 +145,36 @@ function build_quality_biosequence_graph(fastq_records::Vector{FASTX.FASTQ.Recor
 end
 
 """
+Vertex data for quality-aware string graphs.
+"""
+struct QualityStringVertexData
+    string_value::String
+    quality_scores::Vector{Vector{Int}}
+    coverage::Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}
+
+    function QualityStringVertexData(
+        string_value::String,
+        quality_scores::Vector{Vector{Int}}=Vector{Int}[],
+        coverage::Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}=Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}()
+    )
+        new(string_value, quality_scores, coverage)
+    end
+end
+
+"""
+Edge data for quality-aware string graphs.
+"""
+struct QualityStringEdgeData
+    overlap_length::Int
+    weight::Float64
+    quality_scores::Vector{Vector{Int}}
+
+    function QualityStringEdgeData(overlap_length::Int, weight::Float64=1.0)
+        new(overlap_length, weight, Vector{Int}[])
+    end
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Convert a Qualmer graph to a quality-aware BioSequence graph by collapsing linear paths.
@@ -660,44 +690,44 @@ function build_string_qualmer_ngram_graph_next(fastq_records::Vector{FASTX.FASTQ
         default_weight=0.0
     )
 
-    # Extract n-grams with quality information
+    # Extract n-grams with quality information, leveraging core utilities for Unicode-safe slicing
     ngram_quality_data = Dict{String, Vector{Vector{Int}}}()
-    for record in fastq_records
+    ngram_coverage_data = Dict{String, Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}}()
+
+    for (obs_idx, record) in enumerate(fastq_records)
         sequence_str = FASTX.sequence(String, record)
-        quality = FASTX.quality(record)
+        phred_scores = Int.(collect(FASTX.quality_scores(record)))
 
-        # Generate n-grams with quality
-        for i in 1:(length(sequence_str) - ngram_length + 1)
-            ngram = sequence_str[i:i+ngram_length-1]
-            ngram_quality = quality[i:i+ngram_length-1]
+        observed_ngrams = ngrams(sequence_str, ngram_length)
 
-            if !haskey(ngram_quality_data, ngram)
-                ngram_quality_data[ngram] = Vector{Int}[]
-            end
-            push!(ngram_quality_data[ngram], collect(Int, ngram_quality))
+        for (pos, ngram) in enumerate(observed_ngrams)
+            quality_slice = phred_scores[pos:pos + ngram_length - 1]
+
+            push!(get!(Vector{Vector{Int}}, ngram_quality_data, ngram), quality_slice)
+            push!(
+                get!(Vector{Tuple{Int, Int, StrandOrientation, Vector{Int}}}, ngram_coverage_data, ngram),
+                (obs_idx, pos, Forward, quality_slice)
+            )
         end
     end
 
     # Add vertices for each n-gram with quality data
     for (ngram, quality_vectors) in ngram_quality_data
-        graph[ngram] = QualityStringVertexData(ngram, quality_vectors)
+        coverage = get(ngram_coverage_data, ngram, Tuple{Int, Int, StrandOrientation, Vector{Int}}[])
+        graph[ngram] = QualityStringVertexData(ngram, quality_vectors, coverage)
     end
 
     # Add edges between consecutive n-grams from each record
     for record in fastq_records
         sequence_str = FASTX.sequence(String, record)
-        quality = FASTX.quality(record)
+        observed_ngrams = ngrams(sequence_str, ngram_length)
 
-        ngrams = [sequence_str[i:i+ngram_length-1] for i in 1:(length(sequence_str) - ngram_length + 1)]
+        for i in 1:(length(observed_ngrams) - 1)
+            curr_ngram = observed_ngrams[i]
+            next_ngram = observed_ngrams[i + 1]
 
-        for i in 1:(length(ngrams) - 1)
-            curr_ngram = ngrams[i]
-            next_ngram = ngrams[i + 1]
-
-            if haskey(graph, curr_ngram) && haskey(graph, next_ngram)
-                if !haskey(graph, curr_ngram, next_ngram)
-                    graph[curr_ngram, next_ngram] = QualityStringEdgeData(ngram_length - 1, 1.0)
-                end
+            if haskey(graph, curr_ngram) && haskey(graph, next_ngram) && !haskey(graph, curr_ngram, next_ngram)
+                graph[curr_ngram, next_ngram] = QualityStringEdgeData(ngram_length - 1, 1.0)
             end
         end
     end
@@ -731,16 +761,17 @@ function build_string_qualmer_biosequence_graph_next(fastq_records::Vector{FASTX
     )
 
     # Add vertices for each string sequence with quality information
-    for record in fastq_records
+    for (obs_idx, record) in enumerate(fastq_records)
         sequence_str = FASTX.sequence(String, record)
-        quality = FASTX.quality(record)
+        phred_scores = Int.(collect(FASTX.quality_scores(record)))
 
         if !haskey(graph, sequence_str)
-            graph[sequence_str] = QualityStringVertexData(sequence_str, [collect(Int, quality)])
+            coverage = [(obs_idx, 1, Forward, phred_scores)]
+            graph[sequence_str] = QualityStringVertexData(sequence_str, [phred_scores], coverage)
         else
-            # Add quality information to existing vertex
             vertex_data = graph[sequence_str]
-            push!(vertex_data.quality_scores, collect(Int, quality))
+            push!(vertex_data.quality_scores, phred_scores)
+            push!(vertex_data.coverage, (obs_idx, 1, Forward, phred_scores))
         end
     end
 

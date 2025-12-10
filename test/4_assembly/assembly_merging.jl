@@ -19,7 +19,6 @@
 ## using Revise
 import Test
 import Mycelia
-import MetaGraphs
 import MetaGraphsNext
 import Graphs
 import FASTX

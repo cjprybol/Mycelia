@@ -1,7 +1,7 @@
 module Mycelia
 
-# Enable precompilation for faster loading
-__precompile__(false)  # Disabled for testing framework fix
+# Enable precompilation for faster loading; set JULIA_PKG_PRECOMPILE=0 to skip
+__precompile__()
 
 import AlgebraOfGraphics
 import Arrow
@@ -30,7 +30,7 @@ import Distances
 import Distributions
 import DocStringExtensions
 import Downloads
-import ExpFamilyPCA
+# import ExpFamilyPCA
 import EzXML
 import FASTX
 import FileIO
@@ -98,10 +98,16 @@ include("alphabets.jl")
 include("constants.jl")
 include("fastx.jl")
 
+# Rhizomorph graph ecosystem (NEW - correct implementation)
+include("rhizomorph/rhizomorph.jl")
+
 # Graph type definitions and enums (foundation layer)
-include("sequence-graphs-next.jl")  # Defines GraphMode, StrandOrientation enums
+include("graph-core.jl")            # Shared graph enums (OLD - to be deprecated)
+include("kmer-graphs.jl")           # K-mer graph construction utilities (OLD - to be replaced)
+include("sequence-graphs-next.jl")  # Higher-level graph algorithms (depends on enums & k-mer types)
 include("string-graphs.jl")         # N-gram graphs
 include("qualmer-analysis.jl")      # Qualmer types and functions
+include("qualmer-graphs.jl")        # Qualmer graph construction utilities
 
 # Variable-length graph implementations (depend on fixed-length types)
 include("fasta-graphs.jl")          # BioSequence graphs (depends on sequence-graphs-next.jl)

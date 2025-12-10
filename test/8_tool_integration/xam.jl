@@ -300,31 +300,35 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.error_free_sam, force=true)
     end
 
-    Test.@testset "Coverage Determination" begin
-        # Create test data using Mycelia pipeline to ensure correct BAM format
-        rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
-        ref_fasta = tempname() * ".fasta"
-        writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
-        write(writer, ref_record)
-        close(writer)
+    if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+        Test.@testset "Coverage Determination" begin
+            # Create test data using Mycelia pipeline to ensure correct BAM format
+            rng = StableRNGs.StableRNG(1234)
+            ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+            ref_fasta = tempname() * ".fasta"
+            writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
+            write(writer, ref_record)
+            close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="bam")
-        run(map_result.cmd)
-        bam_file = map_result.outfile
+            fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
+            map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="bam")
+            run(map_result.cmd)
+            bam_file = map_result.outfile
 
-        # Test coverage determination - bedtools expects BAM format
-        coverage_result = Mycelia.determine_fasta_coverage_from_bam(bam_file)
-        Test.@test coverage_result isa DataFrames.DataFrame
+            # Test coverage determination - bedtools expects BAM format
+            coverage_result = Mycelia.determine_fasta_coverage_from_bam(bam_file)
+            Test.@test coverage_result isa DataFrames.DataFrame
 
-        # Cleanup
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        rm(bam_file, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+            # Cleanup
+            rm(ref_fasta, force=true)
+            rm(fastq_files.forward_reads, force=true)
+            rm(fastq_files.reverse_reads, force=true)
+            rm(bam_file, force=true)
+            rm(fastq_files.sam, force=true)
+            rm(fastq_files.error_free_sam, force=true)
+        end
+    else
+        @info "Skipping Coverage Determination tests; bedtools execution is opt-in via MYCELIA_RUN_EXTERNAL=true"
     end
 
     Test.@testset "BAM to FASTQ Conversion" begin

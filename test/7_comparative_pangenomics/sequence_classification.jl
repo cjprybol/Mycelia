@@ -11,11 +11,11 @@
 # julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/sequence_classification.jl", "test/7_comparative_pangenomics", execute=false)'
 # ````
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
-import Revise
+# import Pkg
+# if isinteractive()
+#     Pkg.activate("..")
+# end
+# import Revise
 import Test
 import Mycelia
 import BioSequences

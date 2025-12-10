@@ -20,13 +20,17 @@ end
 import Test
 import Mycelia
 import FASTX
+import BioSequences
 import BenchmarkTools
 import Random
 import Statistics
 import Dates
+import DataFrames
+import CSV
+import Plots
 
 println("=== Genome Assembly Benchmark ===")
-println("Start time: $(now())")
+println("Start time: $(Dates.now())")
 
 # ## Benchmark Configuration
 #
@@ -397,19 +401,347 @@ end
 
 println("\n--- Assembler Comparison Benchmarks ---")
 
-# TODO: Implement assembler comparison benchmarks
-# - Performance comparison (runtime, memory usage)
-# - Quality comparison (N50, completeness, accuracy)
-# - Parameter sensitivity analysis
-# - Robustness testing
-# - Mycelia vs external assemblers:
-#   - Short reads: MEGAHIT vs metaSPAdes vs Mycelia
-#   - Long reads: Flye vs Canu vs hifiasm vs Mycelia
-#   - Hybrid: Unicycler vs Mycelia hybrid approach
-# - Error correction effectiveness:
-#   - Viterbi polishing vs traditional polishing
-#   - Iterative polishing convergence
-#   - Probabilistic vs deterministic approaches
+# PhiX174 Reference Genome Benchmarking
+# Head-to-head comparison of 8 assemblers on standard reference
+println("\n=== PhiX174 Assembler Comparison ===")
+
+# Create temporary directory for PhiX174 data
+phix_dir = mktempdir(prefix="phix174_benchmark_")
+println("PhiX174 benchmark directory: $phix_dir")
+
+try
+    # Download PhiX174 reference
+    println("\nDownloading PhiX174 reference...")
+    phix_url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/819/615/GCF_000819615.1_ViralProj14015/GCF_000819615.1_ViralProj14015_genomic.fna.gz"
+    phix_gz = joinpath(phix_dir, "phix174.fna.gz")
+    phix_ref = joinpath(phix_dir, "phix174_reference.fasta")
+
+    download(phix_url, phix_gz)
+    run(pipeline(`gunzip -c $phix_gz`, phix_ref))
+    println("  Reference downloaded: $phix_ref")
+
+    # Load reference sequence
+    ref_records = collect(FASTX.FASTA.Reader(open(phix_ref)))
+    ref_seq = FASTX.sequence(BioSequences.LongDNA{4}, ref_records[1])
+    ref_length = length(ref_seq)
+    println("  Reference length: $ref_length bp")
+
+    # Generate simulated reads
+    println("\nGenerating simulated reads...")
+
+    # Short reads: 100x coverage, 150bp PE
+    println("  Illumina reads (100x coverage)...")
+    short_r1, short_r2 = Mycelia.simulate_illumina_reads(
+        reference=ref_seq,
+        coverage=100,
+        read_length=150,
+        insert_size=300,
+        profile="HS25",
+        seed=12345
+    )
+    short_fastq1 = joinpath(phix_dir, "phix174_illumina_R1.fastq")
+    short_fastq2 = joinpath(phix_dir, "phix174_illumina_R2.fastq")
+    Mycelia.save_reads_as_fastq(short_r1, short_fastq1)
+    Mycelia.save_reads_as_fastq(short_r2, short_fastq2)
+    println("    Generated $(length(short_r1)) paired-end reads")
+
+    # Long reads: 50x coverage, PacBio HiFi
+    println("  PacBio reads (50x coverage)...")
+    long_reads = Mycelia.simulate_pacbio_reads(
+        reference=ref_seq,
+        coverage=50,
+        mean_length=10000,
+        length_sd=2000,
+        identity=99.9,
+        seed=12345
+    )
+    long_fastq = joinpath(phix_dir, "phix174_pacbio.fastq")
+    Mycelia.save_reads_as_fastq(long_reads, long_fastq)
+    println("    Generated $(length(long_reads)) long reads")
+
+    # Define assemblers to compare
+    short_read_assemblers = [
+        (name="SPAdes", func=Mycelia.run_spades),
+        (name="SKESA", func=Mycelia.run_skesa),
+        (name="MEGAHIT", func=Mycelia.run_megahit),
+        (name="metaSPAdes", func=Mycelia.run_metaspades),
+    ]
+
+    long_read_assemblers = [
+        (name="Flye", func=Mycelia.run_flye),
+        (name="Canu", func=Mycelia.run_canu),
+        (name="metaFlye", func=Mycelia.run_metaflye),
+        (name="metaMDBG", func=Mycelia.run_metamdbg),
+    ]
+
+    # Storage for comparison results
+    comparison_results = DataFrames.DataFrame(
+        assembler = String[],
+        read_type = String[],
+        runtime_s = Float64[],
+        n_contigs = Int[],
+        total_length = Int[],
+        n50 = Int[],
+        longest_contig = Int[],
+        identity_vs_ref = Float64[]
+    )
+
+    # Helper function to calculate assembly metrics
+    function calculate_assembly_metrics(contigs_file, reference_file)
+        if !isfile(contigs_file)
+            return (n_contigs=0, total_length=0, n50=0, longest=0, identity=0.0)
+        end
+
+        # Basic metrics
+        n_contigs, total_length, n50 = Mycelia.assess_assembly_quality(contigs_file)
+
+        # Find longest contig
+        contig_records = collect(FASTX.FASTA.Reader(open(contigs_file)))
+        longest = maximum([length(FASTX.sequence(r)) for r in contig_records]; init=0)
+
+        # Align to reference with minimap2 to get identity
+        identity = 0.0
+        try
+            # Create minimap2 index
+            idx_result = Mycelia.minimap_index(fasta=reference_file)
+            run(idx_result.cmd)
+
+            # Map contigs to reference
+            map_result = Mycelia.minimap_map_with_index(
+                index=idx_result.outfile,
+                fasta=contigs_file,
+                mapping_type="asm5"  # Assembly to reference mapping
+            )
+            run(map_result.cmd)
+
+            # Parse PAF output to get identity
+            if isfile(map_result.outfile)
+                paf_lines = readlines(map_result.outfile)
+                if !isempty(paf_lines)
+                    # PAF format: col 10 is number of matches, col 11 is alignment block length
+                    identities = []
+                    for line in paf_lines
+                        fields = split(line, '\t')
+                        if length(fields) >= 11
+                            matches = parse(Int, fields[10])
+                            block_len = parse(Int, fields[11])
+                            push!(identities, 100.0 * matches / block_len)
+                        end
+                    end
+                    if !isempty(identities)
+                        identity = Statistics.mean(identities)
+                    end
+                end
+            end
+        catch e
+            @warn "Identity calculation failed: $e"
+        end
+
+        return (n_contigs=n_contigs, total_length=total_length, n50=n50, longest=longest, identity=identity)
+    end
+
+    # Run short-read assemblers
+    println("\n--- Running Short-Read Assemblers ---")
+    for assembler in short_read_assemblers
+        println("\nRunning $(assembler.name)...")
+        outdir = joinpath(phix_dir, "assembly_$(assembler.name)")
+
+        try
+            # Time the assembly
+            start_time = time()
+            result = assembler.func(
+                fastq1=short_fastq1,
+                fastq2=short_fastq2,
+                outdir=outdir
+            )
+            runtime = time() - start_time
+
+            # Calculate metrics
+            contigs_file = result.contigs
+            metrics = calculate_assembly_metrics(contigs_file, phix_ref)
+
+            # Store results
+            push!(comparison_results, (
+                assembler = assembler.name,
+                read_type = "short",
+                runtime_s = runtime,
+                n_contigs = metrics.n_contigs,
+                total_length = metrics.total_length,
+                n50 = metrics.n50,
+                longest_contig = metrics.longest,
+                identity_vs_ref = metrics.identity
+            ))
+
+            println("  Runtime: $(round(runtime, digits=2)) seconds")
+            println("  Contigs: $(metrics.n_contigs)")
+            println("  Total length: $(metrics.total_length) bp")
+            println("  N50: $(metrics.n50) bp")
+            println("  Longest contig: $(metrics.longest) bp")
+            println("  Identity vs ref: $(round(metrics.identity, digits=2))%")
+
+        catch e
+            @warn "$(assembler.name) failed: $e"
+            # Add failed entry
+            push!(comparison_results, (
+                assembler = assembler.name,
+                read_type = "short",
+                runtime_s = 0.0,
+                n_contigs = 0,
+                total_length = 0,
+                n50 = 0,
+                longest_contig = 0,
+                identity_vs_ref = 0.0
+            ))
+        end
+    end
+
+    # Run long-read assemblers
+    println("\n--- Running Long-Read Assemblers ---")
+    for assembler in long_read_assemblers
+        println("\nRunning $(assembler.name)...")
+        outdir = joinpath(phix_dir, "assembly_$(assembler.name)")
+
+        try
+            # Time the assembly
+            start_time = time()
+            result = if assembler.name == "Canu"
+                assembler.func(
+                    fastq=long_fastq,
+                    outdir=outdir,
+                    genome_size="5k"  # PhiX174 is ~5.4kb
+                )
+            else
+                assembler.func(
+                    fastq=long_fastq,
+                    outdir=outdir
+                )
+            end
+            runtime = time() - start_time
+
+            # Calculate metrics
+            contigs_file = result.contigs
+            metrics = calculate_assembly_metrics(contigs_file, phix_ref)
+
+            # Store results
+            push!(comparison_results, (
+                assembler = assembler.name,
+                read_type = "long",
+                runtime_s = runtime,
+                n_contigs = metrics.n_contigs,
+                total_length = metrics.total_length,
+                n50 = metrics.n50,
+                longest_contig = metrics.longest,
+                identity_vs_ref = metrics.identity
+            ))
+
+            println("  Runtime: $(round(runtime, digits=2)) seconds")
+            println("  Contigs: $(metrics.n_contigs)")
+            println("  Total length: $(metrics.total_length) bp")
+            println("  N50: $(metrics.n50) bp")
+            println("  Longest contig: $(metrics.longest) bp")
+            println("  Identity vs ref: $(round(metrics.identity, digits=2))%")
+
+        catch e
+            @warn "$(assembler.name) failed: $e"
+            # Add failed entry
+            push!(comparison_results, (
+                assembler = assembler.name,
+                read_type = "long",
+                runtime_s = 0.0,
+                n_contigs = 0,
+                total_length = 0,
+                n50 = 0,
+                longest_contig = 0,
+                identity_vs_ref = 0.0
+            ))
+        end
+    end
+
+    # Generate comparison plots
+    println("\n--- Generating Comparison Plots ---")
+
+    # Filter successful assemblies
+    successful_results = filter(row -> row.n_contigs > 0, comparison_results)
+
+    if !isempty(successful_results)
+        # N50 comparison
+        n50_plot = Plots.bar(
+            successful_results.assembler,
+            successful_results.n50,
+            title="N50 Comparison (PhiX174)",
+            ylabel="N50 (bp)",
+            xlabel="Assembler",
+            legend=false,
+            xrotation=45,
+            color=[r.read_type == "short" ? :blue : :green for r in eachrow(successful_results)]
+        )
+        n50_file = joinpath(results_dir, "phix174_n50_comparison.png")
+        Plots.savefig(n50_plot, n50_file)
+        println("  Saved N50 plot: $n50_file")
+
+        # Runtime comparison
+        runtime_plot = Plots.bar(
+            successful_results.assembler,
+            successful_results.runtime_s,
+            title="Runtime Comparison (PhiX174)",
+            ylabel="Runtime (seconds)",
+            xlabel="Assembler",
+            legend=false,
+            xrotation=45,
+            color=[r.read_type == "short" ? :blue : :green for r in eachrow(successful_results)]
+        )
+        runtime_file = joinpath(results_dir, "phix174_runtime_comparison.png")
+        Plots.savefig(runtime_plot, runtime_file)
+        println("  Saved runtime plot: $runtime_file")
+
+        # Identity comparison
+        identity_plot = Plots.bar(
+            successful_results.assembler,
+            successful_results.identity_vs_ref,
+            title="Identity vs Reference (PhiX174)",
+            ylabel="Identity (%)",
+            xlabel="Assembler",
+            legend=false,
+            xrotation=45,
+            ylim=(90, 100),
+            color=[r.read_type == "short" ? :blue : :green for r in eachrow(successful_results)]
+        )
+        identity_file = joinpath(results_dir, "phix174_identity_comparison.png")
+        Plots.savefig(identity_plot, identity_file)
+        println("  Saved identity plot: $identity_file")
+    end
+
+    # Save results to CSV
+    csv_file = joinpath(results_dir, "phix174_comparison.csv")
+    CSV.write(csv_file, comparison_results)
+    println("  Saved results CSV: $csv_file")
+
+    # Display summary
+    println("\n=== PhiX174 Benchmark Summary ===")
+    println("Reference: NC_001422.1 ($ref_length bp)")
+    println("Assemblers tested: $(nrow(comparison_results))")
+    println("Successful assemblies: $(count(row -> row.n_contigs > 0, eachrow(comparison_results)))")
+    println("\nResults:")
+    for row in eachrow(comparison_results)
+        if row.n_contigs > 0
+            println("  $(row.assembler) ($(row.read_type)):")
+            println("    Runtime: $(round(row.runtime_s, digits=1))s")
+            println("    Contigs: $(row.n_contigs)")
+            println("    N50: $(row.n50) bp")
+            println("    Identity: $(round(row.identity_vs_ref, digits=2))%")
+        else
+            println("  $(row.assembler) ($(row.read_type)): FAILED")
+        end
+    end
+
+finally
+    # Cleanup
+    println("\n--- Cleaning up PhiX174 benchmark data ---")
+    rm(phix_dir, force=true, recursive=true)
+    println("  Removed: $phix_dir")
+end
+
+println("\n=== PhiX174 Assembler Comparison Complete ===\n")
 
 # ## Parameter Optimization Benchmarks
 #

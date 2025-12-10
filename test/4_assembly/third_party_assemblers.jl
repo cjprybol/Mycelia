@@ -638,63 +638,33 @@ Test.@testset "Long Read Metagenomic Assembly" begin
         #     # Check if running in CI environment with resource constraints
         #     is_ci = haskey(ENV, "CI") || haskey(ENV, "GITHUB_ACTIONS") || haskey(ENV, "TRAVIS") || haskey(ENV, "CIRCLECI")
             
-        #     # if is_ci
-        #     #     # Skip hifiasm-meta tests in CI due to memory requirements
-        #     #     @warn """
-        #     #     Hifiasm-meta test skipped in CI environment due to resource constraints.
-                
-        #     #     Hifiasm-meta memory requirements:
-        #     #     - Minimum: ~3-6GB RAM for even small test genomes
-        #     #     - GitHub CI runners: 16GB total RAM but shared with system processes
-        #     #     - Risk: Metagenomic assembly algorithms have higher memory overhead
-                
-        #     #     This test runs locally but is automatically disabled in CI/CD environments
-        #     #     to ensure reliable builds. To test hifiasm-meta functionality:
-                
-        #     #     Local testing:
-        #     #     julia --project=. -e 'include("test/4_assembly/third_party_assemblers.jl")'
-                
-        #     #     Extended testing:
-        #     #     julia --project=. run_extended_tests.jl tutorials
-        #     #     """
-        #     #     Test.@test_skip "hifiasm-meta test skipped in CI environment - resource constraints"
-        #     # else
-        #     # Test hifiasm-meta - metagenomic assembly
-        #     hifiasm_meta_outdir = joinpath(dir, "hifiasm_meta_assembly")
-        #     if isdir(hifiasm_meta_outdir)
-        #         rm(hifiasm_meta_outdir, recursive=true)
-        #     end
-        #     try
-        #         result = Mycelia.run_hifiasm_meta(fastq=meta_long_fastq, outdir=hifiasm_meta_outdir, bloom_filter=0, read_selection=true)
-        #         Test.@test result.outdir == hifiasm_meta_outdir
-        #         expected_prefix = joinpath(hifiasm_meta_outdir, basename(meta_long_fastq) * ".hifiasm_meta")
-        #         Test.@test result.hifiasm_outprefix == expected_prefix
-        #         # Clean up after test
-        #         rm(hifiasm_meta_outdir, recursive=true, force=true)
-        #     catch e
-        #         # if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "Segmentation fault")
-        #         #     @warn """
-        #         #     hifiasm-meta assembly failed due to resource constraints.
-        #         #     Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data
-                    
-        #         #     Required resources for hifiasm-meta:
-        #         #     - Memory: ~3-6GB RAM minimum (higher than regular hifiasm)
-        #         #     - CPU: 1-4 cores recommended
-        #         #     - Disk: ~1GB temporary space
-        #         #     - Note: hifiasm-meta is optimized for metagenomic strain resolution
-                    
-        #         #     To fix: Increase available memory or reduce test genome size further.
-        #         #     """
-        #         #     Test.@test_skip "hifiasm-meta test skipped - insufficient resources"
-        #         # else
-        #         #     rethrow(e)
-        #         # end
-        #         # Clean up on failure
-        #         rm(hifiasm_meta_outdir, recursive=true, force=true)
-        #         rethrow(e)
-        #     end
-        # end
-        # # end
+        Test.@testset "Long Read Metagenome Assembly - hifiasm-meta" begin
+            # Test hifiasm-meta - metagenomic assembly
+            hifiasm_meta_outdir = joinpath(dir, "hifiasm_meta_assembly")
+            if isdir(hifiasm_meta_outdir)
+                rm(hifiasm_meta_outdir, recursive=true)
+            end
+            try
+                result = Mycelia.run_hifiasm_meta(fastq=meta_long_fastq, outdir=hifiasm_meta_outdir, bloom_filter=0, read_selection=true)
+                Test.@test result.outdir == hifiasm_meta_outdir
+                expected_prefix = joinpath(hifiasm_meta_outdir, basename(meta_long_fastq) * ".hifiasm_meta")
+                Test.@test result.hifiasm_outprefix == expected_prefix
+                # Clean up after test
+                rm(hifiasm_meta_outdir, recursive=true, force=true)
+            catch e
+                # Resource-heavy assemblies may fail on constrained systems
+                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "Segmentation fault")
+                    @warn """
+                    hifiasm-meta assembly may require >3-6GB RAM. Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data.
+                    """
+                    Test.@test_skip "hifiasm-meta test skipped - insufficient resources"
+                else
+                    rethrow(e)
+                end
+                # Clean up on failure
+                rm(hifiasm_meta_outdir, recursive=true, force=true)
+            end
+        end
 
         Test.@testset "Long Read Metagenomic Assembly - metaFlye" begin
             # Create a smaller, specific dataset for metaFlye to manage memory usage
@@ -1296,3 +1266,109 @@ end
 #     Test.@testset "9. Validation & Quality Control" begin
 #     end
 # end
+
+# ---------------------------------------------------------------------------
+# Additional assembler smoke tests (simulated data)
+# ---------------------------------------------------------------------------
+
+Test.@testset "Protein Assembly - PLASS (simulated reads)" begin
+    mktempdir() do dir
+        ref_fasta = joinpath(dir, "ref.fasta")
+        rng = StableRNGs.StableRNG(42)
+        seq = BioSequences.randdnaseq(rng, 2000)
+        Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("ref", seq)])
+
+        sim = Mycelia.simulate_illumina_reads(
+            fasta=ref_fasta,
+            coverage=5,
+            outbase=joinpath(dir, "sim_plass"),
+            read_length=100,
+            mflen=200,
+            seqSys="HS25",
+            paired=true,
+            errfree=true,
+            quiet=true
+        )
+
+        outdir = joinpath(dir, "plass_out")
+        try
+            result = Mycelia.run_plass_assemble(reads1=sim.forward_reads, reads2=sim.reverse_reads, outdir=outdir, min_length=20, num_iterations=1)
+            Test.@test isfile(result.assembly)
+        catch e
+            if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "not found")
+                @warn "PLASS test skipped due to environment/resource constraints: $e"
+                Test.@test_skip "PLASS test skipped - environment/resource constraints"
+            else
+                rethrow(e)
+            end
+        end
+    end
+end
+
+Test.@testset "Nucleotide Assembly - PenguiN guided_nuclassemble (simulated reads)" begin
+    mktempdir() do dir
+        ref_fasta = joinpath(dir, "ref.fasta")
+        rng = StableRNGs.StableRNG(43)
+        seq = BioSequences.randdnaseq(rng, 2000)
+        Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("ref", seq)])
+
+        sim = Mycelia.simulate_illumina_reads(
+            fasta=ref_fasta,
+            coverage=5,
+            outbase=joinpath(dir, "sim_penguin_guided"),
+            read_length=100,
+            mflen=200,
+            seqSys="HS25",
+            paired=true,
+            errfree=true,
+            quiet=true
+        )
+
+        outdir = joinpath(dir, "penguin_guided_out")
+        try
+            result = Mycelia.run_penguin_guided_nuclassemble(reads1=sim.forward_reads, reads2=sim.reverse_reads, outdir=outdir)
+            Test.@test isfile(result.assembly)
+        catch e
+            if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "not found")
+                @warn "PenguiN guided_nuclassemble test skipped due to environment/resource constraints: $e"
+                Test.@test_skip "PenguiN guided test skipped - environment/resource constraints"
+            else
+                rethrow(e)
+            end
+        end
+    end
+end
+
+Test.@testset "Nucleotide Assembly - PenguiN nuclassemble (simulated reads)" begin
+    mktempdir() do dir
+        ref_fasta = joinpath(dir, "ref.fasta")
+        rng = StableRNGs.StableRNG(44)
+        seq = BioSequences.randdnaseq(rng, 2000)
+        Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("ref", seq)])
+
+        sim = Mycelia.simulate_illumina_reads(
+            fasta=ref_fasta,
+            coverage=5,
+            outbase=joinpath(dir, "sim_penguin"),
+            read_length=100,
+            mflen=200,
+            seqSys="HS25",
+            paired=true,
+            errfree=true,
+            quiet=true
+        )
+
+        outdir = joinpath(dir, "penguin_out")
+        try
+            result = Mycelia.run_penguin_nuclassemble(reads1=sim.forward_reads, reads2=sim.reverse_reads, outdir=outdir)
+            Test.@test isfile(result.assembly)
+        catch e
+            if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "not found")
+                @warn "PenguiN nuclassemble test skipped due to environment/resource constraints: $e"
+                Test.@test_skip "PenguiN nuclassemble test skipped - environment/resource constraints"
+            else
+                rethrow(e)
+            end
+        end
+    end
+end

@@ -1,6 +1,9 @@
 # Look back at this for additional inspiration
 # https://github.com/fargolo/TextGraphs.jl
 
+import MetaGraphsNext
+import FASTX
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -35,6 +38,81 @@ end
 # function ngrams(s::AbstractString, n::Int)
 #     [s[i:i+n-1] for i in 1:length(s)-n+1]
 # end
+
+"""
+Vertex metadata for string graphs (ported from `sequence-graphs-next.jl`).
+"""
+struct StringVertexData
+    string_value::String
+    coverage::Vector{Int}
+
+    function StringVertexData(string_value::String, coverage::Vector{Int}=Int[])
+        new(string_value, coverage)
+    end
+end
+
+"""
+Edge metadata for string graphs.
+"""
+struct StringEdgeData
+    overlap_length::Int
+    weight::Float64
+
+    function StringEdgeData(overlap_length::Int, weight::Float64=1.0)
+        new(overlap_length, weight)
+    end
+end
+
+"""
+Build a string n-gram graph with typed metadata.
+"""
+function build_string_graph_next(
+    fasta_records::Vector{FASTX.FASTA.Record},
+    ngram_length::Int;
+    graph_mode::GraphMode = SingleStrand,
+)
+    if isempty(fasta_records)
+        throw(ArgumentError("Cannot build graph from empty FASTA records"))
+    end
+
+    graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type = String,
+        vertex_data_type = StringVertexData,
+        edge_data_type = StringEdgeData,
+        weight_function = edge_data -> edge_data.weight,
+        default_weight = 0.0,
+    )
+
+    ngram_counts = Dict{String, Int}()
+    for record in fasta_records
+        sequence_str = FASTX.sequence(String, record)
+        for i in 1:(length(sequence_str) - ngram_length + 1)
+            ngram = sequence_str[i:i + ngram_length - 1]
+            ngram_counts[ngram] = get(ngram_counts, ngram, 0) + 1
+        end
+    end
+
+    for ngram in keys(ngram_counts)
+        graph[ngram] = StringVertexData(ngram, Int[])
+    end
+
+    for record in fasta_records
+        sequence_str = FASTX.sequence(String, record)
+        ngrams_local = [sequence_str[i:i + ngram_length - 1] for i in 1:(length(sequence_str) - ngram_length + 1)]
+
+        for i in 1:(length(ngrams_local) - 1)
+            curr_ngram = ngrams_local[i]
+            next_ngram = ngrams_local[i + 1]
+
+            if haskey(graph, curr_ngram) && haskey(graph, next_ngram) && !MetaGraphsNext.has_edge(graph, curr_ngram, next_ngram)
+                graph[curr_ngram, next_ngram] = StringEdgeData(ngram_length - 1, 1.0)
+            end
+        end
+    end
+
+    return graph
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

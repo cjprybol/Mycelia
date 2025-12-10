@@ -11,11 +11,11 @@
 # julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/panproteome.jl", "test/7_comparative_pangenomics", execute=false)'
 # ````
 
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
-import Revise
+# import Pkg
+# if isinteractive()
+#     Pkg.activate("..")
+# end
+# import Revise
 import Test
 import Mycelia
 import FASTX

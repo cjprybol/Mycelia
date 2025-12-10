@@ -130,7 +130,7 @@ Test.@testset "Binary Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == false
         Test.@test summary[:is_in_01] == false
         Test.@test summary[:is_overdispersed] == false
-        Test.@test summary[:suggested_epca] == :bernoulli_pca_epca
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :jaccard_distance
     end
 
@@ -385,6 +385,8 @@ Test.@testset "Binary Matrix Processing" begin
         test_display(evaluation_result.recall_plot)
     end
 
+#= ExpFamilyPCA dependency removed; skipping logistic EPCA-based tests.
+
     ## logisticPCA + KMeans
     Test.@testset "logisticPCA-EPCA + KMeans" begin
         test_println("[Binary] Testing: logisticPCA-EPCA + KMeans")
@@ -550,6 +552,7 @@ Test.@testset "Binary Matrix Processing" begin
         test_display(evaluation_result.precision_plot)
         test_display(evaluation_result.recall_plot)
     end
+=#
 end
 
 # Poisson (counts) Matrix Processing
@@ -585,7 +588,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == false
         Test.@test summary[:is_in_01] == false
         Test.@test summary[:is_probability_vector] == false
-        Test.@test summary[:suggested_epca] == :poisson_pca_epca || summary[:suggested_epca] == :negbin_pca_epca
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :bray_curtis_distance
     end
 
@@ -856,174 +859,174 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         test_display(evaluation_result.recall_plot)
     end
     
-    ## PoissonPCA-EPCA + KMeans
-    Test.@testset "PoissonPCA-EPCA + KMeans" begin
-        test_println("[Poisson] Testing: PoissonPCA-EPCA + KMeans")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-        fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="PoissonPCA-EPCA + KMeans",
-                       xlabel="PC1",
-                       ylabel="PC2",
-                       true_labels=shuffled_poisson_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(poisson_method_accuracies, ("PoissonPCA-EPCA + KMeans", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + KMeans
+    # Test.@testset "PoissonPCA-EPCA + KMeans" begin
+    #     test_println("[Poisson] Testing: PoissonPCA-EPCA + KMeans")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
+    #     fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
+    #                    title="PoissonPCA-EPCA + KMeans",
+    #                    xlabel="PC1",
+    #                    ylabel="PC2",
+    #                    true_labels=shuffled_poisson_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(poisson_method_accuracies, ("PoissonPCA-EPCA + KMeans", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
     
-    ## PoissonPCA-EPCA + KMedoids
-    Test.@testset "PoissonPCA-EPCA + KMedoids" begin
-        test_println("[Poisson] Testing: PoissonPCA-EPCA + KMedoids")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-        ## Compute distance matrix from Poisson PCA scores (Euclidean)
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
-        fit_labels = kmedoids_result.assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="PoissonPCA-EPCA + KMedoids",
-                       xlabel="PC1",
-                       ylabel="PC2",
-                       true_labels=shuffled_poisson_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(poisson_method_accuracies, ("PoissonPCA-EPCA + KMedoids", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + KMedoids
+    # Test.@testset "PoissonPCA-EPCA + KMedoids" begin
+    #     test_println("[Poisson] Testing: PoissonPCA-EPCA + KMedoids")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
+    #     ## Compute distance matrix from Poisson PCA scores (Euclidean)
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
+    #     kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+    #     fit_labels = kmedoids_result.assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
+    #                    title="PoissonPCA-EPCA + KMedoids",
+    #                    xlabel="PC1",
+    #                    ylabel="PC2",
+    #                    true_labels=shuffled_poisson_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(poisson_method_accuracies, ("PoissonPCA-EPCA + KMedoids", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)
-    Test.@testset "PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)" begin
-        test_println("[Poisson] Testing: PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-        ## Compute distance matrix from Poisson PCA scores (Euclidean)
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
-        ## Perform hierarchical clustering with Ward linkage
-        hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
-        fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)",
-                       xlabel="PC1",
-                       ylabel="PC2",
-                       true_labels=shuffled_poisson_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(poisson_method_accuracies, ("PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)
+    # Test.@testset "PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)" begin
+    #     test_println("[Poisson] Testing: PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
+    #     ## Compute distance matrix from Poisson PCA scores (Euclidean)
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
+    #     ## Perform hierarchical clustering with Ward linkage
+    #     hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
+    #     fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
+    #                    title="PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)",
+    #                    xlabel="PC1",
+    #                    ylabel="PC2",
+    #                    true_labels=shuffled_poisson_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(poisson_method_accuracies, ("PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
     
-    ## PoissonPCA-EPCA + UMAP + KMeans
-    Test.@testset "PoissonPCA-EPCA + UMAP + KMeans" begin
-        test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + KMeans")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-        umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-        fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(umap_model.embedding;
-                       title="PoissonPCA-EPCA + UMAP + KMeans",
-                       xlabel="UMAP 1",
-                       ylabel="UMAP 2",
-                       true_labels=shuffled_poisson_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + UMAP + KMeans
+    # Test.@testset "PoissonPCA-EPCA + UMAP + KMeans" begin
+    #     test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + KMeans")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
+    #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
+    #     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(umap_model.embedding;
+    #                    title="PoissonPCA-EPCA + UMAP + KMeans",
+    #                    xlabel="UMAP 1",
+    #                    ylabel="UMAP 2",
+    #                    true_labels=shuffled_poisson_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + UMAP + KMedoids
-    Test.@testset "PoissonPCA-EPCA + UMAP + KMedoids" begin
-        test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + KMedoids")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-        umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-        ## Compute distance matrix from UMAP embedding (Euclidean)
-        embedding = umap_model.embedding
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
-        fit_labels = kmedoids_result.assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(embedding;
-                       title="PoissonPCA-EPCA + UMAP + KMedoids",
-                       xlabel="UMAP 1",
-                       ylabel="UMAP 2",
-                       true_labels=shuffled_poisson_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + UMAP + KMedoids
+    # Test.@testset "PoissonPCA-EPCA + UMAP + KMedoids" begin
+    #     test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + KMedoids")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
+    #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
+    #     ## Compute distance matrix from UMAP embedding (Euclidean)
+    #     embedding = umap_model.embedding
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
+    #     kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+    #     fit_labels = kmedoids_result.assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(embedding;
+    #                    title="PoissonPCA-EPCA + UMAP + KMedoids",
+    #                    xlabel="UMAP 1",
+    #                    ylabel="UMAP 2",
+    #                    true_labels=shuffled_poisson_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)
-    Test.@testset "PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)" begin
-        test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-        umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-        embedding = umap_model.embedding
-        ## Compute distance matrix from UMAP embedding (Euclidean)
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-        ## Perform hierarchical clustering with Ward linkage
-        hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
-        fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(embedding;
-                       title="PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)",
-                       xlabel="UMAP 1",
-                       ylabel="UMAP 2",
-                       true_labels=shuffled_poisson_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)
+    # Test.@testset "PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)" begin
+    #     test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
+    #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
+    #     embedding = umap_model.embedding
+    #     ## Compute distance matrix from UMAP embedding (Euclidean)
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
+    #     ## Perform hierarchical clustering with Ward linkage
+    #     hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
+    #     fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(embedding;
+    #                    title="PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)",
+    #                    xlabel="UMAP 1",
+    #                    ylabel="UMAP 2",
+    #                    true_labels=shuffled_poisson_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_poisson_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(poisson_method_accuracies, ("PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
     ## Report ranked list by accuracy
     test_println("\n[Poisson] Accuracy ranking:")
@@ -1066,7 +1069,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == false
         Test.@test summary[:is_in_01] == false
         Test.@test summary[:is_probability_vector] == false
-        Test.@test summary[:suggested_epca] == :negbin_pca_epca
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :bray_curtis_distance
     end
     ## Distance clustering + Optimal Hierarchical Clustering
@@ -1416,7 +1419,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == false
         Test.@test summary[:is_in_01] == false
         Test.@test summary[:is_probability_vector] == false
-        Test.@test summary[:suggested_epca] == :poisson_pca_epca || summary[:suggested_epca] == :negbin_pca_epca
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :bray_curtis_distance
     end
 
@@ -1678,174 +1681,174 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         test_display(evaluation_result.recall_plot)
     end
 
-    ## PoissonPCA-EPCA + KMeans
-    Test.@testset "PoissonPCA-EPCA + KMeans" begin
-        test_println("[Binom] Testing: PoissonPCA-EPCA + KMeans")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-        fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="PoissonPCA-EPCA + KMeans",
-                       xlabel="PC1",
-                       ylabel="PC2",
-                       true_labels=shuffled_binom_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(binom_method_accuracies, ("PoissonPCA-EPCA + KMeans", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + KMeans
+    # Test.@testset "PoissonPCA-EPCA + KMeans" begin
+    #     test_println("[Binom] Testing: PoissonPCA-EPCA + KMeans")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
+    #     fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
+    #                    title="PoissonPCA-EPCA + KMeans",
+    #                    xlabel="PC1",
+    #                    ylabel="PC2",
+    #                    true_labels=shuffled_binom_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(binom_method_accuracies, ("PoissonPCA-EPCA + KMeans", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + KMedoids
-    Test.@testset "PoissonPCA-EPCA + KMedoids" begin
-        test_println("[Binom] Testing: PoissonPCA-EPCA + KMedoids")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-        ## Compute distance matrix from Poisson PCA scores (Euclidean)
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
-        fit_labels = kmedoids_result.assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="PoissonPCA-EPCA + KMedoids",
-                       xlabel="PC1",
-                       ylabel="PC2",
-                       true_labels=shuffled_binom_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(binom_method_accuracies, ("PoissonPCA-EPCA + KMedoids", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + KMedoids
+    # Test.@testset "PoissonPCA-EPCA + KMedoids" begin
+    #     test_println("[Binom] Testing: PoissonPCA-EPCA + KMedoids")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
+    #     ## Compute distance matrix from Poisson PCA scores (Euclidean)
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
+    #     kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+    #     fit_labels = kmedoids_result.assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
+    #                    title="PoissonPCA-EPCA + KMedoids",
+    #                    xlabel="PC1",
+    #                    ylabel="PC2",
+    #                    true_labels=shuffled_binom_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(binom_method_accuracies, ("PoissonPCA-EPCA + KMedoids", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)
-    Test.@testset "PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)" begin
-        test_println("[Binom] Testing: PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-        ## Compute distance matrix from Poisson PCA scores (Euclidean)
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
-        ## Perform hierarchical clustering with Ward linkage
-        hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
-        fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
-                       title="PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)",
-                       xlabel="PC1",
-                       ylabel="PC2",
-                       true_labels=shuffled_binom_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(binom_method_accuracies, ("PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)
+    # Test.@testset "PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)" begin
+    #     test_println("[Binom] Testing: PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
+    #     ## Compute distance matrix from Poisson PCA scores (Euclidean)
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), poisson_pca_result.scores; dims=2)
+    #     ## Perform hierarchical clustering with Ward linkage
+    #     hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
+    #     fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
+    #                    title="PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)",
+    #                    xlabel="PC1",
+    #                    ylabel="PC2",
+    #                    true_labels=shuffled_binom_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(binom_method_accuracies, ("PoissonPCA-EPCA + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + UMAP + KMeans
-    Test.@testset "PoissonPCA-EPCA + UMAP + KMeans" begin
-        test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + KMeans")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-        umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-        fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(umap_model.embedding;
-                       title="PoissonPCA-EPCA + UMAP + KMeans",
-                       xlabel="UMAP 1",
-                       ylabel="UMAP 2",
-                       true_labels=shuffled_binom_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + UMAP + KMeans
+    # Test.@testset "PoissonPCA-EPCA + UMAP + KMeans" begin
+    #     test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + KMeans")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
+    #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
+    #     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(umap_model.embedding;
+    #                    title="PoissonPCA-EPCA + UMAP + KMeans",
+    #                    xlabel="UMAP 1",
+    #                    ylabel="UMAP 2",
+    #                    true_labels=shuffled_binom_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMeans", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
-    ## PoissonPCA-EPCA + UMAP + KMedoids
-    Test.@testset "PoissonPCA-EPCA + UMAP + KMedoids" begin
-        test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + KMedoids")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-        umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-        ## Compute distance matrix from UMAP embedding (Euclidean)
-        embedding = umap_model.embedding
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
-        fit_labels = kmedoids_result.assignments
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(embedding;
-                       title="PoissonPCA-EPCA + UMAP + KMedoids",
-                       xlabel="UMAP 1",
-                       ylabel="UMAP 2",
-                       true_labels=shuffled_binom_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + UMAP + KMedoids
+    # Test.@testset "PoissonPCA-EPCA + UMAP + KMedoids" begin
+    #     test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + KMedoids")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
+    #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
+    #     ## Compute distance matrix from UMAP embedding (Euclidean)
+    #     embedding = umap_model.embedding
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
+    #     kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+    #     fit_labels = kmedoids_result.assignments
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(embedding;
+    #                    title="PoissonPCA-EPCA + UMAP + KMedoids",
+    #                    xlabel="UMAP 1",
+    #                    ylabel="UMAP 2",
+    #                    true_labels=shuffled_binom_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + KMedoids", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
     
-    ## PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)
-    Test.@testset "PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)" begin
-        test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)")
-        poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-        umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-        embedding = umap_model.embedding
-        ## Compute distance matrix from UMAP embedding (Euclidean)
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-        ## Perform hierarchical clustering with Ward linkage
-        hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
-        fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
-        fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
-        plt = Mycelia.plot_embeddings(embedding;
-                       title="PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)",
-                       xlabel="UMAP 1",
-                       ylabel="UMAP 2",
-                       true_labels=shuffled_binom_labels,
-                       fit_labels=fit_labels)
-        test_display(plt)
-        evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
-        Test.@test evaluation_result.macro_f1 >= 1/2
-        Test.@test evaluation_result.macro_precision >= 1/2
-        Test.@test evaluation_result.macro_recall >= 1/2
-        Test.@test evaluation_result.accuracy >= 1/2
-        push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
-        test_display(evaluation_result.confusion_matrix_plot)
-        test_display(evaluation_result.f1_plot)
-        test_display(evaluation_result.precision_plot)
-        test_display(evaluation_result.recall_plot)
-    end
+    # ## PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)
+    # Test.@testset "PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)" begin
+    #     test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)")
+    #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
+    #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
+    #     embedding = umap_model.embedding
+    #     ## Compute distance matrix from UMAP embedding (Euclidean)
+    #     dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
+    #     ## Perform hierarchical clustering with Ward linkage
+    #     hclust_result = Clustering.hclust(dist_matrix, linkage=:ward)
+    #     fit_labels = Clustering.cutree(hclust_result, k=n_distributions)
+    #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
+    #     plt = Mycelia.plot_embeddings(embedding;
+    #                    title="PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)",
+    #                    xlabel="UMAP 1",
+    #                    ylabel="UMAP 2",
+    #                    true_labels=shuffled_binom_labels,
+    #                    fit_labels=fit_labels)
+    #     test_display(plt)
+    #     evaluation_result = Mycelia.evaluate_classification(shuffled_binom_labels, fit_labels, verbose=false)
+    #     Test.@test evaluation_result.macro_f1 >= 1/2
+    #     Test.@test evaluation_result.macro_precision >= 1/2
+    #     Test.@test evaluation_result.macro_recall >= 1/2
+    #     Test.@test evaluation_result.accuracy >= 1/2
+    #     push!(binom_method_accuracies, ("PoissonPCA-EPCA + UMAP + Hierarchical Clustering (Ward linkage)", evaluation_result.accuracy))
+    #     test_display(evaluation_result.confusion_matrix_plot)
+    #     test_display(evaluation_result.f1_plot)
+    #     test_display(evaluation_result.precision_plot)
+    #     test_display(evaluation_result.recall_plot)
+    # end
 
     ## Report ranked list by accuracy
     test_println("\n[Binom] Accuracy ranking:")
@@ -1887,7 +1890,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == true
         Test.@test summary[:is_in_01] == true
         Test.@test summary[:is_probability_vector] == false
-        Test.@test summary[:suggested_epca] == :contbernoulli_pca_epca
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :cosine_distance
     end
 
@@ -2155,6 +2158,8 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         test_display(evaluation_result.recall_plot)
     end
 
+    #= ExpFamilyPCA dependency removed; ContBernoulli EPCA tests disabled.
+
     ## ContBernoulliPCA-EPCA + KMeans
     Test.@testset "ContBernoulliPCA-EPCA + KMeans" begin
         test_println("[ContBernoulli] Testing: ContBernoulliPCA-EPCA + KMeans")
@@ -2323,6 +2328,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         test_display(evaluation_result.precision_plot)
         test_display(evaluation_result.recall_plot)
     end
+=#
 
     ## Report ranked list by accuracy
     test_println("\n[ContBernoulli] Accuracy ranking:")
@@ -2365,7 +2371,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == true
         Test.@test summary[:is_in_01] == false
         Test.@test summary[:is_probability_vector] == false
-        Test.@test summary[:suggested_epca] == :gamma_pca_epca
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :cosine_distance
     end
 
@@ -2707,6 +2713,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
     gauss_stds = [rand(0.5:0.1:2.0, n_features) for _ in 1:n_distributions]
     gauss_samples = [hcat([rand.(Distributions.Normal.(μ, σ)) for _ in 1:n_samples]...) for (μ, σ) in zip(gauss_means, gauss_stds)]
     gauss_matrix = hcat(gauss_samples...)
+    gauss_matrix .-= Statistics.mean(gauss_matrix; dims=2)  # center features for PCA expectations
     gauss_labels = repeat(1:n_distributions, inner=n_samples)
     perm = Random.shuffle(1:length(gauss_labels))
     shuffled_gauss_matrix = gauss_matrix[:, perm]
@@ -2723,7 +2730,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         Test.@test summary[:is_strictly_positive] == false
         Test.@test summary[:is_in_01] == false
         Test.@test summary[:is_probability_vector] == false
-        Test.@test summary[:suggested_epca] == :gaussian_pca_epca || summary[:suggested_epca] == :pca_transform
+        Test.@test summary[:suggested_epca] === nothing
         Test.@test summary[:suggested_distance] == :euclidean_distance
     end
 
@@ -2990,6 +2997,8 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         test_display(evaluation_result.recall_plot)
     end
 
+    #= ExpFamilyPCA dependency removed; Gaussian EPCA tests disabled.
+
     ## GaussianPCA-EPCA + KMeans
     Test.@testset "GaussianPCA-EPCA + KMeans" begin
         test_println("[Gaussian] Testing: GaussianPCA-EPCA + KMeans")
@@ -3158,6 +3167,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         test_display(evaluation_result.precision_plot)
         test_display(evaluation_result.recall_plot)
     end
+=#
 
     ## Report ranked list by accuracy
     test_println("\n[Gaussian] Accuracy ranking:")

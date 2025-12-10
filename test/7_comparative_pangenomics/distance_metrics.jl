@@ -1,7 +1,20 @@
-import Pkg
-if isinteractive()
-    Pkg.activate("..")
-end
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/7_comparative_pangenomics/distance_metrics.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/distance_metrics.jl", "test/7_comparative_pangenomics", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import Distances
@@ -20,8 +33,8 @@ Test.@testset "Distance Metrics Tests" begin
         
         Test.@test jaccard_dist isa Matrix{Float64}
         Test.@test size(jaccard_dist) == (3, 3)
-        Test.@test issymmetric(jaccard_dist)
-        Test.@test all(diag(jaccard_dist) .== 0.0)  # Diagonal should be zero
+        Test.@test LinearAlgebra.issymmetric(jaccard_dist)
+        Test.@test all(LinearAlgebra.diag(jaccard_dist) .== 0.0)  # Diagonal should be zero
         
         # Manual calculation for verification
         # Column 1: [1,0,1], Column 2: [0,1,1], Column 3: [1,1,0]
@@ -35,8 +48,8 @@ Test.@testset "Distance Metrics Tests" begin
         
         Test.@test bc_dist isa Matrix{Float64}
         Test.@test size(bc_dist) == (3, 3)
-        Test.@test issymmetric(bc_dist)
-        Test.@test all(diag(bc_dist) .== 0.0)
+        Test.@test LinearAlgebra.issymmetric(bc_dist)
+        Test.@test all(LinearAlgebra.diag(bc_dist) .== 0.0)
     end
 
     Test.@testset "K-mer Distance Functions" begin
@@ -142,8 +155,8 @@ Test.@testset "Distance Metrics Tests" begin
         
         Test.@test euclidean_dist isa Matrix{Float64}
         Test.@test size(euclidean_dist) == (3, 3)
-        Test.@test issymmetric(euclidean_dist)
-        Test.@test all(diag(euclidean_dist) .== 0.0)
+        Test.@test LinearAlgebra.issymmetric(euclidean_dist)
+        Test.@test all(LinearAlgebra.diag(euclidean_dist) .== 0.0)
         
         # Test with cosine distance
         cosine_dist = Mycelia.pairwise_distance_matrix(
@@ -154,7 +167,7 @@ Test.@testset "Distance Metrics Tests" begin
         
         Test.@test cosine_dist isa Matrix{Float64}
         Test.@test size(cosine_dist) == (3, 3)
-        Test.@test issymmetric(cosine_dist)
+        Test.@test LinearAlgebra.issymmetric(cosine_dist)
     end
 
     Test.@testset "Wrapper Functions" begin
@@ -163,35 +176,35 @@ Test.@testset "Distance Metrics Tests" begin
         # Test Euclidean distance wrapper
         euclidean_result = Mycelia.frequency_matrix_to_euclidean_distance_matrix(test_matrix)
         Test.@test euclidean_result isa Matrix{Float64}
-        Test.@test issymmetric(euclidean_result)
+        Test.@test LinearAlgebra.issymmetric(euclidean_result)
         
         # Test cosine distance wrapper
         cosine_result = Mycelia.frequency_matrix_to_cosine_distance_matrix(test_matrix)
         Test.@test cosine_result isa Matrix{Float64}
-        Test.@test issymmetric(cosine_result)
+        Test.@test LinearAlgebra.issymmetric(cosine_result)
         
         # Test Bray-Curtis distance wrapper
         bc_result = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(test_matrix)
         Test.@test bc_result isa Matrix{Float64}
-        Test.@test issymmetric(bc_result)
+        Test.@test LinearAlgebra.issymmetric(bc_result)
         
         # Test Jensen-Shannon distance wrapper
         # Normalize matrix first for probability distribution
         prob_matrix = test_matrix ./ sum(test_matrix, dims=1)
         js_result = Mycelia.frequency_matrix_to_jensen_shannon_distance_matrix(prob_matrix)
         Test.@test js_result isa Matrix{Float64}
-        Test.@test issymmetric(js_result)
+        Test.@test LinearAlgebra.issymmetric(js_result)
         
         # Test binary Jaccard distance wrapper
         binary_matrix = BitMatrix([true false true; false true true; true true false])
         binary_jaccard = Mycelia.binary_matrix_to_jaccard_distance_matrix(binary_matrix)
         Test.@test binary_jaccard isa Matrix{Float64}
-        Test.@test issymmetric(binary_jaccard)
+        Test.@test LinearAlgebra.issymmetric(binary_jaccard)
         
         # Test frequency Jaccard distance wrapper
         freq_jaccard = Mycelia.frequency_matrix_to_jaccard_distance_matrix(test_matrix)
         Test.@test freq_jaccard isa Matrix{Float64}
-        Test.@test issymmetric(freq_jaccard)
+        Test.@test LinearAlgebra.issymmetric(freq_jaccard)
     end
 
     Test.@testset "Newick Tree Generation" begin
@@ -286,12 +299,12 @@ Test.@testset "Distance Metrics Tests" begin
         end
         
         # Symmetry
-        Test.@test issymmetric(dist_matrix)
+        Test.@test LinearAlgebra.issymmetric(dist_matrix)
         
         # Non-negativity
         Test.@test all(dist_matrix .≥ 0)
         
         # Identity: d(x,x) = 0
-        Test.@test all(diag(dist_matrix) .≈ 0.0)
+        Test.@test all(LinearAlgebra.diag(dist_matrix) .≈ 0.0)
     end
 end

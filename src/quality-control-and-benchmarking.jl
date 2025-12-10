@@ -460,6 +460,91 @@ function assess_assembly_quality(contigs_file)
     return n_contigs, total_length, n50, l50
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Evaluate genome assembly quality by comparing k-mer distributions between assembled sequences and raw observations.
+
+# Arguments
+- `assembly`: Input assembled sequences to evaluate
+- `observations`: Raw sequencing data for comparison
+- `ks::Vector{Int}`: Vector of k-mer sizes to analyze (default: k=17 to 23)
+
+# Returns
+DataFrame containing quality metrics for each k-mer size:
+- `k`: K-mer length used
+- `cosine_distance`: Cosine similarity between k-mer distributions
+- `js_divergence`: Jensen-Shannon divergence between distributions  
+- `qv`: MerQury-style quality value score
+"""
+function assess_assembly_kmer_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
+    results = DataFrames.DataFrame()
+    @show ks
+    ProgressMeter.@showprogress for k in ks
+        @show k
+        @info "counting assembly kmers..."
+        assembled_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly)
+        # assembled_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=assembly, k=k, canonical=true)
+        # @info "loading assembly kmer counts..."
+        # assembled_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(assembled_canonical_kmer_counts_file)
+        # sort!(assembled_canonical_kmer_counts_table, "kmer")
+        # assembled_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(assembled_canonical_kmer_counts_table))
+        
+        @info "counting observation kmers..."
+        observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
+        # observed_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=observations, k=k, canonical=true)
+        # @info "loading observation kmer counts..."
+        # observed_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(observed_canonical_kmer_counts_file)
+        # sort!(observed_canonical_kmer_counts_table, "kmer")
+        # observed_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(observed_canonical_kmer_counts_table))
+        cosine_distance = kmer_counts_to_cosine_similarity(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
+        js_divergence = kmer_counts_to_js_divergence(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
+        qv = kmer_counts_to_merqury_qv(raw_data_counts=observed_canonical_kmer_counts, assembly_counts=assembled_canonical_kmer_counts)
+        push!(results, (;k, cosine_distance, js_divergence, qv))
+    end
+    return results
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate assembly Quality Value (QV) score using the Merqury method.
+
+Estimates base-level accuracy by comparing k-mer distributions between raw sequencing
+data and assembly. Higher QV scores indicate better assembly quality.
+
+# Arguments
+- `raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}`: K-mer counts from raw sequencing data
+- `assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}`: K-mer counts from assembly
+
+# Returns
+- `Float64`: Quality Value score in Phred scale (-10log₁₀(error rate))
+
+# Method
+QV is calculated using:
+1. Ktotal = number of unique kmers in assembly
+2. Kshared = number of kmers shared between raw data and assembly
+3. P = (Kshared/Ktotal)^(1/k) = estimated base-level accuracy
+4. QV = -10log₁₀(1-P)
+
+# Reference
+Rhie et al. "Merqury: reference-free quality, completeness, and phasing assessment
+for genome assemblies" Genome Biology (2020)
+"""
+function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}, assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}) where {k,N}
+    # Ktotal = # of kmers found in assembly
+    Ktotal = length(keys(assembly_counts))
+    # Kshared = # of shared kmers between assembly and readset
+    Kshared = length(intersect(keys(raw_data_counts), keys(assembly_counts)))
+    # probability_base_in_assembly_correct
+    P = (Kshared/Ktotal)^(1/k)
+    # # Error rate
+    E = 1-P
+    QV = -10log10(E)
+    # return (;P, E, QV)
+    return QV
+end
+
 # ---------- CheckM, CheckM2, CheckV Functions ----------
 
 """

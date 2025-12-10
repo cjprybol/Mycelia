@@ -5,7 +5,7 @@
 > - A record of planned capabilities
 > - Examples of the intended API when implemented
 >
-> **Currently Available**: Limited plotting functions including `plot_kmer_frequency_spectra`, `plot_per_base_quality`, `bandage_visualize`, tree visualization, and taxonomic abundance plots. See source code in `src/plotting-and-visualization.jl` for implemented functions.
+> **Currently Available**: Limited plotting functions including `plot_kmer_frequency_spectra`, `plot_per_base_quality`, `bandage_visualize` (with `format`/`extra_args` passthrough), tree visualization, and taxonomic abundance plots. See source code in `src/plotting-and-visualization.jl` for implemented functions.
 
 This gallery showcases the intended plotting and visualization capabilities of Mycelia across different bioinformatics analysis workflows.
 
@@ -87,6 +87,18 @@ Mycelia.plot_genome_size_estimation(estimation_data)
 *Provides independent genome size validation*
 
 ## Assembly Visualization *(Planned)*
+
+### Bandage Graph Export *(Implemented: bandage_visualize)*
+```julia
+# Export a graph image using Bandage (supports png/svg/etc)
+Mycelia.bandage_visualize(
+    gfa="assembly.gfa";
+    format="svg",
+    extra_args=["--dpi", "1"], # pass Bandage CLI flags directly
+    force=true
+)
+```
+*Uses BandageNG/Bandage to render the graph; set `MYCELIA_BANDAGE_CMD` to a custom binary if needed.*
 
 ### Assembly Statistics *(Planned)*
 ```julia

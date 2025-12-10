@@ -75,6 +75,28 @@ function mutate_string(s::String; alphabet::Union{Nothing,AbstractVector{Char}}=
 end
 
 """
+    mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA{4}}; fraction::Float64, rng::Random.AbstractRNG=Random.default_rng())
+
+Introduce substitutions at approximately `fraction` of positions (no indels) for DNA sequences.
+Returns the mutated sequence in the same type as provided.
+"""
+function mutate_dna_substitution_fraction(seq::Union{String,BioSequences.LongDNA{4}}; fraction::Float64, rng::Random.AbstractRNG=Random.default_rng())
+    if !(0.0 ≤ fraction ≤ 1.0)
+        error("fraction must be between 0 and 1, got $(fraction)")
+    end
+    chars = seq isa String ? collect(seq) : collect(String(seq))
+    n_mut = ceil(Int, fraction * length(chars))
+    idxs = Random.randperm(rng, length(chars))[1:n_mut]
+    for idx in idxs
+        current = chars[idx]
+        choices = setdiff(['A','C','G','T'], [current])
+        chars[idx] = rand(rng, choices)
+    end
+    mutated = String(chars)
+    return seq isa String ? mutated : BioSequences.LongDNA{4}(mutated)
+end
+
+"""
     rand_ascii_greek_string(len::Int) -> String
 
 Generate a random string of printable ASCII and Greek characters of length `len`.
