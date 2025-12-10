@@ -142,6 +142,7 @@ remaining_files = [
     "amino-acid-analysis.jl",
     "annotation.jl",
     "bioconda.jl",
+    "binning.jl",
     "classification.jl",
     "clustering.jl",
     "codon-optimization.jl",

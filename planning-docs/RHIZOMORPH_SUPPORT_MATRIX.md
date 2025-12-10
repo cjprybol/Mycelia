@@ -1,5 +1,7 @@
 # Rhizomorph Support Matrix (single/double/canonical × graph type × alphabet)
 
+> For detailed implementation guidance, code examples, and architectural rationale, see [rhizomorph-graph-ecosystem-plan.md](rhizomorph-graph-ecosystem-plan.md).
+
 Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented)
 
 | Graph Type | Alphabet | Singlestrand | Doublestrand | Canonical | Notes |

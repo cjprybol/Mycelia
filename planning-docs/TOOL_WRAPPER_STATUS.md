@@ -10,7 +10,7 @@
 
 **Mycelia has extensive assembler coverage** with 13+ assemblers wrapped and tested, plus quality control tools. However, **binning and classification tools from the metagenomics workflow are missing**.
 
-### Status Overview
+### Status Overview (Updated 2025-12-10)
 
 | Category | Implemented | Tested | Missing from Workflow |
 |----------|-------------|--------|----------------------|
@@ -18,9 +18,13 @@
 | **Assemblers (Long)** | 6+/6 | 6/6 | 0 |
 | **Strain-Aware** | 3/3 | 0/3 | 0 |
 | **Quality Control** | 2/2 | 0/2 | 0 |
-| **Classification** | 0/4 | 0/4 | 4 |
+| **Classification** | 5/5 | 1/5 | 0 |
 | **Binning** | 0/7 | 0/7 | 7 |
 | **Post-Binning** | 0/2 | 0/2 | 2 |
+
+**2025-12-10 Update**:
+- Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
+- mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
 
 ---
 
@@ -33,10 +37,11 @@
 - sylph - assess relative coverage
 
 **Status**:
-- ❌ sourmash: Commented out in `src/bioconda.jl:299`, NOT implemented
+- ✅ sourmash: **IMPLEMENTED** in `src/classification.jl` (2025-12-10)
+  - Functions: `run_sourmash_sketch()`, `run_sourmash_search()`, `run_sourmash_gather()`
 - ✅ sylph: Implemented and tested (`run_sylph_profile` in `src/sequence-comparison.jl`, integration test in `test/7_comparative_pangenomics/sequence_comparison.jl`)
 
-**Verdict**: ⚠️ **PARTIAL** - sylph now wrapped and covered by tests; sourmash still missing
+**Verdict**: ✅ **COMPLETE** - Both sourmash and sylph implemented
 
 ---
 
@@ -52,12 +57,16 @@
 - ✅ minimap: **FOUND** in `src/alignments-and-mapping.jl`
   - Functions: `minimap_index()`, `minimap_map()`, `minimap_map_with_index()`, `minimap_map_paired_end_with_index()`
   - **VERIFIED**: Multiple functions, well-integrated
-- ❌ mosdepth: NOT FOUND
-- ❌ metaphlan: NOT FOUND (metagenomic-classification.jl is entirely commented out)
-- ❌ metabuli: NOT FOUND
+- ✅ mosdepth: **FOUND** in `src/xam.jl:1001`
+  - Functions: `run_mosdepth()`, `parse_mosdepth_distribution()`, `parse_mosdepth_summary()`, `parse_mosdepth_thresholds()`, `summarize_mosdepth_qc()`
+  - **VERIFIED**: Comprehensive coverage analysis with QC metrics
+- ✅ metaphlan: **IMPLEMENTED** in `src/classification.jl` (2025-12-10)
+  - Functions: `run_metaphlan()`, `parse_metaphlan_profile()`
+- ✅ metabuli: **IMPLEMENTED** in `src/classification.jl` (2025-12-10)
+  - Functions: `run_metabuli_classify()`, `run_metabuli_build_db()`, `parse_metabuli_report()`, `parse_metabuli_classifications()`
 - ✅ skani: Implemented and tested (`skani_triangle`/`skani_dist` in `src/sequence-comparison.jl`, test in `test/7_comparative_pangenomics/sequence_comparison.jl`)
 
-**Verdict**: ⚠️ **PARTIAL** - minimap and skani work; mosdepth, metaphlan, metabuli remain missing
+**Verdict**: ✅ **COMPLETE** - All read classification tools implemented (minimap, mosdepth, metaphlan, metabuli, skani)
 
 ---
 
@@ -126,15 +135,29 @@
 - COMEBin
 
 **Status**:
-- ❌ Taxometer: NOT FOUND
-- ❌ TaxVAMB: NOT FOUND
-- ❌ VAMB: NOT FOUND
-- ❌ MetaBAT2: NOT FOUND
-- ❌ MetaCoAG: NOT FOUND
-- ❌ GenomeFace: NOT FOUND
-- ❌ COMEBin: NOT FOUND
+- ✅ Taxometer: **FOUND** in `src/binning.jl`
+  - Function: `run_taxometer`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ TaxVAMB: **FOUND** in `src/binning.jl`
+  - Function: `run_taxvamb`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ VAMB: **FOUND** in `src/binning.jl`
+  - Function: `run_vamb`
+  - Tests: ✅ Parser/validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ MetaBAT2: **FOUND** in `src/binning.jl`
+  - Function: `run_metabat2`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ MetaCoAG: **FOUND** in `src/binning.jl`
+  - Function: `run_metacoag`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ GenomeFace: **FOUND** in `src/binning.jl`
+  - Function: `run_genomeface`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ COMEBin: **FOUND** in `src/binning.jl`
+  - Function: `run_comebin`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
 
-**Verdict**: ❌ **MISSING** - Zero binning tools wrapped (0/7)
+**Verdict**: ✅ **IMPLEMENTED** - 7/7 binning tools wrapped (tests are validation-only; external runs opt-in).
 
 ---
 
@@ -145,10 +168,14 @@
 - MAGmax (merging)
 
 **Status**:
-- ❌ dRep: NOT FOUND
-- ❌ MAGmax: NOT FOUND
+- ✅ dRep: **FOUND** in `src/binning.jl`
+  - Function: `run_drep_dereplicate`
+  - Tests: ✅ Validation/parsing in `test/8_tool_integration/binning_tools.jl`
+- ✅ MAGmax: **FOUND** in `src/binning.jl`
+  - Function: `run_magmax_merge`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
 
-**Verdict**: ❌ **MISSING** - Zero post-binning tools wrapped (0/2)
+**Verdict**: ✅ **IMPLEMENTED** - 2/2 post-binning tools wrapped (tests are validation-only; external runs opt-in).
 
 ---
 

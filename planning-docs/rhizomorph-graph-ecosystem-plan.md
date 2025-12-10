@@ -1,5 +1,7 @@
 # Comprehensive Rhizomorph Graph Ecosystem Action Plan
 
+> For a quick status overview of supported graph types and modes, see [RHIZOMORPH_SUPPORT_MATRIX.md](RHIZOMORPH_SUPPORT_MATRIX.md).
+
 A detailed plan for implementing a robust "rhizomorph" graph ecosystem that properly handles all graph types as **directed, strand-aware graphs** where vertices and edges are added only when observed. The design distinguishes between two orthogonal concepts:
 
 1. **Strand Specificity** (methodological): Whether evidence is preserved per strand orientation or merged across reverse-complement pairs
