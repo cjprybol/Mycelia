@@ -47,6 +47,27 @@ include("4_assembly/bandage_integration.jl")
 include("4_assembly/megahit_phix_workflow.jl") # MEGAHIT/Bandage/Qualimap end-to-end workflow on PhiX
 # include("4_assembly/end_to_end_assembly_tests.jl")
 
+# Rhizomorph graph ecosystem tests (added 2025-12-10)
+# Path finding and sequence reconstruction
+include("4_assembly/path_finding_test.jl")
+include("4_assembly/rhizomorph_doublestrand_traversal_test.jl")
+include("4_assembly/rhizomorph_canonical_path_test.jl")
+include("4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl")
+include("4_assembly/rhizomorph_qualmer_rc_evidence_test.jl")
+include("4_assembly/rhizomorph_doublestrand_files_test.jl")
+include("4_assembly/rhizomorph_conversion_errors_test.jl")
+
+# K-mer graph construction tests
+include("4_assembly/dna_kmer_singlestrand_test.jl")
+include("4_assembly/dna_kmer_doublestrand_test.jl")
+include("4_assembly/rna_kmer_singlestrand_test.jl")
+include("4_assembly/rna_kmer_doublestrand_test.jl")
+include("4_assembly/rna_kmer_graph_test.jl")
+include("4_assembly/aa_kmer_singlestrand_test.jl")
+include("4_assembly/aa_kmer_graph_test.jl")
+include("4_assembly/kmer_vertex_data_test.jl")
+include("4_assembly/kmer_edge_data_test.jl")
+
 # include_all_tests(joinpath(@__DIR__, "5_validation"))
 include("5_validation/mosdepth_coverage_qc.jl")
 
@@ -60,6 +81,7 @@ include("7_comparative_pangenomics/panproteome.jl")
 include("7_comparative_pangenomics/pantranscriptome.jl")
 include("7_comparative_pangenomics/phylogenetics.jl")
 include("7_comparative_pangenomics/sequence_classification.jl")
+include("7_comparative_pangenomics/pangenome_wrappers.jl")
 
 # Network/tooling heavy suites (NCBI downloads, conda tools) are opt-in.
 # if get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"

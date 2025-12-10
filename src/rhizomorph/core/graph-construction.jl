@@ -741,7 +741,7 @@ function convert_to_doublestrand(singlestrand_graph)
         doublestrand_graph[kmer] = singlestrand_graph[kmer]
     end
 
-    # Add all reverse complement vertices
+    # Add all reverse complement vertices (merging evidence if RC already exists)
     for kmer in MetaGraphsNext.labels(singlestrand_graph)
         rc_kmer = BioSequences.reverse_complement(kmer)
 
@@ -750,29 +750,43 @@ function convert_to_doublestrand(singlestrand_graph)
             continue
         end
 
-        # Create RC vertex with flipped evidence
+        # Get the forward vertex data to flip
         vertex_data = singlestrand_graph[kmer]
 
-        # Create new vertex for RC kmer
-        rc_vertex_data = if VertexDataType <: KmerVertexData
-            KmerVertexData(rc_kmer)
-        elseif VertexDataType <: QualmerVertexData
-            QualmerVertexData(rc_kmer)
-        else
-            error("Unsupported vertex data type: $(VertexDataType)")
-        end
-
-        # Copy and flip all evidence from forward to RC
-        for (dataset_id, observations) in vertex_data.evidence
-            for (obs_id, evidence_set) in observations
-                for evidence in evidence_set
-                    flipped_evidence = flip_evidence_strand(evidence)
-                    add_evidence!(rc_vertex_data, dataset_id, obs_id, flipped_evidence)
+        # Check if RC vertex already exists (it may have been in the original graph)
+        if haskey(doublestrand_graph, rc_kmer)
+            # RC vertex exists - merge flipped evidence into existing vertex
+            existing_rc_vertex = doublestrand_graph[rc_kmer]
+            for (dataset_id, observations) in vertex_data.evidence
+                for (obs_id, evidence_set) in observations
+                    for evidence in evidence_set
+                        flipped_evidence = flip_evidence_strand(evidence)
+                        add_evidence!(existing_rc_vertex, dataset_id, obs_id, flipped_evidence)
+                    end
                 end
             end
-        end
+        else
+            # RC vertex doesn't exist - create new one
+            rc_vertex_data = if VertexDataType <: KmerVertexData
+                KmerVertexData(rc_kmer)
+            elseif VertexDataType <: QualmerVertexData
+                QualmerVertexData(rc_kmer)
+            else
+                error("Unsupported vertex data type: $(VertexDataType)")
+            end
 
-        doublestrand_graph[rc_kmer] = rc_vertex_data
+            # Copy and flip all evidence from forward to RC
+            for (dataset_id, observations) in vertex_data.evidence
+                for (obs_id, evidence_set) in observations
+                    for evidence in evidence_set
+                        flipped_evidence = flip_evidence_strand(evidence)
+                        add_evidence!(rc_vertex_data, dataset_id, obs_id, flipped_evidence)
+                    end
+                end
+            end
+
+            doublestrand_graph[rc_kmer] = rc_vertex_data
+        end
     end
 
     # Add all forward edges

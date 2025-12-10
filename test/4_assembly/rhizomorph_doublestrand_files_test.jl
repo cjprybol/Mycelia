@@ -4,6 +4,7 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
+import Kmers
 
 Test.@testset "Rhizomorph doublestrand from files" begin
     # K-mer graph from FASTA files with mode=:doublestrand
@@ -16,8 +17,8 @@ Test.@testset "Rhizomorph doublestrand from files" begin
         graph = Mycelia.Rhizomorph.build_kmer_graph_from_files([fasta], 3; mode=:doublestrand)
 
         # Expect both forward and reverse-complement k-mers
-        Test.@test Mycelia.Rhizomorph.has_vertex(graph, BioSequences.DNAKmer{3}("ATG"))
-        Test.@test Mycelia.Rhizomorph.has_vertex(graph, BioSequences.DNAKmer{3}("CAT"))
+        Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("ATG"))
+        Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("CAT"))
     end
 
     # Qualmer graph from FASTQ files with mode=:doublestrand
@@ -29,8 +30,8 @@ Test.@testset "Rhizomorph doublestrand from files" begin
         end
         graph = Mycelia.Rhizomorph.build_qualmer_graph_from_files([fastq], 3; mode=:doublestrand)
 
-        Test.@test Mycelia.Rhizomorph.has_vertex(graph, BioSequences.DNAKmer{3}("ATG"))
-        Test.@test Mycelia.Rhizomorph.has_vertex(graph, BioSequences.DNAKmer{3}("CAT"))
+        Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("ATG"))
+        Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("CAT"))
     end
 end
 

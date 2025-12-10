@@ -243,6 +243,52 @@ end
 # ============================================================================
 
 """
+    path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where T
+
+Convert a vector of k-mer labels (from find_eulerian_paths_next) to a biological sequence.
+
+This is an overload that accepts raw k-mer vectors directly, which is the output format
+of find_eulerian_paths_next. For k-mer graphs, reconstructs by overlapping k-mers.
+
+# Arguments
+- `path::Vector{T}`: Path as vector of k-mer labels
+- `graph::MetaGraphsNext.MetaGraph`: Assembly graph
+
+# Returns
+Appropriate sequence type based on the k-mer type.
+"""
+function path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where T
+    if isempty(path)
+        return _get_empty_sequence_for_label_type(T)
+    end
+
+    # Determine the sequence type from the first k-mer
+    SequenceType = _sequence_type_from_kmer_type(T)
+
+    # For k-mer paths: first k-mer in full, then add last base of each subsequent k-mer
+    if SequenceType <: BioSequences.LongSequence
+        # Start with the first k-mer
+        result = SequenceType(string(path[1]))
+
+        # Add last base of each subsequent k-mer
+        for i in 2:length(path)
+            kmer_str = string(path[i])
+            last_base = kmer_str[end:end]
+            result = result * SequenceType(last_base)
+        end
+
+        return result
+    else
+        # String type: concatenate with overlaps
+        result = string(path[1])
+        for i in 2:length(path)
+            result *= string(path[i])[end:end]
+        end
+        return result
+    end
+end
+
+"""
     path_to_sequence(path::GraphPath{T}, graph::MetaGraphsNext.MetaGraph) where T
 
 Convert a graph path to a biological sequence.
