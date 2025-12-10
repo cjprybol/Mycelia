@@ -18,7 +18,8 @@ Test.@testset "DNA K-mer Doublestrand Graph" begin
         seq1 = "ATGCAT"
         record = FASTX.FASTA.Record("read_001", seq1)
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+        # Use canonical builder for canonical behavior (merging forward and RC)
+        graph = Mycelia.Rhizomorph.build_kmer_graph_canonical([record], 3; dataset_id="test")
 
         # Canonical form of ATG is ATG (ATG < CAT lexicographically)
         # Canonical form of CAT is ATG
