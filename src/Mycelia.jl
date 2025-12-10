@@ -157,6 +157,7 @@ remaining_files = [
     "quality-control-and-benchmarking.jl",
     "rclone.jl",
     "reference-databases.jl",
+    "sentencepiece.jl",
     "sequence-comparison.jl",
     "sequence-graphs.jl",
     "simulation.jl",

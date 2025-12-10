@@ -300,7 +300,9 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.error_free_sam, force=true)
     end
 
-    if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+    if run_external
         Test.@testset "Coverage Determination" begin
             # Create test data using Mycelia pipeline to ensure correct BAM format
             rng = StableRNGs.StableRNG(1234)

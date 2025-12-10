@@ -8,7 +8,9 @@ See [Basic Workflows](api/examples/basic-workflows.md) for fundamental bioinform
 
 ## Advanced Patterns
 
-See [Advanced Usage](api/examples/advanced-usage.md) for optimization techniques and complex workflows.
+See [Advanced Usage](api/examples/advanced-usage.md) for optimization techniques and complex workflows, including:
+
+- **Sequence Tokenization with SentencePiece** - Train subword tokenizers for DNA, RNA, amino acids, and text for ML/NLP applications
 
 ## Related Documentation
 
