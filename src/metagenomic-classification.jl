@@ -561,3 +561,347 @@
 #     # Implementation would build actual mapping command
 #     return `echo "placeholder mapping command"`
 # end
+
+# =============================================================================
+# External tool wrappers (Metabuli, MetaPhlAn)
+# =============================================================================
+
+struct MetabuliResult
+    classifications_tsv::String
+    report_tsv::String
+    krona_html::String
+    classifications::DataFrames.DataFrame
+    report::DataFrames.DataFrame
+end
+
+"""
+    run_metabuli_classify(reads1::AbstractString;
+                          reads2::Union{Nothing,AbstractString}=nothing,
+                          dbdir::AbstractString,
+                          outdir::AbstractString,
+                          jobid::AbstractString,
+                          read_platform::Symbol=:illumina,
+                          precision_mode::Bool=true,
+                          threads::Int=Threads.nthreads(),
+                          max_ram_gb::Int=128,
+                          additional_args::Vector{String}=String[],
+                          force::Bool=false)
+
+Run Metabuli `classify` on short or long reads (or contigs) and return parsed results.
+
+Creates `jobid_*` outputs under `outdir`, skipping execution when outputs already
+exist unless `force=true`.
+"""
+function run_metabuli_classify(reads1::AbstractString;
+        reads2::Union{Nothing,AbstractString}=nothing,
+        dbdir::AbstractString,
+        outdir::AbstractString,
+        jobid::AbstractString,
+        read_platform::Symbol=:illumina,
+        precision_mode::Bool=true,
+        threads::Int=Threads.nthreads(),
+        max_ram_gb::Int=128,
+        additional_args::Vector{String}=String[],
+        force::Bool=false)
+
+    for file in isnothing(reads2) ? (reads1,) : (reads1, reads2)
+        isfile(file) || error("Input file not found: $(file)")
+    end
+    isdir(dbdir) || error("Database directory not found: $(dbdir)")
+
+    valid_platforms = (:illumina, :pacbio_hifi, :pacbio_sequel2, :ont, :contig)
+    read_platform in valid_platforms || error("read_platform must be one of $(valid_platforms)")
+
+    mkpath(outdir)
+    classifications_tsv = joinpath(outdir, jobid * "_classifications.tsv")
+    report_tsv = joinpath(outdir, jobid * "_report.tsv")
+    krona_html = joinpath(outdir, jobid * "_krona.html")
+    expected_outputs = [classifications_tsv, report_tsv, krona_html]
+
+    if !force && all(isfile.(expected_outputs)) && all(filesize.(expected_outputs) .> 0)
+        classifications_df = CSV.read(classifications_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
+        report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
+        return MetabuliResult(classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
+    end
+
+    Mycelia.add_bioconda_env("metabuli")
+
+    cmd_args = String["classify"]
+
+    if isnothing(reads2)
+        if read_platform == :illumina || read_platform == :contig
+            append!(cmd_args, ["--seq-mode", "1"])
+        else
+            append!(cmd_args, ["--seq-mode", "3"])
+        end
+    end
+
+    push!(cmd_args, reads1)
+    if !isnothing(reads2)
+        push!(cmd_args, reads2)
+    end
+
+    append!(cmd_args, [dbdir, outdir, jobid])
+
+    if precision_mode
+        if read_platform == :illumina || read_platform == :contig
+            append!(cmd_args, ["--min-score", "0.15", "--min-sp-score", "0.5"])
+        elseif read_platform == :pacbio_hifi
+            append!(cmd_args, ["--min-score", "0.07", "--min-sp-score", "0.3"])
+        elseif read_platform == :pacbio_sequel2
+            append!(cmd_args, ["--min-score", "0.005"])
+        elseif read_platform == :ont
+            append!(cmd_args, ["--min-score", "0.008"])
+        end
+    end
+
+    append!(cmd_args, ["--threads", string(threads), "--max-ram", string(max_ram_gb) * "G"])
+    append!(cmd_args, additional_args)
+
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli $cmd_args`
+    run(cmd)
+
+    classifications_df = CSV.read(classifications_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
+    report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
+    return MetabuliResult(classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
+end
+
+struct MetaPhlAnResult
+    profile_tsv::String
+    map_output::Union{Nothing,String}
+    table::DataFrames.DataFrame
+end
+
+"""
+    run_metaphlan(reads1::Union{String,Vector{String}};
+                  reads2::Union{Nothing,String,Vector{String}}=nothing,
+                  sample_name::AbstractString,
+                  outdir::AbstractString,
+                  db_dir::Union{Nothing,String}=nothing,
+                  bowtie2db::Union{Nothing,String}=nothing,
+                  input_type::Symbol=:fastq,
+                  long_reads::Bool=false,
+                  threads::Int=Threads.nthreads(),
+                  mapout::Bool=true,
+                  additional_args::Vector{String}=String[],
+                  force::Bool=false)
+
+Run MetaPhlAn 4.2+ for marker-based profiling on short or long reads.
+
+Uses comma-joined input lists when multiple files are provided and reuses
+existing outputs unless `force=true`.
+"""
+function run_metaphlan(reads1::Union{String,Vector{String}};
+        reads2::Union{Nothing,String,Vector{String}}=nothing,
+        sample_name::AbstractString,
+        outdir::AbstractString,
+        db_dir::Union{Nothing,String}=nothing,
+        bowtie2db::Union{Nothing,String}=nothing,
+        input_type::Symbol=:fastq,
+        long_reads::Bool=false,
+        threads::Int=Threads.nthreads(),
+        mapout::Bool=true,
+        additional_args::Vector{String}=String[],
+        force::Bool=false)
+
+    normalize_reads(x) = x isa Vector{String} ? join(x, ",") : String(x)
+
+    function ensure_files_exist(paths::Union{String,Vector{String}})
+        for f in paths isa Vector{String} ? paths : [String(paths)]
+            isfile(f) || error("Input file not found: $(f)")
+        end
+    end
+
+    ensure_files_exist(reads1)
+    if !isnothing(reads2)
+        ensure_files_exist(reads2)
+    end
+
+    valid_inputs = (:fastq, :fasta, :sam, :bam)
+    input_type in valid_inputs || error("input_type must be one of $(valid_inputs)")
+
+    mkpath(outdir)
+    base = joinpath(outdir, sample_name)
+    profile_tsv = base * "_metaphlan_profile.tsv"
+    mapout_path = mapout ? (long_reads ? base * "_mapout.bam" : base * "_bowtie2out.bz2") : nothing
+
+    expected = [profile_tsv]
+    if mapout_path !== nothing
+        push!(expected, mapout_path)
+    end
+
+    if !force && all(isfile.(expected)) && all(filesize.(expected) .> 0)
+        table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment='#')
+        return MetaPhlAnResult(profile_tsv, mapout_path, table)
+    end
+
+    Mycelia.add_bioconda_env("metaphlan")
+
+    cmd_args = String[]
+    push!(cmd_args, normalize_reads(reads1))
+    if !isnothing(reads2)
+        push!(cmd_args, normalize_reads(reads2))
+    end
+
+    push!(cmd_args, "--input_type", String(input_type))
+
+    if !isnothing(db_dir)
+        append!(cmd_args, ["--db_dir", db_dir])
+    end
+    if !isnothing(bowtie2db)
+        append!(cmd_args, ["--bowtie2db", bowtie2db])
+    end
+
+    push!(cmd_args, "-o", profile_tsv)
+
+    if mapout_path !== nothing
+        if long_reads
+            append!(cmd_args, ["--mapout", mapout_path])
+        else
+            append!(cmd_args, ["--bowtie2out", mapout_path])
+        end
+    end
+
+    if long_reads
+        push!(cmd_args, "--long_reads")
+    end
+
+    append!(cmd_args, ["--nproc", string(threads)])
+    append!(cmd_args, additional_args)
+
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan metaphlan $cmd_args`
+    run(cmd)
+
+    table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment='#')
+    return MetaPhlAnResult(profile_tsv, mapout_path, table)
+end
+
+struct Sample2MarkersResult
+    output_dir::String
+    marker_fastas::Vector{String}
+end
+
+"""
+    run_sample2markers(map_files::Vector{String};
+                       sample_ids::Union{Nothing,Vector{String}}=nothing,
+                       outdir::AbstractString,
+                       threads::Int=Threads.nthreads(),
+                       long_reads::Bool=false,
+                       additional_args::Vector{String}=String[],
+                       force::Bool=false)
+
+Extract marker FASTAs from MetaPhlAn mapping outputs for downstream StrainPhlAn.
+"""
+function run_sample2markers(map_files::Vector{String};
+        sample_ids::Union{Nothing,Vector{String}}=nothing,
+        outdir::AbstractString,
+        threads::Int=Threads.nthreads(),
+        long_reads::Bool=false,
+        additional_args::Vector{String}=String[],
+        force::Bool=false)
+
+    isempty(map_files) && error("map_files must be non-empty")
+    for f in map_files
+        isfile(f) || error("Mapping output not found: $(f)")
+    end
+
+    mkpath(outdir)
+    ids = isnothing(sample_ids) ? [replace(basename(f), r"\.(bowtie2out\.bz2|mapout\.bam|mapout\.sam)$"i => "") for f in map_files] : sample_ids
+    length(ids) == length(map_files) || error("sample_ids length must match map_files length")
+
+    marker_fastas = [joinpath(outdir, "$(id).markers.fasta") for id in ids]
+    if !force && all(isfile.(marker_fastas)) && all(filesize.(marker_fastas) .> 0)
+        return Sample2MarkersResult(outdir, marker_fastas)
+    end
+
+    Mycelia.add_bioconda_env("metaphlan")
+
+    cmd_args = String["--ifn_samples"]
+    append!(cmd_args, map_files)
+    append!(cmd_args, ["--output_dir", outdir, "--nprocs", string(threads)])
+    if long_reads
+        push!(cmd_args, "--long_reads")
+    end
+    append!(cmd_args, additional_args)
+
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan sample2markers $cmd_args`
+    run(cmd)
+
+    # Collect generated marker FASTAs (fall back to expected names)
+    generated = filter(f -> endswith(f, ".markers.fasta"), readdir(outdir; join=true))
+    if !isempty(generated)
+        marker_fastas = generated
+    end
+    return Sample2MarkersResult(outdir, marker_fastas)
+end
+
+struct StrainPhlAnResult
+    output_dir::String
+    tree_file::Union{Nothing,String}
+    marker_alignment::Union{Nothing,String}
+    log_file::Union{Nothing,String}
+end
+
+"""
+    run_strainphlan(marker_fastas::Vector{String};
+                    sample_ids::Union{Nothing,Vector{String}}=nothing,
+                    outdir::AbstractString,
+                    clade::AbstractString,
+                    reference_genomes::Vector{String}=String[],
+                    threads::Int=Threads.nthreads(),
+                    additional_args::Vector{String}=String[],
+                    force::Bool=false)
+
+Run StrainPhlAn 4 on marker FASTAs produced by `sample2markers`.
+"""
+function run_strainphlan(marker_fastas::Vector{String};
+        sample_ids::Union{Nothing,Vector{String}}=nothing,
+        outdir::AbstractString,
+        clade::AbstractString,
+        reference_genomes::Vector{String}=String[],
+        threads::Int=Threads.nthreads(),
+        additional_args::Vector{String}=String[],
+        force::Bool=false)
+
+    isempty(marker_fastas) && error("marker_fastas must be non-empty")
+    for f in marker_fastas
+        isfile(f) || error("Marker FASTA not found: $(f)")
+    end
+
+    mkpath(outdir)
+
+    expected_tree = joinpath(outdir, "$(clade).StrainPhlAn4.tre")
+    expected_aln = joinpath(outdir, "$(clade).markers.aln")
+    expected = [expected_tree, expected_aln]
+
+    if !force && all(isfile.(expected)) && all(filesize.(expected) .> 0)
+        log_file = first(filter(f -> occursin("strainphlan", lowercase(basename(f))) && endswith(f, ".log"), readdir(outdir; join=true)), nothing)
+        return StrainPhlAnResult(outdir, expected_tree, expected_aln, log_file)
+    end
+
+    Mycelia.add_bioconda_env("metaphlan")
+
+    cmd_args = String["--ifn_samples"]
+    append!(cmd_args, marker_fastas)
+    append!(cmd_args, ["--output_dir", outdir, "--clade", clade, "--nprocs", string(threads)])
+
+    if !isempty(reference_genomes)
+        push!(cmd_args, "--reference_genomes")
+        append!(cmd_args, reference_genomes)
+    end
+
+    if !isnothing(sample_ids)
+        push!(cmd_args, "--sample_ids")
+        append!(cmd_args, sample_ids)
+    end
+
+    append!(cmd_args, additional_args)
+
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan strainphlan $cmd_args`
+    run(cmd)
+
+    tree_file = if isfile(expected_tree) expected_tree else nothing end
+    alignment = if isfile(expected_aln) expected_aln else nothing end
+    log_file = first(filter(f -> occursin("strainphlan", lowercase(basename(f))) && endswith(f, ".log"), readdir(outdir; join=true)), nothing)
+    return StrainPhlAnResult(outdir, tree_file, alignment, log_file)
+end

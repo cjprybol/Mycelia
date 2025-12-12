@@ -21,6 +21,41 @@ import Random
 import BioSequences
 import Kmers
 
+Test.@testset "system overview returns raw values, flags, and display" begin
+    overview = Mycelia.system_overview(memory_low_threshold=1.0, storage_low_threshold=1.0)
+
+    Test.@test isa(overview, Mycelia.SystemOverview)
+    Test.@test overview.default_threads == Mycelia.get_default_threads()
+
+    Test.@test isa(overview.total_memory, Integer)
+    Test.@test isa(overview.available_memory, Integer)
+    Test.@test isa(overview.occupied_memory, Integer)
+    Test.@test overview.total_memory == overview.available_memory + overview.occupied_memory
+
+    Test.@test isa(overview.total_storage, Integer)
+    Test.@test isa(overview.available_storage, Integer)
+    Test.@test isa(overview.occupied_storage, Integer)
+    Test.@test overview.total_storage >= overview.occupied_storage
+    Test.@test overview.total_storage >= overview.available_storage
+
+    expected_memory_pct = overview.total_memory == 0 ? 0.0 : overview.occupied_memory / overview.total_memory
+    expected_storage_pct = overview.total_storage == 0 ? 0.0 : overview.occupied_storage / overview.total_storage
+    Test.@test isapprox(overview.memory_occupied_percent, expected_memory_pct)
+    Test.@test isapprox(overview.storage_occupied_percent, expected_storage_pct)
+
+    Test.@test overview.memory_running_low == (overview.memory_occupied_percent >= 1.0)
+    Test.@test overview.storage_running_low == (overview.storage_occupied_percent >= 1.0)
+
+    display_str = sprint(show, "text/plain", overview)
+    Test.@test occursin("Threads: julia", display_str)
+    Test.@test occursin(Mycelia.bytes_human_readable(overview.total_memory), display_str)
+    Test.@test occursin(Mycelia.bytes_human_readable(overview.available_memory), display_str)
+    Test.@test occursin(Mycelia.bytes_human_readable(overview.occupied_memory), display_str)
+    Test.@test occursin(Mycelia.bytes_human_readable(overview.total_storage), display_str)
+    Test.@test occursin(Mycelia.bytes_human_readable(overview.available_storage), display_str)
+    Test.@test occursin(Mycelia.bytes_human_readable(overview.occupied_storage), display_str)
+end
+
 Test.@testset "scientific notation" begin
     Test.@test Mycelia.scientific_notation(100) == "1.00e+02"
     Test.@test Mycelia.scientific_notation(1000, precision=3) == "1.000e+03"

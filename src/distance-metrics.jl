@@ -1,6 +1,23 @@
 # src/distance_metrics.jl
 
-function generate_mash_sketch(;input_fasta_list::Vector{String}, output_sketch_path_prefix::String="mash_sketch")
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a Mash sketch from a list of FASTA files.
+
+# Arguments
+- `input_fasta_list::Vector{String}`: Paths to input FASTA files
+- `output_sketch_path_prefix::String`: Prefix for the generated `.msh` file (default: "mash_sketch")
+- `threads::Int`: Number of threads to use (default: `get_default_threads()`)
+
+# Returns
+- `String`: Path to the generated Mash sketch file
+
+# Details
+- Uses the Mash conda environment
+- Skips sketching if the output already exists
+"""
+function generate_mash_sketch(;input_fasta_list::Vector{String}, output_sketch_path_prefix::String="mash_sketch", threads=get_default_threads())
     sketch_output = output_sketch_path_prefix * ".msh"
     if !isfile(sketch_output)
         mash_input_sketch_list_file = tempname() * ".mash_input.txt"
@@ -15,20 +32,38 @@ function generate_mash_sketch(;input_fasta_list::Vector{String}, output_sketch_p
         # @info "Output sketch will be saved to: $sketch_output"
         # Run the mash sketch command with the input list file and output prefix
         Mycelia.add_bioconda_env("mash")
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash sketch -l $(mash_input_sketch_list_file) -p $(Sys.CPU_THREADS) -o $(output_sketch_path_prefix)`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash sketch -l $(mash_input_sketch_list_file) -p $(threads) -o $(output_sketch_path_prefix)`)
         rm(mash_input_sketch_list_file)
     end
     @assert isfile(sketch_output) "Mash sketch file was not created: $sketch_output"
     return sketch_output
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute a pairwise Mash distance matrix for a set of FASTA files.
+
+# Arguments
+- `input_fasta_list::Vector{String}`: Paths to input FASTA files
+- `cleanup_sketch_output::Bool`: Remove the generated sketch after computing distances (default: true)
+- `threads::Int`: Number of threads to use (default: `get_default_threads()`)
+
+# Returns
+- `Matrix{Float64}`: Symmetric matrix of Mash distances
+
+# Details
+- Reuses or generates a Mash sketch before computing distances
+- Utilizes the Mash conda environment for both sketching and distance calculation
+"""
 function pairwise_mash_distance_matrix(;
     input_fasta_list::Vector{String},
-    cleanup_sketch_output::Bool = true
+    cleanup_sketch_output::Bool = true,
+    threads=get_default_threads()
 )
     mash_sketch_file = generate_mash_sketch(input_fasta_list=input_fasta_list)
     pairwise_mash_results = CSV.read(
-        open(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash dist -p $(Sys.CPU_THREADS) $(mash_sketch_file) $(mash_sketch_file)`),
+        open(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash dist -p $(threads) $(mash_sketch_file) $(mash_sketch_file)`),
         DataFrames.DataFrame,
         delim='\t',
         header = ["reference", "query", "mash_distance", "p_value", "matching_hashes"]

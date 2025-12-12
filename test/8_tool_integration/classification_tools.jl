@@ -16,6 +16,8 @@ import Mycelia
 import DataFrames
 import BioSequences
 import FASTX
+import CodecZlib
+import Random
 
 # Check if external tool tests should run
 const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
@@ -176,33 +178,65 @@ Test.@testset "Classification Tools Integration Tests" begin
             Test.@testset "MetaPhlAn full execution" begin
                 workdir = mktempdir()
 
-                # Create minimal test FASTQ
-                test_fastq = joinpath(workdir, "test_reads.fq")
-                open(test_fastq, "w") do io
-                    # Create some synthetic reads (MetaPhlAn needs reads to analyze)
-                    for i in 1:100
-                        write(io, "@read$(i)\n")
-                        write(io, "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG\n")
-                        write(io, "+\n")
-                        write(io, "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n")
-                    end
-                end
-
                 try
-                    result = Mycelia.run_metaphlan(
-                        input_file=test_fastq,
-                        outdir=joinpath(workdir, "metaphlan_output"),
-                        input_type="fastq",
-                        nprocs=2
+                    # Download real genome (with fallback to simulated if NCBI unavailable)
+                    test_genome_info = Mycelia.get_test_genome_fasta(
+                        use_ncbi=true,
+                        accession="GCF_000819615.1"  # E. coli phage (small, fast)
                     )
+                    test_fasta = test_genome_info.fasta
 
-                    Test.@test isdir(result.outdir)
-                    Test.@test isfile(result.profile_txt)
+                    if !isfile(test_fasta) || filesize(test_fasta) == 0
+                        @warn "Failed to obtain test genome for MetaPhlAn test"
+                        Test.@test_broken false
+                    else
+                        # Simulate realistic paired-end Illumina reads (100bp, >70bp requirement)
+                        sim_result = Mycelia.simulate_illumina_hs20_100bp(
+                            fasta=test_fasta,
+                            coverage=10,
+                            quiet=true
+                        )
+                        forward_reads = sim_result.forward_reads
+                        reverse_reads = sim_result.reverse_reads
 
-                    # Parse the output
-                    if isfile(result.profile_txt) && filesize(result.profile_txt) > 0
-                        df = Mycelia.parse_metaphlan_profile(result.profile_txt)
-                        Test.@test df isa DataFrames.DataFrame
+                        # Create synthetic reads with random sequences to verify
+                        # tool doesn't misclassify fake data (using randdnaseq for valid DNA)
+                        Random.seed!(42)  # For reproducibility
+                        synthetic_records = [
+                            FASTX.FASTQ.Record(
+                                "synthetic_read$(i)",
+                                BioSequences.randdnaseq(Random.default_rng(), 100),
+                                fill(Int8(40), 100)  # Quality score 40 ('I')
+                            )
+                            for i in 1:50
+                        ]
+                        synthetic_fastq = joinpath(workdir, "synthetic_reads.fq")
+                        Mycelia.write_fastq(records=synthetic_records, filename=synthetic_fastq)
+
+                        # Test with single-end reads (forward + synthetic)
+                        combined_fastq = joinpath(workdir, "combined_reads.fq.gz")
+                        Mycelia.concatenate_fastx([forward_reads, synthetic_fastq], output_path=combined_fastq)
+
+                        result = Mycelia.run_metaphlan(
+                            input_file=combined_fastq,
+                            outdir=joinpath(workdir, "metaphlan_output_single"),
+                            input_type="fastq",
+                            nprocs=2
+                        )
+
+                        Test.@test isdir(result.outdir)
+                        Test.@test isfile(result.profile_txt)
+
+                        # Parse the output
+                        if isfile(result.profile_txt) && filesize(result.profile_txt) > 0
+                            df = Mycelia.parse_metaphlan_profile(result.profile_txt)
+                            Test.@test df isa DataFrames.DataFrame
+                        end
+                    end
+
+                    # Cleanup genome if downloaded
+                    if test_genome_info.cleanup !== nothing
+                        test_genome_info.cleanup()
                     end
                 finally
                     rm(workdir; recursive=true, force=true)
@@ -281,47 +315,86 @@ Test.@testset "Classification Tools Integration Tests" begin
             Test.@testset "Metabuli full execution" begin
                 # Note: Full Metabuli testing requires a pre-built database
                 # which can be several GB. This test is skipped unless a database
-                # path is provided via environment variable.
+                # path is provided via environment variable or default location exists.
 
-                db_path = get(ENV, "METABULI_DB_PATH", "")
+                db_path = get(ENV, "METABULI_DB", get(ENV, "METABULI_DB_PATH", ""))
+                if isempty(db_path)
+                    home_db = joinpath(homedir(), "workspace", "metabuli")
+                    if isdir(home_db)
+                        db_path = home_db
+                    end
+                end
+
                 if isempty(db_path) || !isdir(db_path)
-                    @info "Skipping Metabuli classify test; set METABULI_DB_PATH to a valid database directory"
+                    @info "Skipping Metabuli classify test; set METABULI_DB or METABULI_DB_PATH to a valid database directory"
                 else
                     workdir = mktempdir()
 
-                    # Create test FASTQ
-                    test_fastq = joinpath(workdir, "test_reads.fq")
-                    open(test_fastq, "w") do io
-                        for i in 1:100
-                            write(io, "@read$(i)\n")
-                            write(io, "ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG\n")
-                            write(io, "+\n")
-                            write(io, "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n")
-                        end
-                    end
-
                     try
-                        result = Mycelia.run_metabuli_classify(
-                            input_files=[test_fastq],
-                            database_path=db_path,
-                            outdir=joinpath(workdir, "metabuli_output"),
-                            seq_mode="1",
-                            threads=2
+                        # Download real genome (with fallback to simulated if NCBI unavailable)
+                        test_genome_info = Mycelia.get_test_genome_fasta(
+                            use_ncbi=true,
+                            accession="GCF_000819615.1"  # E. coli phage (small, fast)
                         )
+                        test_fasta = test_genome_info.fasta
 
-                        Test.@test isdir(result.outdir)
-                        Test.@test isfile(result.report_file)
-                        Test.@test isfile(result.classifications_file)
+                        if !isfile(test_fasta) || filesize(test_fasta) == 0
+                            @warn "Failed to obtain test genome for Metabuli test"
+                            Test.@test_broken false
+                        else
+                            # Simulate realistic paired-end Illumina reads
+                            sim_result = Mycelia.simulate_illumina_hs20_100bp(
+                                fasta=test_fasta,
+                                coverage=10,
+                                quiet=true
+                            )
+                            forward_reads = sim_result.forward_reads
+                            reverse_reads = sim_result.reverse_reads
 
-                        # Parse and verify outputs
-                        if isfile(result.report_file) && filesize(result.report_file) > 0
-                            report_df = Mycelia.parse_metabuli_report(result.report_file)
-                            Test.@test report_df isa DataFrames.DataFrame
+                            # Create synthetic reads with random sequences
+                            Random.seed!(42)
+                            synthetic_records = [
+                                FASTX.FASTQ.Record(
+                                    "synthetic_read$(i)",
+                                    BioSequences.randdnaseq(Random.default_rng(), 100),
+                                    fill(Int8(40), 100)
+                                )
+                                for i in 1:50
+                            ]
+                            synthetic_fastq = joinpath(workdir, "synthetic_reads.fq")
+                            Mycelia.write_fastq(records=synthetic_records, filename=synthetic_fastq)
+
+                            # Test with single-end reads (forward + synthetic)
+                            combined_fastq = joinpath(workdir, "combined_reads.fq.gz")
+                            Mycelia.concatenate_fastx([forward_reads, synthetic_fastq], output_path=combined_fastq)
+
+                            result = Mycelia.run_metabuli_classify(
+                                input_files=[combined_fastq],
+                                database_path=db_path,
+                                outdir=joinpath(workdir, "metabuli_output"),
+                                seq_mode="1",
+                                threads=2
+                            )
+
+                            Test.@test isdir(result.outdir)
+                            Test.@test isfile(result.report_file)
+                            Test.@test isfile(result.classifications_file)
+
+                            # Parse and verify outputs
+                            if isfile(result.report_file) && filesize(result.report_file) > 0
+                                report_df = Mycelia.parse_metabuli_report(result.report_file)
+                                Test.@test report_df isa DataFrames.DataFrame
+                            end
+
+                            if isfile(result.classifications_file) && filesize(result.classifications_file) > 0
+                                class_df = Mycelia.parse_metabuli_classifications(result.classifications_file)
+                                Test.@test class_df isa DataFrames.DataFrame
+                            end
                         end
 
-                        if isfile(result.classifications_file) && filesize(result.classifications_file) > 0
-                            class_df = Mycelia.parse_metabuli_classifications(result.classifications_file)
-                            Test.@test class_df isa DataFrames.DataFrame
+                        # Cleanup genome if downloaded
+                        if test_genome_info.cleanup !== nothing
+                            test_genome_info.cleanup()
                         end
                     finally
                         rm(workdir; recursive=true, force=true)

@@ -2075,26 +2075,153 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Get the default number of threads to use for parallel operations.
+
+Checks HPC environment variables in the following order:
+1. SLURM_CPUS_PER_TASK - SLURM job scheduler
+2. PBS_NCPUS - PBS/Torque job scheduler
+3. OMP_NUM_THREADS - OpenMP threads
+4. JULIA_NUM_THREADS - Julia threads
+5. Falls back to DEFAULT_THREADS constant (4) if none are set
+
+This avoids requesting more resources than allocated in HPC environments.
+
+# Returns
+- `Int`: Number of threads to use
+
+# Example
+```julia
+threads = get_default_threads()  # Returns allocated threads or 4
+```
 """
-function system_overview(;path=pwd())
-    total_memory = Base.format_bytes(Sys.total_memory())
-    available_memory = Base.format_bytes(Sys.free_memory())
-    occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
+function get_default_threads()::Int
+    # Check HPC environment variables in priority order
+    for var in ["SLURM_CPUS_PER_TASK", "PBS_NCPUS", "OMP_NUM_THREADS", "JULIA_NUM_THREADS"]
+        val = get(ENV, var, nothing)
+        if val !== nothing
+            parsed = tryparse(Int, val)
+            if parsed !== nothing && parsed > 0
+                return parsed
+            end
+        end
+    end
+    # Fall back to conservative default
+    return DEFAULT_THREADS
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+struct SystemOverview
+    system_threads::Int
+    julia_threads::Int
+    default_threads::Int
+    total_memory::Int
+    available_memory::Int
+    occupied_memory::Int
+    memory_occupied_percent::Float64
+    memory_running_low::Bool
+    total_storage::Int
+    available_storage::Int
+    occupied_storage::Int
+    storage_occupied_percent::Float64
+    storage_running_low::Bool
+    path::String
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Collect system resource information (raw values) with human-readable display.
+
+Notes:
+- `julia_threads` reflects the threads the current session actually started with (`Threads.nthreads()`).
+- `default_threads` reflects the configured default based on environment hints (`get_default_threads`; e.g., `SLURM_CPUS_PER_TASK`, `PBS_NCPUS`, `OMP_NUM_THREADS`, `JULIA_NUM_THREADS`, or the conservative fallback) and may differ if the session was launched with different settings.
+"""
+function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_threshold=0.90)
+    if !(0.0 <= memory_low_threshold <= 1.0)
+        error("memory_low_threshold must be between 0.0 and 1.0 (got $memory_low_threshold)")
+    end
+    if !(0.0 <= storage_low_threshold <= 1.0)
+        error("storage_low_threshold must be between 0.0 and 1.0 (got $storage_low_threshold)")
+    end
+
+    total_memory = Sys.total_memory()
+    available_memory = Sys.free_memory()
+    occupied_memory = total_memory - available_memory
+    memory_occupied_percent = total_memory == 0 ? 0.0 : occupied_memory / total_memory
+
+    disk_stats = Base.diskstat(path)
+    total_storage = disk_stats.total
+    available_storage = disk_stats.available
+    occupied_storage = disk_stats.used
+    storage_occupied_percent = total_storage == 0 ? 0.0 : occupied_storage / total_storage
+
     system_threads = Sys.CPU_THREADS
     julia_threads = Threads.nthreads()
-    available_storage = Base.format_bytes(Base.diskstat(path).available)
-    total_storage = Base.format_bytes(Base.diskstat(path).total)
-    occupied_storage = Base.format_bytes(Base.diskstat(path).used)
-    return (;
-            system_threads,
-            julia_threads,
-            total_memory,
-            available_memory,
-            occupied_memory,
-            total_storage,
-            available_storage,
-            occupied_storage)
+    default_threads = get_default_threads()
+
+    if julia_threads > system_threads
+        @error "The Julia kernel has $julia_threads allocated but only $system_threads are available on the system"
+    elseif julia_threads < system_threads
+        @warn "The Julia kernel only has $julia_threads allocated but $system_threads are available on the system"
+    else
+        @info "The Julia kernel is using all available threads (n=$system_threads) on the system"
+    end
+
+    if julia_threads != default_threads
+        @info "Julia threads ($julia_threads) differ from configured default ($default_threads)"
+    end
+
+    memory_running_low = memory_occupied_percent >= memory_low_threshold
+    storage_running_low = storage_occupied_percent >= storage_low_threshold
+
+    if memory_running_low
+        @warn "Memory usage high: $(bytes_human_readable(occupied_memory)) / $(bytes_human_readable(total_memory)) ($(round(memory_occupied_percent * 100; digits=1))% used)"
+    else
+        @info "Memory usage: $(bytes_human_readable(occupied_memory)) / $(bytes_human_readable(total_memory)) ($(round(memory_occupied_percent * 100; digits=1))% used)"
+    end
+
+    if storage_running_low
+        @warn "Storage usage high: $(bytes_human_readable(occupied_storage)) / $(bytes_human_readable(total_storage)) ($(round(storage_occupied_percent * 100; digits=1))% used)"
+    else
+        @info "Storage usage: $(bytes_human_readable(occupied_storage)) / $(bytes_human_readable(total_storage)) ($(round(storage_occupied_percent * 100; digits=1))% used)"
+    end
+
+    return SystemOverview(
+        system_threads,
+        julia_threads,
+        default_threads,
+        total_memory,
+        available_memory,
+        occupied_memory,
+        memory_occupied_percent,
+        memory_running_low,
+        total_storage,
+        available_storage,
+        occupied_storage,
+        storage_occupied_percent,
+        storage_running_low,
+        String(path),
+    )
 end
+
+function Base.show(io::IO, ::MIME"text/plain", overview::SystemOverview)
+    memory_pct = round(overview.memory_occupied_percent * 100; digits=1)
+    storage_pct = round(overview.storage_occupied_percent * 100; digits=1)
+
+    memory_flag = overview.memory_running_low ? " (LOW)" : ""
+    storage_flag = overview.storage_running_low ? " (LOW)" : ""
+
+    println(io, "SystemOverview:")
+    println(io, "  Threads: julia=$(overview.julia_threads), system=$(overview.system_threads), default=$(overview.default_threads)")
+    println(io, "  Memory: total=$(bytes_human_readable(overview.total_memory)), available=$(bytes_human_readable(overview.available_memory)), occupied=$(bytes_human_readable(overview.occupied_memory)) ($memory_pct% used)$memory_flag")
+    println(io, "  Storage: total=$(bytes_human_readable(overview.total_storage)), available=$(bytes_human_readable(overview.available_storage)), occupied=$(bytes_human_readable(overview.occupied_storage)) ($storage_pct% used)$storage_flag")
+    println(io, "  Path: $(overview.path)")
+end
+
+Base.show(io::IO, overview::SystemOverview) = Base.show(io, MIME"text/plain"(), overview)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

@@ -978,7 +978,7 @@ function fasterq_dump(;outdir=pwd(), srr_identifier="")
                 --outdir $(final_outdir)
                 --mem 1G
                 --split-3
-                --threads $(min(Sys.CPU_THREADS, 4))
+                --threads $(min(get_default_threads(), 4))
                 --skip-technical
                 $(final_outdir)`
         @time run(fasterq_dump_cmd)

@@ -57,6 +57,11 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - Phylogenetic tree construction
 - Large-scale comparative analysis
 
+### 6. Coverage Profiling Benchmarks (`06_coverm_benchmark.jl`)
+- CoverM contig/genome modes on multiple BAMs
+- Thread scaling for coverage and abundance summarization
+- End-to-end timing from BAM generation through CoverM
+
 ## Usage
 
 ### Prerequisites

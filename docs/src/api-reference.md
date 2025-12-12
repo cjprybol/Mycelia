@@ -183,6 +183,13 @@ Mycelia.run_busco
 Mycelia.run_mummer
 ```
 
+## Coverage and Abundance
+
+```@docs
+Mycelia.run_coverm_contig
+Mycelia.run_coverm_genome
+```
+
 ## Annotation
 
 ### Gene Prediction

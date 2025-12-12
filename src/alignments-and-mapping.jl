@@ -23,7 +23,7 @@ function run_diamond_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond",
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     evalue::Float64 = 1e-3,
     block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
     sensitivity::String = "--iterate"
@@ -126,7 +126,7 @@ function run_blastp_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_blastp",
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     evalue::Float64 = 1e-3,
     max_target_seqs::Int = 500
 )
@@ -204,7 +204,7 @@ function run_mmseqs_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs",
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     evalue::Float64 = 1e-3,
     sensitivity::Float64 = 4.0
 )
@@ -289,7 +289,7 @@ Named tuple with `report_pdf`, `report_txt`, and `coverage` file paths.
 function run_qualimap_bamqc(;
     bam::String,
     outdir::String = joinpath(dirname(bam), "qualimap"),
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     outformat::String = "PDF:HTML",
     java_mem::String = "4G"
 )
@@ -423,7 +423,7 @@ end
 #         reference_fasta,
 #         temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
 #         outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz"),
-#         threads = Sys.CPU_THREADS,
+#         threads = get_default_threads(),
 #         memory = Sys.total_memory(),
 #         shell_only = false
 #     )
@@ -462,7 +462,7 @@ end
 # function minimap_index_pacbio(;
 #         reference_fasta,
 #         outfile = replace(reference_fasta, Mycelia.FASTA_REGEX => ".pacbio.mmi"),
-#         threads = Sys.CPU_THREADS,
+#         threads = get_default_threads(),
 #         shell_only = false
 #     )
 #     Mycelia.add_bioconda_env("minimap2")
@@ -531,7 +531,7 @@ Create a minimap2 index for the provided reference sequence.
 # Returns
 Named tuple `(cmd, outfile)` where `outfile` is the generated `.mmi` index path.
 """
-function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=Sys.CPU_THREADS, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
+function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=get_default_threads(), as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     # if lr:hq, deal with : in the name
@@ -569,7 +569,7 @@ function minimap_map_with_index(;
         fastq,
         index_file="",
         mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85),
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         as_string=false,
         denominator=DEFAULT_MINIMAP_DENOMINATOR
     )
@@ -634,7 +634,7 @@ function minimap_map(;
         mapping_type,
         as_string=false,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         denominator=DEFAULT_MINIMAP_DENOMINATOR,
         output_format="bam",
         sorted=true,
@@ -785,7 +785,7 @@ function minimap_map_paired_end_with_index(;
         forward,
         reverse,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         outdir = dirname(forward),
         as_string=false,
         denominator=DEFAULT_MINIMAP_DENOMINATOR,
@@ -998,7 +998,7 @@ end
 #     if force || !isfile(outfile)
 #         cmd = 
 #         `diamond blastp
-#         --threads $(Sys.CPU_THREADS)
+#         --threads $(get_default_threads())
 #         --block-size $(block_size)
 #         --db $(diamond_db)
 #         --query $(protein_fasta)
@@ -1157,7 +1157,7 @@ function run_mmseqs_easy_search(;
     out_dir = dirname(query_fasta),
     outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." * basename(target_database) * ".txt",
     format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-    threads = Sys.CPU_THREADS,
+    threads = get_default_threads(),
     force::Bool = false,
     gzip::Bool = true,
     validate_compression::Bool = true,
@@ -1397,7 +1397,7 @@ This function constructs and runs a BLASTN command based on the provided paramet
 It creates an output directory if it doesn't exist, constructs the output file path, and checks if the BLASTN command needs to be run based on the existence and size of the output file.
 The function supports running the BLASTN command locally or remotely, with options to force re-running and to wait for completion.
 """
-function run_blastn(;outdir=pwd(), fasta, blastdb, threads=min(Sys.CPU_THREADS, 8), task="megablast", force=false, remote=false, wait=true)
+function run_blastn(;outdir=pwd(), fasta, blastdb, threads=min(get_default_threads(), 8), task="megablast", force=false, remote=false, wait=true)
     Mycelia.add_bioconda_env("blast")
     outdir = mkpath(outdir)
     outfile = "$(outdir)/$(basename(fasta)).blastn.$(basename(blastdb)).$(task).txt"
@@ -1477,7 +1477,7 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote
             cmd = 
             `
             $(blast_command)
-            -num_threads $(Sys.CPU_THREADS)
+            -num_threads $(get_default_threads())
             -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
             -query $(fasta)
             -db $(blast_db)
@@ -1930,7 +1930,7 @@ function read_mmseqs_easy_search(mmseqs_file::String)
         delim='\t',           # Tab-delimited file
         types=col_types,      # Apply our defined column types
         pool=true,            # Pool string columns to save memory
-        ntasks=Sys.CPU_THREADS, # Utilize available CPU threads for parsing
+        ntasks=get_default_threads(), # Utilize available CPU threads for parsing
     )
 
     local mmseqs_results::DataFrames.DataFrame

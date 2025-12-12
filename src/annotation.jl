@@ -579,7 +579,7 @@ end
 #     pharroka_outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pharroka"),
 #     phold_outdir = joinpath(pharroka_outdir, "phold"),
 #     phynteny_outdir = joinpath(phold_outdir, "phynteny"),
-#     threads = Sys.CPU_THREADS
+#     threads = get_default_threads()
 # )
 #     Mycelia.add_bioconda_env("pharokka")
 #     Mycelia.add_bioconda_env("phold")
@@ -660,7 +660,7 @@ function run_pgap(;
     outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
     as_string::Bool = false,
     force::Bool = false,
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
     min_seq_length::Int = 200,
     filter_short::Bool = true,
@@ -1243,7 +1243,7 @@ function run_bakta(;
         outdir = replace(fasta, Mycelia.FASTA_REGEX => "_bakta"),
         baktadb_dir=joinpath(homedir(), "workspace", "bakta"),
         mode="full",
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         as_string = false,
         force = false
     )
@@ -1314,7 +1314,7 @@ function run_virsorter2(;
     include_groups = "dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae", # full set is dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae
     min_score = 0.5,
     min_length = 1500,
-    threads = Sys.CPU_THREADS,
+    threads = get_default_threads(),
     provirus_off = false,
     max_orf_per_seq = nothing,
     prep_for_dramv = false,
@@ -1567,7 +1567,7 @@ function run_genomad(;
     input_fasta,
     output_directory=input_fasta * "_genomad",
     genomad_dbpath = mkpath(joinpath(homedir(), "workspace", "genomad")),
-    threads = Sys.CPU_THREADS,
+    threads = get_default_threads(),
     cleanup = true,
     splits = nothing,
     force = false
@@ -2344,7 +2344,24 @@ function run_amrfinderplus(;
 end
 
 # VIBRANT
-function run_vibrant(;input_fasta, output_dir=input_fasta * "_vibrant", threads=Sys.CPU_THREADS)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run VIBRANT for virus and prophage detection.
+
+# Arguments
+- `input_fasta`: Path to nucleotide FASTA file
+- `output_dir`: Output directory (default: `\"<input>_vibrant\"`)
+- `threads::Int`: Number of threads to use (default: `get_default_threads()`)
+
+# Returns
+- `String`: Path to the VIBRANT output directory
+
+# Details
+- Uses the VIBRANT conda environment
+- Utilizes the requested CPU threads via `-t`
+"""
+function run_vibrant(;input_fasta, output_dir=input_fasta * "_vibrant", threads=get_default_threads())
     Mycelia._install_vibrant()
     # mkpath(output_dir)
     # run(`bash -lc "VIBRANT_run.py -i $input_fasta -folder $output_dir"`)
@@ -2527,7 +2544,7 @@ end
 #         identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
 #         basedir = pwd(),        
 #         mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
-#         threads=Sys.CPU_THREADS
+#         threads=get_default_threads()
 #     )
 #     # @show basedir
 #     outdir = joinpath(basedir, identifier)
@@ -2601,7 +2618,7 @@ function annotate_fasta(;
         # identifier::String = replace(basename(fasta), Mycelia.FASTA_REGEX => ""), # Assuming Mycelia.FASTA_REGEX is defined
         # basedir::String = pwd(),      
         mmseqsdb::String = joinpath(homedir(), "workspace/mmseqs/UniRef50"),
-        threads::Int = Sys.CPU_THREADS,
+        threads::Int = get_default_threads(),
         outdir::AbstractString = replace(fasta, Mycelia.FASTA_REGEX => "") * "_annotation"
     )
     
@@ -2678,7 +2695,7 @@ function annotate_aa_fasta(;
         identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
         basedir = pwd(),
         mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
-        threads=Sys.CPU_THREADS
+        threads=get_default_threads()
     )
     # @show basedir
     outdir = joinpath(basedir, identifier)
@@ -2739,7 +2756,7 @@ Parameters:
 """
 function run_padloc(; fasta_file,
                      outdir = replace(fasta_file, Mycelia.FASTA_REGEX => "") * "_padloc",
-                     threads = Sys.CPU_THREADS,
+                     threads = get_default_threads(),
                      cleanup_on_failure::Bool = true,
                      return_error::Bool = true,
                      verbose::Bool = false)

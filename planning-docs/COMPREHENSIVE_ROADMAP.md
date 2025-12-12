@@ -310,10 +310,10 @@ function benchmark_quality_aware_assembly(qualmer_vs_kmer)
     *   [ ] `calculate_evolutionary_distances()`: To be handled via external tools.
 
 #### Assembly Validation Tools
-*   [ ] `QUAST` integration - `run_quast()`
-*   [ ] `BUSCO` integration - `run_busco()`
+*   [X] `QUAST` integration - `run_quast()` (implemented; opt-in extended tests and default outdir derivation)
+*   [X] `BUSCO` integration - `run_busco()` (implemented; auto-lineage default, dataset predownload helper, opt-in extended tests)
 *   [ ] `MUMmer` integration - `run_mummer()`
-*   [ ] `CheckM2` integration - `run_checkm2()`
+*   [X] `CheckM2` integration - `run_checkm2()`
 *   [ ] `Mauve` integration - `run_mauve()`
 
 #### Advanced Quality Assessment Tools

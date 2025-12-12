@@ -1,6 +1,6 @@
 """
     run_vamb(; contigs_fasta, depth_file, outdir, minfasta::Int=2000,
-             threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+             threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
 Run VAMB to bin contigs using sequence composition and coverage.
 
@@ -18,7 +18,7 @@ Named tuple with:
 - `clusters_tsv`: Path to the VAMB clusters table (contig → bin)
 """
 function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
-        minfasta::Int=2000, threads::Int=Sys.CPU_THREADS,
+        minfasta::Int=2000, threads::Int=get_default_threads(),
         extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
@@ -45,7 +45,7 @@ end
 
 """
     run_metabat2(; contigs_fasta, depth_file, outdir,
-                 min_contig::Int=1500, threads::Int=Sys.CPU_THREADS,
+                 min_contig::Int=1500, threads::Int=get_default_threads(),
                  seed::Int=42, extra_args::Vector{String}=String[])
 
 Run MetaBAT2 for metagenomic binning.
@@ -65,7 +65,7 @@ Named tuple with:
 - `bins_prefix`: Output prefix used for generated bins
 """
 function run_metabat2(; contigs_fasta::String, depth_file::String, outdir::String,
-        min_contig::Int=1500, threads::Int=Sys.CPU_THREADS, seed::Int=42,
+        min_contig::Int=1500, threads::Int=get_default_threads(), seed::Int=42,
         extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
@@ -92,7 +92,7 @@ end
 
 """
     run_metacoag(; contigs_fasta, assembly_graph, mapping_file, outdir,
-                 threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+                 threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
 Run MetaCoAG, which integrates assembly graph structure and coverage for binning.
 
@@ -110,7 +110,7 @@ Named tuple with:
 - `bins_tsv`: Contig → bin assignments table
 """
 function run_metacoag(; contigs_fasta::String, assembly_graph::String,
-        mapping_file::String, outdir::String, threads::Int=Sys.CPU_THREADS,
+        mapping_file::String, outdir::String, threads::Int=get_default_threads(),
         extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
@@ -137,7 +137,7 @@ end
 
 """
     run_comebin(; contigs_fasta, coverage_table, marker_file, outdir,
-                 threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+                 threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
 Run COMEBin (constraint-based binning).
 
@@ -155,7 +155,7 @@ Named tuple with:
 - `bins_tsv`: Contig → bin assignments table
 """
 function run_comebin(; contigs_fasta::String, coverage_table::String,
-        marker_file::String, outdir::String, threads::Int=Sys.CPU_THREADS,
+        marker_file::String, outdir::String, threads::Int=get_default_threads(),
         extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
@@ -183,7 +183,7 @@ end
 """
     run_drep_dereplicate(; genomes, outdir, completeness_threshold=nothing,
                          contamination_threshold=nothing, ani_threshold=0.99,
-                         threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+                         threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
 Run dRep for MAG dereplication.
 
@@ -205,7 +205,7 @@ function run_drep_dereplicate(; genomes::Vector{String}, outdir::String,
         completeness_threshold::Union{Nothing, Float64}=nothing,
         contamination_threshold::Union{Nothing, Float64}=nothing,
         ani_threshold::Float64=0.99,
-        threads::Int=Sys.CPU_THREADS,
+        threads::Int=get_default_threads(),
         extra_args::Vector{String}=String[])
 
     isempty(genomes) && error("No genomes provided to dRep")
@@ -303,12 +303,12 @@ end
 # -----------------------------------------------------------------------------
 
 """
-    run_taxometer(; contigs_fasta, depth_file, outdir, threads=Sys.CPU_THREADS, extra_args=String[])
+    run_taxometer(; contigs_fasta, depth_file, outdir, threads=get_default_threads(), extra_args=String[])
 
 Run Taxometer for contig binning using coverage and composition.
 """
 function run_taxometer(; contigs_fasta::String, depth_file::String, outdir::String,
-        threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+        threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
@@ -330,12 +330,12 @@ function run_taxometer(; contigs_fasta::String, depth_file::String, outdir::Stri
 end
 
 """
-    run_taxvamb(; contigs_fasta, depth_file, outdir, threads=Sys.CPU_THREADS, extra_args=String[])
+    run_taxvamb(; contigs_fasta, depth_file, outdir, threads=get_default_threads(), extra_args=String[])
 
 Run TaxVAMB hybrid binning (VAMB with taxonomy priors).
 """
 function run_taxvamb(; contigs_fasta::String, depth_file::String, outdir::String,
-        threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+        threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
@@ -357,12 +357,12 @@ function run_taxvamb(; contigs_fasta::String, depth_file::String, outdir::String
 end
 
 """
-    run_genomeface(; contigs_fasta, coverage_table, outdir, threads=Sys.CPU_THREADS, extra_args=String[])
+    run_genomeface(; contigs_fasta, coverage_table, outdir, threads=get_default_threads(), extra_args=String[])
 
 Run GenomeFace for binning with marker- and coverage-aware clustering.
 """
 function run_genomeface(; contigs_fasta::String, coverage_table::String, outdir::String,
-        threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+        threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(coverage_table) || error("Coverage table not found: $(coverage_table)")
@@ -384,12 +384,12 @@ function run_genomeface(; contigs_fasta::String, coverage_table::String, outdir:
 end
 
 """
-    run_magmax_merge(; bins_dirs, outdir, threads=Sys.CPU_THREADS, extra_args=String[])
+    run_magmax_merge(; bins_dirs, outdir, threads=get_default_threads(), extra_args=String[])
 
 Merge MAGs/bins from multiple binners using MAGmax.
 """
 function run_magmax_merge(; bins_dirs::Vector{String}, outdir::String,
-        threads::Int=Sys.CPU_THREADS, extra_args::Vector{String}=String[])
+        threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
     isempty(bins_dirs) && error("No bins directories provided to MAGmax")
     for dir in bins_dirs

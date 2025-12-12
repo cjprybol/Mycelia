@@ -16,8 +16,8 @@
 |----------|-------------|--------|----------------------|
 | **Assemblers (Short)** | 5/5 | 4/5 | 0 |
 | **Assemblers (Long)** | 6+/6 | 6/6 | 0 |
-| **Strain-Aware** | 3/3 | 0/3 | 0 |
-| **Quality Control** | 2/2 | 0/2 | 0 |
+| **Strain-Aware** | 3/3 | **3/3 opt-in** | 0 |
+| **Quality Control** | 2/2 | **2/2 opt-in** | 0 |
 | **Classification** | 5/5 | 1/5 | 0 |
 | **Binning** | 0/7 | 0/7 | 7 |
 | **Post-Binning** | 0/2 | 0/2 | 2 |
@@ -190,12 +190,12 @@
 **Status**:
 - ✅ QUAST: **FOUND** in `src/quality-control-and-benchmarking.jl:1038`
   - Functions: `run_quast(assembly_files::Vector{String})`, `run_quast(assembly_file::String)`
-  - Tests: ❓ NOT VERIFIED
+  - Tests: ✅ Opt-in extended smoke in `test/5_validation/quast_busco_wrappers_test.jl` (simulated + phiX download) with default outdir derivation
 - ✅ BUSCO: **FOUND** in `src/quality-control-and-benchmarking.jl:1165`
-  - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`
-  - Tests: ❓ NOT VERIFIED
+  - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`; supports auto-lineage and dataset predownload helper
+  - Tests: ✅ Opt-in extended smoke in `test/5_validation/quast_busco_wrappers_test.jl` (auto-lineage, default outdir)
 
-**Verdict**: ✅ **IMPLEMENTED** but tests needed
+**Verdict**: ✅ **IMPLEMENTED/TESTED (opt-in extended)**
 
 ---
 
@@ -347,7 +347,7 @@
 **My Initial Assessment Was Too Harsh**:
 - Claimed "ALL tool integration claims are false" → **INCORRECT**
 - Actually **22 tools are wrapped**, 13 with comprehensive tests
-- QUAST, BUSCO, strain-aware tools (HyLight, STRONG, Strainy) DO exist
+- QUAST, BUSCO, strain-aware tools (HyLight, STRONG, Strainy) DO exist and now have opt-in smoke tests
 
 **What's Actually Missing**:
 - ❌ ALL binning tools (7 tools): VAMB, MetaBAT2, MetaCoAG, etc.
@@ -358,8 +358,8 @@
 - ❌ Pangenome tools: PGGB, Cactus, vg toolkit
 
 **What Exists But Needs Tests**:
-- ⚠️ QUAST, BUSCO (implemented, need test verification)
-- ⚠️ Strain-aware tools: HyLight, STRONG, Strainy (tests commented out)
+- ✅ QUAST, BUSCO: implemented, opt-in extended tests present (sim + phiX download)
+- ✅ Strain-aware tools: HyLight, STRONG, Strainy implemented with resource-aware opt-in smoke tests
 
 ---
 

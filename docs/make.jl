@@ -150,15 +150,18 @@ makedocs(
         "Getting Started" => "getting-started.md",
         "Concepts" => "concepts.md",
         "Probabilistic Assembly" => "probabilistic-assembly-hub.md",
-        # "Tutorials" => tutorial_pages,  # Temporarily disabled to test basic build
+        "Tutorials" => "tutorials.md",
         "Documentation" => [
             "Architecture Overview" => "architecture.md",
             "Assembly Method Selection" => "assembly-method-selection.md",
+            "Workflow & Tool Map" => "workflow-map.md",
+            "Function Coverage Audit" => "api/function-coverage.md",
             "Performance Guide" => "performance.md",
             "FAQ" => "faq.md"
         ],
         "API Reference" => [
             "Complete API Reference" => "api-reference.md",
+            "Complete API Surface" => "api/all-functions.md",
             "Workflows" => [
                 "Assembly Suite" => "api/workflows/assembly-suite.md",
                 "Data Acquisition" => "api/workflows/data-acquisition.md",

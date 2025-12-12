@@ -951,7 +951,7 @@ Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and Fas
 # Dependencies
 Requires trim_galore conda environment
 """
-function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd())
+function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd(), threads=min(get_default_threads(), 4))
     Mycelia.add_bioconda_env("trim-galore")
     # Create output directory if it doesn't exist
     trim_galore_dir = mkpath(joinpath(outdir, "trim_galore"))
@@ -965,7 +965,7 @@ function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdi
     trimmed_reverse = joinpath(trim_galore_dir, replace(reverse_base, Mycelia.FASTQ_REGEX => "_val_2.fq.gz"))
     
     if !isfile(trimmed_forward) && !isfile(trimmed_reverse)
-        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(threads) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
         run(cmd)
     else
         @info "$(trimmed_forward) & $(trimmed_reverse) already present"
@@ -1980,7 +1980,7 @@ function write_fasta(;
     gzip::Bool=false,
     show_progress::Union{Bool,Nothing}=nothing,
     use_pigz::Union{Bool,Nothing}=nothing,
-    pigz_threads::Int=Sys.CPU_THREADS
+    pigz_threads::Int=get_default_threads()
 )
     # Determine if gzip compression should be used based on both the filename and the gzip argument
     gzip = occursin(r"\.gz$", outfile) || gzip

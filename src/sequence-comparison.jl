@@ -872,7 +872,7 @@ Calculate Average Nucleotide Identity (ANI) between genome sequences using FastA
 - `query_list::String`: Path to file containing list of query genome paths (one per line)
 - `reference_list::String`: Path to file containing list of reference genome paths (one per line)
 - `outfile::String`: Path to output file that will contain ANI results
-- `threads::Int=Sys.CPU_THREADS`: Number of parallel threads to use
+- `threads::Int=get_default_threads()`: Number of parallel threads to use
 - `force::Bool=false`: If true, rerun analysis even if output file exists
 
 # Output
@@ -887,7 +887,7 @@ Generates a tab-delimited file with columns:
 - Requires FastANI to be available via Bioconda
 - Automatically sets up required conda environment
 """
-function fastani_list(;query_list="", reference_list="", outfile="", threads=Sys.CPU_THREADS, force=false)
+function fastani_list(;query_list="", reference_list="", outfile="", threads=get_default_threads(), force=false)
     Mycelia.add_bioconda_env("fastani")
     if !isfile(outfile) || force
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n fastani fastANI --ql $(query_list) --rl $(reference_list) --threads $(threads) -o $(outfile)`)
