@@ -855,7 +855,6 @@ end
 #                 # Decompress long reads for HyLight
 #                 meta_long_reads = joinpath(dir, "meta_long_reads.fq")
 #                 run(pipeline(`gunzip -c $(meta_long_reads_gz)`, meta_long_reads))
-
 # Hybrid metagenomic assembly (HyLight) placeholder.
 # Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
 # Keep a stub so we remember to reintroduce a lightweight fixture later.
@@ -899,6 +898,13 @@ end
 #             end
 #         end
 # #     end
+
+# Hybrid metagenomic assembly (HyLight) placeholder.
+# Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
+# Keep a stub so we remember to reintroduce a lightweight fixture later.
+Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
+    Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
+end
 #     Test.@testset "6. Probabilistic Assembly (Mycelia)" begin
 #         mktempdir() do dir
 #             fastq = joinpath(dir, "reads.fq")

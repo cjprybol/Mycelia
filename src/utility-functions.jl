@@ -1559,6 +1559,7 @@ function _glibc_version_tuple()
     isempty(lines) && return nothing
 
     m = match(r"ldd \(GNU libc\) (\d+)\.(\d+)", strip(lines[1]))
+    # m = match(r"ldd \\(GNU libc\\) (\\d+)\\.(\\d+)", strip(lines[1]))
     m === nothing && return nothing
 
     return (parse(Int, m.captures[1]), parse(Int, m.captures[2]))
@@ -2262,7 +2263,7 @@ function get_default_threads()::Int
     if cpu_threads !== nothing
         return min(cld(cpu_threads, 2), 16)
     end
-   return DEFAULT_THREADS
+    return DEFAULT_THREADS
 end
 
 """
