@@ -153,6 +153,7 @@ remaining_files = [
     "kmer-analysis.jl",
     "neo4jl.jl",
     "pangenome-analysis.jl",
+    "pantools.jl",
     "performance-benchmarks.jl",
     "plotting-and-visualization.jl",
     "quality-control-and-benchmarking.jl",

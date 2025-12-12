@@ -754,6 +754,92 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Prefix FASTQ read identifiers with a sample-specific tag to guarantee uniqueness.
+
+Streaming-friendly: reads are rewritten on the fly; optional mapping output can be
+written as gzipped TSV (streamed) or Arrow (buffered).
+
+# Arguments
+- `fastq_file::AbstractString`: Input FASTQ (optionally gzipped).
+- `sample_tag::AbstractString`: Tag prepended to each read identifier.
+- `out_fastq::AbstractString`: Output FASTQ path (gzipped if endswith `.gz`).
+
+# Keywords
+- `mapping_out::Union{Nothing,String}=nothing`: Optional path to write read-id map.
+- `mapping_format::Symbol=:arrow`: `:arrow` or `:tsv`. TSV is written streaming;
+  Arrow buffers in-memory before write.
+- `id_delimiter::AbstractString="::"`: Separator between tag and original id.
+
+# Returns
+Named tuple `(out_fastq, mapping_out, sample_tag)`.
+"""
+function prefix_fastq_reads(
+    fastq_file::AbstractString;
+    sample_tag::AbstractString,
+    out_fastq::AbstractString,
+    mapping_out::Union{Nothing,String}=nothing,
+    mapping_format::Symbol=:arrow,
+    id_delimiter::AbstractString="::"
+)
+    @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
+    @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
+    mkpath(dirname(out_fastq))
+    sanitized_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
+
+    # Prepare mapping output (streaming for TSV, buffered for Arrow)
+    tsv_io = nothing
+    mapping_rows = mapping_out === nothing ? nothing : Vector{NamedTuple}()
+    if mapping_out !== nothing
+        mkpath(dirname(mapping_out))
+        if mapping_format == :tsv
+            tsv_io = CodecZlib.GzipCompressorStream(open(mapping_out, "w"))
+            write(tsv_io, "sample_tag\toriginal_read_id\tnew_read_id\n")
+        else
+            mapping_rows = Vector{NamedTuple}()
+        end
+    end
+
+    out_io = endswith(out_fastq, ".gz") ? CodecZlib.GzipCompressorStream(open(out_fastq, "w")) : open(out_fastq, "w")
+    writer = FASTX.FASTQ.Writer(out_io)
+    reader = Mycelia.open_fastx(fastq_file)
+    for record in reader
+        original_id = String(FASTX.identifier(record))
+        new_id = string(sanitized_tag, id_delimiter, original_id)
+        new_record = FASTX.FASTQ.Record(new_id, FASTX.sequence(record), FASTX.quality(record))
+        FASTX.write(writer, new_record)
+        if mapping_out !== nothing
+            if mapping_format == :tsv
+                write(tsv_io, string(sanitized_tag, '\t', original_id, '\t', new_id, '\n'))
+            else
+                push!(mapping_rows, (sample_tag=sanitized_tag, original_read_id=original_id, new_read_id=new_id))
+            end
+        end
+    end
+    close(reader)
+    FASTX.close(writer)
+    if isa(out_io, CodecZlib.GzipCompressorStream)
+        CodecZlib.close(out_io)
+    else
+        close(out_io)
+    end
+    if mapping_out !== nothing
+        if mapping_format == :arrow
+            Arrow.write(mapping_out, DataFrames.DataFrame(mapping_rows))
+        else
+            if isa(tsv_io, CodecZlib.GzipCompressorStream)
+                CodecZlib.close(tsv_io)
+            else
+                close(tsv_io)
+            end
+        end
+    end
+
+    return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Concatenate FASTQ/FASTA files (gz or plain) into a single gzipped output file.
 Maintains input order and works for both single-end and paired-end files (one stream).
 """
