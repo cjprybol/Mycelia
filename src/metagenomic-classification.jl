@@ -604,7 +604,8 @@ function run_metabuli_classify(reads1::AbstractString;
         additional_args::Vector{String}=String[],
         force::Bool=false)
 
-    for file in isnothing(reads2) ? (reads1,) : (reads1, reads2)
+    input_files = isnothing(reads2) ? (reads1,) : (reads1, reads2)
+    for file in input_files
         isfile(file) || error("Input file not found: $(file)")
     end
     isdir(dbdir) || error("Database directory not found: $(dbdir)")
@@ -707,7 +708,8 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     normalize_reads(x) = x isa Vector{String} ? join(x, ",") : String(x)
 
     function ensure_files_exist(paths::Union{String,Vector{String}})
-        for f in paths isa Vector{String} ? paths : [String(paths)]
+        files = paths isa Vector{String} ? paths : [String(paths)]
+        for f in files
             isfile(f) || error("Input file not found: $(f)")
         end
     end

@@ -10,6 +10,11 @@ const TUTORIALS_DIR = joinpath(PROJECT_ROOT, "tutorials")
 const LITERATE_SRC_DIR = joinpath(PROJECT_ROOT, "test")
 const GENERATED_DOCS_DIR = joinpath(@__DIR__, "src", "generated")
 
+# Drop any stale generated content so we don't ship orphaned pages
+if isdir(GENERATED_DOCS_DIR)
+    rm(GENERATED_DOCS_DIR; recursive=true, force=true)
+end
+
 # Process tutorials from tutorials/ directory
 mkpath(GENERATED_DOCS_DIR)
 tutorials_output_dir = joinpath(GENERATED_DOCS_DIR, "tutorials")
