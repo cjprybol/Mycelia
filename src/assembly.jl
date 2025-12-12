@@ -378,6 +378,7 @@ Named tuple containing:
 - Uses `useGrid=false` to disable automatic SLURM/grid job submission
 """
 function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10, threads = get_default_threads(), cor_threads = threads)
+# function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10, threads = get_default_threads())
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
     threads = max(threads, 1)

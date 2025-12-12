@@ -18,6 +18,11 @@ This audit maps source modules in `src/` to documentation anchors so newly added
 | `simulation.jl` | 41 | [Data Acquisition](../api/workflows/data-acquisition.md) | Read simulators surfaced in tutorials and workflow map. |
 | `plotting-and-visualization.jl` | 27 | [Visualization Gallery](../visualization-gallery.md) | Embedding/taxa plots linked; gallery currently has some broken refs. |
 | `xam.jl` | 22 | [Tool Integration](../generated/tutorials/08_tool_integration.md) | Mapping stats and coverage plotting referenced; align with BAM/CRAM primer. |
+| `alignments-and-mapping.jl` | 25 | [Tool Integration](../../tutorials/08_tool_integration.md) | Alignment wrappers (BLAST/DIAMOND/MMSeqs2/minimap2) are referenced from the capability matrix. |
+| `reference-databases.jl` | 34 | [Data Acquisition](../api/workflows/data-acquisition.md) | NCBI/SRA helpers documented; ensure coverage of metadata loaders. |
+| `simulation.jl` | 41 | [Data Acquisition](../api/workflows/data-acquisition.md) | Read simulators surfaced in tutorials and workflow map. |
+| `plotting-and-visualization.jl` | 27 | [Visualization Gallery](../visualization-gallery.md) | Embedding/taxa plots linked; gallery currently has some broken refs. |
+| `xam.jl` | 22 | [Tool Integration](../../tutorials/08_tool_integration.md) | Mapping stats and coverage plotting referenced; align with BAM/CRAM primer. |
 | `fastx.jl` | 50 | [Workflow & Tool Map](../workflow-map.md) | FASTA/FASTQ normalization utilities used by tutorials; add quick-start snippet to API reference. |
 | `utility-functions.jl` | 102 | Internal | Shared helpers; document only when promoted to user-facing APIs. |
 

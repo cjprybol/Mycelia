@@ -2262,9 +2262,7 @@ function get_default_threads()::Int
     if cpu_threads !== nothing
         return min(cld(cpu_threads, 2), 16)
     end
-
-    # Last resort: conservative constant.
-    return DEFAULT_THREADS
+   return DEFAULT_THREADS
 end
 
 """

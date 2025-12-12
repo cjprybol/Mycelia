@@ -859,9 +859,46 @@ end
 # Hybrid metagenomic assembly (HyLight) placeholder.
 # Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
 # Keep a stub so we remember to reintroduce a lightweight fixture later.
-Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
-    Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
-end
+# Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
+#     Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
+# end
+            
+#             # Test HyLight - hybrid strain-resolved metagenomic assembly
+#             hylight_outdir = joinpath(dir, "hylight_assembly")
+#             if isdir(hylight_outdir)
+#                 rm(hylight_outdir, recursive=true)
+#             end
+#             try
+#                 result = Mycelia.run_hylight(meta_short_reads.forward_reads, meta_short_reads.reverse_reads, meta_long_reads, outdir=hylight_outdir)
+#                 Test.@test result.outdir == hylight_outdir
+#                 Test.@test result.strain_assemblies == joinpath(hylight_outdir, "strain_assemblies")
+#                 Test.@test isdir(result.strain_assemblies)
+#                 # Clean up after test
+#                 rm(hylight_outdir, recursive=true, force=true)
+#             catch e
+#                 if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "failed")
+#                     @warn """
+#                     HyLight hybrid assembly failed due to resource constraints.
+#                     Current test: 3kb genome, 10x short reads + 5x long reads, ~45kb total sequence data
+
+#                     Required resources for HyLight:
+#                     - Memory: ~6-12GB RAM minimum (strain-resolved metagenomic hybrid assembly)
+#                     - CPU: 4-16 cores recommended
+#                     - Disk: ~2-4GB temporary space
+#                     - Note: HyLight performs strain resolution on hybrid assemblies
+
+#                     To fix: This is a very resource-intensive assembler requiring significant computational resources.
+#                     Consider running on a high-memory machine or skip strain-resolved hybrid assembly testing.
+#                     """
+#                     Test.@test_skip "HyLight test skipped - insufficient resources (very memory-intensive strain-resolved hybrid assembler)"
+#                 else
+#                     rethrow(e)
+#                 end
+#                 # Clean up on failure
+#                 rm(hylight_outdir, recursive=true, force=true)
+#             end
+#         end
+# #     end
 #     Test.@testset "6. Probabilistic Assembly (Mycelia)" begin
 #         mktempdir() do dir
 #             fastq = joinpath(dir, "reads.fq")
