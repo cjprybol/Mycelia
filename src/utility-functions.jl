@@ -1558,7 +1558,7 @@ function _glibc_version_tuple()
     lines = split(text, '\n'; keepempty=false)
     isempty(lines) && return nothing
 
-    m = match(r"ldd \\(GNU libc\\) (\\d+)\\.(\\d+)", strip(lines[1]))
+    m = match(r"ldd \(GNU libc\) (\d+)\.(\d+)", strip(lines[1]))
     m === nothing && return nothing
 
     return (parse(Int, m.captures[1]), parse(Int, m.captures[2]))
