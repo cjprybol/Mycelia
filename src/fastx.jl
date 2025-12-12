@@ -1216,7 +1216,12 @@ function qc_filter_short_reads_fastp(;
         @show isfile(json)
         @show isfile(html)
     end
-    return (;out_forward, out_reverse, json, html)
+    return (
+        out_forward = String(out_forward),
+        out_reverse = String(out_reverse),
+        json = String(json),
+        html = String(html)
+    )
 end
 
 """
@@ -1232,7 +1237,10 @@ Perform QC filtering on long-read FASTQ files using fastplong.
 - `max_length::Int=0`: Maximum read length (default 0, no maximum).
 
 # Returns
-- `String`: Path to the filtered FASTQ file.
+- Named tuple containing:
+  - `out_fastq`: Filtered FASTQ file
+  - `html_report`: fastplong HTML report
+  - `json_report`: fastplong JSON report
 
 # Details
 This function uses fastplong to filter long reads based on quality and length criteria.
@@ -1247,7 +1255,8 @@ function qc_filter_long_reads_fastplong(;
                             min_length::Int=1000,
                             max_length::Int=0)
     # Build command with required parameters
-    if !isfile(out_fastq)
+    outputs_exist = isfile(out_fastq) && isfile(html_report) && isfile(json_report)
+    if !outputs_exist
         Mycelia.add_bioconda_env("fastplong")
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastplong fastplong
                 --in $(in_fastq)
@@ -1264,7 +1273,11 @@ function qc_filter_long_reads_fastplong(;
 
         run(`$cmd`)
     end
-    return out_fastq
+    return (
+        out_fastq = String(out_fastq),
+        html_report = String(html_report),
+        json_report = String(json_report)
+    )
 end
 
 """

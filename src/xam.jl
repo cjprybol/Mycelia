@@ -851,11 +851,9 @@ Convert a BAM file to FASTQ format with gzip compression.
 
 """
 function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
-    Mycelia.add_bioconda_env("samtools")
-    bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
-    gzip_cmd = `gzip`
-    p = pipeline(bam_to_fastq_cmd, gzip_cmd)
     if !isfile(fastq)
+        Mycelia.add_bioconda_env("samtools")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`, `gzip`)
         @time run(pipeline(p, fastq))
     else
         @info "$(fastq) already exists"

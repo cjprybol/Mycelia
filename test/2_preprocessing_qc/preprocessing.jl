@@ -345,11 +345,13 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
             
             ## Test fastplong (long reads)
             Test.@testset "fastplong" begin
-                out_fastq = Mycelia.qc_filter_long_reads_fastplong(
+                result = Mycelia.qc_filter_long_reads_fastplong(
                     in_fastq = fastq_single
                 )
-                Test.@test isfile(out_fastq)
-                Test.@test endswith(out_fastq, ".fastplong.fq.gz")
+                Test.@test isfile(result.out_fastq)
+                Test.@test isfile(result.html_report)
+                Test.@test isfile(result.json_report)
+                Test.@test endswith(result.out_fastq, ".fastplong.fq.gz")
             end
             
             ## Test chopper (long reads)
