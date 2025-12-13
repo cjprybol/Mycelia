@@ -875,6 +875,8 @@ reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
 # - This function passes all (prefixed) FASTQ paths directly to minimap2; extremely large numbers of inputs
 #   can exceed the OS `ARG_MAX` limit (“argument list too long”). In that case, use a shorter `tmpdir` or
 #   run in batches and merge BAMs with `samtools merge`.
+# - For very large references, minimap2 may use a multi-part index; we pass `--split-prefix` to ensure SAM
+#   output contains @SQ header lines required by samtools.
 
 # Returns
 Named tuple with commands, paths, and per-sample output metadata.
@@ -1093,6 +1095,10 @@ function minimap_merge_map_and_split(;
         Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
         "-t", string(threads), "-x", mapping_type, "-I$(index_size)", "-a"
     ]
+    # Required for multi-part indices to ensure @SQ lines are present in SAM output.
+    # Also safe for single-part indices and helps avoid samtools header/truncation errors.
+    split_prefix = merged_bam * ".minimap2.split"
+    push!(minimap_parts, "--split-prefix=$(split_prefix)")
     append!(minimap_parts, minimap_extra_args)
     push!(minimap_parts, target)
     append!(minimap_parts, prefixed_fastqs)
@@ -1126,6 +1132,14 @@ function minimap_merge_map_and_split(;
         else
             try
                 run(minimap_cmd)
+                # Best-effort cleanup of minimap2 split-prefix temp files.
+                try
+                    split_base = basename(split_prefix)
+                    for path in readdir(tmpdir; join=true)
+                        startswith(basename(path), split_base) && rm(path; force=true)
+                    end
+                catch
+                end
             catch err
                 msg = sprint(showerror, err)
                 if occursin("E2BIG", msg) || occursin("argument list too long", lowercase(msg))
@@ -1134,6 +1148,18 @@ function minimap_merge_map_and_split(;
                         "Mitigations:\n" *
                         "  - Use a shorter `tmpdir` (and/or shorten input paths)\n" *
                         "  - Run samples in batches and merge BAMs with `samtools merge`\n" *
+                        "Original error: $(msg)"
+                    )
+                end
+                if occursin("no SQ lines present in the header", msg) || occursin("samtools sort: truncated file", msg)
+                    # Leave a clearer error and avoid caching a possibly corrupt BAM.
+                    try
+                        isfile(merged_bam) && rm(merged_bam; force=true)
+                    catch
+                    end
+                    error(
+                        "Mapping/sorting failed due to a missing SAM @SQ header (common with minimap2 multi-part indices without --split-prefix).\n" *
+                        "This run now uses `--split-prefix=$(split_prefix)`; rerun with `force=true` if needed.\n" *
                         "Original error: $(msg)"
                     )
                 end
