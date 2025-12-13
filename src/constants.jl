@@ -12,6 +12,13 @@ const NERSC_MEM=460
 # const NERSC_CPU=240
 const NERSC_CPU=240
 
+# Default thread count for non-HPC environments or when no HPC allocation detected
+# Used as fallback by get_default_threads() function
+const DEFAULT_THREADS = 4
+
+# Maximum threads supported by Flye assembler
+const FLYE_MAX_THREADS = 128
+
 # Phase these out and move to the below more specific options
 const DNA_ALPHABET = BioSymbols.ACGT
 const RNA_ALPHABET = BioSymbols.ACGU

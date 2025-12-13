@@ -20,7 +20,8 @@ import Mycelia
 import Arrow
 import DataFrames
 
-if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
     Test.@testset "BLAST Database Integration" begin
         Test.@testset "BLAST DB Search Paths" begin
             env_paths = split(get(ENV, "BLASTDB", ""), ":")
@@ -45,6 +46,7 @@ if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
             db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
             table = Mycelia.blastdb2table(
                 blastdb=db_path,
+                blastdbs_dir=db_dir,
                 ALL_FIELDS=false,
                 accession=true,
                 taxid=true,
@@ -53,7 +55,9 @@ if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
             )
             Test.@test table isa DataFrames.DataFrame
             Test.@test DataFrames.nrow(table) > 0
-            arrow_table = Arrow.Table(table)
+            arrow_path = tempname() * ".arrow"
+            Arrow.write(arrow_path, table)
+            arrow_table = Arrow.Table(arrow_path)
             Test.@test arrow_table isa Arrow.Table
             fasta_file = Mycelia.blastdb_to_fasta(blastdb=db_path, outfile=joinpath(db_dir, "$(db_name).fna.gz"), force=true, max_cores=1)
             Test.@test isfile(fasta_file)
@@ -65,6 +69,7 @@ if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
             db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
             filtered = Mycelia.blastdb2table(
                 blastdb=db_path,
+                blastdbs_dir=db_dir,
                 ALL_FIELDS=false,
                 taxid=true,
                 sequence=false,
@@ -73,6 +78,12 @@ if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
             Test.@test !isempty(filtered)
             if "taxid" in DataFrames.names(filtered)
                 Test.@test any(filtered.taxid .== 12884)
+                # Require at least one non-missing taxid; specific value may vary by DB release
+                has_taxids = any(!ismissing, filtered.taxid)
+                Test.@test has_taxids
+                if has_taxids && !any(string.(coalesce.(filtered.taxid, "")) .== "12884")
+                    @info "Taxid 12884 not present in filtered table; sample taxids" unique(first(filtered.taxid, min(length(filtered.taxid), 5)))
+                end
             end
             rm(db_dir, recursive=true)
         end

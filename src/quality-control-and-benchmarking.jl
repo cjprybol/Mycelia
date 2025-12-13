@@ -648,7 +648,7 @@ result = run_checkv("genome.fasta")
 println("Quality summary: ", result.quality_summary)
 ```
 """
-function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=Sys.CPU_THREADS)
+function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=get_default_threads())
     if !isfile(fasta_file)
         error("Input file does not exist: $(fasta_file)")
     end
@@ -701,7 +701,7 @@ CheckM requires a directory of genome files as input.
 run_checkm("./genomes/")
 ```
 """
-function run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta", threads::Int=Sys.CPU_THREADS)
+function run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta", threads::Int=get_default_threads())
     setup_checkm(db_dir=db_dir)
     
     if !isdir(input_path)
@@ -749,7 +749,7 @@ A named tuple with the following fields:
 - `diamond_results`: Path to DIAMOND_RESULTS.tsv
 - `protein_file`: Path to the single .faa file
 """
-function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
+function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=get_default_threads())
     # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
     # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
     db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
@@ -834,7 +834,7 @@ files = ["genome1.fasta.gz", "genome2.fasta", "genome3.fasta.gz"]
 run_checkm2_list(files)
 ```
 """
-function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=Sys.CPU_THREADS)
+function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=get_default_threads())
     # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
     # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
     db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
@@ -992,15 +992,15 @@ function analyze_fastq_quality(fastq_file::String)
 end
 
 """
-    run_quast(assembly_files::Vector{String}; outdir::String="quast_results", reference::Union{String,Nothing}=nothing, threads::Int=Sys.CPU_THREADS, min_contig::Int=500, gene_finding::Bool=false)
+    run_quast(assembly_files::Vector{String}; outdir::Union{String,Nothing}=nothing, reference::Union{String,Nothing}=nothing, threads::Int=get_default_threads(), min_contig::Int=500, gene_finding::Bool=false)
 
 Run QUAST (Quality Assessment Tool for Genome Assemblies) to evaluate assembly quality.
 
 # Arguments
 - `assembly_files::Vector{String}`: Vector of paths to assembly FASTA files to evaluate
-- `outdir::String="quast_results"`: Output directory for QUAST results
+- `outdir::Union{String,Nothing}=nothing`: Output directory for QUAST results. If `nothing`, defaults to `dirname(first_assembly)/basename_without_fasta_quast`
 - `reference::Union{String,Nothing}=nothing`: Optional reference genome for reference-based metrics
-- `threads::Int=Sys.CPU_THREADS`: Number of threads to use
+- `threads::Int=get_default_threads()`: Number of threads to use
 - `min_contig::Int=500`: Minimum contig length to consider
 - `gene_finding::Bool=false`: Whether to run gene finding (requires GeneMark-ES/ET)
 
@@ -1038,27 +1038,41 @@ quast_dir = Mycelia.run_quast(assemblies,
 - Gene finding requires additional dependencies and is disabled by default
 """
 function run_quast(assembly_files::Vector{String}; 
-                   outdir::String="quast_results", 
+                   outdir::Union{String,Nothing}=nothing, 
                    reference::Union{String,Nothing}=nothing,
-                   threads::Int=Sys.CPU_THREADS,
+                   threads::Int=get_default_threads(),
                    min_contig::Int=500,
                    gene_finding::Bool=false)
     
     # Install QUAST via Bioconda if needed
     add_bioconda_env("quast")
-    
+
     # Validate input files
     for assembly_file in assembly_files
         if !isfile(assembly_file)
             error("Assembly file does not exist: $(assembly_file)")
         end
     end
-    
+
     # Validate reference if provided
     if reference !== nothing && !isfile(reference)
         error("Reference file does not exist: $(reference)")
     end
-    
+
+    # Derive default outdir from first assembly if not provided
+    if outdir === nothing
+        first_asm = assembly_files[1]
+        base = replace(basename(first_asm), Mycelia.FASTA_REGEX => "")
+        outdir = joinpath(dirname(first_asm), base * "_quast")
+    end
+
+    # Derive default outdir from first assembly if not provided
+    if outdir === nothing
+        first_asm = assembly_files[1]
+        base = replace(basename(first_asm), Mycelia.FASTA_REGEX => "")
+        outdir = joinpath(dirname(first_asm), base * "_busco")
+    end
+
     # Create output directory
     mkpath(outdir)
     
@@ -1121,17 +1135,20 @@ function run_quast(assembly_file::String; kwargs...)
 end
 
 """
-    run_busco(assembly_files::Vector{String}; outdir::String="busco_results", lineage::String="auto", mode::String="genome", threads::Int=Sys.CPU_THREADS, force::Bool=false)
+    run_busco(assembly_files::Vector{String}; outdir::Union{String,Nothing}=nothing, lineage::Union{String,Nothing}=nothing, mode::String="genome", threads::Int=get_default_threads(), force::Bool=false, auto_lineage::Bool=true, auto_lineage_euk::Bool=false, auto_lineage_prok::Bool=false)
 
 Run BUSCO (Benchmarking Universal Single-Copy Orthologs) to assess genome assembly completeness.
 
 # Arguments
 - `assembly_files::Vector{String}`: Vector of paths to assembly FASTA files to evaluate
-- `outdir::String="busco_results"`: Output directory for BUSCO results
-- `lineage::String="auto"`: BUSCO lineage dataset to use (e.g., "bacteria_odb10", "eukaryota_odb10", "auto")
+- `outdir::Union{String,Nothing}=nothing`: Output directory for BUSCO results. If `nothing`, defaults to `dirname(first_assembly)/basename_without_fasta_busco`
+- `lineage::Union{String,Nothing}=nothing`: BUSCO lineage dataset to use (e.g., "bacteria_odb10", "eukaryota_odb10"); if `nothing`, auto-lineage is used
 - `mode::String="genome"`: BUSCO mode ("genome", "transcriptome", "proteins")
-- `threads::Int=Sys.CPU_THREADS`: Number of threads to use
+- `threads::Int=get_default_threads()`: Number of threads to use (`--cpu`)
 - `force::Bool=false`: Force overwrite existing results
+- `auto_lineage::Bool=true`: Use BUSCO auto-lineage placement (default when lineage is not provided)
+- `auto_lineage_euk::Bool=false`: Auto-lineage limited to eukaryotic tree
+- `auto_lineage_prok::Bool=false`: Auto-lineage limited to prokaryotic tree
 
 # Returns
 - `String`: Path to the output directory containing BUSCO results
@@ -1164,12 +1181,15 @@ busco_dir = Mycelia.run_busco(assemblies,
 - Available lineages: bacteria_odb10, archaea_odb10, eukaryota_odb10, fungi_odb10, etc.
 - Results provide Complete, Fragmented, and Missing BUSCO counts
 """
-function run_busco(assembly_files::Vector{String}; 
+function run_busco(assembly_files::Vector{String};
                    outdir::String="busco_results",
-                   lineage::String="auto",
+                   lineage::Union{String,Nothing}=nothing,
                    mode::String="genome",
-                   threads::Int=Sys.CPU_THREADS,
-                   force::Bool=false)
+                   threads::Int=get_default_threads(),
+                   force::Bool=false,
+                   auto_lineage::Bool=true,
+                   auto_lineage_euk::Bool=false,
+                   auto_lineage_prok::Bool=false)
     
     # Install BUSCO via Bioconda if needed
     add_bioconda_env("busco")
@@ -1185,6 +1205,18 @@ function run_busco(assembly_files::Vector{String};
     valid_modes = ["genome", "transcriptome", "proteins"]
     if !(mode in valid_modes)
         error("Invalid mode: $(mode). Must be one of: $(join(valid_modes, ", "))")
+    end
+
+    # Validate lineage / auto-lineage flags
+    if auto_lineage + auto_lineage_euk + auto_lineage_prok > 1
+        error("Specify only one of auto_lineage, auto_lineage_euk, or auto_lineage_prok.")
+    end
+    if lineage !== nothing && (auto_lineage || auto_lineage_euk || auto_lineage_prok)
+        error("Provide either lineage or an auto-lineage flag, not both.")
+    end
+    # Default to auto-lineage if nothing provided
+    if lineage === nothing && !(auto_lineage || auto_lineage_euk || auto_lineage_prok)
+        auto_lineage = true
     end
     
     # Create output directory
@@ -1204,9 +1236,19 @@ function run_busco(assembly_files::Vector{String};
             "--output", assembly_name,
             "--out_path", outdir,
             "--mode", mode,
-            "--lineage_dataset", lineage,
             "--cpu", string(threads)
         ]
+
+        # Lineage / auto-lineage selection
+        if lineage !== nothing
+            push!(cmd_parts, "--lineage_dataset", lineage)
+        elseif auto_lineage_euk
+            push!(cmd_parts, "--auto-lineage-euk")
+        elseif auto_lineage_prok
+            push!(cmd_parts, "--auto-lineage-prok")
+        else
+            push!(cmd_parts, "--auto-lineage")
+        end
         
         # Add force flag if requested
         if force
@@ -1223,8 +1265,7 @@ function run_busco(assembly_files::Vector{String};
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n busco $cmd_parts`)
             
             # Verify output files were created
-            summary_pattern = joinpath(assembly_outdir, "short_summary.specific.*.$(assembly_name).txt")
-            summary_files = Glob.glob(summary_pattern)
+            summary_files = Glob.glob(joinpath(assembly_outdir, "short_summary*.txt"))
             
             if isempty(summary_files)
                 error("BUSCO failed to generate summary file for $(assembly_file)")
@@ -1582,6 +1623,7 @@ Run ALE (Assembly Likelihood Evaluation) for reference-free quality assessment.
 - `assembly_file::String`: Path to assembly FASTA file
 - `reads_file::String`: Path to reads FASTQ file (can be comma-separated for paired reads)
 - `outdir::String`: Output directory path (default: "\${assembly_file}_ale")
+- `threads::Int`: Number of threads to use for read mapping (default: `get_default_threads()`)
 
 # Returns
 Named tuple containing:
@@ -1594,9 +1636,10 @@ Named tuple containing:
 - Evaluates assembly quality based on read mapping consistency
 - Identifies potential misassemblies and low-quality regions
 - Automatically creates and uses a conda environment with ale
+- Utilizes requested CPU threads for BWA mapping
 - Skips analysis if output files already exist
 """
-function run_ale(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_ale")
+function run_ale(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_ale", threads::Int=get_default_threads())
     Mycelia.add_bioconda_env("ale")
     mkpath(outdir)
     
@@ -1612,10 +1655,10 @@ function run_ale(assembly_file::String, reads_file::String; outdir::String=assem
             if occursin(",", reads_file)
                 # Paired-end reads
                 reads = split(reads_file, ",")
-                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads[1]) $(reads[2]) -o $(sam_file)`)
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(threads) $(assembly_file) $(reads[1]) $(reads[2]) -o $(sam_file)`)
             else
                 # Single-end reads
-                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads_file) -o $(sam_file)`)
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(threads) $(assembly_file) $(reads_file) -o $(sam_file)`)
             end
         end
         
@@ -1640,6 +1683,7 @@ Run FRCbam for reference-free misassembly detection using Feature Response Curve
 - `assembly_file::String`: Path to assembly FASTA file
 - `reads_file::String`: Path to reads FASTQ file (can be comma-separated for paired reads)
 - `outdir::String`: Output directory path (default: "\${assembly_file}_frcbam")
+- `threads::Int`: Number of threads to use for read mapping (default: `get_default_threads()`)
 
 # Returns
 Named tuple containing:
@@ -1652,9 +1696,10 @@ Named tuple containing:
 - Evaluates paired-end consistency and insert size distributions
 - Identifies structural variations and assembly errors
 - Automatically creates and uses a conda environment with frcbam
+- Utilizes requested CPU threads for BWA mapping
 - Skips analysis if output files already exist
 """
-function run_frcbam(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_frcbam")
+function run_frcbam(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_frcbam", threads::Int=get_default_threads())
     Mycelia.add_bioconda_env("frcbam")
     mkpath(outdir)
     
@@ -1672,16 +1717,16 @@ function run_frcbam(assembly_file::String, reads_file::String; outdir::String=as
                 reads = split(reads_file, ",")
                 run(
                     pipeline(
-                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads[1]) $(reads[2])`,
-                        `samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(threads) $(assembly_file) $(reads[1]) $(reads[2])`,
+                        `samtools sort -@ $(get_default_threads()) -o $(bam_file)`
                     )
                 )
             else
                 # Single-end reads (FRCbam works best with paired-end)
                 run(
                     pipeline(
-                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(Sys.CPU_THREADS) $(assembly_file) $(reads_file)`, 
-                        `samtools sort -@ $(Sys.CPU_THREADS) -o $(bam_file)`
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(threads) $(assembly_file) $(reads_file)`, 
+                        `samtools sort -@ $(get_default_threads()) -o $(bam_file)`
                     )
                 )
             end

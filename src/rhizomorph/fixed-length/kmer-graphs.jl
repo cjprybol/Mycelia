@@ -9,7 +9,7 @@
 # - Strand-specific by default (stores k-mers as observed)
 # - Evidence tracking with nested Dict structure
 # - Type-stable core functions for performance
-# - Support for both SingleStrand and DoubleStrand modes
+# - Support for SingleStrand (default), DoubleStrand (DNA/RNA), and Canonical (DNA/RNA) modes
 #
 # Based on rhizomorph-graph-ecosystem-plan.md Section 2.1
 
@@ -28,14 +28,15 @@ This is the main user-facing function for k-mer graph construction.
 - `records::Vector{<:FASTX.Record}`: Input sequences (FASTA or FASTQ)
 - `k::Int`: K-mer size
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand or :doublestrand)
+- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph with evidence
 
 # Graph Modes
 - `:singlestrand` - Records k-mers exactly as observed (strand-specific)
-- `:doublestrand` - Merges forward and reverse-complement k-mers (canonical)
+- `:doublestrand` - Adds reverse-complement strand with directed edges (DNA/RNA only)
+- `:canonical` - Merges reverse-complement pairs into canonical vertices with undirected edges (DNA/RNA only)
 
 # Examples
 ```julia
@@ -45,8 +46,11 @@ records = collect(open_fastx("reads.fasta"))
 # Build strand-specific graph (default)
 graph = build_kmer_graph(records, 31)
 
-# Build canonical (doublestrand) graph
-graph_canonical = build_kmer_graph(records, 31; mode=:doublestrand)
+# Build doublestrand graph
+graph_doublestrand = build_kmer_graph(records, 31; mode=:doublestrand)
+
+# Build canonical graph
+graph_canonical = build_kmer_graph(records, 31; mode=:canonical)
 
 # Multiple datasets
 graph = build_kmer_graph(records1, 31; dataset_id="sample_A")
@@ -73,8 +77,11 @@ function build_kmer_graph(
         return build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
     elseif mode == :doublestrand
         return build_kmer_graph_doublestrand(records, k; dataset_id=dataset_id)
+    elseif mode == :canonical
+        singlestrand_graph = build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+        return convert_to_canonical(singlestrand_graph)
     else
-        error("Invalid mode: $mode. Must be :singlestrand or :doublestrand")
+        error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
 end
 
@@ -98,7 +105,7 @@ dataset_id if not specified.
 - `filepath::String`: Path to FASTA or FASTQ file (compressed or uncompressed)
 - `k::Int`: K-mer size
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename without extension)
-- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand or :doublestrand)
+- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph
@@ -149,7 +156,7 @@ Handles compressed files automatically.
 # Arguments
 - `filepaths::Vector{String}`: List of FASTA/FASTQ files (compressed or uncompressed)
 - `k::Int`: K-mer size
-- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand or :doublestrand)
+- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph with evidence from all files
@@ -174,8 +181,8 @@ function build_kmer_graph_from_files(
         error("No files provided")
     end
 
-    if !(mode in (:singlestrand, :doublestrand))
-        error("Invalid mode: $mode. Must be :singlestrand or :doublestrand")
+    if !(mode in (:singlestrand, :doublestrand, :canonical))
+        error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
 
     # Build graph from first file (strand-specific) and convert later if needed
@@ -195,9 +202,19 @@ function build_kmer_graph_from_files(
         add_observations_to_graph!(graph, records, k; dataset_id=dataset_id)
     end
 
-    # Convert to doublestrand if requested
+    # Determine if canonical/doublestrand conversion is valid for the k-mer type
+    if !isempty(MetaGraphsNext.labels(graph))
+        first_label = first(MetaGraphsNext.labels(graph))
+        if mode != :singlestrand && !(first_label isa Kmers.DNAKmer || first_label isa Kmers.RNAKmer)
+            error("Mode $mode is only supported for DNA/RNA k-mers")
+        end
+    end
+
+    # Convert to doublestrand or canonical if requested
     if mode == :doublestrand
         graph = convert_to_doublestrand(graph)
+    elseif mode == :canonical
+        graph = convert_to_canonical(graph)
     end
 
     return graph

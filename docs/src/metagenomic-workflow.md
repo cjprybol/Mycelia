@@ -163,3 +163,4 @@ The Mycelia workflow integrates with the Rhizomorph graph-based assembly system 
 ## Tool Status
 
 See the [Tool Wrapper Status](../planning-docs/TOOL_WRAPPER_STATUS.md) document for current implementation status of each tool wrapper.
+See the [Tool Wrapper Status](https://github.com/cjprybol/Mycelia/blob/main/planning-docs/TOOL_WRAPPER_STATUS.md) document for current implementation status of each tool wrapper.

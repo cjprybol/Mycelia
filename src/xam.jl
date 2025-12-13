@@ -609,6 +609,231 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Build the CLI arguments for running CoverM in contig mode.
+
+# Internal
+Returns a `Vector{String}` suitable for interpolation into a `coverm` command.
+"""
+function _build_coverm_contig_args(; bam_files::Vector{String},
+                                   reference_fasta::Union{Nothing,String},
+                                   methods::Vector{String},
+                                   threads::Int,
+                                   min_read_percent_identity::Union{Nothing,Float64},
+                                   min_covered_fraction::Union{Nothing,Float64},
+                                   out_path::String,
+                                   additional_args::Vector{String})
+    args = String[]
+    push!(args, "contig")
+    push!(args, "--bam-files")
+    append!(args, bam_files)
+
+    if reference_fasta !== nothing
+        push!(args, "--reference", reference_fasta)
+    end
+
+    push!(args, "--methods")
+    append!(args, methods)
+
+    push!(args, "--threads", string(threads))
+
+    if min_read_percent_identity !== nothing
+        push!(args, "--min-read-percent-identity", string(min_read_percent_identity))
+    end
+    if min_covered_fraction !== nothing
+        push!(args, "--min-covered-fraction", string(min_covered_fraction))
+    end
+
+    push!(args, "--output-file", out_path)
+    append!(args, additional_args)
+    return args
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run CoverM in *contig* mode to compute per-contig coverage statistics.
+
+# Arguments
+- `bam_files::Vector{String}`: Paths to BAM files containing read alignments.
+- `reference_fasta::Union{Nothing,String}=nothing`: Optional contig FASTA for reference lengths.
+- `outdir::Union{Nothing,String}=nothing`: Output directory (defaults to `coverm_contig` next to the first BAM).
+- `methods::Vector{String}=["mean", "covered_fraction"]`: Coverage statistics to compute.
+- `threads::Int=Sys.CPU_THREADS`: Number of threads for CoverM.
+- `min_covered_fraction::Union{Nothing,Float64}=nothing`: Optional `--min-covered-fraction` filter.
+- `min_read_percent_identity::Union{Nothing,Float64}=nothing`: Optional `--min-read-percent-identity` filter.
+- `output_tsv::Union{Nothing,String}=nothing`: Optional explicit output path.
+- `additional_args::Vector{String}=String[]`: Extra CLI arguments passed directly to CoverM.
+- `quiet::Bool=true`: Suppress CoverM stdout/stderr.
+
+# Returns
+`DataFrames.DataFrame` parsed from the CoverM contig output.
+"""
+function run_coverm_contig(; bam_files::Vector{String},
+                           reference_fasta::Union{Nothing,String}=nothing,
+                           outdir::Union{Nothing,String}=nothing,
+                           methods::Vector{String}=["mean", "covered_fraction"],
+                           threads::Int=Sys.CPU_THREADS,
+                           min_covered_fraction::Union{Nothing,Float64}=nothing,
+                           min_read_percent_identity::Union{Nothing,Float64}=nothing,
+                           output_tsv::Union{Nothing,String}=nothing,
+                           additional_args::Vector{String}=String[],
+                           quiet::Bool=true)
+    @assert !isempty(bam_files) "bam_files must be non-empty"
+    for bam in bam_files
+        @assert isfile(bam) "BAM file does not exist: $(bam)"
+        @assert filesize(bam) > 0 "BAM file is empty: $(bam)"
+    end
+    if reference_fasta !== nothing
+        @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
+        @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
+    end
+    @assert threads > 0 "Thread count must be positive: $(threads)"
+    @assert !isempty(methods) "At least one CoverM method must be specified"
+    @assert all(!isempty, methods) "CoverM methods cannot contain empty strings"
+
+    resolved_outdir = isnothing(outdir) ? joinpath(dirname(first(bam_files)), "coverm_contig") : outdir
+    out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_contig.tsv") : output_tsv
+    mkpath(dirname(out_path))
+
+    should_run = !isfile(out_path) || filesize(out_path) == 0
+    if should_run
+        Mycelia.add_bioconda_env("coverm")
+        args = _build_coverm_contig_args(; bam_files, reference_fasta, methods, threads,
+                                         min_read_percent_identity, min_covered_fraction,
+                                         out_path, additional_args)
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n coverm coverm $args`
+        if quiet
+            run(pipeline(cmd, stdout=devnull, stderr=devnull))
+        else
+            run(cmd)
+        end
+        @assert isfile(out_path) "CoverM contig output file was not created: $(out_path)"
+        @assert filesize(out_path) > 0 "CoverM contig output file is empty: $(out_path)"
+    end
+
+    return CSV.read(out_path, DataFrames.DataFrame; delim='\t', normalizenames=true)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build the CLI arguments for running CoverM in genome mode.
+
+# Internal
+Returns a `Vector{String}` suitable for interpolation into a `coverm` command.
+"""
+function _build_coverm_genome_args(; bam_files::Vector{String},
+                                   genome_fasta_files::Union{Nothing,Vector{String}},
+                                   genome_directory::Union{Nothing,String},
+                                   genome_extension::String,
+                                   methods::Vector{String},
+                                   threads::Int,
+                                   out_path::String,
+                                   additional_args::Vector{String})
+    args = String[]
+    push!(args, "genome")
+    push!(args, "--bam-files")
+    append!(args, bam_files)
+
+    if genome_fasta_files !== nothing
+        push!(args, "--genome-fasta-files")
+        append!(args, genome_fasta_files)
+    elseif genome_directory !== nothing
+        push!(args, "--genome-fasta-directory", genome_directory)
+        push!(args, "--genome-fasta-extension", genome_extension)
+    end
+
+    push!(args, "--methods")
+    append!(args, methods)
+
+    push!(args, "--threads", string(threads))
+    push!(args, "--output-file", out_path)
+    append!(args, additional_args)
+    return args
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run CoverM in *genome* mode to compute per-genome/bin coverage and abundance.
+
+# Arguments
+- `bam_files::Vector{String}`: Paths to BAM files containing read alignments.
+- `genome_fasta_files::Union{Nothing,Vector{String}}=nothing`: Explicit list of genome/bin FASTA files.
+- `genome_directory::Union{Nothing,String}=nothing`: Directory containing genome FASTAs (mutually exclusive with `genome_fasta_files`).
+- `genome_extension::String="fa"`: Extension to match within `genome_directory`.
+- `outdir::Union{Nothing,String}=nothing`: Output directory (defaults to `coverm_genome` next to the first BAM).
+- `methods::Vector{String}=["relative_abundance", "mean_coverage"]`: Coverage/abundance metrics to compute.
+- `threads::Int=Sys.CPU_THREADS`: Number of threads for CoverM.
+- `output_tsv::Union{Nothing,String}=nothing`: Optional explicit output path.
+- `additional_args::Vector{String}=String[]`: Extra CLI arguments passed directly to CoverM.
+- `quiet::Bool=true`: Suppress CoverM stdout/stderr.
+
+# Returns
+`DataFrames.DataFrame` parsed from the CoverM genome output.
+"""
+function run_coverm_genome(; bam_files::Vector{String},
+                           genome_fasta_files::Union{Nothing,Vector{String}}=nothing,
+                           genome_directory::Union{Nothing,String}=nothing,
+                           genome_extension::String="fa",
+                           outdir::Union{Nothing,String}=nothing,
+                           methods::Vector{String}=["relative_abundance", "mean_coverage"],
+                           threads::Int=Sys.CPU_THREADS,
+                           output_tsv::Union{Nothing,String}=nothing,
+                           additional_args::Vector{String}=String[],
+                           quiet::Bool=true)
+    @assert !isempty(bam_files) "bam_files must be non-empty"
+    for bam in bam_files
+        @assert isfile(bam) "BAM file does not exist: $(bam)"
+        @assert filesize(bam) > 0 "BAM file is empty: $(bam)"
+    end
+
+    if genome_fasta_files === nothing && genome_directory === nothing
+        error("Specify either genome_fasta_files or genome_directory")
+    end
+    if genome_fasta_files !== nothing && genome_directory !== nothing
+        error("Specify genome_fasta_files OR genome_directory, not both")
+    end
+    if genome_fasta_files !== nothing
+        @assert !isempty(genome_fasta_files) "genome_fasta_files must be non-empty if provided"
+        for genome in genome_fasta_files
+            @assert isfile(genome) "Genome FASTA file does not exist: $(genome)"
+            @assert filesize(genome) > 0 "Genome FASTA file is empty: $(genome)"
+        end
+    else
+        @assert isdir(genome_directory) "Genome directory does not exist: $(genome_directory)"
+    end
+
+    @assert threads > 0 "Thread count must be positive: $(threads)"
+    @assert !isempty(methods) "At least one CoverM method must be specified"
+    @assert all(!isempty, methods) "CoverM methods cannot contain empty strings"
+    @assert !isempty(genome_extension) "genome_extension must be non-empty"
+
+    resolved_outdir = isnothing(outdir) ? joinpath(dirname(first(bam_files)), "coverm_genome") : outdir
+    out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_genome.tsv") : output_tsv
+    mkpath(dirname(out_path))
+
+    should_run = !isfile(out_path) || filesize(out_path) == 0
+    if should_run
+        Mycelia.add_bioconda_env("coverm")
+        args = _build_coverm_genome_args(; bam_files, genome_fasta_files, genome_directory,
+                                         genome_extension, methods, threads, out_path, additional_args)
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n coverm coverm $args`
+        if quiet
+            run(pipeline(cmd, stdout=devnull, stderr=devnull))
+        else
+            run(cmd)
+        end
+        @assert isfile(out_path) "CoverM genome output file was not created: $(out_path)"
+        @assert filesize(out_path) > 0 "CoverM genome output file is empty: $(out_path)"
+    end
+
+    return CSV.read(out_path, DataFrames.DataFrame; delim='\t', normalizenames=true)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Convert a BAM file to FASTQ format with gzip compression.
 
 # Arguments
@@ -626,11 +851,9 @@ Convert a BAM file to FASTQ format with gzip compression.
 
 """
 function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
-    Mycelia.add_bioconda_env("samtools")
-    bam_to_fastq_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`
-    gzip_cmd = `gzip`
-    p = pipeline(bam_to_fastq_cmd, gzip_cmd)
     if !isfile(fastq)
+        Mycelia.add_bioconda_env("samtools")
+        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`, `gzip`)
         @time run(pipeline(p, fastq))
     else
         @info "$(fastq) already exists"
@@ -850,7 +1073,7 @@ Keyword Arguments:
 - threads: Number of threads to use for sorting (default: all available CPUs)
 - output_path: Path for the sorted BAM file (default: input with .sorted.bam suffix)
 """
-function sort_bam(input_bam::String; threads::Int=Sys.CPU_THREADS, output_path::Union{String,Nothing}=nothing)
+function sort_bam(input_bam::String; threads::Int=get_default_threads(), output_path::Union{String,Nothing}=nothing)
     sorted_bam = Base.isnothing(output_path) ? Base.replace(input_bam, ".bam" => ".sorted.bam") : output_path
     if !isfile(sorted_bam)
         Mycelia.add_bioconda_env("samtools")
@@ -876,7 +1099,7 @@ Keyword Arguments:
 - threads: Number of threads to use for sorting (default: all available CPUs)
 - skip_sort_check: Skip pre-check for sort order and attempt indexing directly (default: false)
 """
-function index_bam(bam_path::String; threads::Int=Sys.CPU_THREADS, skip_sort_check::Bool=false)
+function index_bam(bam_path::String; threads::Int=get_default_threads(), skip_sort_check::Bool=false)
 
     bai_path = bam_path * ".bai"
     # Check if index already exists

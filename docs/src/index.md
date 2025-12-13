@@ -37,14 +37,22 @@ New to Mycelia? Start with our [Getting Started Guide](getting-started.md) to in
 Pages = [
     "getting-started.md",
     "concepts.md",
-    "tutorials.md", 
+    "workflow-map.md",
+    "tutorials.md",
     "api.md",
+    "api/function-coverage.md",
     "visualization-gallery.md",
     "faq.md",
     "contributing.md"
 ]
 Depth = 2
 ```
+
+## Navigating the Docs
+
+- **Workflow & Tool Map**: See [`workflow-map.md`](workflow-map.md) for the end-to-end data-flow map with links to tutorials and third-party tool wrappers.
+- **Function Coverage Audit**: Review [`api/function-coverage.md`](api/function-coverage.md) to confirm every implemented function has an associated doc entry or tutorial reference.
+- **Tutorials**: Start with [`tutorials.md`](tutorials.md) for guided walkthroughs of each workflow stage.
 
 ## Installation
 

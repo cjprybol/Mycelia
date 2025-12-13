@@ -34,6 +34,7 @@ TUTORIALS = [
     "06_gene_annotation.jl",
     "07_comparative_genomics.jl",
     "08_tool_integration.jl",
+    "12_coverm_coverage.jl",
 ]
 
 """

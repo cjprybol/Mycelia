@@ -1502,6 +1502,147 @@ function calculate_v(s,p)
     return v
 end
 
+struct BandageCompatibilityError <: Exception
+    msg::String
+end
+
+Base.showerror(io::IO, e::BandageCompatibilityError) = print(io, e.msg)
+
+function _bandage_probe(bin::AbstractString)
+    output = IOBuffer()
+    cmd = pipeline(ignorestatus(`$(bin) --version`); stdout=output, stderr=output)
+    if Sys.islinux()
+        return mktempdir() do dir
+            Base.withenv(
+                "QT_QPA_PLATFORM" => "offscreen",
+                "XDG_RUNTIME_DIR" => dir
+            ) do
+                proc = run(cmd; wait=false)
+                wait(proc)
+                return success(proc), String(take!(output))
+            end
+        end
+    end
+
+    proc = run(cmd; wait=false)
+    wait(proc)
+    return success(proc), String(take!(output))
+end
+
+function _ensure_bandage_runs(bin::AbstractString)
+    ok, output = try
+        _bandage_probe(bin)
+    catch err
+        throw(BandageCompatibilityError("Failed to invoke Bandage binary at $(bin): $(err)"))
+    end
+    ok && return
+
+    cleaned = strip(output)
+    if any(token -> occursin(token, cleaned), ("GLIBC_", "GLIBCXX_", "CXXABI_"))
+        throw(BandageCompatibilityError("Bandage binary at $(bin) cannot run on this system (glibc/libstdc++ mismatch).\nOutput:\n$(cleaned)\nProvide a compatible binary via MYCELIA_BANDAGE_CMD or MYCELIA_BANDAGE_URL, or use a system install/module."))
+    end
+
+    throw(BandageCompatibilityError("Bandage binary at $(bin) failed to run (--version).\nOutput:\n$(cleaned)"))
+end
+
+function _glibc_version_tuple()
+    Sys.islinux() || return nothing
+    ldd = Sys.which("ldd")
+    ldd === nothing && return nothing
+
+    output = IOBuffer()
+    proc = run(pipeline(ignorestatus(`$(ldd) --version`); stdout=output, stderr=output); wait=false)
+    wait(proc)
+
+    text = String(take!(output))
+    lines = split(text, '\n'; keepempty=false)
+    isempty(lines) && return nothing
+
+    m = match(r"ldd \(GNU libc\) (\d+)\.(\d+)", strip(lines[1]))
+    # m = match(r"ldd \\(GNU libc\\) (\\d+)\\.(\\d+)", strip(lines[1]))
+    m === nothing && return nothing
+
+    return (parse(Int, m.captures[1]), parse(Int, m.captures[2]))
+end
+
+function _default_bandage_urls()
+    if Sys.islinux()
+        bandage_ng = "https://github.com/asl/BandageNG/releases/download/v2025.12.1/BandageNG-Linux-e80ad3a.AppImage"
+        bandage_legacy = "https://github.com/rrwick/Bandage/releases/download/v0.9.0/Bandage_Ubuntu-x86-64_v0.9.0_AppImage.zip"
+
+        glibc = _glibc_version_tuple()
+        if glibc !== nothing && glibc < (2, 29)
+            return (bandage_legacy,)
+        end
+
+        return (bandage_ng, bandage_legacy)
+    end
+
+    if Sys.isapple()
+        return ("https://github.com/asl/BandageNG/releases/download/v2025.12.1/BandageNG-macOS-e80ad3a.dmg",)
+    end
+
+    error("Bandage download is only automated for Linux and macOS.")
+end
+
+function _install_bandage_from_url(url::AbstractString, bandage_executable::AbstractString)
+    mktempdir() do tmp
+        archive_path = joinpath(tmp, basename(url))
+        Downloads.download(url, archive_path)
+
+        lower_url = lowercase(url)
+        if endswith(lower_url, ".appimage")
+            cp(archive_path, bandage_executable; force=true)
+            chmod(bandage_executable, 0o755)
+            return
+        end
+
+        if endswith(lower_url, ".dmg")
+            Sys.isapple() || error("DMG installs are only supported on macOS")
+            mountpoint = joinpath(tmp, "mnt")
+            mkpath(mountpoint)
+            run(`hdiutil attach -nobrowse -mountpoint $(mountpoint) $(archive_path)`)
+            candidate = joinpath(mountpoint, "BandageNG.app", "Contents", "MacOS", "BandageNG")
+            isfile(candidate) || error("BandageNG executable not found in DMG")
+            cp(candidate, bandage_executable; force=true)
+            chmod(bandage_executable, 0o755)
+            run(`hdiutil detach $(mountpoint)`)
+            return
+        end
+
+        run(`unzip $(archive_path) -d $(tmp)`)
+
+        best_candidate = nothing
+        best_score = 0
+        for (root, _, files) in walkdir(tmp)
+            for file in files
+                path = joinpath(root, file)
+                isfile(path) || continue
+                name = basename(path)
+                lower = lowercase(name)
+                score = if name == "BandageNG"
+                    2
+                elseif name == "Bandage"
+                    1
+                elseif endswith(lower, ".appimage") && occursin("bandage", lower)
+                    3
+                else
+                    0
+                end
+                if score > best_score
+                    best_score = score
+                    best_candidate = path
+                end
+            end
+        end
+
+        best_candidate === nothing && error("Bandage archive did not contain an executable")
+        cp(best_candidate, bandage_executable; force=true)
+        chmod(bandage_executable, 0o755)
+        return
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1516,9 +1657,10 @@ Downloads and installs Bandage, a bioinformatics visualization tool for genome a
 # Details
 - Prefers an existing `BandageNG` or `Bandage` on PATH
 - Accepts overrides via `ENV["MYCELIA_BANDAGE_CMD"]` (absolute path) or `ENV["MYCELIA_BANDAGE_URL"]` (archive URL)
-- Defaults to BandageNG: Linux AppImage or macOS DMG
+- Defaults to BandageNG (and falls back to legacy Bandage on Linux if needed)
 - Installs into a user-writable directory without requiring sudo or apt packages
 - Skips download if Bandage is already installed at target location
+- Validates the selected binary with `--version` and throws `BandageCompatibilityError` if it cannot run
 
 # Dependencies
 Requires system commands: unzip (for zip archives), hdiutil on macOS (for DMG)
@@ -1526,6 +1668,7 @@ Requires system commands: unzip (for zip archives), hdiutil on macOS (for DMG)
 function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
     cmd_override = get(ENV, "MYCELIA_BANDAGE_CMD", nothing)
     if cmd_override !== nothing
+        _ensure_bandage_runs(cmd_override)
         return cmd_override
     end
 
@@ -1590,6 +1733,44 @@ function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
     end
 
     return bandage_executable
+        _ensure_bandage_runs(existing)
+        return existing
+    end
+
+    mkpath(outdir)
+    bandage_executable = joinpath(outdir, "Bandage")
+    if isfile(bandage_executable)
+        try
+            _ensure_bandage_runs(bandage_executable)
+            return bandage_executable
+        catch e
+            (e isa BandageCompatibilityError) || rethrow()
+            get(ENV, "MYCELIA_BANDAGE_URL", nothing) === nothing || rethrow()
+        end
+    end
+
+    urls = if (url_override = get(ENV, "MYCELIA_BANDAGE_URL", nothing)) === nothing
+        _default_bandage_urls()
+    else
+        (url_override,)
+    end
+
+    last_error = nothing
+    for url in urls
+        try
+            _install_bandage_from_url(url, bandage_executable)
+            _ensure_bandage_runs(bandage_executable)
+            return bandage_executable
+        catch e
+            last_error = e
+            if get(ENV, "MYCELIA_BANDAGE_URL", nothing) !== nothing
+                rethrow()
+            end
+        end
+    end
+
+    last_error === nothing && error("Bandage download failed.")
+    throw(last_error)
 end
 
 """
@@ -2075,26 +2256,185 @@ end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
+
+Get the default number of threads to use for parallel operations.
+
+Checks environment hints in the following order:
+1. `JULIA_NUM_THREADS` (explicit user intent)
+2. SLURM allocation (`SLURM_JOB_CPUS_PER_NODE` preferred, or `SLURM_CPUS_PER_TASK * SLURM_TASKS_PER_NODE`)
+3. PBS allocation (`PBS_NCPUS`)
+4. Falls back to half of detected system cores (capped at 16)
+5. Uses `DEFAULT_THREADS` (4) if hardware cannot be detected
+
+# Returns
+- `Int`: Number of threads to use
+
+# Example
+```julia
+threads = get_default_threads()  # Returns allocated threads or 4
+```
 """
-function system_overview(;path=pwd())
-    total_memory = Base.format_bytes(Sys.total_memory())
-    available_memory = Base.format_bytes(Sys.free_memory())
-    occupied_memory = Base.format_bytes(Sys.total_memory() - Sys.free_memory())
+function get_default_threads()::Int
+    parse_env_int(var) = begin
+        val = get(ENV, var, nothing)
+        if val === nothing
+            return nothing
+        end
+        str = String(val)
+        # SLURM values can include decorations like "24(x2)"; grab the leading integer.
+        m = match(r"^\s*(\d+)", str)
+        parsed = m === nothing ? tryparse(Int, str) : tryparse(Int, m.captures[1])
+        parsed !== nothing && parsed > 0 ? parsed : nothing
+    end
+
+    cpu_threads = Sys.CPU_THREADS > 0 ? Sys.CPU_THREADS : nothing
+
+    # Respect explicit Julia threading request.
+    julia_hint = parse_env_int("JULIA_NUM_THREADS")
+    if julia_hint !== nothing
+        return cpu_threads === nothing ? max(1, julia_hint) : clamp(julia_hint, 1, cpu_threads)
+    end
+
+    # SLURM hints: prefer job-level declaration, otherwise derive from per-task × tasks-per-node.
+    slurm_job = parse_env_int("SLURM_JOB_CPUS_PER_NODE")
+    slurm_cpt = parse_env_int("SLURM_CPUS_PER_TASK")
+    slurm_tpn = parse_env_int("SLURM_TASKS_PER_NODE")
+    slurm_derived = slurm_cpt !== nothing && slurm_tpn !== nothing ? slurm_cpt * slurm_tpn : nothing
+    slurm_on_node = parse_env_int("SLURM_CPUS_ON_NODE")
+    slurm_hint =
+        slurm_job !== nothing ? slurm_job :
+        slurm_derived !== nothing ? slurm_derived :
+        slurm_on_node
+
+    if slurm_hint !== nothing
+        return cpu_threads === nothing ? slurm_hint : min(slurm_hint, cpu_threads)
+    end
+
+    # PBS/Torque hint as a fallback for other schedulers.
+    pbs_hint = parse_env_int("PBS_NCPUS")
+    if pbs_hint !== nothing
+        return cpu_threads === nothing ? pbs_hint : min(pbs_hint, cpu_threads)
+    end
+
+    # No scheduler hints: default to half of hardware threads (rounded up), capped at 16.
+    if cpu_threads !== nothing
+        return min(cld(cpu_threads, 2), 16)
+    end
+    return DEFAULT_THREADS
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+"""
+struct SystemOverview
+    system_threads::Int
+    julia_threads::Int
+    default_threads::Int
+    total_memory::Int
+    available_memory::Int
+    occupied_memory::Int
+    memory_occupied_percent::Float64
+    memory_running_low::Bool
+    total_storage::Int
+    available_storage::Int
+    occupied_storage::Int
+    storage_occupied_percent::Float64
+    storage_running_low::Bool
+    path::String
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Collect system resource information (raw values) with human-readable display.
+
+Notes:
+- `julia_threads` reflects the threads the current session actually started with (`Threads.nthreads()`).
+- `default_threads` reflects the configured default based on environment hints (`get_default_threads`; e.g., `SLURM_CPUS_PER_TASK`, `PBS_NCPUS`, `OMP_NUM_THREADS`, `JULIA_NUM_THREADS`, or the conservative fallback) and may differ if the session was launched with different settings.
+"""
+function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_threshold=0.90)
+    if !(0.0 <= memory_low_threshold <= 1.0)
+        error("memory_low_threshold must be between 0.0 and 1.0 (got $memory_low_threshold)")
+    end
+    if !(0.0 <= storage_low_threshold <= 1.0)
+        error("storage_low_threshold must be between 0.0 and 1.0 (got $storage_low_threshold)")
+    end
+
+    total_memory = Sys.total_memory()
+    available_memory = Sys.free_memory()
+    occupied_memory = total_memory - available_memory
+    memory_occupied_percent = total_memory == 0 ? 0.0 : occupied_memory / total_memory
+
+    disk_stats = Base.diskstat(path)
+    total_storage = disk_stats.total
+    available_storage = disk_stats.available
+    occupied_storage = disk_stats.used
+    storage_occupied_percent = total_storage == 0 ? 0.0 : occupied_storage / total_storage
+
     system_threads = Sys.CPU_THREADS
     julia_threads = Threads.nthreads()
-    available_storage = Base.format_bytes(Base.diskstat(path).available)
-    total_storage = Base.format_bytes(Base.diskstat(path).total)
-    occupied_storage = Base.format_bytes(Base.diskstat(path).used)
-    return (;
-            system_threads,
-            julia_threads,
-            total_memory,
-            available_memory,
-            occupied_memory,
-            total_storage,
-            available_storage,
-            occupied_storage)
+    default_threads = get_default_threads()
+
+    if julia_threads > system_threads
+        @error "The Julia kernel has $julia_threads allocated but only $system_threads are available on the system"
+    elseif julia_threads < system_threads
+        @warn "The Julia kernel only has $julia_threads allocated but $system_threads are available on the system"
+    else
+        @info "The Julia kernel is using all available threads (n=$system_threads) on the system"
+    end
+
+    if julia_threads != default_threads
+        @info "Julia threads ($julia_threads) differ from configured default ($default_threads)"
+    end
+
+    memory_running_low = memory_occupied_percent >= memory_low_threshold
+    storage_running_low = storage_occupied_percent >= storage_low_threshold
+
+    if memory_running_low
+        @warn "Memory usage high: $(bytes_human_readable(occupied_memory)) / $(bytes_human_readable(total_memory)) ($(round(memory_occupied_percent * 100; digits=1))% used)"
+    else
+        @info "Memory usage: $(bytes_human_readable(occupied_memory)) / $(bytes_human_readable(total_memory)) ($(round(memory_occupied_percent * 100; digits=1))% used)"
+    end
+
+    if storage_running_low
+        @warn "Storage usage high: $(bytes_human_readable(occupied_storage)) / $(bytes_human_readable(total_storage)) ($(round(storage_occupied_percent * 100; digits=1))% used)"
+    else
+        @info "Storage usage: $(bytes_human_readable(occupied_storage)) / $(bytes_human_readable(total_storage)) ($(round(storage_occupied_percent * 100; digits=1))% used)"
+    end
+
+    return SystemOverview(
+        system_threads,
+        julia_threads,
+        default_threads,
+        total_memory,
+        available_memory,
+        occupied_memory,
+        memory_occupied_percent,
+        memory_running_low,
+        total_storage,
+        available_storage,
+        occupied_storage,
+        storage_occupied_percent,
+        storage_running_low,
+        String(path),
+    )
 end
+
+function Base.show(io::IO, ::MIME"text/plain", overview::SystemOverview)
+    memory_pct = round(overview.memory_occupied_percent * 100; digits=1)
+    storage_pct = round(overview.storage_occupied_percent * 100; digits=1)
+
+    memory_flag = overview.memory_running_low ? " (LOW)" : ""
+    storage_flag = overview.storage_running_low ? " (LOW)" : ""
+
+    println(io, "SystemOverview:")
+    println(io, "  Threads: julia=$(overview.julia_threads), system=$(overview.system_threads), default=$(overview.default_threads)")
+    println(io, "  Memory: total=$(bytes_human_readable(overview.total_memory)), available=$(bytes_human_readable(overview.available_memory)), occupied=$(bytes_human_readable(overview.occupied_memory)) ($memory_pct% used)$memory_flag")
+    println(io, "  Storage: total=$(bytes_human_readable(overview.total_storage)), available=$(bytes_human_readable(overview.available_storage)), occupied=$(bytes_human_readable(overview.occupied_storage)) ($storage_pct% used)$storage_flag")
+    println(io, "  Path: $(overview.path)")
+end
+
+Base.show(io::IO, overview::SystemOverview) = Base.show(io, MIME"text/plain"(), overview)
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

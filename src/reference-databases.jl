@@ -10,70 +10,120 @@ const NCBI_SUPERKINGDOMS = Dict(
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Convert a BLAST database to FASTA format.
+Convert a BLAST database (or a subset of it) to FASTA format, compressed with gzip.
+
+If `outfile` already exists, is non-empty, and `force == false`, this function is a
+no-op and simply returns the existing output path.
 
 # Arguments
-- `blastdb::String`: Name of the BLAST database to convert (e.g. "nr", "nt")
-- `dbdir::String`: Directory containing the BLAST database files
-- `outfile::String`: Path for the output FASTA file
+- `blastdb::AbstractString`: Name of the BLAST database to convert (e.g. "nr", "nt").
+- `entries::AbstractVector{<:AbstractString}`: Optional list of specific sequence IDs
+  to extract. Mutually exclusive with `taxids`.
+- `taxids::AbstractVector{<:Integer}`: Optional list of taxonomic IDs to extract.
+  Mutually exclusive with `entries`.
+- `outfile::AbstractString`: Path for the output FASTA (gzip) file. If empty, a
+  filename of the form `<blastdb>.<YYYY-MM-DD>.<ext>.gz` is inferred from the
+  BLAST DB metadata, where `<YYYY-MM-DD>` is the date when the database was last
+  updated and `<ext>` is `.fna` for nucleotide DBs and `.faa` for protein DBs.
+- `force::Bool`: If `true`, regenerate the FASTA even if `outfile` already exists
+  and is non-empty. If `false`, the function is a no-op in that case.
+- `max_cores::Integer`: Maximum number of threads to use for `pigz` compression.
 
 # Returns
-- Path to the generated FASTA file as String
+- `outfile::String`: Path to the generated (or existing) FASTA file.
 """
-function blastdb_to_fasta(;blastdb, entries = String[], taxids = Int[], outfile="", force=true, max_cores = 16)
-    Mycelia.add_bioconda_env("blast")
-    Mycelia.add_bioconda_env("pigz")
+function blastdb_to_fasta(; blastdb::AbstractString,
+                            entries::AbstractVector{<:AbstractString} = String[],
+                            taxids::AbstractVector{<:Integer} = Int[],
+                            outfile::AbstractString = "",
+                            force::Bool = true,
+                            max_cores::Integer = 16)
+
+    # Validate mutually exclusive options
     if !isempty(entries) && !isempty(taxids)
         error("Can only specify entries OR taxids, not both")
     end
+
+    # Infer output filename if not provided
     if isempty(outfile)
-        blastdb_metadata = get_blastdb_metadata(blastdb=blastdb)
-        if blastdb_metadata["dbtype"] == "Nucleotide"
+        blastdb_metadata = get_blastdb_metadata(blastdb = blastdb)
+
+        dbtype = blastdb_metadata["dbtype"]
+        if dbtype == "Nucleotide"
             extension = ".fna.gz"
-        elseif blastdb_metadata["dbtype"] == "Protein"
+        elseif dbtype == "Protein"
             extension = ".faa.gz"
+        else
+            error("Unsupported BLAST dbtype: $dbtype")
         end
-        last_update_date = string(Dates.format(Dates.DateTime(blastdb_metadata["last-updated"]), "yyyy-mm-dd"))
+
+        last_updated_raw = blastdb_metadata["last-updated"]
+        last_updated_dt = Dates.DateTime(last_updated_raw)  # adjust if different format is needed
+        last_update_date = Dates.format(last_updated_dt, "yyyy-mm-dd")
+
         outfile = "$(blastdb).$(last_update_date)" * extension
     end
+
+    # No-op if output already exists and we are not forcing regeneration
     if isfile(outfile) && (filesize(outfile) > 0) && !force
-        return outfile
+        return String(outfile)
     end
+
     temp_file = ""
+    blast_cmd = nothing
+
+    # Build blastdbcmd command, optionally writing temp files for entries/taxids
     if isempty(entries) && isempty(taxids)
-        # NC_002030.1
         blast_cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt %f`
-        # gi|11497497|ref|NC_002030.1|
-        # p = pipeline(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -long_seqids -outfmt %f`, `gzip`)
     elseif !isempty(entries)
-        # write entries out to a temporary file, 1 per line
         temp_file = tempname() * ".entries.txt"
-        open(temp_file, "w") do file
+        open(temp_file, "w") do io
             for entry in entries
-                println(file, entry)
+                println(io, entry)
             end
         end
-        # create the command using the temporary file
         blast_cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry_batch $(temp_file) -outfmt %f`
-    elseif !isempty(taxids)
-        # write taxids out to a temporary file, 1 per line
+    else
+        # !isempty(taxids)
         temp_file = tempname() * ".taxids.txt"
-        open(temp_file, "w") do file
+        open(temp_file, "w") do io
             for taxid in taxids
-                println(file, taxid)
+                println(io, taxid)
             end
         end
-        # create the command with the temporary file
         blast_cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -taxidlist $(temp_file) -outfmt %f`
     end
-    cores = min(max_cores, Threads.nthreads())
-    p = pipeline(blast_cmd, `$(CONDA_RUNNER) run --live-stream -n pigz pigz -c -p $(cores)`)
-    run(pipeline(p, outfile))
-    if !isempty(temp_file)
-        rm(temp_file)
+
+    @assert blast_cmd !== nothing "Internal error: blast_cmd was not defined"
+
+    # Ensure cores is at least 1 and not more than Threads.nthreads()
+    cores = max(1, min(Int(max_cores), Threads.nthreads()))
+
+    # Create output directory if needed
+    outdir = dirname(outfile)
+    if !isempty(outdir) && outdir != "."
+        mkpath(outdir)
     end
-    return outfile
+
+    # Build compression pipeline
+    p = pipeline(blast_cmd, `$(CONDA_RUNNER) run --live-stream -n pigz pigz -c -p $(cores)`)
+
+    # Only set up envs if we're actually going to run the commands
+    Mycelia.add_bioconda_env("blast")
+    Mycelia.add_bioconda_env("pigz")
+
+    try
+        run(pipeline(p, outfile))
+    finally
+        # Robust cleanup of temporary file, even on error
+        if !isempty(temp_file) && isfile(temp_file)
+            rm(temp_file; force = true)
+        end
+    end
+
+    return String(outfile)
 end
+
 
 # not sure how to use this - doesn't seem super helpful?
 # function get_blastdb_dups(;blastdb)
@@ -568,7 +618,8 @@ Convert a BLAST database to an in-memory table with sequence and taxonomy inform
 - `DataFrame`: DataFrame containing the requested columns from the BLAST database
 """
 function blastdb2table(;
-    blastdb::String, 
+    blastdb::String,
+    blastdbs_dir::Union{Nothing, String}=nothing,
     # Master field selection flag
     ALL_FIELDS::Bool=true,
     # Individual field selection flags
@@ -617,22 +668,6 @@ function blastdb2table(;
     end
 
     Mycelia.add_bioconda_env("blast")
-    blast_db_info = Mycelia.local_blast_database_info()
-    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
-    @assert DataFrames.nrow(filtered) == 1
-    blast_db_info = filtered[1, :]
-    @show blast_db_info
-
-    # Determine database type
-    if blast_db_info["BLAST database molecule type"] == "Protein"
-        extension = ".faa"
-    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
-        extension = ".fna"
-    else
-        @show blast_db_info["BLAST database molecule type"]
-        error("unexpected blast database molecule type")
-    end
-
     # Check if sequence needs to be extracted for SHA256 calculation
     needs_sequence = sequence || sequence_sha256
 
@@ -679,6 +714,43 @@ function blastdb2table(;
 
     if sequence
         push!(output_columns, "sequence")
+    end
+
+    # If no columns were requested, return an empty table early.
+    if isempty(output_columns)
+        @info "No BLAST fields requested; returning empty table"
+        return DataFrames.DataFrame()
+    end
+
+    # Decide which directory to scan for BLAST databases. Prefer the provided
+    # directory, otherwise use the directory component of `blastdb` when given,
+    # and finally fall back to the default BLASTDB path.
+    db_dir = if blastdbs_dir !== nothing
+        blastdbs_dir
+    elseif occursin('/', blastdb) || occursin('\\', blastdb)
+        dirname(blastdb)
+    else
+        Mycelia.DEFAULT_BLASTDB_PATH
+    end
+    db_dir = abspath(db_dir)
+    target_db = isabspath(blastdb) ? blastdb : joinpath(db_dir, basename(blastdb))
+
+    blast_db_info = Mycelia.local_blast_database_info(; blastdbs_dir=db_dir)
+    filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== target_db, :]
+    if DataFrames.nrow(filtered) != 1
+        @info "BLAST database not found in local listing; returning empty table" blastdb target_db DataFrames.nrow(filtered)
+        return DataFrames.DataFrame(Dict(Symbol(col) => String[] for col in output_columns))
+    end
+    blast_db_info = filtered[1, :]
+
+    # Determine database type
+    if blast_db_info["BLAST database molecule type"] == "Protein"
+        extension = ".faa"
+    elseif blast_db_info["BLAST database molecule type"] == "Nucleotide"
+        extension = ".fna"
+    else
+        @show blast_db_info["BLAST database molecule type"]
+        error("unexpected blast database molecule type")
     end
 
     # Use dynamic storage for all columns
@@ -906,7 +978,7 @@ function fasterq_dump(;outdir=pwd(), srr_identifier="")
                 --outdir $(final_outdir)
                 --mem 1G
                 --split-3
-                --threads $(min(Sys.CPU_THREADS, 4))
+                --threads $(min(get_default_threads(), 4))
                 --skip-technical
                 $(final_outdir)`
         @time run(fasterq_dump_cmd)
@@ -1313,7 +1385,13 @@ function local_blast_database_info(;blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH)
     outfmt_string = join(collect(keys(symbol_header_map)), "\t")
     data, header = uCSV.read(open(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`), delim='\t')
     header = collect(values(symbol_header_map))
-    df = DataFrames.DataFrame(data, header)
+    if isempty(data)
+        # Return empty DataFrame with expected columns to avoid DimensionMismatch when no DBs are present
+        empty_cols = Dict(Symbol(h) => String[] for h in header)
+        df = DataFrames.DataFrame(empty_cols)
+    else
+        df = DataFrames.DataFrame(data, header)
+    end
     # remove numbered database fragments from summary results
     df = df[map(x -> !occursin(r"\.\d+$", x), df[!, "BLAST database path"]), :]
     df[!, "human readable size"] = Base.format_bytes.(df[!, "number of bytes"])

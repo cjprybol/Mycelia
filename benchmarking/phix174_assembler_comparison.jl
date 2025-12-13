@@ -18,6 +18,7 @@ import Plots
 
 # Optional: skip BUSCO for constrained environments (CI). Default: run BUSCO.
 skip_busco = "--skip-busco" in ARGS || lowercase(get(ENV, "MYCELIA_SKIP_BUSCO", "false")) in ["1", "true", "yes"]
+is_ci = haskey(ENV, "CI") || haskey(ENV, "GITHUB_ACTIONS") || haskey(ENV, "TRAVIS") || haskey(ENV, "CIRCLECI")
 
 println("=== PhiX174 Assembler Comparison ===")
 println("Start time: $(Dates.now())")
@@ -29,6 +30,19 @@ println("PhiX174 benchmark directory: $phix_dir")
 # Create results directory
 results_dir = "results"
 mkpath(results_dir)
+    println("PhiX174 benchmark directory: $phix_dir")
+
+    # Create results directory
+    results_dir = "results"
+    mkpath(results_dir)
+
+    # Simple resource capture helpers
+    function _time_and_mem(f)
+        t0 = time()
+        # Memory is not portable across platforms without extra deps; keep placeholder
+        result = f()
+        return (result=result, runtime=time() - t0)
+    end
 
 try
     # Download PhiX174 reference using Mycelia function
@@ -46,14 +60,17 @@ try
     ref_length = length(ref_seq)
     println("  Reference length: $ref_length bp")
 
-    # Generate simulated reads
+    # Generate simulated reads (lighter in CI to reduce memory/time)
     println("\nGenerating simulated reads...")
 
-    # Short reads: 100x coverage, 150bp PE
-    println("  Illumina reads (100x coverage)...")
+    short_cov = is_ci ? 30 : 100
+    long_cov = is_ci ? "20x" : "50x"
+
+    # Short reads: coverage scaled for CI
+    println("  Illumina reads ($(short_cov)x coverage)...")
     Mycelia.simulate_illumina_reads(
         fasta=phix_ref,
-        coverage=100,
+        coverage=short_cov,
         outbase=joinpath(phix_dir, "phix174_illumina"),
         read_length=150,
         mflen=300,
@@ -66,11 +83,11 @@ try
     short_fastq2 = joinpath(phix_dir, "phix174_illumina2.fq")
     println("    Generated Illumina reads: $short_fastq1, $short_fastq2")
 
-    # Long reads: 50x coverage, PacBio HiFi
-    println("  PacBio reads (50x coverage)...")
+    # Long reads: coverage scaled for CI, PacBio HiFi
+    println("  PacBio reads ($(long_cov) coverage)...")
     long_fastq = Mycelia.simulate_pacbio_reads(
         fasta=phix_ref,
-        quantity="50x",
+        quantity=long_cov,
         outfile=joinpath(phix_dir, "phix174_pacbio.fastq.gz")
     )
     # Uncompress the file
@@ -107,6 +124,13 @@ try
     long_read_assemblers = filter(a -> current_platform in a.platforms, all_long_read_assemblers)
 
     println("  Platform: $current_platform")
+    # Trim heavy assemblers in CI to reduce resource pressure
+    if is_ci
+        short_read_assemblers = filter(a -> !(a.name in ["metaSPAdes"]), short_read_assemblers)
+        long_read_assemblers = filter(a -> !(a.name in ["metaMDBG"]), long_read_assemblers)
+    end
+
+    println("  Platform: $current_platform (CI=$(is_ci))")
     println("  Testing $(length(short_read_assemblers)) short-read assemblers")
     println("  Testing $(length(long_read_assemblers)) long-read assemblers")
 
@@ -177,21 +201,24 @@ comparison_results = DataFrames.DataFrame(
         try
             is_protein = get(assembler, :is_protein, false)
             # Time the assembly
-            start_time = time()
-            result = if is_protein
-                assembler.func(
-                    reads1=short_fastq1,
-                    reads2=short_fastq2,
-                    outdir=outdir
-                )
-            else
-                assembler.func(
-                    fastq1=short_fastq1,
-                    fastq2=short_fastq2,
-                    outdir=outdir
-                )
+            asm_call = () -> begin
+                if is_protein
+                    return assembler.func(
+                        reads1=short_fastq1,
+                        reads2=short_fastq2,
+                        outdir=outdir
+                    )
+                else
+                    return assembler.func(
+                        fastq1=short_fastq1,
+                        fastq2=short_fastq2,
+                        outdir=outdir
+                    )
+                end
             end
-            runtime = time() - start_time
+            asm_out = _time_and_mem(asm_call)
+            result = asm_out.result
+            runtime = asm_out.runtime
 
             # Calculate metrics (skip for protein-only assemblies)
             contigs_file = get(result, :contigs, nothing)
@@ -209,18 +236,18 @@ comparison_results = DataFrames.DataFrame(
 
             if !is_protein && contigs_file !== nothing
                 try
-                    quast_start = time()
-                    quast_outdir = Mycelia.run_quast(contigs_file; reference=phix_ref, outdir=joinpath(outdir, "quast"))
-                    quast_runtime = time() - quast_start
+                    quast_run = _time_and_mem(() -> Mycelia.run_quast(contigs_file; reference=phix_ref))
+                    quast_outdir = quast_run.result
+                    quast_runtime = quast_run.runtime
                 catch e
                     @warn "QUAST failed for $(assembler.name): $e"
                 end
 
                 if !skip_busco
                     try
-                        busco_start = time()
-                        busco_outdir = Mycelia.run_busco([contigs_file]; outdir=joinpath(outdir, "busco"), lineage="auto", mode="genome")
-                        busco_runtime = time() - busco_start
+                        busco_run = _time_and_mem(() -> Mycelia.run_busco([contigs_file]; mode="genome"))
+                        busco_outdir = busco_run.result
+                        busco_runtime = busco_run.runtime
                     catch e
                         @warn "BUSCO failed for $(assembler.name): $e"
                     end
@@ -286,26 +313,29 @@ comparison_results = DataFrames.DataFrame(
         try
             is_protein = get(assembler, :is_protein, false)
             # Time the assembly
-            start_time = time()
-            result = if assembler.name == "Canu"
-                assembler.func(
-                    fastq=long_fastq,
-                    outdir=outdir,
-                    genome_size="5k"  # PhiX174 is ~5.4kb
-                )
-            elseif assembler.name == "metaMDBG"
-                # metaMDBG uses hifi_reads parameter instead of fastq
-                assembler.func(
-                    hifi_reads=long_fastq,
-                    outdir=outdir
-                )
-            else
-                assembler.func(
-                    fastq=long_fastq,
-                    outdir=outdir
-                )
+            asm_call = () -> begin
+                if assembler.name == "Canu"
+                    return assembler.func(
+                        fastq=long_fastq,
+                        outdir=outdir,
+                        genome_size="5k"  # PhiX174 is ~5.4kb
+                    )
+                elseif assembler.name == "metaMDBG"
+                    # metaMDBG uses hifi_reads parameter instead of fastq
+                    return assembler.func(
+                        hifi_reads=long_fastq,
+                        outdir=outdir
+                    )
+                else
+                    return assembler.func(
+                        fastq=long_fastq,
+                        outdir=outdir
+                    )
+                end
             end
-            runtime = time() - start_time
+            asm_out = _time_and_mem(asm_call)
+            result = asm_out.result
+            runtime = asm_out.runtime
 
             # Calculate metrics
             contigs_file = result.contigs
@@ -323,18 +353,18 @@ comparison_results = DataFrames.DataFrame(
 
             if !is_protein
                 try
-                    quast_start = time()
-                    quast_outdir = Mycelia.run_quast(contigs_file; reference=phix_ref, outdir=joinpath(outdir, "quast"))
-                    quast_runtime = time() - quast_start
+                    quast_run = _time_and_mem(() -> Mycelia.run_quast(contigs_file; reference=phix_ref))
+                    quast_outdir = quast_run.result
+                    quast_runtime = quast_run.runtime
                 catch e
                     @warn "QUAST failed for $(assembler.name): $e"
                 end
 
                 if !skip_busco
                     try
-                        busco_start = time()
-                        busco_outdir = Mycelia.run_busco([contigs_file]; outdir=joinpath(outdir, "busco"), lineage="auto", mode="genome")
-                        busco_runtime = time() - busco_start
+                        busco_run = _time_and_mem(() -> Mycelia.run_busco([contigs_file]; mode="genome"))
+                        busco_outdir = busco_run.result
+                        busco_runtime = busco_run.runtime
                     catch e
                         @warn "BUSCO failed for $(assembler.name): $e"
                     end

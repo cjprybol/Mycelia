@@ -878,7 +878,7 @@ function convert_to_canonical(singlestrand_graph)
 
     # Create new canonical graph
     canonical_graph = MetaGraphsNext.MetaGraph(
-        Graphs.DiGraph();
+        Graphs.Graph();
         label_type=KmerType,
         vertex_data_type=VertexDataType,
         edge_data_type=EdgeDataType

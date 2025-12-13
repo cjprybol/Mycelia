@@ -41,3 +41,6 @@ test/test-development.jl
 Manifest.toml
 scratch*
 build/*
+package-lock.json
+package.json
+node_modules/*

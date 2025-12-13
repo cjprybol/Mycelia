@@ -199,25 +199,27 @@ end
 
 """
     run_metaphlan(;input_file, outdir, input_type="fastq",
-                  nprocs=Sys.CPU_THREADS, bowtie2db=nothing,
-                  unknown_estimation=false, stat_q=0.2)
+                  nprocs=get_default_threads(), db_dir=nothing,
+                  unknown_estimation=true, stat_q=0.2,
+                  long_reads=false)
 
 Run MetaPhlAn for marker-based taxonomic profiling.
 
 # Arguments
 - `input_file::String`: Input file (FASTQ, FASTA, or BAM)
 - `outdir::String`: Output directory
-- `input_type::String`: Input type - "fastq", "fasta", "bowtie2out", "sam" (default: "fastq")
-- `nprocs::Int`: Number of threads (default: Sys.CPU_THREADS)
-- `bowtie2db::Union{Nothing, String}`: Path to bowtie2 database (default: auto-download)
-- `unknown_estimation::Bool`: Include unknown fraction estimation (default: false)
+- `input_type::String`: Input type - "fastq", "fasta", "mapout", "sam" (default: "fastq")
+- `nprocs::Int`: Number of threads (default: get_default_threads())
+- `db_dir::Union{Nothing, String}`: Path to database directory (passed to MetaPhlAn `--db_dir`)
+- `unknown_estimation::Bool`: Include unknown/unclassified fraction estimation (default: true)
 - `stat_q::Float64`: Quantile for robust average (default: 0.2)
+- `long_reads::Bool`: Use long-read mode (MetaPhlAn `--long_reads`, uses minimap2)
 
 # Returns
 Named tuple with:
 - `outdir`: Output directory path
 - `profile_txt`: Path to taxonomic profile output
-- `bowtie2_out`: Path to bowtie2 alignment output
+- `mapout`: Path to mapping output (also returned as `bowtie2_out` for compatibility)
 
 # Example
 ```julia
@@ -232,20 +234,21 @@ function run_metaphlan(;
         input_file::String,
         outdir::String,
         input_type::String="fastq",
-        nprocs::Int=Sys.CPU_THREADS,
-        bowtie2db::Union{Nothing, String}=nothing,
-        unknown_estimation::Bool=false,
-        stat_q::Float64=0.2)
+        nprocs::Int=get_default_threads(),
+        db_dir::Union{Nothing, String}=nothing,
+        unknown_estimation::Bool=true,
+        stat_q::Float64=0.2,
+        long_reads::Bool=false)
 
     isfile(input_file) || error("Input file not found: $(input_file)")
-    input_type in ["fastq", "fasta", "bowtie2out", "sam"] || error("Invalid input_type: $(input_type)")
+    input_type in ["fastq", "fasta", "mapout", "sam"] || error("Invalid input_type: $(input_type)")
 
     Mycelia.add_bioconda_env("metaphlan")
     mkpath(outdir)
 
     input_basename = replace(basename(input_file), r"\.(fa|fasta|fq|fastq|bam|sam)(\.gz)?$"i => "")
     profile_txt = joinpath(outdir, "$(input_basename)_profile.txt")
-    bowtie2_out = joinpath(outdir, "$(input_basename)_bowtie2.bz2")
+    mapout_file = joinpath(outdir, "$(input_basename)_mapout.bz2")
 
     if !isfile(profile_txt)
         cmd_args = String[
@@ -253,25 +256,29 @@ function run_metaphlan(;
             "metaphlan",
             input_file,
             "--input_type", input_type,
-            "--nprocs", string(nprocs),
+            "--nproc", string(nprocs),
             "-o", profile_txt,
-            "--bowtie2out", bowtie2_out,
+            "--mapout", mapout_file,
             "--stat_q", string(stat_q)
         ]
 
-        if !isnothing(bowtie2db)
-            push!(cmd_args, "--bowtie2db")
-            push!(cmd_args, bowtie2db)
+        if !isnothing(db_dir)
+            push!(cmd_args, "--db_dir")
+            push!(cmd_args, db_dir)
         end
 
-        if unknown_estimation
-            push!(cmd_args, "--unknown_estimation")
+        if !unknown_estimation
+            push!(cmd_args, "--skip_unclassified_estimation")
+        end
+
+        if long_reads
+            push!(cmd_args, "--long_reads")
         end
 
         run(Cmd(cmd_args))
     end
 
-    return (; outdir, profile_txt, bowtie2_out)
+    return (; outdir, profile_txt, mapout=mapout_file)
 end
 
 """
@@ -349,18 +356,19 @@ end
 # ============================================================================
 
 """
-    run_metabuli_classify(;input_files, database_path, outdir,
-                          seq_mode="1", threads=Sys.CPU_THREADS,
+    run_metabuli_classify(;input_files, outdir, database_path=nothing,
+                          seq_mode="1", threads=get_default_threads(),
                           min_score=nothing, min_sp_score=nothing)
 
 Run Metabuli for fast metagenomic classification.
 
 # Arguments
 - `input_files::Vector{String}`: Input sequence files (FASTA/FASTQ)
-- `database_path::String`: Path to Metabuli database
 - `outdir::String`: Output directory
+- `database_path::Union{Nothing, String}`: Path to Metabuli database. If not provided,
+  checks METABULI_DB environment variable, then falls back to `\$HOME/workspace/metabuli`
 - `seq_mode::String`: Sequence mode - "1" for single-end, "2" for paired-end (default: "1")
-- `threads::Int`: Number of threads (default: Sys.CPU_THREADS)
+- `threads::Int`: Number of threads (default: get_default_threads())
 - `min_score::Union{Nothing, Float64}`: Minimum score threshold
 - `min_sp_score::Union{Nothing, Float64}`: Minimum species-level score
 
@@ -381,16 +389,30 @@ result = run_metabuli_classify(
 """
 function run_metabuli_classify(;
         input_files::Vector{String},
-        database_path::String,
         outdir::String,
+        database_path::Union{Nothing, String}=nothing,
         seq_mode::String="1",
-        threads::Int=Sys.CPU_THREADS,
+        threads::Int=get_default_threads(),
         min_score::Union{Nothing, Float64}=nothing,
         min_sp_score::Union{Nothing, Float64}=nothing)
 
     # Validate inputs
     for f in input_files
         isfile(f) || error("Input file not found: $(f)")
+    end
+
+    # Determine database path
+    if database_path === nothing
+        database_path = get(ENV, "METABULI_DB", nothing)
+        if database_path === nothing
+            home_db = joinpath(homedir(), "workspace", "metabuli")
+            if isdir(home_db)
+                database_path = home_db
+            else
+                error("No database_path provided and no database found at default location ($(home_db)). " *
+                      "Set METABULI_DB environment variable or provide database_path parameter.")
+            end
+        end
     end
     isdir(database_path) || error("Database directory not found: $(database_path)")
     seq_mode in ["1", "2", "3"] || error("Invalid seq_mode: $(seq_mode). Use '1' for single-end, '2' for paired-end interleaved, '3' for paired-end separate")
@@ -433,7 +455,7 @@ end
 
 """
     run_metabuli_build_db(;reference_fasta, taxonomy_dir, outdir,
-                          threads=Sys.CPU_THREADS, split_num=4096)
+                          threads=get_default_threads(), split_num=4096)
 
 Build a Metabuli database from reference sequences.
 
@@ -441,7 +463,7 @@ Build a Metabuli database from reference sequences.
 - `reference_fasta::String`: Input reference sequences (FASTA)
 - `taxonomy_dir::String`: Directory with NCBI taxonomy files (names.dmp, nodes.dmp)
 - `outdir::String`: Output database directory
-- `threads::Int`: Number of threads (default: Sys.CPU_THREADS)
+- `threads::Int`: Number of threads (default: get_default_threads())
 - `split_num::Int`: Number of database splits (default: 4096)
 
 # Returns
@@ -452,7 +474,7 @@ function run_metabuli_build_db(;
         reference_fasta::String,
         taxonomy_dir::String,
         outdir::String,
-        threads::Int=Sys.CPU_THREADS,
+        threads::Int=get_default_threads(),
         split_num::Int=4096)
 
     isfile(reference_fasta) || error("Reference FASTA not found: $(reference_fasta)")

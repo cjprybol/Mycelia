@@ -754,6 +754,92 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Prefix FASTQ read identifiers with a sample-specific tag to guarantee uniqueness.
+
+Streaming-friendly: reads are rewritten on the fly; optional mapping output can be
+written as gzipped TSV (streamed) or Arrow (buffered).
+
+# Arguments
+- `fastq_file::AbstractString`: Input FASTQ (optionally gzipped).
+- `sample_tag::AbstractString`: Tag prepended to each read identifier.
+- `out_fastq::AbstractString`: Output FASTQ path (gzipped if endswith `.gz`).
+
+# Keywords
+- `mapping_out::Union{Nothing,String}=nothing`: Optional path to write read-id map.
+- `mapping_format::Symbol=:arrow`: `:arrow` or `:tsv`. TSV is written streaming;
+  Arrow buffers in-memory before write.
+- `id_delimiter::AbstractString="::"`: Separator between tag and original id.
+
+# Returns
+Named tuple `(out_fastq, mapping_out, sample_tag)`.
+"""
+function prefix_fastq_reads(
+    fastq_file::AbstractString;
+    sample_tag::AbstractString,
+    out_fastq::AbstractString,
+    mapping_out::Union{Nothing,String}=nothing,
+    mapping_format::Symbol=:arrow,
+    id_delimiter::AbstractString="::"
+)
+    @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
+    @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
+    mkpath(dirname(out_fastq))
+    sanitized_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
+
+    # Prepare mapping output (streaming for TSV, buffered for Arrow)
+    tsv_io = nothing
+    mapping_rows = mapping_out === nothing ? nothing : Vector{NamedTuple}()
+    if mapping_out !== nothing
+        mkpath(dirname(mapping_out))
+        if mapping_format == :tsv
+            tsv_io = CodecZlib.GzipCompressorStream(open(mapping_out, "w"))
+            write(tsv_io, "sample_tag\toriginal_read_id\tnew_read_id\n")
+        else
+            mapping_rows = Vector{NamedTuple}()
+        end
+    end
+
+    out_io = endswith(out_fastq, ".gz") ? CodecZlib.GzipCompressorStream(open(out_fastq, "w")) : open(out_fastq, "w")
+    writer = FASTX.FASTQ.Writer(out_io)
+    reader = Mycelia.open_fastx(fastq_file)
+    for record in reader
+        original_id = String(FASTX.identifier(record))
+        new_id = string(sanitized_tag, id_delimiter, original_id)
+        new_record = FASTX.FASTQ.Record(new_id, FASTX.sequence(record), FASTX.quality(record))
+        FASTX.write(writer, new_record)
+        if mapping_out !== nothing
+            if mapping_format == :tsv
+                write(tsv_io, string(sanitized_tag, '\t', original_id, '\t', new_id, '\n'))
+            else
+                push!(mapping_rows, (sample_tag=sanitized_tag, original_read_id=original_id, new_read_id=new_id))
+            end
+        end
+    end
+    close(reader)
+    FASTX.close(writer)
+    if isa(out_io, CodecZlib.GzipCompressorStream)
+        CodecZlib.close(out_io)
+    else
+        close(out_io)
+    end
+    if mapping_out !== nothing
+        if mapping_format == :arrow
+            Arrow.write(mapping_out, DataFrames.DataFrame(mapping_rows))
+        else
+            if isa(tsv_io, CodecZlib.GzipCompressorStream)
+                CodecZlib.close(tsv_io)
+            else
+                close(tsv_io)
+            end
+        end
+    end
+
+    return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Concatenate FASTQ/FASTA files (gz or plain) into a single gzipped output file.
 Maintains input order and works for both single-end and paired-end files (one stream).
 """
@@ -951,7 +1037,7 @@ Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and Fas
 # Dependencies
 Requires trim_galore conda environment
 """
-function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd())
+function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd(), threads=min(get_default_threads(), 4))
     Mycelia.add_bioconda_env("trim-galore")
     # Create output directory if it doesn't exist
     trim_galore_dir = mkpath(joinpath(outdir, "trim_galore"))
@@ -965,7 +1051,7 @@ function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdi
     trimmed_reverse = joinpath(trim_galore_dir, replace(reverse_base, Mycelia.FASTQ_REGEX => "_val_2.fq.gz"))
     
     if !isfile(trimmed_forward) && !isfile(trimmed_reverse)
-        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(min(Sys.CPU_THREADS, 4)) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(threads) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
         run(cmd)
     else
         @info "$(trimmed_forward) & $(trimmed_reverse) already present"
@@ -1216,7 +1302,12 @@ function qc_filter_short_reads_fastp(;
         @show isfile(json)
         @show isfile(html)
     end
-    return (;out_forward, out_reverse, json, html)
+    return (
+        out_forward = String(out_forward),
+        out_reverse = String(out_reverse),
+        json = String(json),
+        html = String(html)
+    )
 end
 
 """
@@ -1232,7 +1323,10 @@ Perform QC filtering on long-read FASTQ files using fastplong.
 - `max_length::Int=0`: Maximum read length (default 0, no maximum).
 
 # Returns
-- `String`: Path to the filtered FASTQ file.
+- Named tuple containing:
+  - `out_fastq`: Filtered FASTQ file
+  - `html_report`: fastplong HTML report
+  - `json_report`: fastplong JSON report
 
 # Details
 This function uses fastplong to filter long reads based on quality and length criteria.
@@ -1247,7 +1341,8 @@ function qc_filter_long_reads_fastplong(;
                             min_length::Int=1000,
                             max_length::Int=0)
     # Build command with required parameters
-    if !isfile(out_fastq)
+    outputs_exist = isfile(out_fastq) && isfile(html_report) && isfile(json_report)
+    if !outputs_exist
         Mycelia.add_bioconda_env("fastplong")
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastplong fastplong
                 --in $(in_fastq)
@@ -1264,7 +1359,11 @@ function qc_filter_long_reads_fastplong(;
 
         run(`$cmd`)
     end
-    return out_fastq
+    return (
+        out_fastq = String(out_fastq),
+        html_report = String(html_report),
+        json_report = String(json_report)
+    )
 end
 
 """
@@ -1980,7 +2079,7 @@ function write_fasta(;
     gzip::Bool=false,
     show_progress::Union{Bool,Nothing}=nothing,
     use_pigz::Union{Bool,Nothing}=nothing,
-    pigz_threads::Int=Sys.CPU_THREADS
+    pigz_threads::Int=get_default_threads()
 )
     # Determine if gzip compression should be used based on both the filename and the gzip argument
     gzip = occursin(r"\.gz$", outfile) || gzip

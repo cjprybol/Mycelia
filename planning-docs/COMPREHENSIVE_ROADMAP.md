@@ -286,6 +286,12 @@ function benchmark_quality_aware_assembly(qualmer_vs_kmer)
 ### 4.7. Strategic Tool Integration & Functionality Gaps
 **Source:** `ROADMAP.md`
 
+#### Completed Integrations (2025-12-10)
+*   [x] **SentencePiece** - Subword tokenization for ML/NLP applications on biological sequences
+    *   Implementation: `src/sentencepiece.jl`
+    *   Tests: `test/8_tool_integration/sentencepiece.jl`
+    *   Features: Train models, encode/decode DNA/RNA/AA/text, subword regularization
+
 #### Gap Analysis and Tool Integration
 *   [ ] **Comprehensive functionality audit**: Identify missing functions vs available tools.
 *   [ ] **Tool integration opportunities**: Find external tools for remaining gaps.
@@ -304,10 +310,10 @@ function benchmark_quality_aware_assembly(qualmer_vs_kmer)
     *   [ ] `calculate_evolutionary_distances()`: To be handled via external tools.
 
 #### Assembly Validation Tools
-*   [ ] `QUAST` integration - `run_quast()`
-*   [ ] `BUSCO` integration - `run_busco()`
+*   [X] `QUAST` integration - `run_quast()` (implemented; opt-in extended tests and default outdir derivation)
+*   [X] `BUSCO` integration - `run_busco()` (implemented; auto-lineage default, dataset predownload helper, opt-in extended tests)
 *   [ ] `MUMmer` integration - `run_mummer()`
-*   [ ] `CheckM2` integration - `run_checkm2()`
+*   [X] `CheckM2` integration - `run_checkm2()`
 *   [ ] `Mauve` integration - `run_mauve()`
 
 #### Advanced Quality Assessment Tools
