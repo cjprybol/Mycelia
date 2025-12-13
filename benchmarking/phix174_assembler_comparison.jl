@@ -25,6 +25,11 @@ println("Start time: $(Dates.now())")
 
 # Create temporary directory for PhiX174 data
 phix_dir = mktempdir(prefix="phix174_benchmark_")
+println("PhiX174 benchmark directory: $phix_dir")
+
+# Create results directory
+results_dir = "results"
+mkpath(results_dir)
     println("PhiX174 benchmark directory: $phix_dir")
 
     # Create results directory
@@ -118,6 +123,7 @@ try
     short_read_assemblers = filter(a -> current_platform in a.platforms, all_short_read_assemblers)
     long_read_assemblers = filter(a -> current_platform in a.platforms, all_long_read_assemblers)
 
+    println("  Platform: $current_platform")
     # Trim heavy assemblers in CI to reduce resource pressure
     if is_ci
         short_read_assemblers = filter(a -> !(a.name in ["metaSPAdes"]), short_read_assemblers)

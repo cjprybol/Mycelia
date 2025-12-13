@@ -77,6 +77,7 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
             )
             Test.@test !isempty(filtered)
             if "taxid" in DataFrames.names(filtered)
+                Test.@test any(filtered.taxid .== 12884)
                 # Require at least one non-missing taxid; specific value may vary by DB release
                 has_taxids = any(!ismissing, filtered.taxid)
                 Test.@test has_taxids

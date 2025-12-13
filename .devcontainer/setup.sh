@@ -2,6 +2,8 @@
 export LD_LIBRARY_PATH="" && julia -e 'import Pkg; Pkg.add(["IJulia"]); using IJulia; n=Sys.CPU_THREADS; ks=[2^i for i in 0:floor(Int,log2(n-1)) if 2^i < n]; ks = push!(ks, n); foreach(k -> IJulia.installkernel("julia-$k", env=Dict("JULIA_NUM_THREADS"=>"$k", "LD_LIBRARY_PATH"=>"")), ks)'
 npm install -g @anthropic-ai/claude-code@latest
 npm install -g @openai/codex@latest
+# alternate one-liner installation
+# npm install -g @anthropic-ai/claude-code @github/copilot @openai/codex @google/gemini-cli
 
 # if installing in an environment without sudo, use:
 # install nvm (node version manager)
@@ -14,10 +16,3 @@ npm install -g @openai/codex@latest
 # need to run with npx prefix when not installed globally
 # npx codex
 # npx claude
-
-
-# npm install -g @google/gemini-cli@latest
-# npm install -g @github/copilot@latest
-
-# alternate one-liner installation
-# npm install -g @anthropic-ai/claude-code @github/copilot @openai/codex @google/gemini-cli

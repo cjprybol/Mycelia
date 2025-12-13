@@ -132,6 +132,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 3. **Tool Wrapper Reality (verified in TOOL_WRAPPER_STATUS.md, 2025-01-25)**:
    - ✅ 13 wrappers implemented **and tested**: megahit, metaspades, skesa, spades, velvet, flye, metaflye, canu, hifiasm, metamdbg, minimap2, diamond, mmseqs
+   - ✅ 9 wrappers implemented but **untested**: QUAST, BUSCO, HyLight, STRONG, Strainy, apollo, homopolish, unicycler, metavelvet
    - ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
    - ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
    - ⚠️ hifiasm-meta wrapper exists but is commented out

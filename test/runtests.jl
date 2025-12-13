@@ -52,6 +52,28 @@ include("4_assembly/end_to_end_graph_tests.jl") # may not yet be fully complete 
 include("4_assembly/comprehensive_correctness_tests.jl")
 include("4_assembly/bandage_integration.jl")
 include("4_assembly/megahit_phix_workflow.jl") # MEGAHIT/Bandage/Qualimap end-to-end workflow on PhiX
+# include("4_assembly/end_to_end_assembly_tests.jl")
+
+# Rhizomorph graph ecosystem tests (added 2025-12-10)
+# Path finding and sequence reconstruction
+include("4_assembly/path_finding_test.jl")
+include("4_assembly/rhizomorph_doublestrand_traversal_test.jl")
+include("4_assembly/rhizomorph_canonical_path_test.jl")
+include("4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl")
+include("4_assembly/rhizomorph_qualmer_rc_evidence_test.jl")
+include("4_assembly/rhizomorph_doublestrand_files_test.jl")
+include("4_assembly/rhizomorph_conversion_errors_test.jl")
+
+# K-mer graph construction tests
+include("4_assembly/dna_kmer_singlestrand_test.jl")
+include("4_assembly/dna_kmer_doublestrand_test.jl")
+include("4_assembly/rna_kmer_singlestrand_test.jl")
+include("4_assembly/rna_kmer_doublestrand_test.jl")
+include("4_assembly/rna_kmer_graph_test.jl")
+include("4_assembly/aa_kmer_singlestrand_test.jl")
+include("4_assembly/aa_kmer_graph_test.jl")
+include("4_assembly/kmer_vertex_data_test.jl")
+include("4_assembly/kmer_edge_data_test.jl")
 # TODO: fix
 # include("4_assembly/end_to_end_assembly_tests.jl")
 
@@ -97,6 +119,8 @@ include("4_assembly/rhizomorph_bubbles_and_gfa_test.jl")
 include("5_validation/coverm_wrappers.jl")
 include("5_validation/coverm_integration_extended.jl")
 include("5_validation/mosdepth_coverage_qc.jl")
+
+# include_all_tests(joinpath(@__DIR__, "6_annotation"))
 include("5_validation/quast_busco_wrappers_test.jl")
 
 # K-mer graph construction tests
@@ -161,6 +185,12 @@ include("7_comparative_pangenomics/phylogenetics.jl")
 include("7_comparative_pangenomics/sequence_classification.jl")
 include("7_comparative_pangenomics/pangenome_wrappers.jl")
 
+# Network/tooling heavy suites (NCBI downloads, conda tools) are opt-in.
+# if get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+include("7_comparative_pangenomics/sequence_comparison.jl")   # sylph/skani, ART reads, NCBI fetch
+include("7_comparative_pangenomics/multiomics_alignment.jl")  # badread + minimap2
+include("7_comparative_pangenomics/blastdb_integration.jl")   # BLAST DB downloads
+# end
 include("7_comparative_pangenomics/sequence_comparison.jl")   # sylph/skani, ART reads, NCBI fetch
 include("7_comparative_pangenomics/multiomics_alignment.jl")  # badread + minimap2
 include("7_comparative_pangenomics/blastdb_integration.jl")   # BLAST DB downloads

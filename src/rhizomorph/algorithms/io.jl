@@ -189,6 +189,7 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
                 segments[seg_id] = sequence
             end
         elseif line_type == "L"
+            # Link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
             if length(fields) >= 6
                 src_id = fields[2]
                 src_orient = fields[3] == "+"
@@ -259,6 +260,19 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     end
 
     # Add edges (links)
+# <<<<<<< HEAD
+#     for (src_id, src_forward, dst_id, dst_forward) in links
+#         if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
+#             src_kmer = id_to_kmer[src_id]
+#             dst_kmer = id_to_kmer[dst_id]
+
+#             # Convert GFA orientations to StrandOrientation
+#             src_strand = src_forward ? Forward : Reverse
+#             dst_strand = dst_forward ? Forward : Reverse
+
+#             # Create strand-aware edge
+#             graph[src_kmer, dst_kmer] = edge_data_type(Dict{String, Dict{String, Set{EdgeEvidenceEntry}}}())
+# =======
     for (src_id, src_forward, dst_id, dst_forward, _) in links
         if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
             src_kmer = id_to_kmer[src_id]
@@ -305,7 +319,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
     segment_lengths = Set{Int}()
     segments = Dict{String, String}()
 
-    for line in readlines(gfa_file)
+    for line in eachline(gfa_file)
         fields = split(line, '\t')
         if isempty(fields) || first(fields) != "S"
             continue

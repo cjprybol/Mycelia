@@ -366,6 +366,7 @@ Test.@testset "Sequence Comparison Tests" begin
 
         df = Mycelia.skani_dist([ref_a, ref_b]; small_genomes=true, threads=2)
         lower_cols = Dict(lowercase(string(c)) => c for c in names(df))
+
         keys_list = collect(keys(lower_cols))
 
         ani_key = findfirst(k -> occursin("ani", k), keys_list)

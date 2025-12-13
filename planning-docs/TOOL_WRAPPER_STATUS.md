@@ -195,6 +195,16 @@
 **Status**:
 - ✅ QUAST: **FOUND** in `src/quality-control-and-benchmarking.jl:1038`
   - Functions: `run_quast(assembly_files::Vector{String})`, `run_quast(assembly_file::String)`
+  - Tests: ❓ NOT VERIFIED
+- ✅ BUSCO: **FOUND** in `src/quality-control-and-benchmarking.jl:1165`
+  - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`
+  - Tests: ❓ NOT VERIFIED
+
+**Verdict**: ✅ **IMPLEMENTED** but tests needed
+
+---
+
+### 7. Strain-Aware Tools
   - Tests: ✅ Opt-in extended smoke in `test/5_validation/quast_busco_wrappers_test.jl` (simulated + phiX download) with default outdir derivation
 - ✅ BUSCO: **FOUND** in `src/quality-control-and-benchmarking.jl:1165`
   - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`; supports auto-lineage and dataset predownload helper

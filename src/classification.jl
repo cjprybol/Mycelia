@@ -382,6 +382,7 @@ Named tuple with:
 ```julia
 result = run_metabuli_classify(
     input_files=["reads.fq.gz"],
+    database_path="/path/to/metabuli_db",
     outdir="metabuli_output"
 )
 ```
