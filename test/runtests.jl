@@ -1,5 +1,6 @@
 # Mycelia Test Suite - Tiered Testing System
 #
+# curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel lts
 # Usage:
 #   Core tests:                 julia --project=. -e "import Pkg; Pkg.test()"
 #   Extended tests:             MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'

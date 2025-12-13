@@ -757,7 +757,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Prefix FASTQ read identifiers with a sample-specific tag to guarantee uniqueness.
 
 Streaming-friendly: reads are rewritten on the fly; optional mapping output can be
-written as gzipped TSV (streamed) or Arrow (buffered).
+written as TSV (streamed) or Arrow (buffered). If an output path ends with `.gz`,
+the file is written uncompressed first and then gzipped with `pigz`/`gzip` via
+`Mycelia.gzip_file` to avoid CodecZlib buffering issues.
 
 # Arguments
 - `fastq_file::AbstractString`: Input FASTQ (optionally gzipped).
@@ -769,6 +771,8 @@ written as gzipped TSV (streamed) or Arrow (buffered).
 - `mapping_format::Symbol=:arrow`: `:arrow` or `:tsv`. TSV is written streaming;
   Arrow buffers in-memory before write.
 - `id_delimiter::AbstractString="::"`: Separator between tag and original id.
+- `force::Bool=false`: If `true`, overwrite existing outputs.
+- `compress_threads::Integer=get_default_threads()`: Threads for gzip compression.
 
 # Returns
 Named tuple `(out_fastq, mapping_out, sample_tag)`.
@@ -779,27 +783,75 @@ function prefix_fastq_reads(
     out_fastq::AbstractString,
     mapping_out::Union{Nothing,String}=nothing,
     mapping_format::Symbol=:arrow,
-    id_delimiter::AbstractString="::"
+    id_delimiter::AbstractString="::",
+    force::Bool=false,
+    compress_threads::Integer=get_default_threads()
 )
     @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
     @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
     mkpath(dirname(out_fastq))
     sanitized_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
 
-    # Prepare mapping output (streaming for TSV, buffered for Arrow)
+    nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
+
+    # Always write uncompressed first when `.gz` is requested, then gzip externally.
+    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") : out_fastq
+    tmp_fastq_plain = out_fastq_plain * ".tmp"
+
+    map_plain = nothing
+    tmp_map_plain = nothing
+    if mapping_out !== nothing
+        mkpath(dirname(mapping_out))
+        if mapping_format == :arrow
+            endswith(mapping_out, ".gz") && error("Arrow mapping_out should not be gzipped: $mapping_out")
+        else
+            map_plain = endswith(mapping_out, ".gz") ? replace(mapping_out, r"\.gz$" => "") : mapping_out
+            tmp_map_plain = map_plain * ".tmp"
+        end
+    end
+
+    if !force && nonempty_file(out_fastq) && (mapping_out === nothing || nonempty_file(mapping_out))
+        return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+    end
+
+    # Resume: if the uncompressed intermediate exists from a prior run, just gzip it.
+    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) && nonempty_file(out_fastq_plain)
+        mapping_ready = if mapping_out === nothing
+            true
+        elseif mapping_format == :arrow
+            nonempty_file(mapping_out)
+        elseif endswith(mapping_out, ".gz")
+            nonempty_file(map_plain) || nonempty_file(mapping_out)
+        else
+            nonempty_file(mapping_out)
+        end
+
+        if mapping_ready
+            if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) && nonempty_file(map_plain)
+                Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            end
+            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+            return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+        end
+    end
+
+    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+    if tmp_map_plain !== nothing
+        isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+    end
+
     tsv_io = nothing
     mapping_rows = mapping_out === nothing ? nothing : Vector{NamedTuple}()
     if mapping_out !== nothing
-        mkpath(dirname(mapping_out))
         if mapping_format == :tsv
-            tsv_io = CodecZlib.GzipCompressorStream(open(mapping_out, "w"))
+            tsv_io = open(tmp_map_plain, "w")
             write(tsv_io, "sample_tag\toriginal_read_id\tnew_read_id\n")
         else
             mapping_rows = Vector{NamedTuple}()
         end
     end
 
-    out_io = endswith(out_fastq, ".gz") ? CodecZlib.GzipCompressorStream(open(out_fastq, "w")) : open(out_fastq, "w")
+    out_io = open(tmp_fastq_plain, "w")
     writer = FASTX.FASTQ.Writer(out_io)
     reader = Mycelia.open_fastx(fastq_file)
     for record in reader
@@ -817,21 +869,28 @@ function prefix_fastq_reads(
     end
     close(reader)
     FASTX.close(writer)
-    if isa(out_io, CodecZlib.GzipCompressorStream)
-        CodecZlib.close(out_io)
-    else
-        close(out_io)
+    close(out_io)
+    if mapping_out !== nothing && mapping_format == :tsv
+        close(tsv_io)
     end
-    if mapping_out !== nothing
-        if mapping_format == :arrow
-            Arrow.write(mapping_out, DataFrames.DataFrame(mapping_rows))
-        else
-            if isa(tsv_io, CodecZlib.GzipCompressorStream)
-                CodecZlib.close(tsv_io)
-            else
-                close(tsv_io)
-            end
-        end
+
+    mv(tmp_fastq_plain, out_fastq_plain; force=true)
+    if mapping_out !== nothing && mapping_format == :tsv
+        mv(tmp_map_plain, map_plain; force=true)
+    end
+
+    if mapping_out !== nothing && mapping_format == :arrow
+        tmp_arrow = mapping_out * ".tmp"
+        isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+        Arrow.write(tmp_arrow, DataFrames.DataFrame(mapping_rows))
+        mv(tmp_arrow, mapping_out; force=true)
+    end
+
+    if endswith(out_fastq, ".gz")
+        Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+    end
+    if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
+        Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
     end
 
     return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)

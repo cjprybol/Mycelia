@@ -1962,6 +1962,71 @@ function tar_extract(;tarchive, directory=dirname(tarchive))
 end
 
 """
+    gzip_file(
+        infile::AbstractString;
+        outfile::Union{Nothing,AbstractString}=nothing,
+        threads::Integer=get_default_threads(),
+        force::Bool=false,
+        keep_input::Bool=false
+    ) -> String
+
+Compress a file to gzip format using an external compressor (`pigz` preferred, else `gzip`).
+
+If `outfile` is `nothing`, defaults to `infile * ".gz"` (unless `infile` already ends with `.gz`,
+in which case it is returned unchanged). Uses an atomic write (`outfile * ".tmp"` then `mv`).
+
+This avoids writing directly to CodecZlib compressor streams, which can hit buffering issues
+for large streaming writes.
+"""
+function gzip_file(
+    infile::AbstractString;
+    outfile::Union{Nothing,AbstractString}=nothing,
+    threads::Integer=get_default_threads(),
+    force::Bool=false,
+    keep_input::Bool=false
+)::String
+    @assert isfile(infile) "Input file not found: $infile"
+
+    out = if outfile === nothing
+        endswith(infile, ".gz") ? infile : infile * ".gz"
+    else
+        String(outfile)
+    end
+    endswith(out, ".gz") || error("gzip_file outfile must end with .gz: $out")
+    out == infile && return out
+
+    mkpath(dirname(out))
+    if isfile(out) && !force
+        error("Refusing to overwrite existing file: $out (use force=true)")
+    end
+
+    tmp = out * ".tmp"
+    isfile(tmp) && rm(tmp; force=true)
+
+    pigz = Sys.which("pigz")
+    gzip = Sys.which("gzip")
+    compressor = if pigz !== nothing
+        Cmd([pigz, "--processes", string(max(1, threads)), "-c", infile])
+    elseif gzip !== nothing
+        Cmd([gzip, "-c", infile])
+    else
+        Mycelia.add_bioconda_env("pigz")
+        Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pigz", "pigz", "--processes", string(max(1, threads)), "-c", infile])
+    end
+
+    open(tmp, "w") do out_io
+        run(pipeline(compressor, stdout=out_io))
+    end
+    mv(tmp, out; force=true)
+
+    if !keep_input
+        rm(infile; force=true)
+    end
+
+    return out
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Extract biosample and barcode information from a PacBio XML metadata file.

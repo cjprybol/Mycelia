@@ -862,8 +862,11 @@ reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
 - `id_delimiter::AbstractString="::"`: Separator between sample tag and original id.
 - `write_read_map::Bool=false`: Optionally emit read-id map files.
 - `read_map_format::Symbol=:arrow`: `:arrow` (buffered) or `:tsv` (streaming) mapping output.
+- `gzip_prefixed_fastqs::Bool=true`: Gzip the prefixed FASTQs using external gzip/pigz.
+- `gzip_read_map_tsv::Bool=true`: If `read_map_format==:tsv`, gzip the mapping TSVs using external gzip/pigz.
 - `run_mapping::Bool=true`, `run_splitting::Bool=true`: Execute minimap2 stage and per-sample splits.
 - `keep_prefixed_fastqs::Bool=false`: Retain prefixed intermediates if true.
+- `force::Bool=false`: If `true`, regenerate intermediates even if present.
 - `merged_bam::Union{Nothing,String}=nothing`: Override merged BAM path.
 - `as_string::Bool=false`: Return command strings instead of `Cmd`/pipelines.
 
@@ -886,9 +889,12 @@ function minimap_merge_map_and_split(;
     id_delimiter::AbstractString="::",
     write_read_map::Bool=false,
     read_map_format::Symbol=:arrow,
+    gzip_prefixed_fastqs::Bool=true,
+    gzip_read_map_tsv::Bool=true,
     run_mapping::Bool=true,
     run_splitting::Bool=true,
     keep_prefixed_fastqs::Bool=false,
+    force::Bool=false,
     merged_bam::Union{Nothing,String}=nothing,
     as_string::Bool=false
 )
@@ -905,6 +911,7 @@ function minimap_merge_map_and_split(;
     end
     tmpdir = isnothing(tmpdir) ? mktempdir() : tmpdir
     mkpath(tmpdir)
+    nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
 
     # Helper to build sample tag from filenames
     function build_sample_tag(name::AbstractString)
@@ -912,24 +919,20 @@ function minimap_merge_map_and_split(;
         return replace(base, r"[^\w\.\-]+" => "_")
     end
 
-    prefixed_fastqs = String[]
+    prefix_jobs = NamedTuple[]
     sample_infos = NamedTuple[]
-    mapping_suffix = read_map_format == :arrow ? "arrow" : "tsv.gz"
+    mapping_suffix = if read_map_format == :arrow
+        "arrow"
+    else
+        gzip_read_map_tsv ? "tsv.gz" : "tsv"
+    end
 
     # Single-end inputs
     for fq in single_end_fastqs
         sample_tag = build_sample_tag(fq)
-        outfq = joinpath(tmpdir, sample_tag * ".prefixed.fq.gz")
+        outfq = joinpath(tmpdir, sample_tag * (gzip_prefixed_fastqs ? ".prefixed.fq.gz" : ".prefixed.fq"))
         map_path = write_read_map ? joinpath(tmpdir, "$(sample_tag).read_map.$mapping_suffix") : nothing
-        Mycelia.prefix_fastq_reads(
-            fq;
-            sample_tag=sample_tag,
-            out_fastq=outfq,
-            mapping_out=map_path,
-            mapping_format=read_map_format,
-            id_delimiter=id_delimiter
-        )
-        push!(prefixed_fastqs, outfq)
+        push!(prefix_jobs, (fastq=fq, sample_tag=sample_tag, out_fastq=outfq, mapping_out=map_path))
         push!(sample_infos, (
             sample_tag=sample_tag,
             source_fastqs=[fq],
@@ -947,27 +950,12 @@ function minimap_merge_map_and_split(;
             sample_tag = build_sample_tag(fwd)
         end
         sample_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
-        out1 = joinpath(tmpdir, "$(sample_tag).R1.prefixed.fq.gz")
-        out2 = joinpath(tmpdir, "$(sample_tag).R2.prefixed.fq.gz")
+        out1 = joinpath(tmpdir, "$(sample_tag).R1" * (gzip_prefixed_fastqs ? ".prefixed.fq.gz" : ".prefixed.fq"))
+        out2 = joinpath(tmpdir, "$(sample_tag).R2" * (gzip_prefixed_fastqs ? ".prefixed.fq.gz" : ".prefixed.fq"))
         map1 = write_read_map ? joinpath(tmpdir, "$(sample_tag).R1.read_map.$mapping_suffix") : nothing
         map2 = write_read_map ? joinpath(tmpdir, "$(sample_tag).R2.read_map.$mapping_suffix") : nothing
-        Mycelia.prefix_fastq_reads(
-            fwd;
-            sample_tag=sample_tag,
-            out_fastq=out1,
-            mapping_out=map1,
-            mapping_format=read_map_format,
-            id_delimiter=id_delimiter
-        )
-        Mycelia.prefix_fastq_reads(
-            rev;
-            sample_tag=sample_tag,
-            out_fastq=out2,
-            mapping_out=map2,
-            mapping_format=read_map_format,
-            id_delimiter=id_delimiter
-        )
-        append!(prefixed_fastqs, (out1, out2))
+        push!(prefix_jobs, (fastq=fwd, sample_tag=sample_tag, out_fastq=out1, mapping_out=map1))
+        push!(prefix_jobs, (fastq=rev, sample_tag=sample_tag, out_fastq=out2, mapping_out=map2))
         push!(sample_infos, (
             sample_tag=sample_tag,
             source_fastqs=[fwd, rev],
@@ -977,6 +965,8 @@ function minimap_merge_map_and_split(;
             output_bam=nothing
         ))
     end
+
+    prefixed_fastqs = String[j.out_fastq for j in prefix_jobs]
 
     index_cmd = nothing
     index_file = nothing
@@ -1005,7 +995,59 @@ function minimap_merge_map_and_split(;
 
     reference_label = !isnothing(reference_fasta) ? basename(reference_fasta) : basename(minimap_index)
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    merged_bam = isnothing(merged_bam) ? joinpath(tmpdir, Mycelia.normalized_current_datetime() * "." * reference_label * ".joint.minimap2.sorted.bam") : merged_bam
+    if isnothing(merged_bam)
+        paired_str = join(sort(string.(paired_end_fastqs)), "\n")
+        fingerprint = Mycelia.create_sha1_hash(
+            string(
+                "mapping_type=", mapping_type, "\n",
+                "target=", target, "\n",
+                "id_delimiter=", id_delimiter, "\n",
+                "single_end_fastqs=", join(sort(single_end_fastqs), "\n"), "\n",
+                "paired_end_fastqs=", paired_str, "\n",
+                "minimap_extra_args=", join(minimap_extra_args, " ")
+            );
+            encoding=:hex,
+            encoded_length=12,
+            normalize_case=false,
+            allow_truncation=true
+        )
+        merged_bam = joinpath(tmpdir, "$(reference_label).$(mapping_type).$(fingerprint).joint.minimap2.sorted.bam")
+    end
+
+    # Prefixing (and optional gzip) in parallel across samples.
+    merged_ready = nonempty_file(merged_bam) && !force
+    need_prefixing = force || write_read_map || keep_prefixed_fastqs || (run_mapping && !merged_ready)
+    if need_prefixing && !isempty(prefix_jobs)
+        prefix_workers = min(length(prefix_jobs), max(1, Threads.nthreads()))
+        compress_threads_per_job = max(1, fld(max(1, threads), prefix_workers))
+        sem = Base.Semaphore(prefix_workers)
+        errs = Channel{Any}(length(prefix_jobs))
+        @sync for job in prefix_jobs
+            Threads.@spawn begin
+                Base.acquire(sem)
+                try
+                    Mycelia.prefix_fastq_reads(
+                        job.fastq;
+                        sample_tag=job.sample_tag,
+                        out_fastq=job.out_fastq,
+                        mapping_out=job.mapping_out,
+                        mapping_format=read_map_format,
+                        id_delimiter=id_delimiter,
+                        force=force,
+                        compress_threads=compress_threads_per_job
+                    )
+                catch err
+                    put!(errs, err)
+                finally
+                    Base.release(sem)
+                end
+            end
+        end
+        if isready(errs)
+            err = take!(errs)
+            throw(err)
+        end
+    end
 
     minimap_parts = [
         Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
@@ -1021,7 +1063,11 @@ function minimap_merge_map_and_split(;
     if run_mapping
         Mycelia.add_bioconda_env("minimap2")
         Mycelia.add_bioconda_env("samtools")
-        run(minimap_cmd)
+        if nonempty_file(merged_bam) && !force
+            # resume/caching: keep existing merged BAM
+        else
+            run(minimap_cmd)
+        end
     end
 
     split_cmds = Dict{String,Cmd}()
@@ -1039,7 +1085,11 @@ function minimap_merge_map_and_split(;
             sort_split_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", sample_bam, "-"])
             split_cmd = pipeline(view_cmd, filter_cmd, sort_split_cmd)
             split_cmds[sample_tag] = split_cmd
-            run(split_cmd)
+            if nonempty_file(sample_bam) && !force
+                # resume/caching: keep existing per-sample BAM
+            else
+                run(split_cmd)
+            end
         end
     end
 

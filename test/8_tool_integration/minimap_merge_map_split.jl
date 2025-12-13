@@ -18,14 +18,13 @@
 import Test
 import Mycelia
 import FASTX
-import CodecZlib
 
 Test.@testset "Minimap merge/map/split helpers" begin
     Test.@testset "prefix_fastq_reads adds unique tag and mapping" begin
         temp_fastq = tempname() * ".fq"
         write(temp_fastq, "@r1\nACGT\n+\nIIII\n@r1\nTGCA\n+\nHHHH\n")
-        out_fastq = tempname() * ".fq.gz"
-        map_tsv = tempname() * ".tsv.gz"
+        out_fastq = tempname() * ".fq"
+        map_tsv = tempname() * ".tsv"
 
         res = Mycelia.prefix_fastq_reads(
             temp_fastq;
@@ -45,9 +44,7 @@ Test.@testset "Minimap merge/map/split helpers" begin
         close(reader)
         Test.@test all(startswith(id, "sampleA::") for id in ids)
 
-        io = CodecZlib.GzipDecompressorStream(open(map_tsv))
-        tsv_lines = readlines(io)
-        close(io)
+        tsv_lines = readlines(map_tsv)
         Test.@test length(tsv_lines) == 3 # header + 2 reads
     end
 
@@ -72,6 +69,7 @@ Test.@testset "Minimap merge/map/split helpers" begin
             run_mapping=false,
             run_splitting=false,
             write_read_map=false,
+            gzip_prefixed_fastqs=false,
             minimap_extra_args=["-N", "5"],
             as_string=true
         )
@@ -96,6 +94,7 @@ Test.@testset "Minimap merge/map/split helpers" begin
             single_end_fastqs=[fq],
             run_mapping=false,
             run_splitting=false,
+            gzip_prefixed_fastqs=false,
             as_string=true
         )
 
