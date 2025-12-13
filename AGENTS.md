@@ -21,6 +21,9 @@
 - Sequences: use `BioSequences.LongDNA{4}/LongRNA{4}/LongAA`; avoid string conversions in k-mer/qualmer/assembly code—only convert when interfacing with external tools or outputs.
 - Prefer `joinpath` for portability, avoid type piracy, and keep external tool calls isolated in helpers under `src/`.
 
+## Collaboration Notes
+- Before large deletions or restructures, explain why the deletion is necessary and what logic is being kept/replaced, then proceed once agreed.
+
 ## Testing Guidelines
 - Place new tests in the relevant stage directory; name files after the feature (e.g., `assembly_merging.jl`). Use `Test.@testset` with descriptive labels; do not skip/disable tests for broken functionality—fix the code instead.
 - Use small fixtures from `assembly_test_data/` and deterministic seeds (`StableRNGs`) for reproducibility.

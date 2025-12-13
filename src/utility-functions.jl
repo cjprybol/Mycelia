@@ -1676,63 +1676,6 @@ function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
     existing = Sys.which("BandageNG")
     existing === nothing && (existing = Sys.which("Bandage"))
     if existing !== nothing
-        return existing
-    end
-
-    # Download a static build
-    mkpath(outdir)
-    bandage_executable = joinpath(outdir, "Bandage")
-    if isfile(bandage_executable)
-        return bandage_executable
-    end
-
-    url = get(ENV, "MYCELIA_BANDAGE_URL", nothing)
-    if url === nothing
-        if Sys.islinux()
-            url = "https://github.com/asl/BandageNG/releases/download/v2025.12.1/BandageNG-Linux-e80ad3a.AppImage"
-        elseif Sys.isapple()
-            url = "https://github.com/asl/BandageNG/releases/download/v2025.12.1/BandageNG-macOS-e80ad3a.dmg"
-        else
-            error("Bandage download is only automated for Linux and macOS.")
-        end
-    end
-
-    mktempdir() do tmp
-        archive_path = joinpath(tmp, basename(url))
-        Downloads.download(url, archive_path)
-        if endswith(lowercase(url), ".appimage")
-            cp(archive_path, bandage_executable; force=true)
-            chmod(bandage_executable, 0o755)
-        elseif endswith(lowercase(url), ".dmg")
-            Sys.isapple() || error("DMG installs are only supported on macOS")
-            mountpoint = joinpath(tmp, "mnt")
-            mkpath(mountpoint)
-            run(`hdiutil attach -nobrowse -mountpoint $(mountpoint) $(archive_path)`)
-            candidate = joinpath(mountpoint, "BandageNG.app", "Contents", "MacOS", "BandageNG")
-            isfile(candidate) || error("BandageNG executable not found in DMG")
-            cp(candidate, bandage_executable; force=true)
-            chmod(bandage_executable, 0o755)
-            run(`hdiutil detach $(mountpoint)`)
-        else
-            run(`unzip $(archive_path) -d $(tmp)`)
-            candidate = nothing
-            for (root, _, files) in walkdir(tmp)
-                for file in files
-                    path = joinpath(root, file)
-                    if basename(path) in ("Bandage", "BandageNG") && isfile(path)
-                        candidate = path
-                        break
-                    end
-                end
-                candidate === nothing || break
-            end
-            candidate === nothing && error("Bandage archive did not contain an executable")
-            cp(candidate, bandage_executable; force=true)
-            chmod(bandage_executable, 0o755)
-        end
-    end
-
-    return bandage_executable
         _ensure_bandage_runs(existing)
         return existing
     end
