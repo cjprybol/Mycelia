@@ -44,6 +44,9 @@ try
     println("\n=== Comparative Analysis Benchmark ===")
     include("05_comparative_benchmark.jl")
     
+    println("\n=== CoverM Coverage Benchmark ===")
+    include("06_coverm_benchmark.jl")
+    
     elapsed = round(time() - start_time, digits=1)
     println("\n✅ All benchmarks completed in $elapsed seconds!")
     

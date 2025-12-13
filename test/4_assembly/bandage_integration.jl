@@ -2,13 +2,22 @@ import Test
 import Mycelia
 
 Test.@testset "Bandage download and CLI (opt-in)" begin
-    if !Sys.islinux() || get(ENV, "MYCELIA_RUN_BANDAGE_DOWNLOAD", "false") != "true"
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    if !Sys.islinux() || !(run_all || get(ENV, "MYCELIA_RUN_BANDAGE_DOWNLOAD", "false") == "true")
         @info "Skipping Bandage download/invoke test (requires Linux and MYCELIA_RUN_BANDAGE_DOWNLOAD=true)"
         return
     end
 
     mktempdir() do dir
-        bandage_bin = Mycelia.download_bandage(joinpath(dir, "bin"))
+        bandage_bin = try
+            Mycelia.download_bandage(joinpath(dir, "bin"))
+        catch e
+            if e isa Mycelia.BandageCompatibilityError
+                @info "Skipping Bandage download/invoke test (incompatible binary)" error=sprint(showerror, e)
+                return
+            end
+            rethrow()
+        end
         Test.@test isfile(bandage_bin)
 
         gfa = joinpath(dir, "graph.gfa")

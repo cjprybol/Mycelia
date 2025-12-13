@@ -165,12 +165,14 @@ graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
 ```
 """
 function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode=DoubleStrand)
+    lines = readlines(gfa_file)
+
     # Parse GFA file content
     segments = Dict{String, String}()  # id -> sequence
-    links = Vector{Tuple{String, Bool, String, Bool}}()  # (src_id, src_forward, dst_id, dst_forward)
+    links = Vector{Tuple{String, Bool, String, Bool, String}}()  # (src_id, src_forward, dst_id, dst_forward, overlap_str)
     paths = Dict{String, Vector{String}}()  # path_name -> vertex_ids
 
-    for line in eachline(gfa_file)
+    for line in lines
         fields = split(line, '\t')
         if isempty(fields)
             continue
@@ -179,34 +181,29 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
         line_type = first(fields)
 
         if line_type == "H"
-            # Header line - skip for now
             continue
         elseif line_type == "S"
-            # Segment line: S<tab>id<tab>sequence<tab>optional_fields
             if length(fields) >= 3
                 seg_id = fields[2]
                 sequence = fields[3]
                 segments[seg_id] = sequence
             end
         elseif line_type == "L"
-            # Link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
             if length(fields) >= 6
                 src_id = fields[2]
                 src_orient = fields[3] == "+"
                 dst_id = fields[4]
                 dst_orient = fields[5] == "+"
-                push!(links, (src_id, src_orient, dst_id, dst_orient))
+                overlap = fields[6]
+                push!(links, (src_id, src_orient, dst_id, dst_orient, overlap))
             end
         elseif line_type == "P"
-            # Path line: P<tab>path_name<tab>path<tab>overlaps
             if length(fields) >= 3
                 path_name = fields[2]
-                # Parse path string (removes +/- orientations for now)
                 path_vertices = split(replace(fields[3], r"[+-]" => ""), ',')
                 paths[path_name] = string.(path_vertices)
             end
         elseif line_type == "A"
-            # Assembly info line (hifiasm) - skip for now
             continue
         else
             @warn "Unknown GFA line type: $line_type in line: $line"
@@ -223,12 +220,10 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
 
     # Create MetaGraphsNext graph
     graph = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
+        Graphs.DiGraph();
         label_type=kmer_type,
         vertex_data_type=vertex_data_type,
-        edge_data_type=edge_data_type,
-        weight_function=edge_data -> 1.0,  # Default weight
-        default_weight=0.0
+        edge_data_type=edge_data_type
     )
 
     # Add vertices (segments) - convert sequences to k-mer types
@@ -264,17 +259,11 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     end
 
     # Add edges (links)
-    for (src_id, src_forward, dst_id, dst_forward) in links
+    for (src_id, src_forward, dst_id, dst_forward, _) in links
         if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
             src_kmer = id_to_kmer[src_id]
             dst_kmer = id_to_kmer[dst_id]
-
-            # Convert GFA orientations to StrandOrientation
-            src_strand = src_forward ? Forward : Reverse
-            dst_strand = dst_forward ? Forward : Reverse
-
-            # Create strand-aware edge
-            graph[src_kmer, dst_kmer] = edge_data_type(Dict{String, Dict{String, Set{EdgeEvidenceEntry}}}())
+            graph[src_kmer, dst_kmer] = edge_data_type()
         else
             @warn "Link references unknown segment: $src_id -> $dst_id"
         end
@@ -316,7 +305,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
     segment_lengths = Set{Int}()
     segments = Dict{String, String}()
 
-    for line in eachline(gfa_file)
+    for line in readlines(gfa_file)
         fields = split(line, '\t')
         if isempty(fields) || first(fields) != "S"
             continue
@@ -348,6 +337,66 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         return read_gfa_next(gfa_file, kmer_type, graph_mode)
     else
         # Variable lengths or forced - use BioSequence graph
-        error("Variable-length BioSequence GFA import not yet implemented. Use read_gfa_next(file, kmer_type, mode) for fixed-length graphs.")
+        # Use existing sequence detection utilities for type safety
+        Mycelia_module = parentmodule(Rhizomorph)
+        seqs = Dict{String, Any}()
+        seq_types = Set{DataType}()
+        for (seg_id, seq_str) in segments
+            seq = Mycelia_module.convert_sequence(seq_str)
+            seqs[seg_id] = seq
+            push!(seq_types, typeof(seq))
+        end
+
+        if isempty(seq_types)
+            return MetaGraphsNext.MetaGraph(Graphs.DiGraph(); label_type=String, vertex_data_type=StringVertexData, edge_data_type=StringEdgeData)
+        end
+        if length(seq_types) != 1
+            error("Mixed sequence types in GFA segments; unable to construct a homogeneous BioSequence graph.")
+        end
+
+        SeqType = first(seq_types)
+
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type=SeqType,
+            vertex_data_type=BioSequenceVertexData{SeqType},
+            edge_data_type=BioSequenceEdgeData
+        )
+
+        # Add vertices
+        for seq in values(seqs)
+            graph[seq] = BioSequenceVertexData(seq)
+        end
+
+        # Helper to parse overlaps like "12M"
+        function parse_overlap_str(s::AbstractString)
+            m = match(Regex("\\d+"), s)
+            isnothing(m) && return 0
+            try
+                return parse(Int, m.captures[1])
+            catch
+                return 0
+            end
+        end
+
+        # Add edges
+        lines = readlines(gfa_file)
+        for line in lines
+            fields = split(line, '\t')
+            if isempty(fields) || first(fields) != "L" || length(fields) < 6
+                continue
+            end
+            src_id = fields[2]
+            dst_id = fields[4]
+            overlap = parse_overlap_str(fields[6])
+
+            if haskey(seqs, src_id) && haskey(seqs, dst_id)
+                src_seq = seqs[src_id]
+                dst_seq = seqs[dst_id]
+                graph[src_seq, dst_seq] = BioSequenceEdgeData(overlap)
+            end
+        end
+
+        return graph
     end
 end

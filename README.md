@@ -51,6 +51,7 @@ import Mycelia
 - **[Getting Started Guide](https://cjprybol.github.io/Mycelia/dev/getting-started/)** - Install and complete your first analysis
 - **[API Reference](https://cjprybol.github.io/Mycelia/dev/)** - Complete function documentation
 - **[Tutorials](https://cjprybol.github.io/Mycelia/dev/tutorials/)** - Step-by-step workflows
+- **[Workflow & Tool Map](docs/src/workflow-map.md)** - Quick links from inputs to tools, outputs, and tutorials
 
 ## Installation
 

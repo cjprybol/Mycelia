@@ -132,7 +132,7 @@ Count k-mers in a FASTA/FASTQ file using Jellyfish.
 # Arguments
 - `fastx::String`: Path to input FASTA/FASTQ file (can be gzipped)
 - `k::Integer`: k-mer length
-- `threads::Integer=Sys.CPU_THREADS`: Number of threads to use
+- `threads::Integer=get_default_threads()`: Number of threads to use
 - `max_mem::Integer=Int(Sys.free_memory())`: Maximum memory in bytes (defaults to system free memory)
 - `canonical::Bool=false`: Whether to count canonical k-mers (both strands combined)
 - `outfile::String=auto`: Output filename (auto-generated based on input and parameters)
@@ -141,7 +141,7 @@ Count k-mers in a FASTA/FASTQ file using Jellyfish.
 # Returns
 - `String`: Path to gzipped TSV file containing k-mer counts
 """
-function jellyfish_count(;fastx, k, threads=Sys.CPU_THREADS, max_mem=Int(Sys.free_memory()), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
+function jellyfish_count(;fastx, k, threads=get_default_threads(), max_mem=Int(Sys.free_memory()), canonical=false, outfile = ifelse(canonical, "$(fastx).k$(k).canonical.jf", "$(fastx).k$(k).jf"), conda_check=true)
     if conda_check
         Mycelia.add_bioconda_env("kmer-jellyfish")
     end

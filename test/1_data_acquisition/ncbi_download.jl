@@ -74,6 +74,10 @@ end
 
 Test.@testset "SRA prefetch and fasterq_dump stepwise" begin
     sra_public_fastq_metadata_file = joinpath(@__DIR__, "..", "metadata", "20250702.sra-public-fastqs.csv.gz")
+    if !isfile(sra_public_fastq_metadata_file)
+        @info "Skipping SRA prefetch test; metadata missing at $(sra_public_fastq_metadata_file)"
+        return
+    end
     sra_public_fastq_metadata = CSV.read(CodecZlib.GzipDecompressorStream(open(sra_public_fastq_metadata_file)), DataFrames.DataFrame)
     SRR_identifier = sort!(sra_public_fastq_metadata, "Bytes")[1, "Run"]
     prefetch_result = Mycelia.prefetch(SRR=SRR_identifier)
@@ -91,6 +95,10 @@ end
 
 Test.@testset "SRA fasterq_dump standalone" begin
     sra_public_fastq_metadata_file = joinpath(@__DIR__, "..", "metadata", "20250702.sra-public-fastqs.csv.gz")
+    if !isfile(sra_public_fastq_metadata_file)
+        @info "Skipping SRA fasterq_dump test; metadata missing at $(sra_public_fastq_metadata_file)"
+        return
+    end
     sra_public_fastq_metadata = CSV.read(CodecZlib.GzipDecompressorStream(open(sra_public_fastq_metadata_file)), DataFrames.DataFrame)
     SRR_identifier = sort!(sra_public_fastq_metadata, "Bytes")[1, "Run"]
     fasterq_result = Mycelia.fasterq_dump(srr_identifier=SRR_identifier)

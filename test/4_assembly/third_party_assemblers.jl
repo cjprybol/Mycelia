@@ -633,13 +633,7 @@ Test.@testset "Long Read Metagenomic Assembly" begin
         meta_long_fastq = joinpath(dir, "meta_long_reads.fq")
         run(pipeline(`gunzip -c $(meta_long_simulated_reads)`, meta_long_fastq))
             
-        # takes too long to run relative to other tools
-        # Test.@testset "Long Read Metagenomic Assembly - hifiasm-meta" begin
-        #     # Check if running in CI environment with resource constraints
-        #     is_ci = haskey(ENV, "CI") || haskey(ENV, "GITHUB_ACTIONS") || haskey(ENV, "TRAVIS") || haskey(ENV, "CIRCLECI")
-            
         Test.@testset "Long Read Metagenome Assembly - hifiasm-meta" begin
-            # Test hifiasm-meta - metagenomic assembly
             hifiasm_meta_outdir = joinpath(dir, "hifiasm_meta_assembly")
             if isdir(hifiasm_meta_outdir)
                 rm(hifiasm_meta_outdir, recursive=true)
@@ -649,10 +643,8 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 Test.@test result.outdir == hifiasm_meta_outdir
                 expected_prefix = joinpath(hifiasm_meta_outdir, basename(meta_long_fastq) * ".hifiasm_meta")
                 Test.@test result.hifiasm_outprefix == expected_prefix
-                # Clean up after test
                 rm(hifiasm_meta_outdir, recursive=true, force=true)
             catch e
-                # Resource-heavy assemblies may fail on constrained systems
                 if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "Segmentation fault")
                     @warn """
                     hifiasm-meta assembly may require >3-6GB RAM. Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data.
@@ -661,7 +653,6 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 else
                     rethrow(e)
                 end
-                # Clean up on failure
                 rm(hifiasm_meta_outdir, recursive=true, force=true)
             end
         end
@@ -864,6 +855,12 @@ end
 #                 # Decompress long reads for HyLight
 #                 meta_long_reads = joinpath(dir, "meta_long_reads.fq")
 #                 run(pipeline(`gunzip -c $(meta_long_reads_gz)`, meta_long_reads))
+# Hybrid metagenomic assembly (HyLight) placeholder.
+# Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
+# Keep a stub so we remember to reintroduce a lightweight fixture later.
+# Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
+#     Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
+# end
             
 #             # Test HyLight - hybrid strain-resolved metagenomic assembly
 #             hylight_outdir = joinpath(dir, "hylight_assembly")
@@ -882,13 +879,13 @@ end
 #                     @warn """
 #                     HyLight hybrid assembly failed due to resource constraints.
 #                     Current test: 3kb genome, 10x short reads + 5x long reads, ~45kb total sequence data
-                    
+
 #                     Required resources for HyLight:
 #                     - Memory: ~6-12GB RAM minimum (strain-resolved metagenomic hybrid assembly)
 #                     - CPU: 4-16 cores recommended
 #                     - Disk: ~2-4GB temporary space
 #                     - Note: HyLight performs strain resolution on hybrid assemblies
-                    
+
 #                     To fix: This is a very resource-intensive assembler requiring significant computational resources.
 #                     Consider running on a high-memory machine or skip strain-resolved hybrid assembly testing.
 #                     """
@@ -900,7 +897,14 @@ end
 #                 rm(hylight_outdir, recursive=true, force=true)
 #             end
 #         end
-#     end
+# #     end
+
+# Hybrid metagenomic assembly (HyLight) placeholder.
+# Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
+# Keep a stub so we remember to reintroduce a lightweight fixture later.
+Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
+    Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
+end
 #     Test.@testset "6. Probabilistic Assembly (Mycelia)" begin
 #         mktempdir() do dir
 #             fastq = joinpath(dir, "reads.fq")
@@ -1266,6 +1270,99 @@ end
 #     Test.@testset "9. Validation & Quality Control" begin
 #     end
 # end
+
+Test.@testset "Strain-aware workflows (STRONG/Strainy)" begin
+    mktempdir() do dir
+        # Two small strains
+        base_ref_fasta = joinpath(dir, "base_strain.fasta")
+        variant_ref_fasta = joinpath(dir, "variant_strain.fasta")
+        rng_base = StableRNGs.StableRNG(901)
+        rng_variant = StableRNGs.StableRNG(902)
+        base_genome = BioSequences.randdnaseq(rng_base, 5000)
+        variant_genome = BioSequences.randdnaseq(rng_variant, 5000)
+        Mycelia.write_fasta(outfile=base_ref_fasta, records=[FASTX.FASTA.Record("base_strain", base_genome)])
+        Mycelia.write_fasta(outfile=variant_ref_fasta, records=[FASTX.FASTA.Record("variant_strain", variant_genome)])
+
+        # Simulate reads (uneven coverage)
+        base_reads_gz = Mycelia.simulate_nanopore_reads(fasta=base_ref_fasta, quantity="12x")
+        variant_reads_gz = Mycelia.simulate_nanopore_reads(fasta=variant_ref_fasta, quantity="4x")
+
+        base_fastq = joinpath(dir, "base_strain_reads.fq")
+        variant_fastq = joinpath(dir, "variant_strain_reads.fq")
+        mixed_fastq = joinpath(dir, "mixed_strain_reads.fq")
+        run(pipeline(`gunzip -c $(base_reads_gz)`, base_fastq))
+        run(pipeline(`gunzip -c $(variant_reads_gz)`, variant_fastq))
+        run(pipeline(`cat $(base_fastq) $(variant_fastq)`, mixed_fastq))
+
+        # STRONG: requires assembly graph; generate via metaFlye
+        metaflye_for_graph_outdir = joinpath(dir, "metaflye_for_graph")
+        assembly_graph_gfa = joinpath(metaflye_for_graph_outdir, "assembly_graph.gfa")
+        try
+            Mycelia.run_metaflye(fastq=mixed_fastq, outdir=metaflye_for_graph_outdir, genome_size="5k", read_type="nano-raw")
+
+            strong_outdir = joinpath(dir, "strong_assembly")
+            if isfile(assembly_graph_gfa)
+                try
+                    result = Mycelia.run_strong(assembly_graph_gfa, mixed_fastq, outdir=strong_outdir, nb_strains=2)
+                    Test.@test result.outdir == strong_outdir
+                    Test.@test result.strain_unitigs == joinpath(strong_outdir, "strain_unitigs.fasta")
+                catch e
+                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
+                        @warn "STRONG strain resolution failed due to resource constraints." exception=e
+                        Test.@test_skip "STRONG test skipped - insufficient resources"
+                    else
+                        rethrow(e)
+                    end
+                end
+            else
+                @warn "Assembly graph not generated by metaFlye - skipping STRONG test"
+                Test.@test_skip "STRONG test skipped - no assembly graph available"
+            end
+        catch e
+            if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
+                @warn "metaFlye failed; cannot run STRONG" exception=e
+                Test.@test_skip "STRONG test skipped - cannot generate assembly graph"
+            else
+                rethrow(e)
+            end
+        end
+        isdir(metaflye_for_graph_outdir) && rm(metaflye_for_graph_outdir, recursive=true, force=true)
+
+        # Strainy: requires assembly FASTA; generate via metaFlye
+        metaflye_for_strainy_outdir = joinpath(dir, "metaflye_for_strainy")
+        metaflye_assembly = joinpath(metaflye_for_strainy_outdir, "assembly.fasta")
+        try
+            Mycelia.run_metaflye(fastq=mixed_fastq, outdir=metaflye_for_strainy_outdir, genome_size="5k", read_type="nano-raw")
+
+            if isfile(metaflye_assembly)
+                strainy_outdir = joinpath(dir, "strainy_assembly")
+                try
+                    result = Mycelia.run_strainy(metaflye_assembly, mixed_fastq, outdir=strainy_outdir, mode="phase")
+                    Test.@test result.outdir == strainy_outdir
+                    Test.@test result.strain_assemblies == joinpath(strainy_outdir, "strain_assemblies.fasta")
+                catch e
+                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
+                        @warn "Strainy strain phasing failed due to resource constraints." exception=e
+                        Test.@test_skip "Strainy test skipped - insufficient resources"
+                    else
+                        rethrow(e)
+                    end
+                end
+            else
+                @warn "Assembly not generated by metaFlye - skipping Strainy test"
+                Test.@test_skip "Strainy test skipped - no assembly available"
+            end
+        catch e
+            if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
+                @warn "metaFlye failed; cannot run Strainy" exception=e
+                Test.@test_skip "Strainy test skipped - cannot generate assembly"
+            else
+                rethrow(e)
+            end
+        end
+        isdir(metaflye_for_strainy_outdir) && rm(metaflye_for_strainy_outdir, recursive=true, force=true)
+    end
+end
 
 # ---------------------------------------------------------------------------
 # Additional assembler smoke tests (simulated data)

@@ -23,7 +23,7 @@ function run_diamond_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond",
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     evalue::Float64 = 1e-3,
     block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
     sensitivity::String = "--iterate"
@@ -126,7 +126,7 @@ function run_blastp_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_blastp",
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     evalue::Float64 = 1e-3,
     max_target_seqs::Int = 500
 )
@@ -204,7 +204,7 @@ function run_mmseqs_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs",
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     evalue::Float64 = 1e-3,
     sensitivity::Float64 = 4.0
 )
@@ -289,7 +289,7 @@ Named tuple with `report_pdf`, `report_txt`, and `coverage` file paths.
 function run_qualimap_bamqc(;
     bam::String,
     outdir::String = joinpath(dirname(bam), "qualimap"),
-    threads::Int = Sys.CPU_THREADS,
+    threads::Int = get_default_threads(),
     outformat::String = "PDF:HTML",
     java_mem::String = "4G"
 )
@@ -423,7 +423,7 @@ end
 #         reference_fasta,
 #         temp_sam_outfile = fastq * "." * basename(reference_fasta) * "." * "minimap2.sam",
 #         outfile = replace(temp_sam_outfile, ".sam" => ".sam.gz"),
-#         threads = Sys.CPU_THREADS,
+#         threads = get_default_threads(),
 #         memory = Sys.total_memory(),
 #         shell_only = false
 #     )
@@ -462,7 +462,7 @@ end
 # function minimap_index_pacbio(;
 #         reference_fasta,
 #         outfile = replace(reference_fasta, Mycelia.FASTA_REGEX => ".pacbio.mmi"),
-#         threads = Sys.CPU_THREADS,
+#         threads = get_default_threads(),
 #         shell_only = false
 #     )
 #     Mycelia.add_bioconda_env("minimap2")
@@ -531,7 +531,7 @@ Create a minimap2 index for the provided reference sequence.
 # Returns
 Named tuple `(cmd, outfile)` where `outfile` is the generated `.mmi` index path.
 """
-function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=Sys.CPU_THREADS, as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
+function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=get_default_threads(), as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     # if lr:hq, deal with : in the name
@@ -569,7 +569,7 @@ function minimap_map_with_index(;
         fastq,
         index_file="",
         mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85),
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         as_string=false,
         denominator=DEFAULT_MINIMAP_DENOMINATOR
     )
@@ -634,7 +634,7 @@ function minimap_map(;
         mapping_type,
         as_string=false,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         denominator=DEFAULT_MINIMAP_DENOMINATOR,
         output_format="bam",
         sorted=true,
@@ -785,7 +785,7 @@ function minimap_map_paired_end_with_index(;
         forward,
         reverse,
         mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=Sys.CPU_THREADS,
+        threads=get_default_threads(),
         outdir = dirname(forward),
         as_string=false,
         denominator=DEFAULT_MINIMAP_DENOMINATOR,
@@ -835,6 +835,208 @@ function minimap_map_paired_end_with_index(;
     end
     
     return (;cmd, outfile)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Merge FASTQs, map with minimap2, and split the sorted BAM back into per-sample files.
+
+Read identifiers are rewritten with a sample-specific prefix to guarantee uniqueness and
+enable efficient splitting. Supports single-end reads and paired collections (forward,
+reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
+
+# Arguments
+- `reference_fasta::AbstractString`: Reference FASTA or `.mmi` when `minimap_index` is supplied.
+- `mapping_type::AbstractString`: Minimap2 preset (`"map-hifi"`, `"map-ont"`, `"map-pb"`, `"sr"`, `"lr:hq"`).
+
+# Keywords
+- `single_end_fastqs::Vector{<:AbstractString}`: FASTQs treated as single-end.
+- `paired_end_fastqs::Vector{Tuple{<:AbstractString,<:AbstractString}}`: Forward/reverse pairs.
+- `minimap_index::AbstractString=""`: Optional prebuilt minimap2 index.
+- `outdir::Union{Nothing,String}=nothing`: Destination for per-sample BAMs (defaults to each sample's FASTQ dir).
+- `tmpdir::Union{Nothing,String}=nothing`: Location for prefixed FASTQs and merged BAM (defaults to a tempdir).
+- `minimap_extra_args::Vector{<:AbstractString}=String[]`: Additional minimap2 flags (e.g., `["-N", "10"]`).
+- `threads::Integer=get_default_threads()`, `mem_gb`, `denominator`: Control minimap2 index sizing.
+- `id_delimiter::AbstractString="::"`: Separator between sample tag and original id.
+- `write_read_map::Bool=false`: Optionally emit read-id map files.
+- `read_map_format::Symbol=:arrow`: `:arrow` (buffered) or `:tsv` (streaming) mapping output.
+- `run_mapping::Bool=true`, `run_splitting::Bool=true`: Execute minimap2 stage and per-sample splits.
+- `keep_prefixed_fastqs::Bool=false`: Retain prefixed intermediates if true.
+- `merged_bam::Union{Nothing,String}=nothing`: Override merged BAM path.
+- `as_string::Bool=false`: Return command strings instead of `Cmd`/pipelines.
+
+# Returns
+Named tuple with commands, paths, and per-sample output metadata.
+"""
+function minimap_merge_map_and_split(;
+    reference_fasta::AbstractString,
+    mapping_type::AbstractString,
+    single_end_fastqs::Vector{<:AbstractString}=String[],
+    paired_end_fastqs::AbstractVector{<:Tuple{<:AbstractString,<:AbstractString}}=Tuple{String,String}[],
+    minimap_index::AbstractString="",
+    outdir::Union{Nothing,String}=nothing,
+    tmpdir::Union{Nothing,String}=nothing,
+    minimap_extra_args::Vector{<:AbstractString}=String[],
+    threads::Integer=get_default_threads(),
+    mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85),
+    denominator::Real=DEFAULT_MINIMAP_DENOMINATOR,
+    id_delimiter::AbstractString="::",
+    write_read_map::Bool=false,
+    read_map_format::Symbol=:arrow,
+    run_mapping::Bool=true,
+    run_splitting::Bool=true,
+    keep_prefixed_fastqs::Bool=false,
+    merged_bam::Union{Nothing,String}=nothing,
+    as_string::Bool=false
+)
+    @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    if isempty(single_end_fastqs) && isempty(paired_end_fastqs)
+        error("Provide at least one FASTQ via single_end_fastqs or paired_end_fastqs")
+    end
+    @assert isfile(reference_fasta) "Reference FASTA not found: $reference_fasta"
+    if !isempty(minimap_index)
+        @assert isfile(minimap_index) "minimap_index supplied but not found: $minimap_index"
+    end
+    tmpdir = isnothing(tmpdir) ? mktempdir() : tmpdir
+    mkpath(tmpdir)
+
+    # Helper to build sample tag from filenames
+    function build_sample_tag(name::AbstractString)
+        base = replace(basename(name), Mycelia.FASTQ_REGEX => "")
+        return replace(base, r"[^\w\.\-]+" => "_")
+    end
+
+    prefixed_fastqs = String[]
+    sample_infos = NamedTuple[]
+    mapping_suffix = read_map_format == :arrow ? "arrow" : "tsv.gz"
+
+    # Single-end inputs
+    for fq in single_end_fastqs
+        sample_tag = build_sample_tag(fq)
+        outfq = joinpath(tmpdir, sample_tag * ".prefixed.fq.gz")
+        map_path = write_read_map ? joinpath(tmpdir, "$(sample_tag).read_map.$mapping_suffix") : nothing
+        Mycelia.prefix_fastq_reads(
+            fq;
+            sample_tag=sample_tag,
+            out_fastq=outfq,
+            mapping_out=map_path,
+            mapping_format=read_map_format,
+            id_delimiter=id_delimiter
+        )
+        push!(prefixed_fastqs, outfq)
+        push!(sample_infos, (
+            sample_tag=sample_tag,
+            source_fastqs=[fq],
+            prefixed_fastqs=[outfq],
+            mapping_files=map_path === nothing ? String[] : [map_path],
+            paired=false,
+            output_bam=nothing
+        ))
+    end
+
+    # Paired-end inputs
+    for (fwd, rev) in paired_end_fastqs
+        sample_tag = find_matching_prefix(basename(fwd), basename(rev))
+        if isempty(sample_tag)
+            sample_tag = build_sample_tag(fwd)
+        end
+        sample_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
+        out1 = joinpath(tmpdir, "$(sample_tag).R1.prefixed.fq.gz")
+        out2 = joinpath(tmpdir, "$(sample_tag).R2.prefixed.fq.gz")
+        map1 = write_read_map ? joinpath(tmpdir, "$(sample_tag).R1.read_map.$mapping_suffix") : nothing
+        map2 = write_read_map ? joinpath(tmpdir, "$(sample_tag).R2.read_map.$mapping_suffix") : nothing
+        Mycelia.prefix_fastq_reads(
+            fwd;
+            sample_tag=sample_tag,
+            out_fastq=out1,
+            mapping_out=map1,
+            mapping_format=read_map_format,
+            id_delimiter=id_delimiter
+        )
+        Mycelia.prefix_fastq_reads(
+            rev;
+            sample_tag=sample_tag,
+            out_fastq=out2,
+            mapping_out=map2,
+            mapping_format=read_map_format,
+            id_delimiter=id_delimiter
+        )
+        append!(prefixed_fastqs, (out1, out2))
+        push!(sample_infos, (
+            sample_tag=sample_tag,
+            source_fastqs=[fwd, rev],
+            prefixed_fastqs=[out1, out2],
+            mapping_files=String[m for m in (map1, map2) if m !== nothing],
+            paired=true,
+            output_bam=nothing
+        ))
+    end
+
+    target = isempty(minimap_index) ? reference_fasta : minimap_index
+    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    merged_bam = isnothing(merged_bam) ? joinpath(tmpdir, Mycelia.normalized_current_datetime() * "." * basename(reference_fasta) * ".joint.minimap2.sorted.bam") : merged_bam
+
+    minimap_parts = [
+        Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
+        "-t", string(threads), "-x", mapping_type, "-I$(index_size)", "-a"
+    ]
+    append!(minimap_parts, minimap_extra_args)
+    push!(minimap_parts, target)
+    append!(minimap_parts, prefixed_fastqs)
+    map_cmd = Cmd(minimap_parts)
+    sort_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", merged_bam, "-"])
+    minimap_cmd = pipeline(map_cmd, sort_cmd)
+
+    if run_mapping
+        Mycelia.add_bioconda_env("minimap2")
+        Mycelia.add_bioconda_env("samtools")
+        run(minimap_cmd)
+    end
+
+    split_cmds = Dict{String,Cmd}()
+    if run_splitting
+        @assert isfile(merged_bam) "Merged BAM not found: $(merged_bam). Run mapping or supply existing BAM."
+        Mycelia.add_bioconda_env("samtools")
+        for info in sample_infos
+            sample_tag = info.sample_tag
+            sample_outdir = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
+            mkpath(sample_outdir)
+            sample_bam = joinpath(sample_outdir, string(sample_tag, ".", basename(reference_fasta), ".sorted.bam"))
+            awk_script = "BEGIN{FS=\"\t\"; OFS=\"\t\"} /^@/ {print; next} { split(" * "\\\$1" * ", parts, \"" * id_delimiter * "\"); if (parts[1]==\"" * sample_tag * "\") print }"
+            view_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "view", "-@", string(threads), "-h", merged_bam])
+            filter_cmd = Cmd(["awk", awk_script])
+            sort_split_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", sample_bam, "-"])
+            split_cmd = pipeline(view_cmd, filter_cmd, sort_split_cmd)
+            split_cmds[sample_tag] = split_cmd
+            run(split_cmd)
+        end
+    end
+
+    sample_outputs = map(sample_infos) do info
+        outdir_for_sample = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
+        sample_bam = joinpath(outdir_for_sample, string(info.sample_tag, ".", basename(reference_fasta), ".sorted.bam"))
+        merge(info, (;output_bam=sample_bam))
+    end
+
+    if !keep_prefixed_fastqs && run_mapping && run_splitting
+        try
+            for fq in prefixed_fastqs
+                rm(fq; force=true)
+            end
+        catch
+            # best-effort cleanup
+        end
+    end
+
+    return (
+        minimap_cmd = as_string ? string(minimap_cmd) : minimap_cmd,
+        merged_bam = merged_bam,
+        split_cmds = as_string ? Dict(k => string(v) for (k, v) in split_cmds) : split_cmds,
+        prefixed_fastqs = prefixed_fastqs,
+        sample_outputs = sample_outputs,
+        tmpdir = tmpdir
+    )
 end
 
 # """
@@ -998,7 +1200,7 @@ end
 #     if force || !isfile(outfile)
 #         cmd = 
 #         `diamond blastp
-#         --threads $(Sys.CPU_THREADS)
+#         --threads $(get_default_threads())
 #         --block-size $(block_size)
 #         --db $(diamond_db)
 #         --query $(protein_fasta)
@@ -1157,7 +1359,7 @@ function run_mmseqs_easy_search(;
     out_dir = dirname(query_fasta),
     outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." * basename(target_database) * ".txt",
     format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-    threads = Sys.CPU_THREADS,
+    threads = get_default_threads(),
     force::Bool = false,
     gzip::Bool = true,
     validate_compression::Bool = true,
@@ -1397,7 +1599,7 @@ This function constructs and runs a BLASTN command based on the provided paramet
 It creates an output directory if it doesn't exist, constructs the output file path, and checks if the BLASTN command needs to be run based on the existence and size of the output file.
 The function supports running the BLASTN command locally or remotely, with options to force re-running and to wait for completion.
 """
-function run_blastn(;outdir=pwd(), fasta, blastdb, threads=min(Sys.CPU_THREADS, 8), task="megablast", force=false, remote=false, wait=true)
+function run_blastn(;outdir=pwd(), fasta, blastdb, threads=min(get_default_threads(), 8), task="megablast", force=false, remote=false, wait=true)
     Mycelia.add_bioconda_env("blast")
     outdir = mkpath(outdir)
     outfile = "$(outdir)/$(basename(fasta)).blastn.$(basename(blastdb)).$(task).txt"
@@ -1477,7 +1679,7 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote
             cmd = 
             `
             $(blast_command)
-            -num_threads $(Sys.CPU_THREADS)
+            -num_threads $(get_default_threads())
             -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
             -query $(fasta)
             -db $(blast_db)
@@ -1930,7 +2132,7 @@ function read_mmseqs_easy_search(mmseqs_file::String)
         delim='\t',           # Tab-delimited file
         types=col_types,      # Apply our defined column types
         pool=true,            # Pool string columns to save memory
-        ntasks=Sys.CPU_THREADS, # Utilize available CPU threads for parsing
+        ntasks=get_default_threads(), # Utilize available CPU threads for parsing
     )
 
     local mmseqs_results::DataFrames.DataFrame

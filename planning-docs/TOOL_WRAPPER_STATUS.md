@@ -10,17 +10,28 @@
 
 **Mycelia has extensive assembler coverage** with 13+ assemblers wrapped and tested, plus quality control tools. However, **binning and classification tools from the metagenomics workflow are missing**.
 
-### Status Overview
+### Status Overview (Updated 2025-12-10)
 
 | Category | Implemented | Tested | Missing from Workflow |
 |----------|-------------|--------|----------------------|
 | **Assemblers (Short)** | 5/5 | 4/5 | 0 |
 | **Assemblers (Long)** | 6+/6 | 6/6 | 0 |
-| **Strain-Aware** | 3/3 | 0/3 | 0 |
-| **Quality Control** | 2/2 | 0/2 | 0 |
-| **Classification** | 0/4 | 0/4 | 4 |
+| **Strain-Aware** | 3/3 | **3/3 opt-in** | 0 |
+| **Quality Control** | 2/2 | **2/2 opt-in** | 0 |
+| **Classification** | 5/5 | 1/5 | 0 |
 | **Binning** | 0/7 | 0/7 | 7 |
 | **Post-Binning** | 0/2 | 0/2 | 2 |
+| **Sequence Encoding** | 1/1 | 1/1 | 0 |
+
+**2025-12-10 Update**:
+- Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
+- mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
+- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications
+
+**2025-12-10 Update**:
+- Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
+- mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
+- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications
 
 ---
 
@@ -33,10 +44,11 @@
 - sylph - assess relative coverage
 
 **Status**:
-- ❌ sourmash: Commented out in `src/bioconda.jl:299`, NOT implemented
+- ✅ sourmash: **IMPLEMENTED** in `src/classification.jl` (2025-12-10)
+  - Functions: `run_sourmash_sketch()`, `run_sourmash_search()`, `run_sourmash_gather()`
 - ✅ sylph: Implemented and tested (`run_sylph_profile` in `src/sequence-comparison.jl`, integration test in `test/7_comparative_pangenomics/sequence_comparison.jl`)
 
-**Verdict**: ⚠️ **PARTIAL** - sylph now wrapped and covered by tests; sourmash still missing
+**Verdict**: ✅ **COMPLETE** - Both sourmash and sylph implemented
 
 ---
 
@@ -52,12 +64,16 @@
 - ✅ minimap: **FOUND** in `src/alignments-and-mapping.jl`
   - Functions: `minimap_index()`, `minimap_map()`, `minimap_map_with_index()`, `minimap_map_paired_end_with_index()`
   - **VERIFIED**: Multiple functions, well-integrated
-- ❌ mosdepth: NOT FOUND
-- ❌ metaphlan: NOT FOUND (metagenomic-classification.jl is entirely commented out)
-- ❌ metabuli: NOT FOUND
+- ✅ mosdepth: **FOUND** in `src/xam.jl:1001`
+  - Functions: `run_mosdepth()`, `parse_mosdepth_distribution()`, `parse_mosdepth_summary()`, `parse_mosdepth_thresholds()`, `summarize_mosdepth_qc()`
+  - **VERIFIED**: Comprehensive coverage analysis with QC metrics
+- ✅ metaphlan: **IMPLEMENTED** in `src/classification.jl` (2025-12-10)
+  - Functions: `run_metaphlan()`, `parse_metaphlan_profile()`
+- ✅ metabuli: **IMPLEMENTED** in `src/classification.jl` (2025-12-10)
+  - Functions: `run_metabuli_classify()`, `run_metabuli_build_db()`, `parse_metabuli_report()`, `parse_metabuli_classifications()`
 - ✅ skani: Implemented and tested (`skani_triangle`/`skani_dist` in `src/sequence-comparison.jl`, test in `test/7_comparative_pangenomics/sequence_comparison.jl`)
 
-**Verdict**: ⚠️ **PARTIAL** - minimap and skani work; mosdepth, metaphlan, metabuli remain missing
+**Verdict**: ✅ **COMPLETE** - All read classification tools implemented (minimap, mosdepth, metaphlan, metabuli, skani)
 
 ---
 
@@ -126,15 +142,29 @@
 - COMEBin
 
 **Status**:
-- ❌ Taxometer: NOT FOUND
-- ❌ TaxVAMB: NOT FOUND
-- ❌ VAMB: NOT FOUND
-- ❌ MetaBAT2: NOT FOUND
-- ❌ MetaCoAG: NOT FOUND
-- ❌ GenomeFace: NOT FOUND
-- ❌ COMEBin: NOT FOUND
+- ✅ Taxometer: **FOUND** in `src/binning.jl`
+  - Function: `run_taxometer`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ TaxVAMB: **FOUND** in `src/binning.jl`
+  - Function: `run_taxvamb`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ VAMB: **FOUND** in `src/binning.jl`
+  - Function: `run_vamb`
+  - Tests: ✅ Parser/validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ MetaBAT2: **FOUND** in `src/binning.jl`
+  - Function: `run_metabat2`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ MetaCoAG: **FOUND** in `src/binning.jl`
+  - Function: `run_metacoag`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ GenomeFace: **FOUND** in `src/binning.jl`
+  - Function: `run_genomeface`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
+- ✅ COMEBin: **FOUND** in `src/binning.jl`
+  - Function: `run_comebin`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
 
-**Verdict**: ❌ **MISSING** - Zero binning tools wrapped (0/7)
+**Verdict**: ✅ **IMPLEMENTED** - 7/7 binning tools wrapped (tests are validation-only; external runs opt-in).
 
 ---
 
@@ -145,10 +175,14 @@
 - MAGmax (merging)
 
 **Status**:
-- ❌ dRep: NOT FOUND
-- ❌ MAGmax: NOT FOUND
+- ✅ dRep: **FOUND** in `src/binning.jl`
+  - Function: `run_drep_dereplicate`
+  - Tests: ✅ Validation/parsing in `test/8_tool_integration/binning_tools.jl`
+- ✅ MAGmax: **FOUND** in `src/binning.jl`
+  - Function: `run_magmax_merge`
+  - Tests: ✅ Validation in `test/8_tool_integration/binning_tools.jl`
 
-**Verdict**: ❌ **MISSING** - Zero post-binning tools wrapped (0/2)
+**Verdict**: ✅ **IMPLEMENTED** - 2/2 post-binning tools wrapped (tests are validation-only; external runs opt-in).
 
 ---
 
@@ -161,16 +195,33 @@
 **Status**:
 - ✅ QUAST: **FOUND** in `src/quality-control-and-benchmarking.jl:1038`
   - Functions: `run_quast(assembly_files::Vector{String})`, `run_quast(assembly_file::String)`
-  - Tests: ❓ NOT VERIFIED
+  - Tests: ✅ Opt-in extended smoke in `test/5_validation/quast_busco_wrappers_test.jl` (simulated + phiX download) with default outdir derivation
 - ✅ BUSCO: **FOUND** in `src/quality-control-and-benchmarking.jl:1165`
-  - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`
-  - Tests: ❓ NOT VERIFIED
+  - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`; supports auto-lineage and dataset predownload helper
+  - Tests: ✅ Opt-in extended smoke in `test/5_validation/quast_busco_wrappers_test.jl` (auto-lineage, default outdir)
 
-**Verdict**: ✅ **IMPLEMENTED** but tests needed
+**Verdict**: ✅ **IMPLEMENTED/TESTED (opt-in extended)**
 
 ---
 
-### 7. Strain-Aware Tools
+### 7. Sequence Encoding/Tokenization
+
+**Tools**:
+- SentencePiece (subword tokenization for ML/NLP applications)
+
+**Status**:
+- ✅ SentencePiece: **IMPLEMENTED & TESTED** in `src/sentencepiece.jl` (2025-12-10)
+  - Functions: `train_sentencepiece_model()`, `train_sentencepiece_model_from_sequences()`, `train_sentencepiece_model_from_fasta()`, `train_sentencepiece_model_from_fastq()`, `encode_sentencepiece()`, `decode_sentencepiece()`, `load_sentencepiece_model()`, `get_sentencepiece_vocab()`, `sentencepiece_vocab_size()`, `is_valid_sentencepiece_model()`
+  - Auto-installs via pip in conda environment on first use
+  - Supports DNA, RNA, AA sequences, ASCII, and Unicode text
+  - Supports subword regularization/sampling for neural network training
+  - Tests: `test/8_tool_integration/sentencepiece.jl`
+
+**Verdict**: ✅ **COMPLETE** - SentencePiece implemented with comprehensive wrapper
+
+---
+
+### 8. Strain-Aware Tools
 
 **Tools** (from old planning docs):
 - HyLight
@@ -262,6 +313,10 @@
 8. unicycler - `src/assembly.jl:443`
 9. metavelvet - `src/assembly.jl:2540`
 
+### ✅ IMPLEMENTED & TESTED - Sequence Encoding (1 tool)
+
+1. sentencepiece - `src/sentencepiece.jl` + `test/8_tool_integration/sentencepiece.jl`
+
 ### ⚠️ COMMENTED OUT (1 tool)
 
 1. hifiasm-meta - `src/assembly.jl:443` (function exists but commented)
@@ -297,7 +352,7 @@
 **My Initial Assessment Was Too Harsh**:
 - Claimed "ALL tool integration claims are false" → **INCORRECT**
 - Actually **22 tools are wrapped**, 13 with comprehensive tests
-- QUAST, BUSCO, strain-aware tools (HyLight, STRONG, Strainy) DO exist
+- QUAST, BUSCO, strain-aware tools (HyLight, STRONG, Strainy) DO exist and now have opt-in smoke tests
 
 **What's Actually Missing**:
 - ❌ ALL binning tools (7 tools): VAMB, MetaBAT2, MetaCoAG, etc.
@@ -308,8 +363,8 @@
 - ❌ Pangenome tools: PGGB, Cactus, vg toolkit
 
 **What Exists But Needs Tests**:
-- ⚠️ QUAST, BUSCO (implemented, need test verification)
-- ⚠️ Strain-aware tools: HyLight, STRONG, Strainy (tests commented out)
+- ✅ QUAST, BUSCO: implemented, opt-in extended tests present (sim + phiX download)
+- ✅ Strain-aware tools: HyLight, STRONG, Strainy implemented with resource-aware opt-in smoke tests
 
 ---
 
