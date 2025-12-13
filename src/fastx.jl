@@ -793,6 +793,7 @@ function prefix_fastq_reads(
     sanitized_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
 
     nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
+    input_bytes = filesize(fastq_file)
 
     # Always write uncompressed first when `.gz` is requested, then gzip externally.
     out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") : out_fastq
@@ -840,6 +841,38 @@ function prefix_fastq_reads(
         isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
     end
 
+    # Gracefully handle 0-byte input files (including 0-byte `.gz` placeholders).
+    # For a *valid* gzipped FASTQ with zero reads, the gzip stream still has a header
+    # and should not be 0 bytes, so this is safe and avoids a CodecZlib truncation error.
+    if input_bytes == 0
+        open(tmp_fastq_plain, "w") do _
+        end
+        if mapping_out !== nothing
+            if mapping_format == :tsv
+                open(tmp_map_plain, "w") do io
+                    write(io, "sample_tag\toriginal_read_id\tnew_read_id\n")
+                end
+            else
+                tmp_arrow = mapping_out * ".tmp"
+                isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+                Arrow.write(tmp_arrow, DataFrames.DataFrame(sample_tag=String[], original_read_id=String[], new_read_id=String[]))
+                mv(tmp_arrow, mapping_out; force=true)
+            end
+        end
+
+        mv(tmp_fastq_plain, out_fastq_plain; force=true)
+        if mapping_out !== nothing && mapping_format == :tsv
+            mv(tmp_map_plain, map_plain; force=true)
+        end
+        if endswith(out_fastq, ".gz")
+            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+        end
+        if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
+            Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+        end
+        return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+    end
+
     tsv_io = nothing
     mapping_rows = mapping_out === nothing ? nothing : Vector{NamedTuple}()
     if mapping_out !== nothing
@@ -853,21 +886,72 @@ function prefix_fastq_reads(
 
     out_io = open(tmp_fastq_plain, "w")
     writer = FASTX.FASTQ.Writer(out_io)
-    reader = Mycelia.open_fastx(fastq_file)
-    for record in reader
-        original_id = String(FASTX.identifier(record))
-        new_id = string(sanitized_tag, id_delimiter, original_id)
-        new_record = FASTX.FASTQ.Record(new_id, FASTX.sequence(record), FASTX.quality(record))
-        FASTX.write(writer, new_record)
-        if mapping_out !== nothing
-            if mapping_format == :tsv
-                write(tsv_io, string(sanitized_tag, '\t', original_id, '\t', new_id, '\n'))
-            else
-                push!(mapping_rows, (sample_tag=sanitized_tag, original_read_id=original_id, new_read_id=new_id))
+    reader = nothing
+    try
+        reader = Mycelia.open_fastx(fastq_file)
+        for record in reader
+            original_id = String(FASTX.identifier(record))
+            new_id = string(sanitized_tag, id_delimiter, original_id)
+            new_record = FASTX.FASTQ.Record(new_id, FASTX.sequence(record), FASTX.quality(record))
+            FASTX.write(writer, new_record)
+            if mapping_out !== nothing
+                if mapping_format == :tsv
+                    write(tsv_io, string(sanitized_tag, '\t', original_id, '\t', new_id, '\n'))
+                else
+                    push!(mapping_rows, (sample_tag=sanitized_tag, original_read_id=original_id, new_read_id=new_id))
+                end
+            end
+        end
+    catch err
+        msg = sprint(showerror, err)
+        # Best-effort cleanup of partial outputs
+        try
+            reader !== nothing && close(reader)
+        catch
+        end
+        try
+            FASTX.close(writer)
+        catch
+        end
+        try
+            close(out_io)
+        catch
+        end
+        if mapping_out !== nothing && mapping_format == :tsv
+            try
+                close(tsv_io)
+            catch
+            end
+        end
+        try
+            isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+        catch
+        end
+        if tmp_map_plain !== nothing
+            try
+                isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+            catch
+            end
+        end
+
+        if occursin("compressed stream may be truncated", msg) || occursin("ZlibError", msg)
+            error(
+                "Failed to read gzipped FASTQ (gzip stream appears truncated): $(fastq_file)\n" *
+                "File size: $(input_bytes) bytes\n" *
+                "This usually indicates an incomplete/corrupt `.gz` (e.g., partially copied, still being written, or 0-byte placeholder).\n" *
+                "Suggested checks: `gzip -t $(fastq_file)` (or `pigz -t`) and verify upstream file generation/copy.\n" *
+                "Original error: $(msg)"
+            )
+        end
+        rethrow()
+    finally
+        if reader !== nothing
+            try
+                close(reader)
+            catch
             end
         end
     end
-    close(reader)
     FASTX.close(writer)
     close(out_io)
     if mapping_out !== nothing && mapping_format == :tsv
