@@ -847,13 +847,14 @@ enable efficient splitting. Supports single-end reads and paired collections (fo
 reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
 
 # Arguments
-- `reference_fasta::AbstractString`: Reference FASTA or `.mmi` when `minimap_index` is supplied.
+- `reference_fasta::Union{Nothing,AbstractString}`: Reference FASTA (optionally gzipped). Required unless `minimap_index` is supplied.
 - `mapping_type::AbstractString`: Minimap2 preset (`"map-hifi"`, `"map-ont"`, `"map-pb"`, `"sr"`, `"lr:hq"`).
 
 # Keywords
 - `single_end_fastqs::Vector{<:AbstractString}`: FASTQs treated as single-end.
 - `paired_end_fastqs::Vector{Tuple{<:AbstractString,<:AbstractString}}`: Forward/reverse pairs.
-- `minimap_index::AbstractString=""`: Optional prebuilt minimap2 index.
+- `minimap_index::AbstractString=""`: Optional prebuilt minimap2 `.mmi` index. When supplied, it is used as the minimap2 target.
+- `build_index::Bool=false`: When `true` and `minimap_index==""`, build a persistent `.mmi` via `Mycelia.minimap_index` and use it for mapping.
 - `outdir::Union{Nothing,String}=nothing`: Destination for per-sample BAMs (defaults to each sample's FASTQ dir).
 - `tmpdir::Union{Nothing,String}=nothing`: Location for prefixed FASTQs and merged BAM (defaults to a tempdir).
 - `minimap_extra_args::Vector{<:AbstractString}=String[]`: Additional minimap2 flags (e.g., `["-N", "10"]`).
@@ -870,11 +871,12 @@ reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
 Named tuple with commands, paths, and per-sample output metadata.
 """
 function minimap_merge_map_and_split(;
-    reference_fasta::AbstractString,
+    reference_fasta::Union{Nothing,AbstractString}=nothing,
     mapping_type::AbstractString,
     single_end_fastqs::Vector{<:AbstractString}=String[],
     paired_end_fastqs::AbstractVector{<:Tuple{<:AbstractString,<:AbstractString}}=Tuple{String,String}[],
     minimap_index::AbstractString="",
+    build_index::Bool=false,
     outdir::Union{Nothing,String}=nothing,
     tmpdir::Union{Nothing,String}=nothing,
     minimap_extra_args::Vector{<:AbstractString}=String[],
@@ -894,7 +896,10 @@ function minimap_merge_map_and_split(;
     if isempty(single_end_fastqs) && isempty(paired_end_fastqs)
         error("Provide at least one FASTQ via single_end_fastqs or paired_end_fastqs")
     end
-    @assert isfile(reference_fasta) "Reference FASTA not found: $reference_fasta"
+    isempty(minimap_index) && isnothing(reference_fasta) && error("Provide reference_fasta or minimap_index")
+    if !isnothing(reference_fasta)
+        @assert isfile(reference_fasta) "Reference FASTA not found: $reference_fasta"
+    end
     if !isempty(minimap_index)
         @assert isfile(minimap_index) "minimap_index supplied but not found: $minimap_index"
     end
@@ -973,9 +978,34 @@ function minimap_merge_map_and_split(;
         ))
     end
 
-    target = isempty(minimap_index) ? reference_fasta : minimap_index
+    index_cmd = nothing
+    index_file = nothing
+    target = minimap_index
+    if isempty(target)
+        @assert !isnothing(reference_fasta)
+        if build_index
+            index_result = Mycelia.minimap_index(
+                fasta=reference_fasta,
+                mapping_type=mapping_type,
+                mem_gb=mem_gb,
+                threads=threads,
+                as_string=false,
+                denominator=denominator
+            )
+            index_file = index_result.outfile
+            index_cmd = as_string ? string(index_result.cmd) : index_result.cmd
+            if run_mapping && !isfile(index_file)
+                run(index_result.cmd)
+            end
+            target = index_file
+        else
+            target = reference_fasta
+        end
+    end
+
+    reference_label = !isnothing(reference_fasta) ? basename(reference_fasta) : basename(minimap_index)
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    merged_bam = isnothing(merged_bam) ? joinpath(tmpdir, Mycelia.normalized_current_datetime() * "." * basename(reference_fasta) * ".joint.minimap2.sorted.bam") : merged_bam
+    merged_bam = isnothing(merged_bam) ? joinpath(tmpdir, Mycelia.normalized_current_datetime() * "." * reference_label * ".joint.minimap2.sorted.bam") : merged_bam
 
     minimap_parts = [
         Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
@@ -1002,7 +1032,7 @@ function minimap_merge_map_and_split(;
             sample_tag = info.sample_tag
             sample_outdir = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
             mkpath(sample_outdir)
-            sample_bam = joinpath(sample_outdir, string(sample_tag, ".", basename(reference_fasta), ".sorted.bam"))
+            sample_bam = joinpath(sample_outdir, string(sample_tag, ".", reference_label, ".sorted.bam"))
             awk_script = "BEGIN{FS=\"\t\"; OFS=\"\t\"} /^@/ {print; next} { split(" * "\\\$1" * ", parts, \"" * id_delimiter * "\"); if (parts[1]==\"" * sample_tag * "\") print }"
             view_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "view", "-@", string(threads), "-h", merged_bam])
             filter_cmd = Cmd(["awk", awk_script])
@@ -1015,7 +1045,7 @@ function minimap_merge_map_and_split(;
 
     sample_outputs = map(sample_infos) do info
         outdir_for_sample = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
-        sample_bam = joinpath(outdir_for_sample, string(info.sample_tag, ".", basename(reference_fasta), ".sorted.bam"))
+        sample_bam = joinpath(outdir_for_sample, string(info.sample_tag, ".", reference_label, ".sorted.bam"))
         merge(info, (;output_bam=sample_bam))
     end
 
@@ -1030,6 +1060,8 @@ function minimap_merge_map_and_split(;
     end
 
     return (
+        index_cmd = index_cmd,
+        index_file = index_file,
         minimap_cmd = as_string ? string(minimap_cmd) : minimap_cmd,
         merged_bam = merged_bam,
         split_cmds = as_string ? Dict(k => string(v) for (k, v) in split_cmds) : split_cmds,

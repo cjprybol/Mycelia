@@ -83,6 +83,26 @@ Test.@testset "Minimap merge/map/split helpers" begin
         Test.@test occursin(basename(ref), res.merged_bam)
     end
 
+    Test.@testset "Accepts minimap_index without reference_fasta" begin
+        idx = tempname() * ".mmi"
+        write(idx, "dummy index placeholder")
+        fq = tempname() * ".fq"
+        write(fq, "@a\nAAAA\n+\nIIII\n")
+
+        res = Mycelia.minimap_merge_map_and_split(
+            reference_fasta=nothing,
+            minimap_index=idx,
+            mapping_type="sr",
+            single_end_fastqs=[fq],
+            run_mapping=false,
+            run_splitting=false,
+            as_string=true
+        )
+
+        Test.@test occursin(basename(idx), res.merged_bam)
+        Test.@test occursin(idx, res.minimap_cmd)
+    end
+
     Test.@testset "Paired identifiers stay linked after prefixing" begin
         r1 = tempname() * ".fq"
         r2 = tempname() * ".fq"
