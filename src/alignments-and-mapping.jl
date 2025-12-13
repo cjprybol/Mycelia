@@ -864,11 +864,17 @@ reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
 - `read_map_format::Symbol=:arrow`: `:arrow` (buffered) or `:tsv` (streaming) mapping output.
 - `gzip_prefixed_fastqs::Bool=true`: Gzip the prefixed FASTQs using external gzip/pigz.
 - `gzip_read_map_tsv::Bool=true`: If `read_map_format==:tsv`, gzip the mapping TSVs using external gzip/pigz.
+- `show_progress::Union{Bool,Nothing}=nothing`: If `true`, show progress meters for long-running local stages (prefixing and splitting). If `nothing`, auto-enables for large batches.
 - `run_mapping::Bool=true`, `run_splitting::Bool=true`: Execute minimap2 stage and per-sample splits.
 - `keep_prefixed_fastqs::Bool=false`: Retain prefixed intermediates if true.
 - `force::Bool=false`: If `true`, regenerate intermediates even if present.
 - `merged_bam::Union{Nothing,String}=nothing`: Override merged BAM path.
 - `as_string::Bool=false`: Return command strings instead of `Cmd`/pipelines.
+#
+# Notes
+# - This function passes all (prefixed) FASTQ paths directly to minimap2; extremely large numbers of inputs
+#   can exceed the OS `ARG_MAX` limit (“argument list too long”). In that case, use a shorter `tmpdir` or
+#   run in batches and merge BAMs with `samtools merge`.
 
 # Returns
 Named tuple with commands, paths, and per-sample output metadata.
@@ -891,6 +897,7 @@ function minimap_merge_map_and_split(;
     read_map_format::Symbol=:arrow,
     gzip_prefixed_fastqs::Bool=true,
     gzip_read_map_tsv::Bool=true,
+    show_progress::Union{Bool,Nothing}=nothing,
     run_mapping::Bool=true,
     run_splitting::Bool=true,
     keep_prefixed_fastqs::Bool=false,
@@ -1019,6 +1026,27 @@ function minimap_merge_map_and_split(;
     need_prefixing = force || write_read_map || keep_prefixed_fastqs || (run_mapping && !merged_ready)
     if need_prefixing && !isempty(prefix_jobs)
         prefix_workers = min(length(prefix_jobs), max(1, Threads.nthreads()))
+        show_prefix_progress = if show_progress === nothing
+            length(prefix_jobs) >= 10
+        else
+            show_progress
+        end
+        total_prefix_bytes = show_prefix_progress ? sum(filesize(j.fastq) for j in prefix_jobs) : 0
+        progress_chan = show_prefix_progress ? Channel{NamedTuple}(prefix_workers) : nothing
+        progress_task = nothing
+        if show_prefix_progress
+            progress_task = @async begin
+                bytes_done = 0
+                files_done = 0
+                p = ProgressMeter.Progress(total_prefix_bytes; desc="Prefixing FASTQs: ")
+                for msg in progress_chan
+                    bytes_done += msg.bytes
+                    files_done += 1
+                    ProgressMeter.update!(p, min(bytes_done, total_prefix_bytes); showvalues=[(:files, files_done), (:total, length(prefix_jobs))])
+                end
+                ProgressMeter.finish!(p)
+            end
+        end
         compress_threads_per_job = max(1, fld(max(1, threads), prefix_workers))
         sem = Base.Semaphore(prefix_workers)
         errs = Channel{Any}(length(prefix_jobs))
@@ -1036,12 +1064,24 @@ function minimap_merge_map_and_split(;
                         force=force,
                         compress_threads=compress_threads_per_job
                     )
+                    if progress_chan !== nothing
+                        try
+                            put!(progress_chan, (bytes=filesize(job.fastq),))
+                        catch
+                        end
+                    end
                 catch err
                     put!(errs, err)
                 finally
                     Base.release(sem)
                 end
             end
+        end
+        if progress_chan !== nothing
+            close(progress_chan)
+        end
+        if progress_task !== nothing
+            wait(progress_task)
         end
         if isready(errs)
             err = take!(errs)
@@ -1056,6 +1096,24 @@ function minimap_merge_map_and_split(;
     append!(minimap_parts, minimap_extra_args)
     push!(minimap_parts, target)
     append!(minimap_parts, prefixed_fastqs)
+
+    # Preflight argv size for many-input runs to avoid opaque "argument list too long" errors.
+    if run_mapping
+        arg_max = Mycelia.get_arg_max()
+        if arg_max !== nothing
+            argv_bytes = Mycelia.estimate_argv_bytes(minimap_parts)
+            headroom = 256_000 # env + runtime variance
+            if argv_bytes > (arg_max - headroom)
+                error(
+                    "minimap2 argv likely exceeds ARG_MAX (estimated argv bytes=$(argv_bytes), ARG_MAX=$(arg_max)).\n" *
+                    "Inputs: $(length(prefixed_fastqs)) FASTQ(s). Consider:\n" *
+                    "  - Using a shorter `tmpdir` (and/or shorter input paths)\n" *
+                    "  - Running samples in batches and merging BAMs with `samtools merge`\n"
+                )
+            end
+        end
+    end
+
     map_cmd = Cmd(minimap_parts)
     sort_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", merged_bam, "-"])
     minimap_cmd = pipeline(map_cmd, sort_cmd)
@@ -1066,7 +1124,21 @@ function minimap_merge_map_and_split(;
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
         else
-            run(minimap_cmd)
+            try
+                run(minimap_cmd)
+            catch err
+                msg = sprint(showerror, err)
+                if occursin("E2BIG", msg) || occursin("argument list too long", lowercase(msg))
+                    error(
+                        "minimap2 failed with an argument-length error (too many/too-long FASTQ paths).\n" *
+                        "Mitigations:\n" *
+                        "  - Use a shorter `tmpdir` (and/or shorten input paths)\n" *
+                        "  - Run samples in batches and merge BAMs with `samtools merge`\n" *
+                        "Original error: $(msg)"
+                    )
+                end
+                rethrow()
+            end
         end
     end
 
@@ -1074,6 +1146,13 @@ function minimap_merge_map_and_split(;
     if run_splitting
         @assert isfile(merged_bam) "Merged BAM not found: $(merged_bam). Run mapping or supply existing BAM."
         Mycelia.add_bioconda_env("samtools")
+        show_split_progress = if show_progress === nothing
+            length(sample_infos) >= 10
+        else
+            show_progress
+        end
+        split_progress = show_split_progress ? ProgressMeter.Progress(length(sample_infos); desc="Splitting BAMs: ") : nothing
+        split_done = 0
         for info in sample_infos
             sample_tag = info.sample_tag
             sample_outdir = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
@@ -1090,6 +1169,13 @@ function minimap_merge_map_and_split(;
             else
                 run(split_cmd)
             end
+            split_done += 1
+            if split_progress !== nothing
+                ProgressMeter.update!(split_progress, split_done)
+            end
+        end
+        if split_progress !== nothing
+            ProgressMeter.finish!(split_progress)
         end
     end
 

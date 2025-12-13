@@ -2027,6 +2027,32 @@ function gzip_file(
 end
 
 """
+    get_arg_max() -> Union{Int,Nothing}
+
+Return the system `ARG_MAX` (maximum total size of argv+env for `execve`) if it can be determined.
+Uses `getconf ARG_MAX` when available; returns `nothing` if unavailable.
+"""
+function get_arg_max()::Union{Int,Nothing}
+    getconf = Sys.which("getconf")
+    getconf === nothing && return nothing
+    try
+        return parse(Int, strip(readchomp(`$getconf ARG_MAX`)))
+    catch
+        return nothing
+    end
+end
+
+"""
+    estimate_argv_bytes(args::AbstractVector{<:AbstractString}) -> Int
+
+Estimate bytes consumed by argv strings for `execve` (sum of argument lengths plus NULs).
+Does not include environment size.
+"""
+function estimate_argv_bytes(args::AbstractVector{<:AbstractString})::Int
+    return sum(length, args) + length(args)
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Extract biosample and barcode information from a PacBio XML metadata file.
