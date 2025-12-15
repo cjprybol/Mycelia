@@ -113,6 +113,9 @@ include("qualmer-graphs.jl")        # Qualmer graph construction utilities
 include("fasta-graphs.jl")          # BioSequence graphs (depends on sequence-graphs-next.jl)
 include("fastq-graphs.jl")          # Quality-aware BioSequence graphs (depends on qualmer-analysis.jl)
 
+# Topological data analysis utilities (depends on Graphs)
+include("tda.jl")
+
 # Assembly pipeline (depends on all graph types and GraphMode enum)
 include("assembly.jl")
 

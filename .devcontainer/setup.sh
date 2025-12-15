@@ -16,3 +16,6 @@ npm install -g @openai/codex@latest
 # need to run with npx prefix when not installed globally
 # npx codex
 # npx claude
+
+# Note - running codex on extra high (xhigh) is painfully slow, prefer high or default (medium)
+# If xhigh is equivalent to pro level in main app, use pro in app to plan and then switch to high in codex for faster response times.

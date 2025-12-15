@@ -806,6 +806,7 @@ struct AssemblyConfig
     polish_iterations::Int                  # Number of polishing iterations
     bubble_resolution::Bool                 # Whether to resolve bubble structures
     repeat_resolution::Bool                 # Whether to resolve repeat regions
+    tda::Union{Nothing, TDAConfig}          # Optional TDA configuration for topology-aware metrics/cleaning
 
     # Constructor with validation
     function AssemblyConfig(;
@@ -818,7 +819,8 @@ struct AssemblyConfig
         use_quality_scores::Bool = true,
         polish_iterations::Int = 3,
         bubble_resolution::Bool = true,
-        repeat_resolution::Bool = true
+        repeat_resolution::Bool = true,
+        tda::Union{Nothing, TDAConfig} = nothing,
     )
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
@@ -849,8 +851,19 @@ struct AssemblyConfig
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
         end
 
-        new(k, min_overlap, sequence_type, graph_mode, error_rate, min_coverage,
-            use_quality_scores, polish_iterations, bubble_resolution, repeat_resolution)
+        new(
+            k,
+            min_overlap,
+            sequence_type,
+            graph_mode,
+            error_rate,
+            min_coverage,
+            use_quality_scores,
+            polish_iterations,
+            bubble_resolution,
+            repeat_resolution,
+            tda,
+        )
     end
 end
 

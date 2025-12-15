@@ -28,6 +28,7 @@ Transform Mycelia from a research-oriented assembly framework into an accessible
 *   **Novel 6-Graph Type Hierarchy**: A comprehensive, type-safe graph system that maintains biological correctness while enabling efficient computation.
 *   **Quality-Aware Assembly**: First assembly framework to preserve per-base quality scores throughout the entire assembly process, enabling higher accuracy.
 *   **Intelligent Self-Optimizing Assembly**: A learnable, self-optimizing assembler that uses reinforcement learning to eliminate manual parameter tuning while maximizing assembly accuracy.
+*   **Topology-Aware Assembly Optimization (TDA)**: Use Betti curves and (optionally) persistent homology across coverage/quality/confidence filtrations to guide graph cleaning and parameter selection (see `planning-docs/TDA_INTEGRATION_PLAN.md`).
 *   **Iterative Maximum Likelihood Assembly**: A complementary statistical path resampling approach for read-level error correction.
 *   **Zero String Conversions**: Complete elimination of string conversions in bioinformatics pipelines for type safety and efficiency.
 *   **Cross-validation Pipeline**: For robust assembly confidence and accuracy assessment.
