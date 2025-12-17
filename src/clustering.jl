@@ -108,6 +108,7 @@ function clustering_summary(original_df::DataFrames.DataFrame, cluster_info::Dat
     )
 end
 
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -116,27 +117,81 @@ Cluster protein or nucleotide sequences using MMseqs2 easy-cluster workflow.
 # Arguments
 - `fasta::String`: Path to input FASTA file containing sequences to cluster
 - `output::String`: Base path for output files (default: input path + ".mmseqs_easy_cluster")
-- `tmp::String`: Path to temporary directory (default: auto-generated temp dir)
+- `tmp::Union{String, Nothing}`: Path to temporary directory. If nothing, defaults to a subdirectory in output location.
 
 # Returns
-- `String`: Path to the output cluster TSV file containing cluster assignments
+- `String`: Path to the output TSV file.
 
 # Details
 Uses MMseqs2 with minimum sequence identity threshold of 50% (-min-seq-id 0.5) and 
 minimum coverage threshold of 80% (-c 0.8). The output TSV file format contains 
 tab-separated cluster representative and member sequences.
 """
-# --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
-function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mktempdir())
-    outfile = "$(output)_cluster.tsv"
-    if !isfile(outfile)
-        Mycelia.add_bioconda_env("mmseqs2")
-        # at least 50% equivalent
-        # --min-seq-id 0.5 -c 0.8
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`)
+function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=nothing,
+                             executor=:local, job_name="mmseqs_cluster", time="4-00:00:00", partition=nothing, account=nothing,
+                             mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+                             )
+    
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
     end
-    rm(tmp, recursive=true)
-    return "$(output)_cluster.tsv"
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, nothing, slurm_template, "64G", get_default_threads()
+    )
+
+    outfile = "$(output)_cluster.tsv"
+    
+    # Handle temp directory
+    # If tmp is not provided, use a directory alongside output to ensure visibility on shared FS
+    if isnothing(tmp)
+        tmp_dir = "$(output)_tmp"
+    else
+        tmp_dir = tmp
+    end
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        run_analysis = true
+        if exec_instance isa Mycelia.Execution.LocalExecutor
+            if isfile(outfile)
+               run_analysis = false 
+            end
+        end
+        
+        if run_analysis
+            Mycelia.add_bioconda_env("mmseqs2")
+            
+            cmd_parts = String[]
+            
+            # Create tmp dir
+            push!(cmd_parts, "mkdir -p $(tmp_dir)")
+            
+            # MMseqs command
+            # --threads $(resolved_threads)
+            # --min-seq-id 0.5 -c 0.8
+            mmseqs_cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp_dir) --threads $(resolved_threads) --min-seq-id 0.5 -c 0.8"
+            push!(cmd_parts, mmseqs_cmd)
+            
+            # Cleanup tmp dir
+            push!(cmd_parts, "rm -rf $(tmp_dir)")
+            
+            final_cmd = join(cmd_parts, "\n")
+            
+            Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+                final_cmd;
+                name=job_name,
+                time=time,
+                cpus=resolved_threads,
+                mem=resolved_mem,
+                partition=partition,
+                account=account,
+                extra=slurm_kwargs
+            ))
+        end
+    end
+    
+    return outfile
 end
 
 """
