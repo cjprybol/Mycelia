@@ -19,37 +19,34 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
-import Kmers
 import MetaGraphsNext
 
 # Simple test to verify SingleStrand mode fix
-Test.@testset "SingleStrand Mode Fix Test" begin
-    # Create a simple RNA sequence
+Test.@testset "SingleStrand Mode Fix Test (Rhizomorph)" begin
     reference_seq = BioSequences.rna"AUCGAUCGAUCG"
     reads = [FASTX.FASTA.Record("read1", reference_seq)]
 
-    # Build k-mer graph in SingleStrand mode
-    kmer_type = Kmers.RNAKmer{5}
-    graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.SingleStrand)
+    graph = Mycelia.Rhizomorph.build_kmer_graph(
+        reads,
+        5;
+        dataset_id="ss_fix",
+        mode=:singlestrand,
+    )
 
     Test.@test graph isa MetaGraphsNext.MetaGraph
     Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-    # Check if coverage is now populated (this was failing due to k-mer mismatches)
-    has_coverage = false
+    all_forward = true
     for label in MetaGraphsNext.labels(graph)
         vertex_data = graph[label]
-        Test.@test vertex_data isa Mycelia.KmerVertexData
-
-        # Extract strand orientations from coverage
-        strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-        if !isempty(strand_orientations)
-            has_coverage = true
-            println("Found coverage: ", strand_orientations)
-            # In SingleStrand mode, all orientations should be Forward
-            Test.@test all(s == Mycelia.Forward for s in strand_orientations)
+        Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+        strands = Set(obs.orientation for obs in Iterators.flatten(values(vertex_data.evidence["ss_fix"])))
+        if isempty(strands)
+            all_forward = false
+        else
+            all_forward &= all(strand == Mycelia.Rhizomorph.Forward for strand in strands)
         end
     end
 
-    Test.@test has_coverage
+    Test.@test all_forward
 end

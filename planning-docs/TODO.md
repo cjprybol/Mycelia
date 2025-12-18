@@ -31,6 +31,12 @@ The following issues have been **FIXED** and all 302 assembly tests now pass:
 
 ---
 
+### Recent Rhizomorph migration progress
+- Ported legacy suites to Rhizomorph APIs: `basic_graph_tests`, `sequence_graphs_next`, `graph_algorithms_next` (bubble helpers, DFS fallback, tip thresholds), `end_to_end_graph_tests` (exact k-mer content/evidence positions, qualmer edge/vertex quality checks, variable-length overlap evidence, doublestrand/canonical conversion and GFA vertex-count round-trip), `gfa_io_next`, singlestrand canonicalization and orientation suites (`dna|rna|aa_kmer_singlestrand_test`, `doublestrand_canonicalization_test`, `canonicalization_consistency_test`) now build graphs via `Mycelia.Rhizomorph` (no shims).
+- `rna_kmer_singlestrand_test` now asserts strand-aware evidence positions and edge evidence using `Mycelia.Rhizomorph` helpers.
+- Remaining legacy-heavy suites still calling `build_kmer_graph_next`/legacy conversions: `end_to_end_assembly_tests.jl`, `six_graph_hierarchy_tests.jl`, `comprehensive_*`, `probabilistic_algorithms_next.jl`, and older string/assembly end-to-end suites.
+- Implementation gaps blocking full migration: repeat detection/contig/coverage helpers live only in legacy `sequence-graphs-next.jl`; simplification does not delete edges when resolving bubbles; no JLD2 round-trip coverage for Rhizomorph graphs; probabilistic walk utilities are still legacy-only.
+
 ## Executive Summary
 
 The Rhizomorph graph ecosystem has **substantial implementation (~7,000 lines) and excellent documentation (94% coverage)**, but has **critical testing gaps (~40% coverage)**. We cannot consider work "complete" without comprehensive tests. This document tracks the work needed to reach production-ready status.
@@ -75,19 +81,19 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 **Core Algorithms**
 - ✅ Path finding (find_eulerian_paths_next) - 43 tests passing (path_finding_test.jl)
 - ✅ Sequence reconstruction (path_to_sequence) - Tests passing (doublestrand/canonical traversal tests)
-- ❌ Simplification (detect_bubbles_next) - NO TESTS FOUND
-- ❌ I/O roundtrip (GFA export/import) - UNCLEAR STATUS
+- 🔸 Simplification (detect_bubbles_next) - Smoke coverage in `graph_algorithms_next`; edge removal still unimplemented
+- 🔸 I/O roundtrip (GFA export/import) - Covered in `gfa_io_next` and `end_to_end_graph_tests`; JLD2 still missing
 
 **Graph Construction Testing (Updated 2025-12-10)**
 - ✅ K-mer graphs (DNA/RNA/AA) - 232 tests passing across singlestrand/doublestrand/canonical
 - ✅ Qualmer graphs - Doublestrand and canonical traversal tests passing
 - ✅ Multi-read, multi-dataset scenarios - RC evidence handling test passing
-- ❌ Variable-length OLC graphs - Implementation exists, tests unknown
-- ❌ N-gram graphs - Implementation exists, tests unknown
+- 🔸 Variable-length OLC graphs - Covered in `sequence_graphs_next`/`end_to_end_graph_tests`; traversal coverage still light
+- 🔸 N-gram graphs - Covered in `sequence_graphs_next`/`end_to_end_graph_tests`; traversal coverage still light
 - ❌ Edge cases and error handling - Minimal coverage
 
 **Missing Algorithm Implementations**
-- ❌ remove_tips() - Not found
+- ✅ remove_tips! exists and is smoke-tested; full simplification still pending
 - ❌ collapse_linear_chains() - Not found
 - ✅ Strand conversion implemented for fixed-length and variable-length graphs (convert_* in core/graph-construction.jl and variable-length/strand-conversions.jl)
 - ❌ Error correction - Not found (algorithms/error-correction.jl planned)
@@ -177,6 +183,12 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 **Conclusion**: Old planning docs overstated completion. Code quality is good, but accessibility and testing are the gaps.
 
 ---
+
+## New Rhizomorph Migration Actions (current)
+- Avoid shims; port remaining legacy graph tests directly to `Mycelia.Rhizomorph` and update GraphMode usage so old code paths can be retired cleanly.
+- Port legacy graph tests (comprehensive/end-to-end/probabilistic/assembly hierarchy) to Rhizomorph APIs and add missing Rhizomorph coverage for variable-length/n-gram traversal and GFA/JLD2 round-trips.
+- Remove legacy graph includes from `src/Mycelia.jl` once Rhizomorph tests pass; then delete deprecated graph files (`graph-core.jl`, `kmer-graphs.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`).
+- Implement the planned conversion layer (`core/graph-type-conversions.jl`, `algorithms/strand-conversions.jl`) plus simplification tip-removal/linear-chain collapse and expose non-strand-specific merge helpers as public APIs; add focused tests.
 
 ## Approach: Rigorous Test-First Validation
 

@@ -6,65 +6,39 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
-import Kmers
 import MetaGraphsNext
 
-Test.@testset "DNA K-mer SingleStrand Graph" begin
-    # Test data
+Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
+    dataset_id = "dna_single"
     test_dna = BioSequences.dna"ATCGATCG"
     reads = [FASTX.FASTA.Record("test", test_dna)]
 
-    # Build graph
-    graph = Mycelia.build_kmer_graph_next(Kmers.DNAKmer{3}, reads; graph_mode=Mycelia.SingleStrand)
+    graph = Mycelia.Rhizomorph.build_kmer_graph(
+        reads,
+        3;
+        dataset_id=dataset_id,
+        mode=:singlestrand,
+    )
 
-    # Structure validation
     vertices = collect(MetaGraphsNext.labels(graph))
-    Test.@test length(vertices) == 4  # ATC, TCG, CGA, GAT
+    Test.@test Set(vertices) == Set([
+        BioSequences.DNAKmer{3}("ATC"),
+        BioSequences.DNAKmer{3}("TCG"),
+        BioSequences.DNAKmer{3}("CGA"),
+        BioSequences.DNAKmer{3}("GAT"),
+    ])
     Test.@test MetaGraphsNext.ne(graph) == 4
 
-    # Coverage validation
     for vertex_label in vertices
         vertex_data = graph[vertex_label]
-        Test.@test !isempty(vertex_data.coverage)
-
-        for cov_entry in vertex_data.coverage
-            obs_id, pos, strand = cov_entry
-            Test.@test obs_id isa Int
-            Test.@test pos isa Int
-            Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
-        end
+        Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+        Test.@test Mycelia.Rhizomorph.count_evidence(vertex_data) >= 1
+        Test.@test haskey(vertex_data.evidence, dataset_id)
     end
 
-    # Path reconstruction
-    paths = Mycelia.find_eulerian_paths_next(graph)
+    paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
     Test.@test !isempty(paths)
 
-    # Verify we can reconstruct sequences
-    reconstruction_success = false
-    for path_vector in paths
-        if !isempty(path_vector)
-            try
-                vertex_type = typeof(first(path_vector))
-                walk_steps = Mycelia.WalkStep{vertex_type}[]
-
-                for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
-                    push!(walk_steps, step)
-                end
-
-                graph_path = Mycelia.GraphPath(walk_steps)
-                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
-
-                if reconstructed !== nothing
-                    reconstruction_success = true
-                    @info "Successfully reconstructed: $(typeof(reconstructed)) of length $(length(reconstructed))"
-                    break
-                end
-            catch e
-                @warn "Reconstruction failed: $e"
-            end
-        end
-    end
-
-    Test.@test reconstruction_success
+    reconstructed = Mycelia.Rhizomorph.path_to_sequence(first(paths), graph)
+    Test.@test reconstructed == "ATCGATCG"
 end

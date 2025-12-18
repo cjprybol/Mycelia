@@ -204,3 +204,9 @@ struct QualityStringVertexData
         new(string_value, evidence)
     end
 end
+
+# Convenience constructors for parameterized vertex types to support explicit instantiation.
+KmerVertexData{T}(kmer::T) where {T} = KmerVertexData(kmer)
+QualmerVertexData{T}(kmer::T) where {T} = QualmerVertexData(kmer)
+BioSequenceVertexData{T}(sequence::T) where {T} = BioSequenceVertexData(sequence)
+QualityBioSequenceVertexData{T}(sequence::T) where {T} = QualityBioSequenceVertexData(sequence)

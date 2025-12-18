@@ -289,6 +289,47 @@ function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure})
 end
 
 # ============================================================================
+# Tip removal (dead-end pruning)
+# ============================================================================
+
+"""
+    remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
+
+Remove dead-end vertices (tips) whose evidence support is ≤ `min_support`.
+Tips are vertices with indegree == 0 or outdegree == 0. Returns the modified graph.
+"""
+function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
+    if Graphs.nv(graph.graph) == 0
+        return graph
+    end
+
+    labels = collect(MetaGraphsNext.labels(graph))
+    to_delete = Set{eltype(labels)}()
+
+    for label in labels
+        idx = MetaGraphsNext.labelindex(graph, label)
+        indeg = Graphs.indegree(graph.graph, idx)
+        outdeg = Graphs.outdegree(graph.graph, idx)
+        if indeg == 0 || outdeg == 0
+            support = 0
+            data = graph[label]
+            if hasproperty(data, :evidence)
+                support = Rhizomorph.count_evidence(data)
+            end
+            if support <= min_support
+                push!(to_delete, label)
+            end
+        end
+    end
+
+    for label in to_delete
+        MetaGraphsNext.rem_vertex!(graph, label)
+    end
+
+    return graph
+end
+
+# ============================================================================
 # Graph Simplification
 # ============================================================================
 

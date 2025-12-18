@@ -395,6 +395,14 @@ function count_evidence_entries(vertex_or_edge)
     return total
 end
 
+"""
+    count_evidence(vertex_or_edge)
+
+Compatibility wrapper for `count_evidence_entries` that returns the total
+number of evidence entries on a vertex or edge.
+"""
+count_evidence(vertex_or_edge) = count_evidence_entries(vertex_or_edge)
+
 # ============================================================================
 # Filtering Functions
 # ============================================================================

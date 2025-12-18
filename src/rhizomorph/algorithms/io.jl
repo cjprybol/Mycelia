@@ -213,7 +213,12 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
 
     # Determine vertex data type from kmer_type
     if kmer_type <: Kmers.DNAKmer || kmer_type <: Kmers.RNAKmer || kmer_type <: Kmers.AAKmer
-        vertex_data_type = KmerVertexData{kmer_type}
+        sample_kmer_type = if isempty(segments)
+            kmer_type
+        else
+            typeof(kmer_type(first(values(segments))))
+        end
+        vertex_data_type = KmerVertexData{sample_kmer_type}
         edge_data_type = KmerEdgeData
     else
         error("Unsupported k-mer type: $kmer_type")
@@ -222,41 +227,22 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     # Create MetaGraphsNext graph
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=kmer_type,
+        label_type=sample_kmer_type,
         vertex_data_type=vertex_data_type,
         edge_data_type=edge_data_type
     )
 
-    # Add vertices (segments) - convert sequences to k-mer types
+    # Add vertices (segments) - convert sequences to k-mer types without canonicalizing
     for (seg_id, sequence) in segments
-        # Convert sequence to k-mer type
         kmer_seq = kmer_type(sequence)
-
-        # Determine canonical k-mer based on graph mode
-        canonical_kmer = if graph_mode == DoubleStrand && (kmer_type <: Kmers.DNAKmer || kmer_type <: Kmers.RNAKmer)
-            # Use canonical representation for double-strand mode
-            rc_kmer = Kmers.reverse_complement(kmer_seq)
-            kmer_seq <= rc_kmer ? kmer_seq : rc_kmer
-        else
-            # Use k-mer as-is for single-strand mode or amino acids
-            kmer_seq
-        end
-
-        # Create vertex with empty evidence (will be populated if we have observations)
-        graph[canonical_kmer] = vertex_data_type(canonical_kmer, Dict{String, Dict{String, Set{EvidenceEntry}}}())
+        graph[kmer_seq] = vertex_data_type(kmer_seq)
     end
 
-    # Create mapping from segment IDs to k-mers
-    id_to_kmer = Dict{String, kmer_type}()
+    # Create mapping from segment IDs to observed k-mers (strand as provided in the GFA)
+    id_to_kmer = Dict{String, sample_kmer_type}()
     for (seg_id, sequence) in segments
         kmer_seq = kmer_type(sequence)
-        canonical_kmer = if graph_mode == DoubleStrand && (kmer_type <: Kmers.DNAKmer || kmer_type <: Kmers.RNAKmer)
-            rc_kmer = Kmers.reverse_complement(kmer_seq)
-            kmer_seq <= rc_kmer ? kmer_seq : rc_kmer
-        else
-            kmer_seq
-        end
-        id_to_kmer[seg_id] = canonical_kmer
+        id_to_kmer[seg_id] = kmer_seq
     end
 
     # Add edges (links)

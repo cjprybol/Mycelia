@@ -18,6 +18,7 @@
 - Follow standard Julia style: 4-space indentation, clear docstrings (`"""signature..."""`), favor pure functions and explicit keyword arguments.
 - Names: modules in CamelCase, functions/variables in `snake_case`, constants in `SCREAMING_SNAKE_CASE`; no emojis.
 - Imports: dependencies are imported once in `src/Mycelia.jl`; do not `using` or re-import inside leaf files—fully qualify (e.g., `Test.@test`, `Dates.now()`).
+- Do not introduce shorthand module aliases as constants (e.g., avoid `R = Mycelia.Rhizomorph`); call modules/functions by their full qualified names to keep tests and sources explicit.
 - Sequences: use `BioSequences.LongDNA{4}/LongRNA{4}/LongAA`; avoid string conversions in k-mer/qualmer/assembly code—only convert when interfacing with external tools or outputs.
 - Prefer `joinpath` for portability, avoid type piracy, and keep external tool calls isolated in helpers under `src/`.
 

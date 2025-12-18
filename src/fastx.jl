@@ -1629,7 +1629,7 @@ function fastx_stats(fastx)
 end
 
 """
-    write_fastq(;records, filename, gzip=false)
+    write_fastq(; records, filename=nothing, outfile=nothing, gzip=false)
 
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1637,21 +1637,30 @@ Write FASTQ records to file using FASTX.jl.
 Validates extension: .fastq, .fq, .fastq.gz, or .fq.gz.
 If `gzip` is true or filename endswith .gz, output is gzipped.
 `records` must be an iterable of FASTX.FASTQ.Record.
+Accepts `outfile` as an alias for `filename` for consistency with write_fasta.
 """
-function write_fastq(;records, filename, gzip=false)
+function write_fastq(;records, filename=nothing, outfile=nothing, gzip=false)
+    output_path = isnothing(filename) ? outfile : filename
+    if isnothing(output_path)
+        error("Provide either filename or outfile")
+    end
+    if !isnothing(filename) && !isnothing(outfile) && filename != outfile
+        error("Provide only one of filename or outfile (got $filename and $outfile)")
+    end
+
     function is_valid_fastq_ext(fname)
         any(endswith.(fname, [".fastq", ".fq", ".fastq.gz", ".fq.gz"]))
     end
 
-    if !is_valid_fastq_ext(filename)
+    if !is_valid_fastq_ext(output_path)
         error("File extension must be .fastq, .fq, .fastq.gz, or .fq.gz")
     end
 
-    gzip_out = gzip || endswith(filename, ".gz")
+    gzip_out = gzip || endswith(output_path, ".gz")
     if gzip_out
-        io = CodecZlib.GzipCompressorStream(open(filename, "w"))
+        io = CodecZlib.GzipCompressorStream(open(output_path, "w"))
     else
-        io = open(filename, "w")
+        io = open(output_path, "w")
     end
 
     try
@@ -1663,7 +1672,7 @@ function write_fastq(;records, filename, gzip=false)
     finally
         close(io)
     end
-    return filename
+    return output_path
 end
 
 """
