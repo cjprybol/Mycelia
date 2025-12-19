@@ -640,6 +640,22 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - **Tool wrappers**:
   - Authoritative inventory: `planning-docs/TOOL_WRAPPER_STATUS.md` (13 tested, 9 untested, 1 commented out). Missing categories: classification, binning/post-binning, variant calling, pangenome. Add tests for the 9 untested wrappers; decide on enabling hifiasm-meta.
 
+### Planned Tool Integrations
+- **Assembly**: 
+   - [ ] [`shasta` (eukaryotic nanopore)](https://github.com/paoloshasta/shasta)
+   - [ ] [`verkko` (T2T/diploid)](https://github.com/marbl/verkko)
+   - [ ] [`myloasm` (long-read)](https://github.com/bluenote-1577/myloasm)
+   - [ ] [`floria` (strain-aware)](https://github.com/bluenote-1577/floria)
+- **Alignment/Variant Calling**:
+   - [ ] [`strobealign` (fast mapping)](https://github.com/ksahlin/strobealign)
+   - [ ] [`rtg-tools` (vcfeval)](https://github.com/RealTimeGenomics/rtg-tools)
+   - [ ] [`gatk`](https://github.com/broadgsa/gatk/)
+   - [ ] [`freebayes`](https://github.com/ekg/freebayes)
+- **Genomics/Binning**:
+   - [ ] [`galah` (genome selection)](https://github.com/wwood/galah)
+   - [ ] [`dashing2` (sketching)](https://github.com/dnbaker/dashing2)
+- **NCBI**: [`ncbi-genome-download` (robust fetch)](https://github.com/kblin/ncbi-genome-download)
+
 ---
 
 ## Notes
