@@ -95,7 +95,7 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
         Test.@test total_coverage_entries > 0
 
         # 3. Path reconstruction validation
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
         Test.@test !isempty(paths)
 
         reconstruction_success = false
@@ -105,15 +105,15 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
                     # Create properly typed WalkStep objects
                     first_vertex = first(path_vector)
                     vertex_type = typeof(first_vertex)
-                    walk_steps = Mycelia.WalkStep{vertex_type}[]
+                    walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
 
                     for (i, vertex_label) in enumerate(path_vector)
-                        step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                        step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                         push!(walk_steps, step)
                     end
 
-                    graph_path = Mycelia.GraphPath(walk_steps)
-                    reconstructed = Mycelia.path_to_sequence(graph_path, graph)
+                    graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
+                    reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
 
                     if reconstructed !== nothing
                         reconstruction_success = true
@@ -318,8 +318,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             bio_graph = Mycelia.build_biosequence_graph(reads; graph_mode=Mycelia.SingleStrand)
 
             # Both should successfully reconstruct sequences
-            kmer_paths = Mycelia.find_eulerian_paths_next(kmer_graph)
-            bio_paths = Mycelia.find_eulerian_paths_next(bio_graph)
+            kmer_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(kmer_graph)
+            bio_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(bio_graph)
 
             Test.@test !isempty(kmer_paths)
             Test.@test !isempty(bio_paths)

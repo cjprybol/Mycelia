@@ -84,7 +84,7 @@ Mycelia.plot_kmer_spectrum(spectrum, title="21-mer Frequency Spectrum")
 ```julia
 println("\n=== Genome Assembly ===")
 # Assemble genome using hifiasm (for HiFi reads) or adjust for your data type
-assembly_result = Mycelia.assemble_genome(
+assembly_result = Mycelia.Rhizomorph.assemble_genome(
     "filtered_reads.fastq",
     assembler="hifiasm",     # Use "spades" for Illumina
     output_dir="assembly",
@@ -107,7 +107,7 @@ println("  N50: $(assembly_stats.n50)")
 println("  Largest contig: $(assembly_stats.largest_contig)")
 
 # Validate assembly quality
-validation_result = Mycelia.validate_assembly(
+validation_result = Mycelia.Rhizomorph.validate_assembly(
     assembly_result.contigs,
     "filtered_reads.fastq",
     reference_genome=reference
@@ -319,7 +319,7 @@ assembly_results = []
 
 for k in k_values
     println("Testing k=$k...")
-    result = Mycelia.assemble_genome(
+    result = Mycelia.Rhizomorph.assemble_genome(
         "reads.fastq",
         assembler="hifiasm",
         k=k,
@@ -344,13 +344,13 @@ assembler_results = []
 
 for assembler in assemblers
     println("Running $assembler...")
-    result = Mycelia.assemble_genome(
+    result = Mycelia.Rhizomorph.assemble_genome(
         "reads.fastq",
         assembler=assembler,
         output_dir="assembly_$assembler"
     )
     
-    validation = Mycelia.validate_assembly(result.contigs, "reads.fastq")
+    validation = Mycelia.Rhizomorph.validate_assembly(result.contigs, "reads.fastq")
     push!(assembler_results, (
         assembler=assembler,
         n50=validation.n50,
@@ -413,7 +413,7 @@ function robust_genome_analysis(reads_file::String)
         assembly_result = nothing
         for attempt in 1:3
             try
-                assembly_result = Mycelia.assemble_genome(reads_file)
+                assembly_result = Mycelia.Rhizomorph.assemble_genome(reads_file)
                 break
             catch e
                 @warn "Assembly attempt $attempt failed: $e"
@@ -424,7 +424,7 @@ function robust_genome_analysis(reads_file::String)
         end
         
         # Validation with quality checks
-        validation = Mycelia.validate_assembly(assembly_result.contigs, reads_file)
+        validation = Mycelia.Rhizomorph.validate_assembly(assembly_result.contigs, reads_file)
         if validation.completeness < 90
             @warn "Low assembly completeness: $(validation.completeness)%"
         end

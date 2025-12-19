@@ -85,9 +85,9 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** Use TDA metrics in the scalar objective for parameter search/learning.
 
-- [ ] Extend assembly result logging to record `TDARunSummary` (stored in `AssemblyResult.assembly_stats` initially).
+- [ ] Extend assembly result logging to record `TDARunSummary` (stored in `Mycelia.Rhizomorph.AssemblyResult.assembly_stats` initially).
 - [ ] Define an `assembly_objective(result; weights)` that mixes classical QC metrics and TDA simplicity.
-- [ ] Add a simple black-box search driver (random / Latin hypercube) over `AssemblyConfig`.
+- [ ] Add a simple black-box search driver (random / Latin hypercube) over `Mycelia.Rhizomorph.AssemblyConfig`.
 
 **Acceptance:** `optimize_assembly` returns the best config on small simulated datasets and logs topology metrics.
 
@@ -112,4 +112,3 @@ Implemented as a new core file: `src/tda.jl`.
 
 - `src/tda.jl`: initial skeleton planned/started (graph Betti invariants + filtration curves)
 - `test/4_assembly/tda_metrics_test.jl`: initial tests planned/started (cycle vs path; filtration sanity)
-

@@ -264,7 +264,7 @@ kmer_frequency_spectrum(kmer_counts)
 
 ```julia
 # Run assembly
-Mycelia.assemble_genome("reads.fastq", output_dir="assembly")
+Mycelia.Rhizomorph.assemble_genome("reads.fastq", output_dir="assembly")
 
 # Evaluate assembly quality
 evaluate_assembly(assembly_fasta)

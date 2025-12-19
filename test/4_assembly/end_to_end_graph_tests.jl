@@ -216,7 +216,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             Test.@test isfile(temp_file)
             
             # Test reading back
-            read_graph = Mycelia.read_gfa_next(temp_file)
+            read_graph = Mycelia.Rhizomorph.read_gfa_next(temp_file)
             Test.@test !isempty(read_graph.vertex_labels)
             
             rm(temp_file)
@@ -357,7 +357,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             
             # Test K-mer graph assembly (FASTA input auto-detects to k-mer graph)
             try
-                kmer_result = Mycelia.assemble_genome(fasta_records; k=5)
+                kmer_result = Mycelia.Rhizomorph.assemble_genome(fasta_records; k=5)
                 Test.@test !isempty(kmer_result.contigs)
                 println("✓ Unified Assembly: K-mer graph method working")
             catch e
@@ -366,7 +366,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
             # Test Qualmer graph assembly (FASTQ input auto-detects to qualmer graph)
             try
-                qualmer_result = Mycelia.assemble_genome(fastq_records; k=5)
+                qualmer_result = Mycelia.Rhizomorph.assemble_genome(fastq_records; k=5)
                 Test.@test !isempty(qualmer_result.contigs)
                 println("✓ Unified Assembly: Qualmer graph method working")
             catch e
@@ -383,7 +383,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             # Test DNA detection
             try
                 dna_records = [FASTX.FASTA.Record("test", dna_seq)]
-                dna_result = Mycelia.assemble_genome(dna_records; k=5)
+                dna_result = Mycelia.Rhizomorph.assemble_genome(dna_records; k=5)
                 Test.@test !isempty(dna_result.contigs)
                 println("✓ Auto-detection: DNA assembly working")
             catch e
@@ -393,7 +393,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             # Test RNA detection
             try
                 rna_records = [FASTX.FASTA.Record("test", rna_seq)]
-                rna_result = Mycelia.assemble_genome(rna_records; k=4)
+                rna_result = Mycelia.Rhizomorph.assemble_genome(rna_records; k=4)
                 Test.@test !isempty(rna_result.contigs)
                 println("✓ Auto-detection: RNA assembly working")
             catch e
@@ -403,7 +403,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             # Test protein detection (should auto-detect SingleStrand mode)
             try
                 aa_records = [FASTX.FASTA.Record("test", aa_seq)]
-                aa_result = Mycelia.assemble_genome(aa_records; k=3)
+                aa_result = Mycelia.Rhizomorph.assemble_genome(aa_records; k=3)
                 Test.@test !isempty(aa_result.contigs)
                 println("✓ Auto-detection: Protein assembly working")
             catch e
@@ -470,15 +470,15 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                             gfa_file = joinpath(tmpdir, "roundtrip_$(replace(test_name, " " => "_")).gfa")
 
                             # Write to GFA
-                            Mycelia.write_gfa_next(original_graph, gfa_file)
+                            Mycelia.Rhizomorph.write_gfa_next(original_graph, gfa_file)
                             Test.@test isfile(gfa_file)
 
                             # Read back from GFA
                             # For BioSequence graphs, force BioSequence graph type to preserve original semantics
                             if test_name == "BioSequence Graph"
-                                restored_graph = Mycelia.read_gfa_next(gfa_file, force_biosequence_graph=true)
+                                restored_graph = Mycelia.Rhizomorph.read_gfa_next(gfa_file, force_biosequence_graph=true)
                             else
-                                restored_graph = Mycelia.read_gfa_next(gfa_file)
+                                restored_graph = Mycelia.Rhizomorph.read_gfa_next(gfa_file)
                             end
 
                             # Comprehensive validation
@@ -674,11 +674,11 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                     jld2_file = joinpath(tmpdir, "comparison.jld2")
 
                     # Save in both formats
-                    Mycelia.write_gfa_next(original_graph, gfa_file)
+                    Mycelia.Rhizomorph.write_gfa_next(original_graph, gfa_file)
                     JLD2.save(jld2_file, "graph", original_graph)
 
                     # Load from both formats
-                    gfa_restored = Mycelia.read_gfa_next(gfa_file)
+                    gfa_restored = Mycelia.Rhizomorph.read_gfa_next(gfa_file)
                     jld2_restored = JLD2.load(jld2_file, "graph")
 
                     # Compare preservation levels
@@ -748,7 +748,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
                 # Validate that we can walk a path through the graph that reconstructs the original sequence
                 # This is the CRITICAL test - can we get back our input?
-                paths = Mycelia.find_eulerian_paths_next(graph)
+                paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
                 if !isempty(paths)
                     # At least one path should be able to reconstruct a sequence similar to our input
                     longest_path = argmax(length, paths)

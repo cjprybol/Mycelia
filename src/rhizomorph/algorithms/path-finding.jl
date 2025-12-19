@@ -45,6 +45,261 @@ function GraphPath(steps::Vector{WalkStep{T}}) where T
     return GraphPath{T}(steps)
 end
 
+function probabilistic_walk_next(
+    graph::MetaGraphsNext.MetaGraph,
+    start_vertex::T,
+    max_steps::Int;
+    seed::Union{Nothing, Int}=nothing,
+) where T
+    if seed !== nothing
+        Mycelia.Random.seed!(seed)
+    end
+
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+
+    steps = WalkStep{T}[]
+    current_vertex = start_vertex
+    current_strand = Forward
+    cumulative_prob = 1.0
+
+    push!(steps, WalkStep(current_vertex, current_strand, 1.0, cumulative_prob))
+
+    for _ in 1:max_steps
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+
+        if isempty(valid_transitions)
+            break
+        end
+
+        transition_probs = _calculate_transition_probabilities(valid_transitions)
+        next_transition = _sample_transition(valid_transitions, transition_probs)
+
+        step_prob = next_transition[:probability]
+        cumulative_prob *= step_prob
+
+        current_vertex = next_transition[:target_vertex]
+        current_strand = next_transition[:target_strand]
+
+        push!(steps, WalkStep(current_vertex, current_strand, step_prob, cumulative_prob))
+    end
+
+    return GraphPath(steps)
+end
+
+function maximum_weight_walk_next(
+    graph::MetaGraphsNext.MetaGraph,
+    start_vertex::T,
+    max_steps::Int;
+    weight_function::Function = edge_data -> edge_data.weight,
+) where T
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+
+    steps = WalkStep{T}[]
+    current_vertex = start_vertex
+    current_strand = Forward
+    cumulative_prob = 1.0
+
+    push!(steps, WalkStep(current_vertex, current_strand, 1.0, cumulative_prob))
+
+    for _ in 1:max_steps
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+
+        if isempty(valid_transitions)
+            break
+        end
+
+        best_transition = nothing
+        max_weight = -Inf
+
+        for transition in valid_transitions
+            weight = weight_function(transition[:edge_data])
+            if weight > max_weight
+                max_weight = weight
+                best_transition = transition
+            end
+        end
+
+        if best_transition === nothing
+            break
+        end
+
+        step_prob = best_transition[:probability]
+        cumulative_prob *= step_prob
+
+        current_vertex = best_transition[:target_vertex]
+        current_strand = best_transition[:target_strand]
+
+        push!(steps, WalkStep(current_vertex, current_strand, step_prob, cumulative_prob))
+    end
+
+    return GraphPath(steps)
+end
+
+function _normalize_strand(strand)
+    if strand == Forward || strand == Reverse
+        return strand
+    end
+    if isdefined(Mycelia, :Forward) && strand == Mycelia.Forward
+        return Forward
+    end
+    if isdefined(Mycelia, :Reverse) && strand == Mycelia.Reverse
+        return Reverse
+    end
+    return Forward
+end
+
+function _get_valid_transitions(graph, vertex_label, strand)
+    transitions = []
+
+    for edge_labels in MetaGraphsNext.edge_labels(graph)
+        if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+            target_vertex = edge_labels[2]
+            edge_data = graph[edge_labels...]
+
+            edge_src_strand = _normalize_strand(edge_data.src_strand)
+            if edge_src_strand == strand
+                probability = edge_data.weight > 0 ? edge_data.weight : 1e-10
+
+                push!(transitions, Dict(
+                    :target_vertex => target_vertex,
+                    :target_strand => _normalize_strand(edge_data.dst_strand),
+                    :probability => probability,
+                    :edge_data => edge_data,
+                ))
+            end
+        end
+    end
+
+    return transitions
+end
+
+function _calculate_transition_probabilities(transitions)
+    if isempty(transitions)
+        return Float64[]
+    end
+
+    weights = [t[:probability] for t in transitions]
+    total_weight = sum(weights)
+
+    if total_weight == 0
+        return fill(1.0 / length(transitions), length(transitions))
+    end
+
+    return weights ./ total_weight
+end
+
+function _sample_transition(transitions, probabilities)
+    if isempty(transitions)
+        return nothing
+    end
+
+    if length(transitions) == 1
+        return first(transitions)
+    end
+
+    r = Mycelia.Random.rand()
+    cumulative = 0.0
+
+    for (i, prob) in enumerate(probabilities)
+        cumulative += prob
+        if r <= cumulative
+            return transitions[i]
+        end
+    end
+
+    return last(transitions)
+end
+
+function shortest_probability_path_next(
+    graph::MetaGraphsNext.MetaGraph,
+    source::T,
+    target::T,
+) where T
+    if !(source in MetaGraphsNext.labels(graph)) || !(target in MetaGraphsNext.labels(graph))
+        return nothing
+    end
+
+    distances = Dict{Tuple{T, StrandOrientation}, Float64}()
+    predecessors = Dict{Tuple{T, StrandOrientation}, Union{Nothing, Tuple{T, StrandOrientation}}}()
+    visited = Set{Tuple{T, StrandOrientation}}()
+    pq = DataStructures.PriorityQueue{Tuple{T, StrandOrientation}, Float64}()
+
+    for strand in (Forward, Reverse)
+        start_state = (source, strand)
+        distances[start_state] = 0.0
+        predecessors[start_state] = nothing
+        DataStructures.enqueue!(pq, start_state, 0.0)
+    end
+
+    while !isempty(pq)
+        current_state = DataStructures.dequeue!(pq)
+        if current_state in visited
+            continue
+        end
+
+        push!(visited, current_state)
+        current_vertex, current_strand = current_state
+
+        if current_vertex == target
+            return _reconstruct_shortest_path(predecessors, distances, (source, Forward), current_state, graph)
+        end
+
+        transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+        for transition in transitions
+            next_vertex = transition[:target_vertex]
+            next_strand = transition[:target_strand]
+            next_state = (next_vertex, next_strand)
+
+            edge_prob = transition[:probability]
+            distance = -log(edge_prob)
+            new_distance = distances[current_state] + distance
+
+            if !haskey(distances, next_state) || new_distance < distances[next_state]
+                distances[next_state] = new_distance
+                predecessors[next_state] = current_state
+                DataStructures.enqueue!(pq, next_state, new_distance)
+            end
+        end
+    end
+
+    return nothing
+end
+
+function _reconstruct_shortest_path(predecessors, distances, start_state, end_state, graph)
+    path_states = []
+    current_state = end_state
+
+    while current_state !== nothing
+        pushfirst!(path_states, current_state)
+        current_state = predecessors[current_state]
+    end
+
+    if isempty(path_states)
+        return GraphPath(WalkStep{Any}[])
+    end
+    vertex_type = typeof(path_states[1][1])
+    steps = WalkStep{vertex_type}[]
+
+    for (i, (vertex, strand)) in enumerate(path_states)
+        step_prob = if i == 1
+            1.0
+        else
+            prev_state = path_states[i - 1]
+            step_distance = distances[(vertex, strand)] - distances[prev_state]
+            exp(-step_distance)
+        end
+
+        cumulative_prob = exp(-distances[(vertex, strand)])
+        push!(steps, WalkStep(vertex, strand, step_prob, cumulative_prob))
+    end
+
+    return GraphPath(steps)
+end
+
 # ============================================================================
 # Eulerian Path Finding
 # ============================================================================

@@ -401,27 +401,27 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             # Test DNA assembly (should auto-detect method based on input format)
             Test.@testset "DNA Assembly Type Detection" begin
                 # FASTQ input should auto-detect to Qualmer graphs
-                result_fastq = Mycelia.assemble_genome(fastq_records; k=5)
-                Test.@test result_fastq isa Mycelia.AssemblyResult
+                result_fastq = Mycelia.Rhizomorph.assemble_genome(fastq_records; k=5)
+                Test.@test result_fastq isa Mycelia.Rhizomorph.AssemblyResult
                 Test.@test !isempty(result_fastq.contigs)
 
                 # FASTA input should auto-detect to K-mer graphs
-                result_fasta = Mycelia.assemble_genome(dna_records; k=5)
-                Test.@test result_fasta isa Mycelia.AssemblyResult
+                result_fasta = Mycelia.Rhizomorph.assemble_genome(dna_records; k=5)
+                Test.@test result_fasta isa Mycelia.Rhizomorph.AssemblyResult
                 Test.@test !isempty(result_fasta.contigs)
             end
 
             # Test RNA assembly
             Test.@testset "RNA Assembly Type Detection" begin
-                result_rna = Mycelia.assemble_genome(rna_records; k=4)
-                Test.@test result_rna isa Mycelia.AssemblyResult
+                result_rna = Mycelia.Rhizomorph.assemble_genome(rna_records; k=4)
+                Test.@test result_rna isa Mycelia.Rhizomorph.AssemblyResult
                 Test.@test !isempty(result_rna.contigs)
             end
 
             # Test protein assembly (should auto-detect SingleStrand mode)
             Test.@testset "Protein Assembly Type Detection" begin
-                result_protein = Mycelia.assemble_genome(protein_records; k=3)
-                Test.@test result_protein isa Mycelia.AssemblyResult
+                result_protein = Mycelia.Rhizomorph.assemble_genome(protein_records; k=3)
+                Test.@test result_protein isa Mycelia.Rhizomorph.AssemblyResult
                 Test.@test !isempty(result_protein.contigs)
             end
         end
@@ -430,18 +430,18 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             dna_records, fastq_records, _, _ = create_test_data()
             
             # Test that assembly method enum contains all 6 graph types
-            Test.@test Mycelia.NgramGraph isa Mycelia.AssemblyMethod
-            Test.@test Mycelia.KmerGraph isa Mycelia.AssemblyMethod
-            Test.@test Mycelia.QualmerGraph isa Mycelia.AssemblyMethod
-            Test.@test Mycelia.StringGraph isa Mycelia.AssemblyMethod
-            Test.@test Mycelia.BioSequenceGraph isa Mycelia.AssemblyMethod
-            Test.@test Mycelia.QualityBioSequenceGraph isa Mycelia.AssemblyMethod
+            Test.@test Mycelia.Rhizomorph.NgramGraph isa Mycelia.Rhizomorph.AssemblyMethod
+            Test.@test Mycelia.Rhizomorph.KmerGraph isa Mycelia.Rhizomorph.AssemblyMethod
+            Test.@test Mycelia.Rhizomorph.QualmerGraph isa Mycelia.Rhizomorph.AssemblyMethod
+            Test.@test Mycelia.Rhizomorph.StringGraph isa Mycelia.Rhizomorph.AssemblyMethod
+            Test.@test Mycelia.Rhizomorph.BioSequenceGraph isa Mycelia.Rhizomorph.AssemblyMethod
+            Test.@test Mycelia.Rhizomorph.QualityBioSequenceGraph isa Mycelia.Rhizomorph.AssemblyMethod
             
             # Test that auto-detection works without errors for different input types
-            Test.@test_nowarn Mycelia.assemble_genome(dna_records; k=5)  # Auto-detects k-mer graph for FASTA
-            Test.@test_nowarn Mycelia.assemble_genome(fastq_records; k=5)  # Auto-detects qualmer graph for FASTQ
-            Test.@test_nowarn Mycelia.assemble_genome(dna_records; min_overlap=10)  # Auto-detects BioSequence graph
-            Test.@test_nowarn Mycelia.assemble_genome(fastq_records; min_overlap=10)  # Auto-detects Quality BioSequence graph
+            Test.@test_nowarn Mycelia.Rhizomorph.assemble_genome(dna_records; k=5)  # Auto-detects k-mer graph for FASTA
+            Test.@test_nowarn Mycelia.Rhizomorph.assemble_genome(fastq_records; k=5)  # Auto-detects qualmer graph for FASTQ
+            Test.@test_nowarn Mycelia.Rhizomorph.assemble_genome(dna_records; min_overlap=10)  # Auto-detects BioSequence graph
+            Test.@test_nowarn Mycelia.Rhizomorph.assemble_genome(fastq_records; min_overlap=10)  # Auto-detects Quality BioSequence graph
         end
     end
     

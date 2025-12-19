@@ -453,7 +453,7 @@ contamination_report = Mycelia.generate_contamination_report(contamination_scree
 
 ### Downstream Analysis
 - [`Mycelia.count_kmers`](@ref) - K-mer analysis of cleaned reads
-- [`Mycelia.assemble_genome`](@ref) - Genome assembly with quality-controlled reads
+- [`Mycelia.Rhizomorph.assemble_genome`](@ref) - Genome assembly with quality-controlled reads
 
 ## Related Workflows
 

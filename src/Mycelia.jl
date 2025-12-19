@@ -61,6 +61,7 @@ import Pkg
 import Plots
 import POMDPs
 import PooledArrays
+import PrecompileTools
 import Primes
 import Printf
 import ProgressMeter
@@ -98,6 +99,9 @@ include("alphabets.jl")
 include("constants.jl")
 include("fastx.jl")
 
+# Topological data analysis utilities (depends on Graphs)
+include("tda.jl")
+
 # Rhizomorph graph ecosystem (NEW - correct implementation)
 include("rhizomorph/rhizomorph.jl")
 
@@ -112,9 +116,6 @@ include("qualmer-graphs.jl")        # Qualmer graph construction utilities
 # Variable-length graph implementations (depend on fixed-length types)
 include("fasta-graphs.jl")          # BioSequence graphs (depends on sequence-graphs-next.jl)
 include("fastq-graphs.jl")          # Quality-aware BioSequence graphs (depends on qualmer-analysis.jl)
-
-# Topological data analysis utilities (depends on Graphs)
-include("tda.jl")
 
 # Assembly pipeline (depends on all graph types and GraphMode enum)
 include("assembly.jl")
@@ -181,5 +182,9 @@ for file in remaining_files
         include(file)
     end
 end
+
+# PrecompileTools workload for faster startup
+# This must be included last, after all other definitions are loaded
+include("precompile_workload.jl")
 
 end # module

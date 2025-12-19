@@ -28,7 +28,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests - Corrected" begin
         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
         # Find Eulerian paths and test reconstruction
-        paths = Mycelia.find_eulerian_paths_next(graph)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
         Test.@test !isempty(paths)
 
         for path_vector in paths
@@ -36,18 +36,18 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests - Corrected" begin
                 # Create WalkStep objects from the path labels with proper typing
                 first_vertex = first(path_vector)
                 vertex_type = typeof(first_vertex)
-                walk_steps = Mycelia.WalkStep{vertex_type}[]
+                walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
 
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
 
                 # Create GraphPath from WalkStep objects
-                graph_path = Mycelia.GraphPath(walk_steps)
+                graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
 
                 # Test type-stable reconstruction
-                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
                 Test.@test reconstructed !== nothing
 
                 # Verify the type is preserved

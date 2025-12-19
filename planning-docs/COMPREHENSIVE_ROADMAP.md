@@ -169,9 +169,9 @@ When a k-mer is observed multiple times with different quality scores:
 
 A high-level API for common assembly tasks.
 ```julia
-function assemble_genome(reads; method=:qualmer_graph, k=31, error_rate=0.01)
-function polish_assembly(assembly, reads; iterations=3)
-function validate_assembly(assembly, reference=nothing)
+function Mycelia.Rhizomorph.assemble_genome(reads; method=:qualmer_graph, k=31, error_rate=0.01)
+function Mycelia.Rhizomorph.polish_assembly(assembly, reads; iterations=3)
+function Mycelia.Rhizomorph.validate_assembly(assembly, reference=nothing)
 ```
 
 ### 4.3. Intelligent Self-Optimizing Assembly System 🔵

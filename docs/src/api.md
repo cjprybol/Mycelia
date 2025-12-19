@@ -50,12 +50,12 @@ Assemble genomes from sequencing reads using various approaches.
 
 **Working Functions:** `assemble_metagenome_megahit`, `assemble_metagenome_metaspades` (external tools)  
 **Experimental:** Graph-based assembly framework  
-**Planned:** `assemble_genome`, `polish_assembly`
+**Planned:** `Mycelia.Rhizomorph.assemble_genome`, `Mycelia.Rhizomorph.polish_assembly`
 
 ### 5. Assembly Validation
 Validate and assess the quality of genome assemblies.
 
-**Working Functions:** `assess_assembly_quality`, `validate_assembly`, `run_quast`, `run_busco`, `run_mummer`, CheckM/CheckM2 integration  
+**Working Functions:** `assess_assembly_quality`, `Mycelia.Rhizomorph.validate_assembly`, `run_quast`, `run_busco`, `run_mummer`, CheckM/CheckM2 integration  
 **Planned:** Mauve integration
 
 ### 6. Gene Annotation

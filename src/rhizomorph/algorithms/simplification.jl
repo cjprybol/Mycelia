@@ -22,6 +22,9 @@ that later rejoin. Bubbles often represent:
 - Sequencing errors
 - Strain variation
 
+# Type Parameter
+- `T`: The vertex label type (e.g., `String`, `Kmers.Kmer`, etc.)
+
 # Fields
 - `entry_vertex`: Vertex where paths diverge
 - `exit_vertex`: Vertex where paths reconverge
@@ -31,19 +34,19 @@ that later rejoin. Bubbles often represent:
 - `path2_support`: Coverage/support for path 2
 - `complexity_score`: Measure of bubble complexity (higher = more complex)
 """
-struct BubbleStructure
-    entry_vertex::String
-    exit_vertex::String
-    path1::Vector{String}
-    path2::Vector{String}
+struct BubbleStructure{T}
+    entry_vertex::T
+    exit_vertex::T
+    path1::Vector{T}
+    path2::Vector{T}
     path1_support::Int
     path2_support::Int
     complexity_score::Float64
 
-    function BubbleStructure(entry::String, exit::String,
-                           p1::Vector{String}, p2::Vector{String},
-                           s1::Int, s2::Int, complexity::Float64)
-        new(entry, exit, p1, p2, s1, s2, complexity)
+    function BubbleStructure(entry::T, exit::T,
+                           p1::Vector{T}, p2::Vector{T},
+                           s1::Int, s2::Int, complexity::Float64) where T
+        new{T}(entry, exit, p1, p2, s1, s2, complexity)
     end
 end
 
@@ -80,8 +83,9 @@ bubbles = detect_bubbles_next(graph, min_bubble_length=2, max_bubble_length=50)
 function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
                            min_bubble_length::Int=2,
                            max_bubble_length::Int=100)
-    bubbles = BubbleStructure[]
     vertices = collect(MetaGraphsNext.labels(graph))
+    T = eltype(vertices)
+    bubbles = BubbleStructure{T}[]
 
     for entry_vertex in vertices
         # Find potential bubble entry points (vertices with out-degree > 1)
@@ -135,10 +139,10 @@ end
 Find potential bubble paths from an entry vertex.
 """
 function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
-                          entry_vertex,
+                          entry_vertex::T,
                           out_neighbors::Vector,
-                          min_length::Int, max_length::Int)
-    bubbles = BubbleStructure[]
+                          min_length::Int, max_length::Int) where T
+    bubbles = BubbleStructure{T}[]
 
     # Try all pairs of outgoing paths
     for i in 1:length(out_neighbors)
@@ -251,7 +255,7 @@ end
 """
 Check if a bubble structure is valid.
 """
-function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure)
+function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure{T}) where T
     # Check that entry and exit vertices exist
     if !haskey(graph, bubble.entry_vertex) || !haskey(graph, bubble.exit_vertex)
         return false
@@ -273,9 +277,9 @@ end
 """
 Remove duplicate bubble detections.
 """
-function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure})
-    unique_bubbles = BubbleStructure[]
-    seen_pairs = Set{Tuple{String, String}}()
+function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where T
+    unique_bubbles = BubbleStructure{T}[]
+    seen_pairs = Set{Tuple{T, T}}()
 
     for bubble in bubbles
         pair = (bubble.entry_vertex, bubble.exit_vertex)
@@ -359,7 +363,7 @@ simplified = simplify_graph_next(graph, bubbles)
 ```
 """
 function simplify_graph_next(graph::MetaGraphsNext.MetaGraph,
-                           bubbles::Vector{BubbleStructure})
+                           bubbles::Vector{BubbleStructure{T}}) where T
     # Create a copy of the graph
     simplified_graph = deepcopy(graph)
 

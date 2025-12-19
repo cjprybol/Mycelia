@@ -42,10 +42,10 @@ Assign functional annotations to predicted genes.
 - **Usage**: `annotate_functions(proteins, database="uniprot")`
 - **See**: [Gene Annotation](../workflows/gene-annotation.md#functional-annotation)
 
-### [`Mycelia.assemble_genome`](@ref)
+### [`Mycelia.Rhizomorph.assemble_genome`](@ref)
 Main genome assembly function supporting multiple assemblers.
 - **Module**: Genome Assembly
-- **Usage**: `Mycelia.assemble_genome("reads.fastq", assembler="hifiasm")`
+- **Usage**: `Mycelia.Rhizomorph.assemble_genome("reads.fastq", assembler="hifiasm")`
 - **See**: [Genome Assembly](../workflows/genome-assembly.md#assembly-execution)
 
 ### `assess_assembly_readiness` *(planned)*
@@ -281,10 +281,10 @@ Generate random FASTA records with DNA, RNA, or amino acid sequences.
 
 ## V
 
-### [`Mycelia.validate_assembly`](@ref)
+### [`Mycelia.Rhizomorph.validate_assembly`](@ref)
 Validate genome assembly using multiple approaches.
 - **Module**: Assembly Validation
-- **Usage**: `validate_assembly("contigs.fasta", "reads.fastq")`
+- **Usage**: `Mycelia.Rhizomorph.validate_assembly("contigs.fasta", "reads.fastq")`
 - **See**: [Assembly Validation](../workflows/assembly-validation.md#validation-approaches)
 
 ## W

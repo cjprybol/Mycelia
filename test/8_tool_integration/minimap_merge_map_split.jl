@@ -124,4 +124,44 @@ Test.@testset "Minimap merge/map/split helpers" begin
         close(rec1_reader)
         close(rec2_reader)
     end
+
+    Test.@testset "Mapping generates sorted BAMs with index-aware names" begin
+        run_external = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true" ||
+            lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+        if !run_external
+            @info "Skipping minimap2 integration test; set MYCELIA_RUN_EXTERNAL=true to run"
+            Test.@test_skip "Requires minimap2 + samtools (external tools)"
+        else
+            ref_seq = repeat("ACGT", 50)
+            ref = tempname() * ".fna"
+            write(ref, ">ref\n", ref_seq, "\n")
+
+            reads = FASTX.FASTQ.Record[]
+            push!(reads, FASTX.FASTQ.Record("read1", ref_seq[1:80], repeat("I", 80)))
+            push!(reads, FASTX.FASTQ.Record("read2", ref_seq[21:100], repeat("I", 80)))
+
+            fq = tempname() * ".fastq.gz"
+            Mycelia.write_fastq(records=reads, filename=fq)
+
+            res = Mycelia.minimap_merge_map_and_split(
+                reference_fasta=ref,
+                mapping_type="sr",
+                single_end_fastqs=[fq],
+                build_index=true,
+                run_mapping=true,
+                run_splitting=true,
+                gzip_prefixed_fastqs=false,
+                write_read_map=false
+            )
+
+            Test.@test length(res.sample_outputs) == 1
+            Test.@test res.index_file !== nothing
+            sample = first(res.sample_outputs)
+            expected_fastq_label = replace(basename(fq), r"\.gz$" => "")
+            expected_bam = joinpath(dirname(fq), "$(expected_fastq_label).$(basename(res.index_file)).sorted.bam")
+            Test.@test sample.output_bam == expected_bam
+            Test.@test isfile(sample.output_bam)
+            Test.@test Mycelia.is_bam_coordinate_sorted(sample.output_bam)
+        end
+    end
 end

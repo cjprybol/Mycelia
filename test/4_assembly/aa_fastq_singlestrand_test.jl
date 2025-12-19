@@ -48,7 +48,7 @@ Test.@testset "AA BioSequence SingleStrand Quality Graph" begin
         end
     end
 
-    paths = Mycelia.find_eulerian_paths_next(graph)
+    paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
     Test.@test !isempty(paths)
 
     reconstruction_success = false
@@ -56,13 +56,13 @@ Test.@testset "AA BioSequence SingleStrand Quality Graph" begin
         if !isempty(path_vector)
             try
                 vertex_type = typeof(first(path_vector))
-                walk_steps = Mycelia.WalkStep{vertex_type}[]
+                walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
-                graph_path = Mycelia.GraphPath(walk_steps)
-                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
+                graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
                 if reconstructed !== nothing
                     reconstruction_success = true
                     @info "Successfully reconstructed: $(typeof(reconstructed)) of length $(length(reconstructed))"

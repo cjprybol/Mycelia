@@ -219,7 +219,7 @@ println("Estimated memory needed: $(estimated_memory) GB")
 
 # Monitor memory during analysis
 Mycelia.with_memory_monitoring() do
-    result = Mycelia.assemble_genome("large_reads.fastq")
+    result = Mycelia.Rhizomorph.assemble_genome("large_reads.fastq")
 end
 ```
 

@@ -18,7 +18,7 @@ Depth = 3
 ### Main Assembly Interface
 
 ```@docs
-Mycelia.assemble_genome
+Mycelia.Rhizomorph.assemble_genome
 ```
 
 ### Third-Party Assembly Tool Wrappers
@@ -172,7 +172,7 @@ For quality control and filtering functions, see [Quality Control Workflow](api/
 
 ```@docs
 Mycelia.assess_assembly_quality
-Mycelia.validate_assembly
+Mycelia.Rhizomorph.validate_assembly
 ```
 
 ### External Validators
@@ -268,7 +268,7 @@ Standard quality metrics returned by analysis functions:
 1. **Input Processing**: `open_fastx`, `convert_sequence`
 2. **Quality Analysis**: `analyze_fastq_quality`, qualmer functions
 3. **Assembly**: `mycelia_assemble`, graph construction
-4. **Validation**: `assess_assembly_quality`, `validate_assembly`
+4. **Validation**: `assess_assembly_quality`, `Mycelia.Rhizomorph.validate_assembly`
 5. **Output**: Assembly statistics and final sequences
 
 ### Supporting Workflows

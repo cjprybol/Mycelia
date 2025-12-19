@@ -877,6 +877,8 @@ reverse). Additional minimap2 flags can be supplied via `minimap_extra_args`.
 #   run in batches and merge BAMs with `samtools merge`.
 # - For very large references, minimap2 may use a multi-part index; we pass `--split-prefix` to ensure SAM
 #   output contains @SQ header lines required by samtools.
+# - Per-sample BAMs are named as `<fastq_basename_without_gz>.<minimap_target_basename>.sorted.bam`.
+#   Paired inputs join both FASTQ basenames (with `.gz` removed) using `__` before the index basename.
 
 # Returns
 Named tuple with commands, paths, and per-sample output metadata.
@@ -928,6 +930,12 @@ function minimap_merge_map_and_split(;
         return replace(base, r"[^\w\.\-]+" => "_")
     end
 
+    strip_gz_extension(name::AbstractString) = replace(name, r"\.gz$" => "")
+    function build_output_label(paths::AbstractVector{<:AbstractString})
+        labels = strip_gz_extension.(basename.(paths))
+        return length(labels) == 1 ? labels[1] : join(labels, "__")
+    end
+
     prefix_jobs = NamedTuple[]
     sample_infos = NamedTuple[]
     mapping_suffix = if read_map_format == :arrow
@@ -939,11 +947,13 @@ function minimap_merge_map_and_split(;
     # Single-end inputs
     for fq in single_end_fastqs
         sample_tag = build_sample_tag(fq)
+        output_label = build_output_label([fq])
         outfq = joinpath(tmpdir, sample_tag * (gzip_prefixed_fastqs ? ".prefixed.fq.gz" : ".prefixed.fq"))
         map_path = write_read_map ? joinpath(tmpdir, "$(sample_tag).read_map.$mapping_suffix") : nothing
         push!(prefix_jobs, (fastq=fq, sample_tag=sample_tag, out_fastq=outfq, mapping_out=map_path))
         push!(sample_infos, (
             sample_tag=sample_tag,
+            output_label=output_label,
             source_fastqs=[fq],
             prefixed_fastqs=[outfq],
             mapping_files=map_path === nothing ? String[] : [map_path],
@@ -959,6 +969,7 @@ function minimap_merge_map_and_split(;
             sample_tag = build_sample_tag(fwd)
         end
         sample_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
+        output_label = build_output_label([fwd, rev])
         out1 = joinpath(tmpdir, "$(sample_tag).R1" * (gzip_prefixed_fastqs ? ".prefixed.fq.gz" : ".prefixed.fq"))
         out2 = joinpath(tmpdir, "$(sample_tag).R2" * (gzip_prefixed_fastqs ? ".prefixed.fq.gz" : ".prefixed.fq"))
         map1 = write_read_map ? joinpath(tmpdir, "$(sample_tag).R1.read_map.$mapping_suffix") : nothing
@@ -967,6 +978,7 @@ function minimap_merge_map_and_split(;
         push!(prefix_jobs, (fastq=rev, sample_tag=sample_tag, out_fastq=out2, mapping_out=map2))
         push!(sample_infos, (
             sample_tag=sample_tag,
+            output_label=output_label,
             source_fastqs=[fwd, rev],
             prefixed_fastqs=[out1, out2],
             mapping_files=String[m for m in (map1, map2) if m !== nothing],
@@ -1002,7 +1014,7 @@ function minimap_merge_map_and_split(;
         end
     end
 
-    reference_label = !isnothing(reference_fasta) ? basename(reference_fasta) : basename(minimap_index)
+    target_label = basename(target)
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     if isnothing(merged_bam)
         paired_str = join(sort(string.(paired_end_fastqs)), "\n")
@@ -1020,7 +1032,7 @@ function minimap_merge_map_and_split(;
             normalize_case=false,
             allow_truncation=true
         )
-        merged_bam = joinpath(tmpdir, "$(reference_label).$(mapping_type).$(fingerprint).joint.minimap2.sorted.bam")
+        merged_bam = joinpath(tmpdir, "$(target_label).$(mapping_type).$(fingerprint).joint.minimap2.sorted.bam")
     end
 
     # Prefixing (and optional gzip) in parallel across samples.
@@ -1183,7 +1195,7 @@ function minimap_merge_map_and_split(;
             sample_tag = info.sample_tag
             sample_outdir = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
             mkpath(sample_outdir)
-            sample_bam = joinpath(sample_outdir, string(sample_tag, ".", reference_label, ".sorted.bam"))
+            sample_bam = joinpath(sample_outdir, string(info.output_label, ".", target_label, ".sorted.bam"))
             awk_script = "BEGIN{FS=\"\t\"; OFS=\"\t\"} /^@/ {print; next} { split(" * "\\\$1" * ", parts, \"" * id_delimiter * "\"); if (parts[1]==\"" * sample_tag * "\") print }"
             view_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "view", "-@", string(threads), "-h", merged_bam])
             filter_cmd = Cmd(["awk", awk_script])
@@ -1207,7 +1219,7 @@ function minimap_merge_map_and_split(;
 
     sample_outputs = map(sample_infos) do info
         outdir_for_sample = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
-        sample_bam = joinpath(outdir_for_sample, string(info.sample_tag, ".", reference_label, ".sorted.bam"))
+        sample_bam = joinpath(outdir_for_sample, string(info.output_label, ".", target_label, ".sorted.bam"))
         merge(info, (;output_bam=sample_bam))
     end
 

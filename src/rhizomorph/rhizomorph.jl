@@ -30,6 +30,9 @@ edges are added only when observed.
 """
 module Rhizomorph
 
+# Access parent module bindings for shared helpers/types.
+import ..Mycelia
+
 # Import necessary packages for Rhizomorph functionality
 import BioSequences
 import DataStructures
@@ -65,5 +68,6 @@ include("variable-length/string-graphs.jl")
 include("variable-length/fasta-graphs.jl")
 include("variable-length/fastq-graphs.jl")
 include("variable-length/strand-conversions.jl")
+include("assembly.jl")
 
 end  # module Rhizomorph

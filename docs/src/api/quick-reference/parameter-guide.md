@@ -143,7 +143,7 @@ Mycelia.count_kmers("reads.fastq",
 
 ### Assembly Configuration
 ```julia
-Mycelia.assemble_genome("reads.fastq",
+Mycelia.Rhizomorph.assemble_genome("reads.fastq",
     assembler="hifiasm",   # Assembly software
     k=31,                 # K-mer size for assembly
     min_overlap=1000,     # Minimum overlap length
@@ -164,7 +164,7 @@ Mycelia.assemble_genome("reads.fastq",
 
 ### Assembly Quality Control
 ```julia
-Mycelia.assemble_genome("reads.fastq",
+Mycelia.Rhizomorph.assemble_genome("reads.fastq",
     min_contig_length=1000,  # Minimum contig size
     min_coverage=5,          # Minimum coverage depth
     error_correction=true,   # Enable error correction

@@ -124,7 +124,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
             end
         end
 
-        g = Mycelia.Rhizomorph.read_gfa_next(gfa, Kmers.DNAKmer{4}, Mycelia.DoubleStrand)
+        g = Mycelia.Rhizomorph.read_gfa_next(gfa, Kmers.DNAKmer{4}, Mycelia.Rhizomorph.DoubleStrand)
         Test.@test g isa MetaGraphsNext.MetaGraph
         Test.@test length(MetaGraphsNext.labels(g)) == 2
         Test.@test length(collect(MetaGraphsNext.edge_labels(g))) == 1
@@ -140,7 +140,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
         Test.@test all_labels == [Kmers.DNAKmer{4}("ACGT"), Kmers.DNAKmer{4}("CGTA")]
         Test.@test length.(all_labels) == [4, 4]
 
-        g = Mycelia.Rhizomorph.read_gfa_next(gfa, Kmers.DNAKmer{4}, Mycelia.SingleStrand)
+        g = Mycelia.Rhizomorph.read_gfa_next(gfa, Kmers.DNAKmer{4}, Mycelia.Rhizomorph.SingleStrand)
         Test.@test g isa MetaGraphsNext.MetaGraph
         Test.@test length(MetaGraphsNext.labels(g)) == 2
         Test.@test length(collect(MetaGraphsNext.edge_labels(g))) == 1

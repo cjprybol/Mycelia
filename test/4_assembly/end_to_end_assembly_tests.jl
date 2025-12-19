@@ -72,8 +72,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                 end
 
                 # Test that we can write and read GFA
-                Test.@test hasmethod(Mycelia.write_gfa_next, (typeof(graph), String))
-                Test.@test hasmethod(Mycelia.read_gfa_next, (String,))
+                Test.@test hasmethod(Mycelia.Rhizomorph.write_gfa_next, (typeof(graph), String))
+                Test.@test hasmethod(Mycelia.Rhizomorph.read_gfa_next, (String,))
             end
         end
         
@@ -634,8 +634,8 @@ Test.@testset "End-to-End Assembly Tests" begin
             Test.@test graph isa MetaGraphsNext.MetaGraph
             
             # Test that GFA I/O functions exist
-            Test.@test hasmethod(Mycelia.write_gfa_next, (typeof(graph), String))
-            Test.@test hasmethod(Mycelia.read_gfa_next, (String,))
+            Test.@test hasmethod(Mycelia.Rhizomorph.write_gfa_next, (typeof(graph), String))
+            Test.@test hasmethod(Mycelia.Rhizomorph.read_gfa_next, (String,))
         end
     end
     
