@@ -37,85 +37,121 @@ include("aqua.jl")
 include("jet.jl")
 
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
+# For debugging individual suites, include explicit files instead of the directory sweep.
+# for file in (
+#     "1_data_acquisition/ncbi_download.jl",
+#     "1_data_acquisition/simulation_fasta.jl",
+#     "1_data_acquisition/simulation_fastq.jl",
+# )
+#     include(joinpath(@__DIR__, file))
+# end
 include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
+# For debugging individual suites, include explicit files instead of the directory sweep.
+# for file in (
+#     "2_preprocessing_qc/alphabets.jl",
+#     "2_preprocessing_qc/constants.jl",
+#     "2_preprocessing_qc/dimensionality_reduction_and_clustering.jl",
+#     "2_preprocessing_qc/preprocessing.jl",
+#     "2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl",
+#     "2_preprocessing_qc/sequence-complexity.jl",
+#     "2_preprocessing_qc/sequence_io.jl",
+# )
+#     include(joinpath(@__DIR__, file))
+# end
 include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
+# For debugging individual suites, include explicit files instead of the directory sweep.
+# for file in (
+#     "3_feature_extraction_kmer/kmer_analysis.jl",
+#     "3_feature_extraction_kmer/qualmer-analysis.jl",
+# )
+#     include(joinpath(@__DIR__, file))
+# end
 
 # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
-# include_all_tests(joinpath(@__DIR__, "4_assembly"))
-for file in (
-    "4_assembly/aa_kmer_graph_test.jl",
-    "4_assembly/aa_kmer_singlestrand_test.jl",
-    "4_assembly/amino_acid_fastq_test.jl",
-    "4_assembly/assembly_merging.jl",
-    "4_assembly/bandage_integration.jl",
-    "4_assembly/basic_graph_tests.jl",
-    "4_assembly/canonicalization_consistency_test.jl",
-    "4_assembly/comprehensive_correctness_tests.jl",
-    "4_assembly/comprehensive_fixes_tests.jl",
-    "4_assembly/comprehensive_type_stable_corrected_tests.jl",
-    "4_assembly/dna_kmer_doublestrand_test.jl",
-    "4_assembly/dna_kmer_singlestrand_test.jl",
-    "4_assembly/doublestrand_canonicalization_test.jl",
-    "4_assembly/end_to_end_graph_tests.jl",
-    "4_assembly/kmer_edge_data_test.jl",
-    "4_assembly/kmer_vertex_data_test.jl",
-    "4_assembly/megahit_phix_workflow.jl",
-    "4_assembly/path_finding_test.jl",
-    # "4_assembly/rhizomorph_bubbles_and_gfa_test.jl", # needs fixing
-    "4_assembly/rhizomorph_canonical_path_test.jl",
-    "4_assembly/rhizomorph_conversion_errors_test.jl",
-    "4_assembly/rhizomorph_doublestrand_files_test.jl",
-    "4_assembly/rhizomorph_doublestrand_traversal_test.jl",
-    # "4_assembly/rhizomorph_kmer_mode_support_test.jl", # needs fixing
-    "4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl",
-    "4_assembly/rhizomorph_qualmer_rc_evidence_test.jl",
-    "4_assembly/rna_kmer_doublestrand_test.jl",
-    "4_assembly/rna_kmer_graph_test.jl",
-    "4_assembly/rna_kmer_singlestrand_test.jl",
-    "4_assembly/singlestrand_canonicalization_test.jl",
-    "4_assembly/string-graph-helpers.jl",
-    "4_assembly/tda_metrics_test.jl",
-    "4_assembly/third_party_assemblers.jl", # might be fine, may need refactoring - under investigation
-)
-    include(file)
-end
+include_all_tests(joinpath(@__DIR__, "4_assembly"))
+# for file in (
+#     "4_assembly/aa_kmer_graph_test.jl",
+#     "4_assembly/aa_kmer_singlestrand_test.jl",
+#     "4_assembly/amino_acid_fastq_test.jl",
+#     "4_assembly/assembly_merging.jl",
+#     "4_assembly/bandage_integration.jl",
+#     "4_assembly/basic_graph_tests.jl",
+#     "4_assembly/canonicalization_consistency_test.jl",
+#     "4_assembly/comprehensive_correctness_tests.jl",
+#     "4_assembly/comprehensive_fixes_tests.jl",
+#     "4_assembly/comprehensive_type_stable_corrected_tests.jl",
+#     "4_assembly/dna_kmer_doublestrand_test.jl",
+#     "4_assembly/dna_kmer_singlestrand_test.jl",
+#     "4_assembly/doublestrand_canonicalization_test.jl",
+#     "4_assembly/end_to_end_graph_tests.jl",
+#     "4_assembly/kmer_edge_data_test.jl",
+#     "4_assembly/kmer_vertex_data_test.jl",
+#     "4_assembly/megahit_phix_workflow.jl",
+#     "4_assembly/path_finding_test.jl",
+#     "4_assembly/rhizomorph_bubbles_and_gfa_test.jl",
+#     "4_assembly/rhizomorph_canonical_path_test.jl",
+#     "4_assembly/rhizomorph_conversion_errors_test.jl",
+#     "4_assembly/rhizomorph_doublestrand_files_test.jl",
+#     "4_assembly/rhizomorph_doublestrand_traversal_test.jl",
+#     "4_assembly/rhizomorph_kmer_mode_support_test.jl",
+#     "4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl",
+#     "4_assembly/rhizomorph_qualmer_rc_evidence_test.jl",
+#     "4_assembly/rna_kmer_doublestrand_test.jl",
+#     "4_assembly/rna_kmer_graph_test.jl",
+#     "4_assembly/rna_kmer_singlestrand_test.jl",
+#     "4_assembly/singlestrand_canonicalization_test.jl",
+#     "4_assembly/string-graph-helpers.jl",
+#     "4_assembly/tda_metrics_test.jl",
+#     "4_assembly/third_party_assemblers.jl", # might be fine, may need refactoring - under investigation
+# )
+#     include(file)
+# end
 
 # Stage 5 (validation): focused suites (all other external-heavy validation stays opt-in for now).
-for file in (
-    # "5_validation/coverm_integration_extended.jl", # broken
-    "5_validation/coverm_wrappers.jl",
-    "5_validation/mosdepth_coverage_qc.jl",
-    # "5_validation/quast_busco_wrappers_test.jl", # need to add Glob to test dependencies
-)
-    include(file)
-end
+include_all_tests(joinpath(@__DIR__, "5_validation")) # broken
+# for file in (
+#     # "5_validation/coverm_integration_extended.jl", # broken
+#     "5_validation/coverm_wrappers.jl",
+#     "5_validation/mosdepth_coverage_qc.jl",
+#     # "5_validation/quast_busco_wrappers_test.jl", # need to add Glob to test dependencies
+# )
+#     include(file)
+# end
 
 # Stage 6 (annotation)
-# include_all_tests(joinpath(@__DIR__, "6_annotation")) # broken
+include_all_tests(joinpath(@__DIR__, "6_annotation")) # broken
+# for file in (
+#     # "6_annotation/annotation.jl", # broken
+#     # "6_annotation/codon_optimization.jl", # broken
+#     # "6_annotation/genome_features.jl", # broken
+# )
+#     include(joinpath(@__DIR__, file))
+# end
 
-# Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
-for file in (
-    "7_comparative_pangenomics/distance_metrics.jl",
-    "7_comparative_pangenomics/pangenome.jl",
-    "7_comparative_pangenomics/pangenome_wrappers.jl",
-    "7_comparative_pangenomics/panproteome.jl",
-    "7_comparative_pangenomics/pantranscriptome.jl",
-    "7_comparative_pangenomics/phylogenetics.jl",
-    "7_comparative_pangenomics/sequence_classification.jl",
-)
-    include(file)
-end
+# # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
+include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
+# for file in (
+#     "7_comparative_pangenomics/distance_metrics.jl",
+#     "7_comparative_pangenomics/pangenome.jl",
+#     "7_comparative_pangenomics/pangenome_wrappers.jl",
+#     "7_comparative_pangenomics/panproteome.jl",
+#     "7_comparative_pangenomics/pantranscriptome.jl",
+#     "7_comparative_pangenomics/phylogenetics.jl",
+#     "7_comparative_pangenomics/sequence_classification.jl",
+# )
+#     include(file)
+# end
 
-# Network/tooling-heavy suites (NCBI downloads, conda tools) are opt-in.
-if MYCELIA_RUN_EXTERNAL
-    for file in (
-        # "7_comparative_pangenomics/blastdb_integration.jl", # broken
-        "7_comparative_pangenomics/multiomics_alignment.jl",
-        "7_comparative_pangenomics/sequence_comparison.jl",
-    )
-        include(file)
-    end
-end
+# # Network/tooling-heavy suites (NCBI downloads, conda tools) are opt-in.
+# if MYCELIA_RUN_EXTERNAL
+#     for file in (
+#         # "7_comparative_pangenomics/blastdb_integration.jl", # broken
+#         "7_comparative_pangenomics/multiomics_alignment.jl",
+#         "7_comparative_pangenomics/sequence_comparison.jl",
+#     )
+#         include(file)
+#     end
+# end
 
 # metaphlan issue to fix
 # Sun Dec 14 17:46:31 2025: [Warning] The number of reads in the sample (315) is below the recommended minimum of 10,000 reads.
@@ -129,4 +165,17 @@ end
 # [ Info: Skipping integration tests; set MYCELIA_RUN_EXTERNAL=true to run external tools
 
 # sentencepiece isn't working
-# include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+# for file in (
+#     "8_tool_integration/bioconda.jl",
+#     "8_tool_integration/binning_tools.jl",
+#     "8_tool_integration/classification_tools.jl",
+#     "8_tool_integration/metabuli_metaphlan_strainphlan.jl",
+#     "8_tool_integration/minimap_merge_map_split.jl",
+#     "8_tool_integration/pantools.jl",
+#     "8_tool_integration/sentencepiece.jl",
+#     "8_tool_integration/utility_functions.jl",
+#     "8_tool_integration/xam.jl",
+# )
+#     include(joinpath(@__DIR__, file))
+# end

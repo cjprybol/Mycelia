@@ -32,6 +32,7 @@ module Rhizomorph
 
 # Import necessary packages for Rhizomorph functionality
 import BioSequences
+import DataStructures
 import FASTX
 import Graphs
 import Kmers
@@ -47,11 +48,14 @@ include("core/evidence-functions.jl")
 include("core/quality-functions.jl")
 include("core/graph-query.jl")
 include("core/graph-construction.jl")
+include("core/graph-type-conversions.jl")
 
 # Load algorithm modules
 include("algorithms/path-finding.jl")
 include("algorithms/io.jl")
 include("algorithms/simplification.jl")
+include("algorithms/repeats.jl")
+include("algorithms/contigs.jl")
 
 # Load graph builders
 include("fixed-length/kmer-graphs.jl")

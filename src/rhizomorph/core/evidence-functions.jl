@@ -437,6 +437,49 @@ function filter_evidence_by_strand(
 end
 
 # ============================================================================
+# Strand normalization helpers
+# ============================================================================
+
+"""
+    merge_strand_evidence!(vertex_or_edge; target_strand::StrandOrientation=Forward)
+
+Normalize evidence to a single strand by flipping entries on the opposite strand
+and merging them. Topology is unchanged; only evidence orientation is unified.
+"""
+function merge_strand_evidence!(vertex_or_edge; target_strand::StrandOrientation=Forward)
+    for (dataset_id, dataset_evidence) in vertex_or_edge.evidence
+        for (obs_id, evidence_set) in dataset_evidence
+            merged_set = Set{eltype(evidence_set)}()
+            for entry in evidence_set
+                normalized = entry.strand == target_strand ? entry : flip_evidence_strand(entry)
+                push!(merged_set, normalized)
+            end
+            dataset_evidence[obs_id] = merged_set
+        end
+    end
+
+    return vertex_or_edge
+end
+
+"""
+    merge_strands!(graph::MetaGraphsNext.MetaGraph; target_strand::StrandOrientation=Forward)
+
+Apply `merge_strand_evidence!` to all vertices and edges, useful for
+non-strand-specific analyses without altering graph structure.
+"""
+function merge_strands!(graph::MetaGraphsNext.MetaGraph; target_strand::StrandOrientation=Forward)
+    for vertex in MetaGraphsNext.labels(graph)
+        merge_strand_evidence!(graph[vertex]; target_strand=target_strand)
+    end
+
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        merge_strand_evidence!(graph[src, dst]; target_strand=target_strand)
+    end
+
+    return graph
+end
+
+# ============================================================================
 # Query Functions - IDs
 # ============================================================================
 
