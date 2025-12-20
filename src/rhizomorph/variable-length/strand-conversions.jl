@@ -38,7 +38,8 @@ function convert_variable_length_to_doublestrand(graph::MetaGraphsNext.MetaGraph
         Graphs.DiGraph();
         label_type=VertexType,
         vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType
+        edge_data_type=EdgeDataType,
+        weight_function=compute_edge_weight
     )
 
     # Add forward vertices
@@ -105,7 +106,8 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
         Graphs.DiGraph();
         label_type=VertexType,
         vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType
+        edge_data_type=EdgeDataType,
+        weight_function=compute_edge_weight
     )
 
     processed = Set{VertexType}()

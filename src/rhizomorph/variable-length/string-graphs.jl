@@ -238,7 +238,8 @@ function build_string_graph_olc_multi_dataset(
         Graphs.DiGraph();
         label_type=String,
         vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Add all strings as vertices with their dataset IDs

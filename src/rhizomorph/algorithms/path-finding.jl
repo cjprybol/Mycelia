@@ -73,7 +73,7 @@ function weighted_graph_from_rhizomorph(
         label_type=label_type,
         vertex_data_type=Any,
         edge_data_type=StrandWeightedEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=Mycelia.edge_data_weight,
         default_weight=0.0,
     )
 
@@ -138,7 +138,7 @@ function maximum_weight_walk_next(
     graph::MetaGraphsNext.MetaGraph,
     start_vertex::T,
     max_steps::Int;
-    weight_function::Function = edge_data -> edge_data.weight,
+    weight_function::Function = Mycelia.edge_data_weight,
 ) where T
     if !(start_vertex in MetaGraphsNext.labels(graph))
         throw(ArgumentError("Start vertex $start_vertex not found in graph"))
@@ -370,41 +370,46 @@ exactly once. The algorithm checks that:
 - All other vertices have equal in-degree and out-degree
 """
 function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where T
-    underlying_graph = graph.graph  # Direct access to underlying Graphs.jl structure
-
-    if Graphs.nv(underlying_graph) == 0
+    labels = collect(MetaGraphsNext.labels(graph))
+    if isempty(labels)
         return Vector{Vector{T}}()
     end
 
-    # Work with vertex indices directly for efficiency
-    vertex_indices = Graphs.vertices(underlying_graph)
+    adj_list = Dict{T, Vector{T}}()
+    in_degrees = Dict{T, Int}()
+    out_degrees = Dict{T, Int}()
 
-    # Calculate in-degrees and out-degrees using Graphs.jl functions
-    in_degrees = Dict{Int, Int}()
-    out_degrees = Dict{Int, Int}()
+    for label in labels
+        adj_list[label] = T[]
+        in_degrees[label] = 0
+        out_degrees[label] = 0
+    end
 
-    for v in vertex_indices
-        in_degrees[v] = Graphs.indegree(underlying_graph, v)
-        out_degrees[v] = Graphs.outdegree(underlying_graph, v)
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        edge_data = graph[src, dst]
+        multiplicity = max(1, count_evidence(edge_data))
+        out_degrees[src] += multiplicity
+        in_degrees[dst] += multiplicity
+        for _ in 1:multiplicity
+            push!(adj_list[src], dst)
+        end
     end
 
     # Check Eulerian path conditions
-    start_vertices = Int[]
-    end_vertices = Int[]
+    start_vertices = T[]
+    end_vertices = T[]
 
-    for v in vertex_indices
-        diff = out_degrees[v] - in_degrees[v]
+    for label in labels
+        diff = out_degrees[label] - in_degrees[label]
         if diff == 1
-            push!(start_vertices, v)
+            push!(start_vertices, label)
         elseif diff == -1
-            push!(end_vertices, v)
+            push!(end_vertices, label)
         elseif diff != 0
-            # Graph doesn't have Eulerian path
             return Vector{Vector{T}}()
         end
     end
 
-    # Validate Eulerian conditions
     if length(start_vertices) > 1 || length(end_vertices) > 1
         return Vector{Vector{T}}()
     end
@@ -412,25 +417,18 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:A
         return Vector{Vector{T}}()
     end
 
-    # Find starting vertex
     start_vertex = if !isempty(start_vertices)
         start_vertices[1]
     else
-        # Eulerian cycle - start from any vertex
-        first(vertex_indices)
+        first(labels)
     end
 
-    # Hierholzer's algorithm on underlying graph
-    path = _find_eulerian_path_hierholzer(underlying_graph, start_vertex)
-
+    path = _find_eulerian_path_hierholzer_labels(adj_list, start_vertex)
     if isempty(path)
         return Vector{Vector{T}}()
     end
 
-    # Convert path from indices to labels
-    label_path = [MetaGraphsNext.label_for(graph, idx) for idx in path]
-
-    return [label_path]
+    return [path]
 end
 
 """
@@ -484,6 +482,31 @@ function _find_eulerian_path_hierholzer(graph::Graphs.AbstractGraph, start_verte
 
     if total_edges_used != Graphs.ne(graph)
         return Int[]  # Failed to find Eulerian path
+    end
+
+    return path
+end
+
+function _find_eulerian_path_hierholzer_labels(adj_list::Dict{T, Vector{T}}, start_vertex::T) where T
+    path = T[]
+    stack = T[start_vertex]
+
+    while !isempty(stack)
+        v = stack[end]
+        if !isempty(adj_list[v])
+            next_v = pop!(adj_list[v])
+            push!(stack, next_v)
+        else
+            push!(path, pop!(stack))
+        end
+    end
+
+    reverse!(path)
+
+    if any(values(adj_list)) do neighbors
+        !isempty(neighbors)
+    end
+        return T[]
     end
 
     return path

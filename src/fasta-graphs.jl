@@ -84,7 +84,7 @@ function build_biosequence_graph(fasta_records::Vector{FASTX.FASTA.Record};
         label_type=biosequence_type,
         vertex_data_type=BioSequenceVertexData{biosequence_type},
         edge_data_type=BioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
     
@@ -161,7 +161,7 @@ function kmer_graph_to_biosequence_graph(kmer_graph::MetaGraphsNext.MetaGraph;
         label_type=biosequence_type,
         vertex_data_type=BioSequenceVertexData{biosequence_type},
         edge_data_type=BioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 

@@ -746,22 +746,69 @@ function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".check
 end
 
 """
-    setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=nothing)
+    setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"), manifest_url::Union{String,Nothing}=nothing, download_db::Bool=false)
 
-Install NCBI FCS-GX via Bioconda and optionally set up its database.
+Install NCBI FCS-GX via Bioconda and optionally download its GX database.
 
-TODO: confirm the FCS-GX database download command and directory layout.
-The Bioconda package is `ncbi-fcs-gx`.
+The Bioconda package is `ncbi-fcs-gx`. The GX database is large (~470 GB) and may
+require a high-memory filesystem for optimal performance (/dev/shm on systems with
+>= 512 GiB RAM).
+
+# Arguments
+- `db_dir`: Directory to store the GX database (only used when `download_db=true`)
+- `manifest_url`: Manifest URL for `sync_files.py` (required when `download_db=true`)
+- `download_db`: If true, download the GX DB using `sync_files.py`
 """
-function setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=nothing)
+function setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"), manifest_url::Union{String,Nothing}=nothing, download_db::Bool=false)
     add_bioconda_env("ncbi-fcs-gx")
-    if !isnothing(db_dir)
-        if !isdir(db_dir)
-            mkpath(db_dir)
+    if isnothing(db_dir)
+        return db_dir
+    end
+
+    if download_db
+        if manifest_url === nothing
+            error("manifest_url is required when download_db=true")
         end
-        # TODO: download or prepare the FCS-GX database in db_dir.
+        mkpath(db_dir)
+        run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx sync_files.py get --mft $(manifest_url) --dir $(db_dir)`)
     end
     return db_dir
+end
+
+function resolve_ncbi_fcs_gx_db_path(gx_db::String)
+    if isfile(gx_db)
+        if endswith(gx_db, ".gxi")
+            return gx_db
+        end
+        error("GX database file must end with .gxi: $(gx_db)")
+    end
+
+    if isdir(gx_db)
+        gxi_files = filter(path -> endswith(path, ".gxi"), readdir(gx_db; join=true))
+        if isempty(gxi_files)
+            error("No .gxi file found in GX database directory: $(gx_db)")
+        elseif length(gxi_files) > 1
+            error("Multiple .gxi files found in GX database directory: $(gx_db)")
+        end
+        return gxi_files[1]
+    end
+
+    parent_dir = dirname(gx_db)
+    if isdir(parent_dir)
+        prefix = basename(gx_db)
+        gxi_files = filter(
+            path -> startswith(basename(path), prefix) && endswith(path, ".gxi"),
+            readdir(parent_dir; join=true)
+        )
+        if isempty(gxi_files)
+            error("GX database not found for prefix: $(gx_db)")
+        elseif length(gxi_files) > 1
+            error("Multiple GX database files match prefix: $(gx_db)")
+        end
+        return gxi_files[1]
+    end
+
+    error("GX database path does not exist: $(gx_db)")
 end
 
 """
@@ -828,14 +875,54 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
 end
 
 """
-    run_ncbi_fcs(fasta_file::String; outdir::String=fasta_file * "_fcs", db_dir::Union{String,Nothing}=nothing, threads::Int=get_default_threads())
+    run_ncbi_fcs(
+        fasta_file::String;
+        tax_id::Int,
+        outdir::String=fasta_file * "_fcs_gx",
+        out_basename::Union{String,Nothing}=nothing,
+        gx_db::Union{String,Nothing}=nothing,
+        manifest_url::Union{String,Nothing}=nothing,
+        download_db::Bool=false,
+        species::Union{String,Nothing}=nothing,
+        split_fasta::Bool=true,
+        div::Union{String,Nothing}=nothing,
+        mask_transposons::Union{Bool,Nothing}=nothing,
+        allow_same_species::Union{Bool,Nothing}=nothing,
+        ignore_same_kingdom::Bool=false,
+        action_report::Bool=true,
+        save_hits::Bool=false,
+        generate_logfile::Bool=false,
+        phone_home_label::Union{String,Nothing}=nothing,
+        debug::Bool=false,
+    )
 
 Run NCBI FCS-GX contamination screening on a single FASTA file.
 
-TODO: Implement the wrapper once the CLI invocation and database setup are finalized.
-See https://github.com/ncbi/fcs for installation and usage details.
+Notes:
+- Requires the GX database (`.gxi` + companion files). Pass `download_db=true`
+  with `manifest_url`, or prepare the DB separately (e.g., via s5cmd download).
+- The tool may query NCBI for taxonomy division information if `--div` is not set.
 """
-function run_ncbi_fcs(fasta_file::String; outdir::String=fasta_file * "_fcs", db_dir::Union{String,Nothing}=nothing, threads::Int=get_default_threads())
+function run_ncbi_fcs(
+    fasta_file::String;
+    tax_id::Int,
+    outdir::String=fasta_file * "_fcs_gx",
+    out_basename::Union{String,Nothing}=nothing,
+    gx_db::Union{String,Nothing}=nothing,
+    manifest_url::Union{String,Nothing}=nothing,
+    download_db::Bool=false,
+    species::Union{String,Nothing}=nothing,
+    split_fasta::Bool=true,
+    div::Union{String,Nothing}=nothing,
+    mask_transposons::Union{Bool,Nothing}=nothing,
+    allow_same_species::Union{Bool,Nothing}=nothing,
+    ignore_same_kingdom::Bool=false,
+    action_report::Bool=true,
+    save_hits::Bool=false,
+    generate_logfile::Bool=false,
+    phone_home_label::Union{String,Nothing}=nothing,
+    debug::Bool=false,
+)
     if !isfile(fasta_file)
         error("Input file does not exist: $(fasta_file)")
     end
@@ -844,11 +931,135 @@ function run_ncbi_fcs(fasta_file::String; outdir::String=fasta_file * "_fcs", db
         error("Input file does not match FASTA format: $(fasta_file)")
     end
 
-    setup_ncbi_fcs_gx(db_dir=db_dir)
+    default_db_dir = joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb")
+    gx_db_path = isnothing(gx_db) ? default_db_dir : gx_db
+    download_dir = isdir(gx_db_path) ? gx_db_path : dirname(gx_db_path)
+
+    setup_ncbi_fcs_gx(
+        db_dir=download_db ? download_dir : nothing,
+        manifest_url=manifest_url,
+        download_db=download_db
+    )
+
+    resolved_gx_db = resolve_ncbi_fcs_gx_db_path(gx_db_path)
+
     mkpath(outdir)
 
-    # TODO: Implement the FCS-GX CLI invocation, database flags, and output parsing.
-    error("TODO: NCBI FCS-GX wrapper not implemented yet. See https://github.com/ncbi/fcs")
+    cmd_parts = [
+        "run_gx.py",
+        "--fasta", fasta_file,
+        "--tax-id", string(tax_id),
+        "--out-dir", outdir,
+        "--gx-db", resolved_gx_db,
+        "--split-fasta", string(split_fasta),
+        "--action-report", string(action_report),
+        "--save-hits", string(save_hits),
+        "--generate-logfile", string(generate_logfile),
+    ]
+
+    if !isnothing(out_basename)
+        push!(cmd_parts, "--out-basename", out_basename)
+    end
+
+    if !isnothing(species)
+        push!(cmd_parts, "--species", species)
+    end
+
+    if !isnothing(div)
+        push!(cmd_parts, "--div", div)
+    end
+
+    if !isnothing(mask_transposons)
+        push!(cmd_parts, "--mask-transposons", string(mask_transposons))
+    end
+
+    if !isnothing(allow_same_species)
+        push!(cmd_parts, "--allow-same-species", string(allow_same_species))
+    end
+
+    if ignore_same_kingdom
+        push!(cmd_parts, "--ignore-same-kingdom")
+    end
+
+    if !isnothing(phone_home_label)
+        push!(cmd_parts, "--phone-home-label", phone_home_label)
+    end
+
+    if debug
+        push!(cmd_parts, "--debug")
+    end
+
+    run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx $cmd_parts`)
+
+    base = out_basename === nothing ? splitext(basename(fasta_file))[1] * "." * string(tax_id) : out_basename
+    out_prefix = joinpath(outdir, base)
+    taxonomy_report = out_prefix * ".taxonomy.rpt"
+    report = action_report ? out_prefix * ".fcs_gx_report.txt" : nothing
+    summary = generate_logfile ? out_prefix * ".summary.txt" : nothing
+    hits = save_hits ? out_prefix * ".hits.tsv.gz" : nothing
+
+    if !isfile(taxonomy_report)
+        error("FCS-GX taxonomy report missing: $(taxonomy_report)")
+    end
+
+    if action_report && !isfile(report)
+        error("FCS-GX action report missing: $(report)")
+    end
+
+    return (outdir=outdir, out_basename=base, taxonomy_report=taxonomy_report, report=report, summary=summary, hits=hits)
+end
+
+"""
+    run_ncbi_fcs_clean_genome(
+        fasta_file::String;
+        action_report::String,
+        outdir::String=fasta_file * "_fcs_gx_clean",
+        output_fasta::Union{String,Nothing}=nothing,
+        contam_fasta::Union{String,Nothing}=nothing,
+        min_seq_len::Int=200,
+    )
+
+Apply an FCS-GX action report to produce a cleaned FASTA and optional contamination FASTA.
+"""
+function run_ncbi_fcs_clean_genome(
+    fasta_file::String;
+    action_report::String,
+    outdir::String=fasta_file * "_fcs_gx_clean",
+    output_fasta::Union{String,Nothing}=nothing,
+    contam_fasta::Union{String,Nothing}=nothing,
+    min_seq_len::Int=200,
+)
+    if !isfile(fasta_file)
+        error("Input file does not exist: $(fasta_file)")
+    end
+
+    if !isfile(action_report)
+        error("Action report does not exist: $(action_report)")
+    end
+
+    setup_ncbi_fcs_gx(db_dir=nothing)
+    mkpath(outdir)
+
+    output_fasta = output_fasta === nothing ? joinpath(outdir, "clean.fasta") : output_fasta
+    contam_fasta = contam_fasta === nothing ? joinpath(outdir, "contam.fasta") : contam_fasta
+
+    cmd_parts = [
+        "gx",
+        "clean-genome",
+        "--input", fasta_file,
+        "--action-report", action_report,
+        "--output", output_fasta,
+        "--contam-fasta-out", contam_fasta,
+        "--min-seq-len", string(min_seq_len),
+    ]
+
+    run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx $cmd_parts`)
+
+    if !isfile(output_fasta)
+        error("Cleaned FASTA not generated: $(output_fasta)")
+    end
+
+    return (outdir=outdir, cleaned_fasta=output_fasta, contamination_fasta=contam_fasta)
 end
 
 """

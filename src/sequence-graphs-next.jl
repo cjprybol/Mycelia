@@ -685,7 +685,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         label_type=biosequence_type,
         vertex_data_type=KmerVertexData{biosequence_type},
         edge_data_type=KmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
     
@@ -1964,7 +1964,7 @@ at each step, useful for finding high-confidence assembly paths.
 - `graph`: MetaGraphsNext k-mer graph
 - `start_vertex`: Starting vertex label
 - `max_steps`: Maximum steps to take
-- `weight_function`: Function to extract weight from edge data (default: uses edge.weight)
+- `weight_function`: Function to extract weight from edge data (default: uses edge_data_weight)
 
 # Returns
 - `GraphPath`: Path following maximum weight edges
@@ -1972,7 +1972,7 @@ at each step, useful for finding high-confidence assembly paths.
 function maximum_weight_walk_next(graph::MetaGraphsNext.MetaGraph,
                                  start_vertex::String,
                                  max_steps::Int;
-                                 weight_function::Function = edge_data -> edge_data.weight)
+                                 weight_function::Function = edge_data_weight)
     if !(start_vertex in MetaGraphsNext.labels(graph))
         throw(ArgumentError("Start vertex $start_vertex not found in graph"))
     end
@@ -2629,7 +2629,7 @@ function build_biosequence_graph_next(sequence_type::Type{<:BioSequences.BioSequ
         label_type=sequence_type,
         vertex_data_type=BioSequenceVertexData{sequence_type},
         edge_data_type=BioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2673,7 +2673,7 @@ function build_biosequence_graph_next(sequence_type::Type{String},
         label_type=String,
         vertex_data_type=StringVertexData,
         edge_data_type=StringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2719,7 +2719,7 @@ function build_qualmer_graph_next(kmer_type, fastq_records::Vector{FASTX.FASTQ.R
         label_type=actual_kmer_type,
         vertex_data_type=QualmerVertexData{actual_kmer_type},
         edge_data_type=QualmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2757,7 +2757,7 @@ Build a quality-aware BioSequence graph from FASTQ records.
         label_type=sequence_type,
         vertex_data_type=QualityBioSequenceVertexData{sequence_type},
         edge_data_type=QualityBioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2806,7 +2806,7 @@ Build a string n-gram graph using MetaGraphsNext.
         label_type=String,
         vertex_data_type=StringVertexData,
         edge_data_type=StringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2868,7 +2868,7 @@ Build a quality-aware string graph from FASTQ records.
         label_type=String,
         vertex_data_type=QualityStringVertexData,
         edge_data_type=QualityStringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2907,7 +2907,7 @@ function _create_empty_qualmer_graph(kmer_type)
         label_type=kmer_type,
         vertex_data_type=QualmerVertexData{kmer_type},
         edge_data_type=QualmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 end

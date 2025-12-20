@@ -142,7 +142,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
 - ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
 - ⚠️ hifiasm-meta wrapper exists but is commented out
-- ❌ TODO: implement NCBI FCS-GX contamination screening wrapper (https://github.com/ncbi/fcs, bioconda `ncbi-fcs-gx`) in `src/quality-control-and-benchmarking.jl`
+- ✅ NCBI FCS-GX contamination screening wrapper added (bioconda `ncbi-fcs-gx`); supports GX DB download via manifest URL and clean-genome output.
 - ❌ Still missing: classification (sourmash, metaphlan, metabuli, mosdepth), binning/post-binning (VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit)
 
 ### 📊 Verification Summary

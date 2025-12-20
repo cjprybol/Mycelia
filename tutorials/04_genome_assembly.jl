@@ -586,7 +586,7 @@ println("--- Contamination Detection ---")
 # Contamination screening options to consider:
 # - Mycelia.run_checkm / Mycelia.run_checkm2 for bacterial MAGs
 # - Mycelia.run_checkv for viral assemblies
-# - NCBI FCS-GX (https://github.com/ncbi/fcs) TODO: add Mycelia.run_ncbi_fcs wrapper and example (bioconda: ncbi-fcs-gx)
+# - NCBI FCS-GX (https://github.com/ncbi/fcs, bioconda: ncbi-fcs-gx)
 # - Read-based taxonomic screens (e.g. Kraken2/Bracken) when wrappers are available
 
 contaminant_candidates = Mycelia.contig_gc_outliers(primary_assembly)
@@ -597,6 +597,43 @@ else
     for candidate in contaminant_candidates
         println("  $(candidate.id): length=$(candidate.length), GC=$(round(candidate.gc, digits=3))")
     end
+end
+
+fcs_tax_id = tryparse(Int, get(ENV, "MYCELIA_FCS_TAX_ID", ""))
+if primary_assembly !== nothing && fcs_tax_id !== nothing
+    fcs_db_dir = get(ENV, "MYCELIA_FCS_DB_DIR", joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"))
+    fcs_manifest_url = get(ENV, "MYCELIA_FCS_MANIFEST_URL", "")
+    download_fcs_db = !isempty(fcs_manifest_url)
+
+    # GX DB (~470 GB) download options:
+    # - Use s5cmd for the official S3 bucket: s3://ncbi-fcs-gx/gxdb/latest/all.*
+    # - Or provide MYCELIA_FCS_MANIFEST_URL to sync_files.py via Mycelia.run_ncbi_fcs
+    println("Running FCS-GX screening (this requires a large GX database)...")
+    try
+        fcs_result = Mycelia.run_ncbi_fcs(
+            primary_assembly;
+            tax_id=fcs_tax_id,
+            outdir=joinpath(assembly_output, "fcs_gx"),
+            gx_db=fcs_db_dir,
+            manifest_url=download_fcs_db ? fcs_manifest_url : nothing,
+            download_db=download_fcs_db
+        )
+        println("FCS-GX report: $(fcs_result.report)")
+
+        if fcs_result.report !== nothing
+            clean_result = Mycelia.run_ncbi_fcs_clean_genome(
+                primary_assembly;
+                action_report=fcs_result.report,
+                outdir=joinpath(assembly_output, "fcs_gx_clean")
+            )
+            println("FCS-GX cleaned assembly: $(clean_result.cleaned_fasta)")
+            println("FCS-GX contamination FASTA: $(clean_result.contamination_fasta)")
+        end
+    catch e
+        @warn "FCS-GX screening failed" exception=e
+    end
+else
+    println("Set MYCELIA_FCS_TAX_ID to run FCS-GX (optionally MYCELIA_FCS_DB_DIR and MYCELIA_FCS_MANIFEST_URL).")
 end
 
 # ## Part 7: Assembly Visualization and Exploration

@@ -109,18 +109,23 @@ function _build_kmer_graph_core(
         error("Unsupported k-mer type: $KmerType")
     end
 
-    # Get actual kmer type from iterator (includes all type parameters)
-    # Need to extract from first sequence to get the concrete type
-    test_seq = FASTX.sequence(SeqType, records[1])
-
-    # DNA/RNA iterators return (kmer, position), AA iterators return just kmer
+    # Get actual kmer type from the first record that yields a k-mer.
+    # Short/ambiguous inputs can yield no k-mers; fall back to the requested type.
     is_aa = KmerType <: Kmers.AAKmer
-    if is_aa
-        test_kmer = first(KmerIterator(test_seq))
-    else
-        test_kmer, _ = first(KmerIterator(test_seq))
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
     end
-    ActualKmerType = typeof(test_kmer)
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
 
     # Create empty directed graph with actual kmer type as vertex labels
     # ALWAYS use directed graphs - MetaGraph with DiGraph backend
@@ -128,7 +133,8 @@ function _build_kmer_graph_core(
         Graphs.DiGraph();
         label_type=ActualKmerType,
         vertex_data_type=KmerVertexData{ActualKmerType},
-        edge_data_type=KmerEdgeData
+        edge_data_type=KmerEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Process each record
@@ -326,7 +332,8 @@ function _build_qualmer_graph_core(
         Graphs.DiGraph();
         label_type=ActualKmerType,
         vertex_data_type=QualmerVertexData{ActualKmerType},
-        edge_data_type=QualmerEdgeData
+        edge_data_type=QualmerEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Process each record
@@ -733,7 +740,8 @@ function convert_to_doublestrand(singlestrand_graph)
         Graphs.DiGraph();
         label_type=KmerType,
         vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType
+        edge_data_type=EdgeDataType,
+        weight_function=compute_edge_weight
     )
 
     # Add all forward vertices
@@ -881,7 +889,8 @@ function convert_to_canonical(singlestrand_graph)
         Graphs.Graph();
         label_type=KmerType,
         vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType
+        edge_data_type=EdgeDataType,
+        weight_function=compute_edge_weight
     )
 
     # Track which k-mers we've already processed
@@ -1030,7 +1039,8 @@ function convert_to_singlestrand(doublestrand_graph)
         label_type=typeof(first_kmer),
         vertex_data_type=VertexDataType,
         edge_data_type=EdgeDataType,
-        graph_data="Singlestrand graph (unfolded from canonical)"
+        graph_data="Singlestrand graph (unfolded from canonical)",
+        weight_function=compute_edge_weight
     )
 
     # Process each canonical k-mer
@@ -1177,7 +1187,8 @@ function build_ngram_graph_singlestrand(
         Graphs.DiGraph();
         label_type=String,
         vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Process each string
@@ -1382,7 +1393,8 @@ function build_string_graph_olc(
         Graphs.DiGraph();
         label_type=String,
         vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Add all strings as vertices
@@ -1572,7 +1584,8 @@ function _build_fasta_graph_olc_core(
         Graphs.DiGraph();
         label_type=SeqType,
         vertex_data_type=BioSequenceVertexData{SeqType},
-        edge_data_type=BioSequenceEdgeData
+        edge_data_type=BioSequenceEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Convert all sequences to proper BioSequence type
@@ -1774,7 +1787,8 @@ function _build_fastq_graph_olc_core(
         Graphs.DiGraph();
         label_type=SeqType,
         vertex_data_type=QualityBioSequenceVertexData{SeqType},
-        edge_data_type=QualityBioSequenceEdgeData
+        edge_data_type=QualityBioSequenceEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Convert all sequences to proper BioSequence type

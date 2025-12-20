@@ -123,7 +123,7 @@ function build_qualmer_graph_next(
         label_type = actual_kmer_type,
         vertex_data_type = QualmerVertexData{actual_kmer_type},
         edge_data_type = QualmerEdgeData,
-        weight_function = edge_data -> edge_data.weight,
+        weight_function = edge_data_weight,
         default_weight = 0.0,
     )
 
@@ -152,7 +152,7 @@ function build_qualmer_biosequence_graph_next(
         label_type = sequence_type,
         vertex_data_type = QualityBioSequenceVertexData{sequence_type},
         edge_data_type = QualityBioSequenceEdgeData,
-        weight_function = edge_data -> edge_data.weight,
+        weight_function = edge_data_weight,
         default_weight = 0.0,
     )
 
@@ -185,7 +185,7 @@ function _create_empty_qualmer_graph(kmer_type)
         label_type = kmer_type,
         vertex_data_type = QualmerVertexData{kmer_type},
         edge_data_type = QualmerEdgeData,
-        weight_function = edge_data -> edge_data.weight,
+        weight_function = edge_data_weight,
         default_weight = 0.0,
     )
 end
@@ -293,7 +293,7 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
             label_type=kmer_type,
             vertex_data_type=QualmerVertexData,
             edge_data_type=QualmerEdgeData,
-            weight_function=edge_data -> edge_data.weight,
+            weight_function=edge_data_weight,
             default_weight=0.0
         )
     end
@@ -308,7 +308,7 @@ function build_qualmer_graph(fastq_records::Vector{FASTX.FASTQ.Record};
         label_type=actual_kmer_type,
         vertex_data_type=QualmerVertexData,
         edge_data_type=QualmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
     

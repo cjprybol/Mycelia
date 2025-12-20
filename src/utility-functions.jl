@@ -33,7 +33,6 @@ function get_ellipse_points(x_coords, y_coords; scale=3.5)
     return points, anchors
 end
 
-
 """
 Collapse duplicate rows in a DataFrame by consolidating non-missing values.
 

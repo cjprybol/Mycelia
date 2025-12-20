@@ -102,11 +102,11 @@ include("fastx.jl")
 # Topological data analysis utilities (depends on Graphs)
 include("tda.jl")
 
-# Rhizomorph graph ecosystem (NEW - correct implementation)
-include("rhizomorph/rhizomorph.jl")
-
 # Graph type definitions and enums (foundation layer)
 include("graph-core.jl")            # Shared graph enums (OLD - to be deprecated)
+
+# Rhizomorph graph ecosystem (NEW - correct implementation)
+include("rhizomorph/rhizomorph.jl")
 include("kmer-graphs.jl")           # K-mer graph construction utilities (OLD - to be replaced)
 include("sequence-graphs-next.jl")  # Higher-level graph algorithms (depends on enums & k-mer types)
 include("string-graphs.jl")         # N-gram graphs

@@ -31,7 +31,7 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
             label_type=String,
             vertex_data_type=Any,
             edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
-            weight_function=edge_data -> edge_data.weight,
+            weight_function=Mycelia.edge_data_weight,
             default_weight=0.0,
         )
         
@@ -50,6 +50,8 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         return graph
     end
     
+    inverse_edge_data_weight(edge_data) = 1.0 / edge_data.weight
+
     Test.@testset "WalkStep and GraphPath Construction" begin
         # Test WalkStep creation
         step = Mycelia.Rhizomorph.WalkStep("ATC", Mycelia.Rhizomorph.Forward, 0.8, 0.8)
@@ -120,7 +122,7 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         # Test custom weight function
         custom_weight_path = Mycelia.Rhizomorph.maximum_weight_walk_next(
             graph, "ATC", 10;
-            weight_function = edge_data -> 1.0 / edge_data.weight  # Inverse weight
+            weight_function = inverse_edge_data_weight
         )
         Test.@test custom_weight_path isa Mycelia.Rhizomorph.GraphPath
         
@@ -202,7 +204,7 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
             label_type=String,
             vertex_data_type=Any,
             edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
-            weight_function=edge_data -> edge_data.weight,
+            weight_function=Mycelia.edge_data_weight,
             default_weight=0.0,
         )
         

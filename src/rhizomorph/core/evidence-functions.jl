@@ -153,9 +153,10 @@ if !isnothing(dataset_evidence)
 end
 ```
 """
-function get_dataset_evidence(vertex_or_edge, dataset_id::String)
-    if haskey(vertex_or_edge.evidence, dataset_id)
-        return vertex_or_edge.evidence[dataset_id]
+function get_dataset_evidence(vertex_or_edge, dataset_id::AbstractString)
+    dataset_key = dataset_id isa String ? dataset_id : String(dataset_id)
+    if haskey(vertex_or_edge.evidence, dataset_key)
+        return vertex_or_edge.evidence[dataset_key]
     else
         return nothing
     end
@@ -182,14 +183,16 @@ if !isnothing(obs_evidence)
 end
 ```
 """
-function get_observation_evidence(vertex_or_edge, dataset_id::String, observation_id::String)
-    dataset_evidence = get_dataset_evidence(vertex_or_edge, dataset_id)
+function get_observation_evidence(vertex_or_edge, dataset_id::AbstractString, observation_id::AbstractString)
+    dataset_key = dataset_id isa String ? dataset_id : String(dataset_id)
+    observation_key = observation_id isa String ? observation_id : String(observation_id)
+    dataset_evidence = get_dataset_evidence(vertex_or_edge, dataset_key)
     if isnothing(dataset_evidence)
         return nothing
     end
 
-    if haskey(dataset_evidence, observation_id)
-        return dataset_evidence[observation_id]
+    if haskey(dataset_evidence, observation_key)
+        return dataset_evidence[observation_key]
     else
         return nothing
     end

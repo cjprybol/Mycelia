@@ -47,7 +47,8 @@ function convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
         graph_type();
         label_type=sequence_type,
         vertex_data_type=is_quality ? QualityBioSequenceVertexData{sequence_type} : BioSequenceVertexData{sequence_type},
-        edge_data_type=is_quality ? QualityBioSequenceEdgeData : BioSequenceEdgeData
+        edge_data_type=is_quality ? QualityBioSequenceEdgeData : BioSequenceEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Add vertices
@@ -106,7 +107,8 @@ function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerT
         graph_type();
         label_type=KmerType,
         vertex_data_type=KmerVertexData{KmerType},
-        edge_data_type=KmerEdgeData
+        edge_data_type=KmerEdgeData,
+        weight_function=compute_edge_weight
     )
 
     for seq in labels
@@ -160,7 +162,8 @@ function _drop_quality_kmer_graph(graph::MetaGraphsNext.MetaGraph)
         typeof(graph.graph)();
         label_type=kmer_type,
         vertex_data_type=KmerVertexData{kmer_type},
-        edge_data_type=KmerEdgeData
+        edge_data_type=KmerEdgeData,
+        weight_function=compute_edge_weight
     )
 
     for label in labels
@@ -187,7 +190,8 @@ function _drop_quality_biosequence_graph(graph::MetaGraphsNext.MetaGraph)
         typeof(graph.graph)();
         label_type=seq_type,
         vertex_data_type=BioSequenceVertexData{seq_type},
-        edge_data_type=BioSequenceEdgeData
+        edge_data_type=BioSequenceEdgeData,
+        weight_function=compute_edge_weight
     )
 
     for label in labels

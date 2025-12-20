@@ -229,7 +229,8 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
         Graphs.DiGraph();
         label_type=sample_kmer_type,
         vertex_data_type=vertex_data_type,
-        edge_data_type=edge_data_type
+        edge_data_type=edge_data_type,
+        weight_function=compute_edge_weight
     )
 
     # Add vertices (segments) - convert sequences to k-mer types without canonicalizing
@@ -348,7 +349,13 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         end
 
         if isempty(seq_types)
-            return MetaGraphsNext.MetaGraph(Graphs.DiGraph(); label_type=String, vertex_data_type=StringVertexData, edge_data_type=StringEdgeData)
+            return MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type=String,
+                vertex_data_type=StringVertexData,
+                edge_data_type=StringEdgeData,
+                weight_function=compute_edge_weight
+            )
         end
         if length(seq_types) != 1
             error("Mixed sequence types in GFA segments; unable to construct a homogeneous BioSequence graph.")
@@ -360,7 +367,8 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
             Graphs.DiGraph();
             label_type=SeqType,
             vertex_data_type=BioSequenceVertexData{SeqType},
-            edge_data_type=BioSequenceEdgeData
+            edge_data_type=BioSequenceEdgeData,
+            weight_function=compute_edge_weight
         )
 
         # Add vertices
