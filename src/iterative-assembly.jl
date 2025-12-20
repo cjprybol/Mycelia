@@ -12,6 +12,136 @@ Part of the Mycelia bioinformatics package's iterative assembler framework.
 """
 
 # =============================================================================
+# Sparsity Detection and Memory Estimation
+# =============================================================================
+
+"""
+Calculate k-mer sparsity for a given k-mer size.
+Returns fraction of possible k-mers that are NOT observed.
+"""
+function calculate_sparsity(reads::Vector{<:FASTX.FASTQ.Record}, k::Int)::Float64
+    observed_kmers = Set{String}()
+
+    for record in reads
+        seq = FASTX.sequence(String, record)
+        if length(seq) >= k
+            for i in 1:(length(seq) - k + 1)
+                kmer = seq[i:i+k-1]
+                push!(observed_kmers, kmer)
+            end
+        end
+    end
+
+    unique_observed = length(observed_kmers)
+    max_possible = 4.0^k
+    return 1.0 - (unique_observed / max_possible)
+end
+
+"""
+Analyze k-mer coverage distribution to detect if errors are singletons.
+Returns true if low-coverage k-mers (likely errors) are well-separated from high-coverage ones.
+"""
+function errors_are_singletons(reads::Vector{<:FASTX.FASTQ.Record}, k::Int; singleton_threshold::Int = 2)::Bool
+    kmer_counts = Dict{String, Int}()
+
+    for record in reads
+        seq = FASTX.sequence(String, record)
+        if length(seq) >= k
+            for i in 1:(length(seq) - k + 1)
+                kmer = seq[i:i+k-1]
+                kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
+            end
+        end
+    end
+
+    coverage_values = collect(values(kmer_counts))
+    total_unique = length(coverage_values)
+    if total_unique == 0
+        return false
+    end
+    singleton_count = count(x -> x <= singleton_threshold, coverage_values)
+    singleton_fraction = singleton_count / total_unique
+
+    if singleton_count > 0 && total_unique > singleton_count
+        non_singleton_min = minimum(filter(x -> x > singleton_threshold, coverage_values))
+        return singleton_fraction > 0.1 && non_singleton_min > singleton_threshold * 2
+    end
+
+    return false
+end
+
+"""
+Find the optimal starting k-mer size using sparsity detection.
+Only considers prime k-mer sizes for optimal performance.
+"""
+function find_initial_k(reads::Vector{<:FASTX.FASTQ.Record}; 
+                       k_range::Vector{Int} = Primes.primes(3, 51),
+                       sparsity_threshold::Float64 = 0.5)::Int
+    for k in k_range
+        sparsity = calculate_sparsity(reads, k)
+        if sparsity > sparsity_threshold && errors_are_singletons(reads, k)
+            return k
+        end
+    end
+
+    return isempty(k_range) ? 3 : first(k_range)
+end
+
+"""
+Find the next prime number greater than current_k.
+For k-mer progression, we prefer odd numbers and especially primes.
+"""
+function next_prime_k(current_k::Int; max_k::Int = 1000)::Int
+    next_prime = Primes.nextprime(current_k + 1)
+    return next_prime <= max_k ? next_prime : current_k
+end
+
+"""
+Estimate memory usage for a graph with a given number of k-mers.
+Provides a rough estimate for memory monitoring.
+"""
+function estimate_memory_usage(num_kmers::Int, k::Int)::Int
+    kmer_size = k * 1
+    vertex_overhead = 100
+    edge_overhead = 50
+
+    estimated_bytes = num_kmers * (kmer_size + vertex_overhead + edge_overhead * 2)
+    return round(Int, estimated_bytes * 1.2)
+end
+
+function _label_k_length(label)::Int
+    if label isa Qualmer
+        return length(label)
+    elseif label isa Kmers.Kmer
+        return length(label)
+    elseif label isa BioSequences.BioSequence
+        return length(label)
+    elseif label isa AbstractString
+        return length(label)
+    end
+    return length(string(label))
+end
+
+"""
+Check if memory usage is within acceptable limits.
+"""
+function check_memory_limits(graph, memory_limit::Int)::Bool
+    labels = if applicable(MetaGraphsNext.labels, graph)
+        collect(MetaGraphsNext.labels(graph))
+    else
+        Any[]
+    end
+
+    num_kmers = length(labels)
+    if num_kmers == 0
+        return true
+    end
+    k = _label_k_length(first(labels))
+    estimated_usage = estimate_memory_usage(num_kmers, k)
+    return estimated_usage <= memory_limit
+end
+
+# =============================================================================
 # Core Iterative Assembly Framework
 # =============================================================================
 
@@ -769,22 +899,54 @@ function generate_kmer_alternatives(original_kmer, graph, sequence_type::Type{<:
 end
 
 """
+Generate alternative k-mer paths by substituting individual k-mers with plausible alternatives.
+Returns a list of alternative paths, each represented as a vector.
+"""
+function generate_alternative_paths(sequence::AbstractString, graph, k::Int; num_samples::Int = 5, graph_mode::Symbol = :canonical)
+    base_path = sequence_to_kmer_path(String(sequence), k)
+    if isempty(base_path) || num_samples <= 0
+        return Vector{Vector{Any}}()
+    end
+
+    alternative_paths = Vector{Vector{Any}}()
+    for (idx, kmer) in enumerate(base_path)
+        alternatives = generate_kmer_alternatives(kmer, graph; graph_mode=graph_mode)
+        for alt in alternatives
+            if alt != kmer
+                alt_path = Any[k for k in base_path]
+                alt_path[idx] = alt
+                push!(alternative_paths, alt_path)
+                if length(alternative_paths) >= num_samples
+                    return alternative_paths
+                end
+                break
+            end
+        end
+    end
+
+    return alternative_paths
+end
+
+"""
 Adjust quality scores based on likelihood improvement.
 """
-function adjust_quality_scores(original_quality::String, improved_sequence::String, likelihood_improvement::Float64)::String
+function adjust_quality_scores(original_quality::AbstractString, improved_sequence::AbstractString, likelihood_improvement::Float64)::String
+    original_quality_str = String(original_quality)
+    improved_sequence_str = String(improved_sequence)
+
     # For now, return original quality scores
     # This can be enhanced to adjust qualities based on the improvement
-    if length(improved_sequence) == length(original_quality)
-        return original_quality
+    if length(improved_sequence_str) == length(original_quality_str)
+        return original_quality_str
     else
         # Handle length changes by extending or truncating quality
-        if length(improved_sequence) > length(original_quality)
+        if length(improved_sequence_str) > length(original_quality_str)
             # Extend with median quality
-            median_qual = isempty(original_quality) ? 'I' : original_quality[length(original_quality)÷2]
-            return original_quality * repeat(string(median_qual), length(improved_sequence) - length(original_quality))
+            median_qual = isempty(original_quality_str) ? 'I' : original_quality_str[length(original_quality_str)÷2]
+            return original_quality_str * repeat(string(median_qual), length(improved_sequence_str) - length(original_quality_str))
         else
             # Truncate quality
-            return original_quality[1:length(improved_sequence)]
+            return original_quality_str[1:length(improved_sequence_str)]
         end
     end
 end
@@ -963,6 +1125,53 @@ function iterative_assembly_summary(result::Dict)::String
     end
     
     return report
+end
+
+"""
+Run a minimal self-test of the iterative assembly pipeline.
+Returns a status dictionary with results or error details.
+"""
+function test_iterative_assembly(; max_k::Int = 13, max_iterations_per_k::Int = 1, cleanup::Bool = true)::Dict
+    temp_dir = mktempdir()
+    try
+        test_fastq = joinpath(temp_dir, "test_reads.fastq")
+        sequences = [
+            "ATCGATCGATCGATCGATCG",
+            "CGATCGATCGATCGATCGAT",
+            "GATCGATCGATCGATCGATC",
+            "ATCGATCGATCGTTCGATCG"
+        ]
+        records = [
+            FASTX.FASTQ.Record("read$i", seq, repeat("I", length(seq)))
+            for (i, seq) in enumerate(sequences)
+        ]
+        write_fastq(records=records, filename=test_fastq)
+
+        output_dir = joinpath(temp_dir, "test_output")
+        result = mycelia_iterative_assemble(
+            test_fastq;
+            max_k=max_k,
+            output_dir=output_dir,
+            max_iterations_per_k=max_iterations_per_k,
+            verbose=false
+        )
+
+        return Dict(
+            :status => :success,
+            :final_assembly => result[:final_assembly],
+            :k_progression => result[:k_progression],
+            :metadata => result[:metadata]
+        )
+    catch e
+        return Dict(:status => :error, :error => sprint(showerror, e))
+    finally
+        if cleanup
+            try
+                rm(temp_dir, recursive=true, force=true)
+            catch
+            end
+        end
+    end
 end
 
 # =============================================================================
@@ -1341,6 +1550,43 @@ function sequence_to_kmer_path(sequence::String, k::Int)::Vector{String}
     end
     
     return path
+end
+
+function _kmer_to_string(kmer)::String
+    return kmer isa AbstractString ? String(kmer) : string(kmer)
+end
+
+"""
+Convert k-mer path back to sequence string.
+"""
+function kmer_path_to_sequence(path::AbstractVector, k::Int)::String
+    if isempty(path)
+        return ""
+    end
+
+    first_kmer = _kmer_to_string(path[1])
+    if isempty(first_kmer)
+        return ""
+    end
+
+    buffer = IOBuffer()
+    write(buffer, first_kmer)
+
+    for i in 2:length(path)
+        kmer_str = _kmer_to_string(path[i])
+        if !isempty(kmer_str)
+            write(buffer, kmer_str[end])
+        end
+    end
+
+    return String(take!(buffer))
+end
+
+"""
+Convert a generic path back to sequence string (alias for k-mer paths).
+"""
+function path_to_sequence(path::AbstractVector, k::Int)::String
+    return kmer_path_to_sequence(path, k)
 end
 
 """

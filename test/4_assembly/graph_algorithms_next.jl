@@ -21,6 +21,7 @@ import MetaGraphsNext
 import Graphs
 import FASTX
 import BioSequences
+import Kmers
 
 function bubble_graph()
     graph = MetaGraphsNext.MetaGraph(
@@ -82,10 +83,10 @@ Test.@testset "Rhizomorph Graph Algorithms" begin
         Test.@test length(paths) == 1
         Test.@test length(first(paths)) == 4  # cycle returns to start
 
-        start_idx = MetaGraphsNext.labelindex(g, "ATC")
+        start_idx = MetaGraphsNext.code_for(g, "ATC")
         dfs_indices = Mycelia.Rhizomorph._find_eulerian_path_dfs(g.graph, start_idx)
         Test.@test !isempty(dfs_indices)
-        dfs_labels = [g.vertex_labels[idx] for idx in dfs_indices]
+        dfs_labels = [MetaGraphsNext.label_for(g, idx) for idx in dfs_indices]
         Test.@test dfs_labels == first(paths)
 
         manual_path = ["ATC", "TCG", "CGA"]
@@ -191,7 +192,7 @@ Test.@testset "Rhizomorph Graph Algorithms" begin
     Test.@testset "GraphPath reverse strand reconstruction" begin
         reads = [FASTX.FASTA.Record("dna", BioSequences.dna"ATCG")]
         kgraph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="rev_path", mode=:singlestrand)
-        path = [BioSequences.DNAKmer{3}("ATC"), BioSequences.DNAKmer{3}("TCG")]
+        path = [Kmers.DNAKmer{3}("ATC"), Kmers.DNAKmer{3}("TCG")]
 
         reverse_steps = [
             Mycelia.Rhizomorph.WalkStep(path[1], Mycelia.Rhizomorph.Reverse, 0.5, 0.5),

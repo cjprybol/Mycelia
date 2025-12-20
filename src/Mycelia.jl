@@ -161,6 +161,7 @@ remaining_files = [
     "performance-benchmarks.jl",
     "plotting-and-visualization.jl",
     "quality-control-and-benchmarking.jl",
+    "read-quality-control.jl",
     "busco-datasets.jl",
     "rclone.jl",
     "reference-databases.jl",

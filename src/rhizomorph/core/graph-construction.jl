@@ -1319,6 +1319,15 @@ end
 # Variable-length String Graph Construction (OLC approach)
 # ============================================================================
 
+function _normalize_min_overlap(min_overlap::Int)
+    if min_overlap < 1
+        error("Minimum overlap must be positive, got: $min_overlap")
+    end
+
+    # Overlap detection only considers odd lengths.
+    return iseven(min_overlap) ? min_overlap + 1 : min_overlap
+end
+
 """
     build_string_graph_olc(strings; dataset_id="dataset_01", min_overlap=3)
 
@@ -1333,7 +1342,7 @@ unambiguous overlap resolution and prevents issues with even-length palindromes.
 # Arguments
 - `strings::Vector{String}`: Input strings (complete sequences)
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length string graph with overlap evidence
@@ -1366,13 +1375,7 @@ function build_string_graph_olc(
         error("Cannot build graph from empty string vector")
     end
 
-    if min_overlap < 1
-        error("Minimum overlap must be positive, got: $min_overlap")
-    end
-
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Create empty directed graph with String labels
     graph = MetaGraphsNext.MetaGraph(
@@ -1491,7 +1494,7 @@ sequence type and allows proper use of BioSequences operations.
 # Arguments
 - `records::Vector{FASTX.FASTA.Record}`: Input FASTA records
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTA graph with BioSequence vertices
@@ -1526,13 +1529,7 @@ function build_fasta_graph_olc(
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    if min_overlap < 1
-        error("Minimum overlap must be positive, got: $min_overlap")
-    end
-
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Detect sequence type from first record
     first_seq_str = String(FASTX.sequence(records[1]))
@@ -1693,7 +1690,7 @@ This preserves the biological sequence type and per-base quality scores.
 # Arguments
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph with BioSequence vertices and quality data
@@ -1729,13 +1726,7 @@ function build_fastq_graph_olc(
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    if min_overlap < 1
-        error("Minimum overlap must be positive, got: $min_overlap")
-    end
-
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Detect sequence type from first record
     first_seq_str = String(FASTX.sequence(records[1]))
@@ -1795,12 +1786,15 @@ function _build_fastq_graph_olc_core(
     for (seq_idx, (sequence, observation_id, quality)) in enumerate(zip(sequences, identifiers, qualities))
         # Create vertex if it doesn't exist
         if !haskey(graph, sequence)
-            vertex_data = QualityBioSequenceVertexData(sequence)
+            vertex_data = QualityBioSequenceVertexData(sequence, quality)
             graph[sequence] = vertex_data
         end
 
         # Add evidence (position=1 since the vertex IS the full sequence)
         vertex_data = graph[sequence]
+        if isempty(vertex_data.quality_scores)
+            append!(vertex_data.quality_scores, quality)
+        end
         add_evidence!(vertex_data, dataset_id, observation_id,
                      QualityEvidenceEntry(1, Forward, quality))
     end

@@ -139,10 +139,11 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 3. **Tool Wrapper Reality (verified in TOOL_WRAPPER_STATUS.md, 2025-01-25)**:
    - ✅ 13 wrappers implemented **and tested**: megahit, metaspades, skesa, spades, velvet, flye, metaflye, canu, hifiasm, metamdbg, minimap2, diamond, mmseqs
    - ✅ 9 wrappers implemented but **untested**: QUAST, BUSCO, HyLight, STRONG, Strainy, apollo, homopolish, unicycler, metavelvet
-   - ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
-   - ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
-   - ⚠️ hifiasm-meta wrapper exists but is commented out
-   - ❌ Still missing: classification (sourmash, metaphlan, metabuli, mosdepth), binning/post-binning (VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit)
+- ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
+- ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
+- ⚠️ hifiasm-meta wrapper exists but is commented out
+- ❌ TODO: implement NCBI FCS-GX contamination screening wrapper (https://github.com/ncbi/fcs, bioconda `ncbi-fcs-gx`) in `src/quality-control-and-benchmarking.jl`
+- ❌ Still missing: classification (sourmash, metaphlan, metabuli, mosdepth), binning/post-binning (VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit)
 
 ### 📊 Verification Summary
 - **Implementations**: Higher quality than expected (many are substantial, not placeholders)

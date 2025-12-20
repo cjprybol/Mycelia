@@ -115,7 +115,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                     vertex_data = graph[label]
                     Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
                     # Check that all characters are valid amino acids
-                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_SYMBOLS for c in string(vertex_data.Kmer))
+                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_CHARSET for c in string(vertex_data.Kmer))
                 end
             end
         end
@@ -228,8 +228,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                         end
                         
                         # Build graph from all mutated strings
-                        combined_string = join(mutated_strings, "")
-                        graph = Mycelia.Rhizomorph.build_ngram_graph([combined_string], 3; dataset_id="test")
+                        graph = Mycelia.Rhizomorph.build_ngram_graph(mutated_strings, 3; dataset_id="test")
                         
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))

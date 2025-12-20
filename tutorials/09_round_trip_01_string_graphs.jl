@@ -61,12 +61,12 @@ for n in [2, 3, 4, 5]
     for (i, text) in enumerate(clean_strings)
         if length(text) >= n  ## Only process if text is long enough
             try
-                ## Construct string graph
-                graph = Mycelia.string_to_ngram_graph(s=text, n=n)
+                ## Construct n-gram graph (Rhizomorph)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([text], n; dataset_id="string_$(i)_n$(n)")
                 
                 ## Extract graph statistics
-                num_vertices = length(graph.vertex_labels)
-                vertex_labels = collect(values(graph.vertex_labels))
+                vertex_labels = collect(Mycelia.MetaGraphsNext.labels(graph))
+                num_vertices = length(vertex_labels)
                 
                 total_ngrams += length(text) - n + 1  ## Expected number of n-grams
                 total_vertices += num_vertices
@@ -113,9 +113,19 @@ for (key, result) in graph_results
     println("\nReconstructing: \"$(result.original_text)\" (n=$(result.n))")
     
     try
-        ## Attempt to reconstruct strings from the graph
-        ## Note: This uses the basic string assembly function
-        reconstructed_strings = Mycelia.assemble_strings(result.graph)
+        ## Attempt to reconstruct strings from the graph (Rhizomorph paths)
+        reconstructed_strings = String[]
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(result.graph)
+        for path in paths
+            if !isempty(path)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(path, result.graph)
+                push!(reconstructed_strings, string(reconstructed))
+            end
+        end
+        if isempty(reconstructed_strings)
+            contigs = Mycelia.Rhizomorph.find_contigs_next(result.graph; min_contig_length=1)
+            reconstructed_strings = [string(contig.sequence) for contig in contigs]
+        end
         
         num_reconstructed = length(reconstructed_strings)
         println("  Reconstructed $num_reconstructed string(s)")
@@ -253,16 +263,16 @@ function analyze_performance_by_n()
         if length(test_string) >= n
             ## Measure construction time
             start_time = time()
-            graph = Mycelia.string_to_ngram_graph(s=test_string, n=n)
+            graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], n; dataset_id="performance_n$(n)")
             construction_time = time() - start_time
             
             ## Measure graph properties
-            num_vertices = length(graph.vertex_labels)
+            num_vertices = length(Mycelia.MetaGraphsNext.labels(graph))
             expected_ngrams = length(test_string) - n + 1
             compression_ratio = num_vertices / expected_ngrams
             
             ## Estimate memory usage (approximate)
-            avg_vertex_size = sum(length(v) for v in values(graph.vertex_labels)) / num_vertices
+            avg_vertex_size = sum(length(v) for v in Mycelia.MetaGraphsNext.labels(graph)) / num_vertices
             estimated_memory_kb = (num_vertices * avg_vertex_size * 2) / 1024  ## Rough estimate
             
             println("  n=$n: $(num_vertices) vertices, $(round(construction_time*1000, digits=2))ms, $(round(compression_ratio, digits=3)) compression, ~$(round(estimated_memory_kb, digits=1))KB")
@@ -299,8 +309,8 @@ combined_dna = join(dna_sequences, "N")  ## Use 'N' as separator
 println("\\nCombined sequence: $combined_dna")
 
 # Build string graph
-dna_graph = Mycelia.string_to_ngram_graph(s=combined_dna, n=4)
-dna_4grams = collect(values(dna_graph.vertex_labels))
+dna_graph = Mycelia.Rhizomorph.build_ngram_graph([combined_dna], 4; dataset_id="dna_string_demo")
+dna_4grams = collect(Mycelia.MetaGraphsNext.labels(dna_graph))
 
 println("DNA 4-gram analysis:")
 println("  Unique 4-grams: $(length(dna_4grams))")
@@ -334,7 +344,7 @@ println("-"^50)
 function analyze_graph_structure(graph, description)
     """Analyze structural properties of a string graph."""
     
-    vertices = collect(values(graph.vertex_labels))
+    vertices = collect(Mycelia.MetaGraphsNext.labels(graph))
     num_vertices = length(vertices)
     
     if num_vertices == 0
@@ -376,7 +386,7 @@ println("Analyzing graph structures:")
 for n in [3, 4]
     test_text = "The quick brown fox jumps over the lazy dog"
     if length(test_text) >= n
-        graph = Mycelia.string_to_ngram_graph(s=test_text, n=n)
+        graph = Mycelia.Rhizomorph.build_ngram_graph([test_text], n; dataset_id="structure_demo_n$(n)")
         analyze_graph_structure(graph, "$(n)-gram graph of: \"$test_text\"")
     end
 end

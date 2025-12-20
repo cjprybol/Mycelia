@@ -3285,6 +3285,23 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Convert a sequence string into a typed BioSequence using a known alphabet.
+
+# Arguments
+- `sequence::AbstractString`: Input sequence string
+- `alphabet::Symbol`: The alphabet symbol (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns
+- `BioSequences.BioSequence`: Typed sequence
+"""
+function detect_and_extract_sequence(sequence::AbstractString, alphabet::Symbol)
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    return sequence_type(sequence)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Calculate GC content (percentage of G and C bases) from a BioSequence.
 
 This function calculates the percentage of guanine (G) and cytosine (C) bases
@@ -3667,4 +3684,36 @@ function fibonacci_numbers_less_than(n::Int)
         end
         return fib
     end
+end
+
+"""
+    dir_size(path::AbstractString) -> Int
+
+Return the total size in bytes of all files under `path`.
+"""
+function dir_size(path::AbstractString)
+    total = 0
+    if !isdir(path)
+        return total
+    end
+    for (root, _, files) in walkdir(path)
+        for file in files
+            total += filesize(joinpath(root, file))
+        end
+    end
+    return total
+end
+
+"""
+    select_first_existing(paths) -> Union{String,Nothing}
+
+Return the first path that exists on disk, or `nothing` if none are found.
+"""
+function select_first_existing(paths)
+    for path in paths
+        if path !== nothing && isfile(path)
+            return path
+        end
+    end
+    return nothing
 end

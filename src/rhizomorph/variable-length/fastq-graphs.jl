@@ -40,7 +40,7 @@ based on suffix-prefix overlaps, preserving quality information.
 # Arguments
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph with BioSequence vertices and quality
@@ -115,7 +115,7 @@ Automatically handles compressed files (.gz, .bz2, .xz).
 # Arguments
 - `filepath::String`: Path to FASTQ file
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename)
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph
@@ -167,7 +167,7 @@ Each file is treated as a separate dataset, using the filename as dataset_id.
 
 # Arguments
 - `filepaths::Vector{String}`: List of FASTQ files
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph with evidence from all files
@@ -221,6 +221,40 @@ function build_fastq_graph_from_files(
     end
 
     return graph
+end
+
+# ============================================================================
+# FASTQ Graph Export Helpers
+# ============================================================================
+
+"""
+    fastq_graph_to_records(graph, prefix)
+
+Convert a variable-length FASTQ graph into FASTQ records.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Quality-aware BioSequence graph
+- `prefix::AbstractString`: Prefix for generated record identifiers
+
+# Returns
+- `Vector{FASTX.FASTQ.Record}`: FASTQ records with Phred+33 quality strings
+"""
+function fastq_graph_to_records(graph::MetaGraphsNext.MetaGraph, prefix::AbstractString)
+    records = FASTX.FASTQ.Record[]
+    labels = collect(MetaGraphsNext.labels(graph))
+
+    for (i, label) in enumerate(labels)
+        vertex_data = graph[label]
+        sequence_str = string(vertex_data.sequence)
+        quality_str = if isempty(vertex_data.quality_scores)
+            repeat("I", length(sequence_str))
+        else
+            String(vertex_data.quality_scores)
+        end
+        push!(records, FASTX.FASTQ.Record("$(prefix)_$(i)", sequence_str, quality_str))
+    end
+
+    return records
 end
 
 # ============================================================================

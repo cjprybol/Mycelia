@@ -461,6 +461,114 @@ function assess_assembly_quality(contigs_file)
 end
 
 """
+    compute_nl_stats(sorted_lengths, fraction) -> Tuple{Int,Int}
+
+Compute Nx/Lx statistics for a sorted list of contig lengths.
+"""
+function compute_nl_stats(sorted_lengths, fraction)
+    total = sum(sorted_lengths)
+    target = total * fraction
+    cumulative = 0
+    for (idx, length_val) in enumerate(sorted_lengths)
+        cumulative += length_val
+        if cumulative >= target
+            return length_val, idx
+        end
+    end
+    return 0, length(sorted_lengths)
+end
+
+"""
+    assembly_metrics(contigs_file) -> Union{NamedTuple,Nothing}
+
+Return standard assembly metrics including N50/N90 and GC content.
+"""
+function assembly_metrics(contigs_file)
+    if contigs_file === nothing || !isfile(contigs_file)
+        return nothing
+    end
+
+    n_contigs, total_length, n50, l50 = Mycelia.assess_assembly_quality(contigs_file)
+    records = open(FASTX.FASTA.Reader, contigs_file) do reader
+        collect(reader)
+    end
+    lengths = [length(FASTX.sequence(record)) for record in records]
+    sorted_lengths = sort(lengths, rev=true)
+    n90, l90 = compute_nl_stats(sorted_lengths, 0.9)
+
+    gc_count = 0
+    total_bases = 0
+    for record in records
+        seq = FASTX.sequence(record)
+        total_bases += length(seq)
+        for base in seq
+            if base == BioSequences.DNA_G || base == BioSequences.DNA_C
+                gc_count += 1
+            end
+        end
+    end
+    gc_content = total_bases == 0 ? 0.0 : (gc_count / total_bases)
+    largest_contig = isempty(sorted_lengths) ? 0 : first(sorted_lengths)
+
+    return (
+        n_contigs=n_contigs,
+        total_length=total_length,
+        n50=n50,
+        l50=l50,
+        n90=n90,
+        l90=l90,
+        largest_contig=largest_contig,
+        gc_content=gc_content
+    )
+end
+
+"""
+    contig_gc_outliers(contigs_file; min_length=500)
+
+Detect contigs with GC fraction more than two standard deviations from the mean.
+"""
+function contig_gc_outliers(contigs_file; min_length=500)
+    outliers = []
+    if contigs_file === nothing || !isfile(contigs_file)
+        return outliers
+    end
+
+    gc_values = Float64[]
+    records = open(FASTX.FASTA.Reader, contigs_file) do reader
+        collect(reader)
+    end
+    for record in records
+        seq = FASTX.sequence(record)
+        if length(seq) < min_length
+            continue
+        end
+        gc_count = count(base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
+        push!(gc_values, gc_count / length(seq))
+    end
+
+    if isempty(gc_values)
+        return outliers
+    end
+
+    mean_gc = Statistics.mean(gc_values)
+    std_gc = Statistics.std(gc_values)
+
+    for record in records
+        seq = FASTX.sequence(record)
+        if length(seq) < min_length
+            continue
+        end
+        gc_count = count(base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
+        gc = gc_count / length(seq)
+        if abs(gc - mean_gc) > 2 * std_gc
+            push!(outliers, (id=FASTX.identifier(record), length=length(seq), gc=gc))
+        end
+    end
+
+    return outliers
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Evaluate genome assembly quality by comparing k-mer distributions between assembled sequences and raw observations.
@@ -545,6 +653,24 @@ function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{
     return QV
 end
 
+"""
+    compute_merqury_qv(assembly_file, reads_file; k=21)
+
+Compute Merqury-style QV for an assembly using raw read data.
+"""
+function compute_merqury_qv(assembly_file, reads_file; k=21)
+    if assembly_file === nothing || reads_file === nothing
+        return missing
+    end
+    if !isfile(assembly_file) || !isfile(reads_file)
+        return missing
+    end
+
+    assembly_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly_file)
+    read_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, reads_file)
+    return Mycelia.kmer_counts_to_merqury_qv(raw_data_counts=read_counts, assembly_counts=assembly_counts)
+end
+
 # ---------- CheckM, CheckM2, CheckV Functions ----------
 
 """
@@ -620,6 +746,25 @@ function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".check
 end
 
 """
+    setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=nothing)
+
+Install NCBI FCS-GX via Bioconda and optionally set up its database.
+
+TODO: confirm the FCS-GX database download command and directory layout.
+The Bioconda package is `ncbi-fcs-gx`.
+"""
+function setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=nothing)
+    add_bioconda_env("ncbi-fcs-gx")
+    if !isnothing(db_dir)
+        if !isdir(db_dir)
+            mkpath(db_dir)
+        end
+        # TODO: download or prepare the FCS-GX database in db_dir.
+    end
+    return db_dir
+end
+
+"""
     run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
 
 Run CheckV on a single genome FASTA file.
@@ -680,6 +825,30 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
     Mycelia.cleanup_directory(tmp_dir, verbose=false, force=true)
     
     return (outdir=outdir, output_files...)
+end
+
+"""
+    run_ncbi_fcs(fasta_file::String; outdir::String=fasta_file * "_fcs", db_dir::Union{String,Nothing}=nothing, threads::Int=get_default_threads())
+
+Run NCBI FCS-GX contamination screening on a single FASTA file.
+
+TODO: Implement the wrapper once the CLI invocation and database setup are finalized.
+See https://github.com/ncbi/fcs for installation and usage details.
+"""
+function run_ncbi_fcs(fasta_file::String; outdir::String=fasta_file * "_fcs", db_dir::Union{String,Nothing}=nothing, threads::Int=get_default_threads())
+    if !isfile(fasta_file)
+        error("Input file does not exist: $(fasta_file)")
+    end
+
+    if !occursin(FASTA_REGEX, fasta_file)
+        error("Input file does not match FASTA format: $(fasta_file)")
+    end
+
+    setup_ncbi_fcs_gx(db_dir=db_dir)
+    mkpath(outdir)
+
+    # TODO: Implement the FCS-GX CLI invocation, database flags, and output parsing.
+    error("TODO: NCBI FCS-GX wrapper not implemented yet. See https://github.com/ncbi/fcs")
 end
 
 """
@@ -1421,6 +1590,38 @@ function run_mummer(reference::String, query::String;
     catch e
         error("MUMmer execution failed: $(e)")
     end
+end
+
+"""
+    parse_mummer_coords(coords_file) -> Vector{NamedTuple}
+
+Parse a MUMmer `show-coords` output file into alignment records.
+"""
+function parse_mummer_coords(coords_file)
+    alignments = NamedTuple[]
+    if !isfile(coords_file)
+        return alignments
+    end
+
+    open(coords_file) do io
+        for raw_line in eachline(io)
+            line = strip(raw_line)
+            isempty(line) && continue
+            fields = split(line)
+            first_val = tryparse(Int, fields[1])
+            if first_val === nothing || length(fields) < 7
+                continue
+            end
+            start_ref = parse(Int, fields[1])
+            end_ref = parse(Int, fields[2])
+            start_query = parse(Int, fields[3])
+            end_query = parse(Int, fields[4])
+            len_ref = parse(Int, fields[5])
+            identity = parse(Float64, fields[7])
+            push!(alignments, (;start_ref, end_ref, start_query, end_query, len_ref, identity))
+        end
+    end
+    return alignments
 end
 
 """

@@ -21,6 +21,7 @@ import MetaGraphsNext
 import Graphs
 import BioSequences
 import FASTX
+import Kmers
 
 Test.@testset "Rhizomorph Sequence Graphs" begin
     dna_records = [FASTX.FASTA.Record("dna", "ATCGATCG")]
@@ -37,7 +38,7 @@ Test.@testset "Rhizomorph Sequence Graphs" begin
         Test.@test Mycelia.Rhizomorph.SingleStrand isa Mycelia.Rhizomorph.GraphMode
         Test.@test Mycelia.Rhizomorph.DoubleStrand isa Mycelia.Rhizomorph.GraphMode
 
-        kmer = BioSequences.DNAKmer{3}("ATC")
+        kmer = Kmers.DNAKmer{3}("ATC")
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
         Mycelia.Rhizomorph.add_evidence!(vertex, "ds1", "obs1", Mycelia.Rhizomorph.EvidenceEntry(1, Mycelia.Rhizomorph.Forward))
         Test.@test Mycelia.Rhizomorph.count_evidence(vertex) == 1
@@ -48,7 +49,7 @@ Test.@testset "Rhizomorph Sequence Graphs" begin
     end
 
     Test.@testset "Evidence helpers" begin
-        kmer = BioSequences.DNAKmer{3}("ATC")
+        kmer = Kmers.DNAKmer{3}("ATC")
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
         Mycelia.Rhizomorph.add_evidence!(vertex, "ds", "obsA", Mycelia.Rhizomorph.EvidenceEntry(2, Mycelia.Rhizomorph.Forward))
         ds_evidence = Mycelia.Rhizomorph.get_dataset_evidence(vertex, "ds")
@@ -83,7 +84,7 @@ Test.@testset "Rhizomorph Sequence Graphs" begin
         end
 
         ds_labels = collect(MetaGraphsNext.labels(ds_graph))
-        Test.@test all(label isa BioSequences.DNAKmer{3} for label in ds_labels)
+        Test.@test all(label isa Kmers.DNAKmer{3} for label in ds_labels)
         rc_present = BioSequences.reverse_complement(first(ds_labels)) in ds_labels
         Test.@test rc_present  # doublestrand includes RC orientations
     end

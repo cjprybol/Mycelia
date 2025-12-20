@@ -25,6 +25,11 @@
 ## Collaboration Notes
 - Before large deletions or restructures, explain why the deletion is necessary and what logic is being kept/replaced, then proceed once agreed.
 
+## Tutorial & Benchmark Guidelines
+- Do not add generally useful functions inside `tutorials/`, `test/`, or `benchmarking/`. If a helper is broadly useful, add it under `src/` and use it from the tutorial.
+- Tutorials should demonstrate core Mycelia functionality; avoid defining new helper functions except true one-offs that only support the tutorial narrative.
+- Prefer Rhizomorph graph/assembly functionality when newer variants exist; avoid legacy base-graph/assembly APIs in tutorials unless explicitly requested.
+
 ## Testing Guidelines
 - Place new tests in the relevant stage directory; name files after the feature (e.g., `assembly_merging.jl`). Use `Test.@testset` with descriptive labels; do not skip/disable tests for broken functionality—fix the code instead.
 - Use small fixtures from `assembly_test_data/` and deterministic seeds (`StableRNGs`) for reproducibility.

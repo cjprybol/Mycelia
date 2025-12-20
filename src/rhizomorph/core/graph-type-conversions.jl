@@ -3,6 +3,25 @@
 # Conversions between fixed-length (k-mer/qualmer) graphs and variable-length
 # OLC graphs, plus utilities for dropping quality scores.
 
+function _quality_scores_from_vertex_evidence(vertex_data, sequence_length::Int)
+    dataset_ids = get_all_dataset_ids(vertex_data)
+    for dataset_id in dataset_ids
+        dataset_evidence = get_dataset_evidence(vertex_data, dataset_id)
+        if isnothing(dataset_evidence)
+            continue
+        end
+        for evidence_set in values(dataset_evidence)
+            for entry in evidence_set
+                if entry isa QualityEvidenceEntry && length(entry.quality_scores) == sequence_length
+                    return copy(entry.quality_scores)
+                end
+            end
+        end
+    end
+
+    return UInt8[]
+end
+
 """
     convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
 
@@ -35,7 +54,9 @@ function convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
     for label in labels
         sequence = sequence_type(string(label))
         if !haskey(new_graph, sequence)
-            vertex_data = is_quality ? QualityBioSequenceVertexData(sequence) : BioSequenceVertexData(sequence)
+            source_vertex_data = graph[label]
+            quality_scores = is_quality ? _quality_scores_from_vertex_evidence(source_vertex_data, length(sequence)) : UInt8[]
+            vertex_data = is_quality ? QualityBioSequenceVertexData(sequence, quality_scores) : BioSequenceVertexData(sequence)
             new_graph[sequence] = vertex_data
         end
         _copy_vertex_evidence!(new_graph[sequence], graph[label]; drop_quality=false)

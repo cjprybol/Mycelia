@@ -99,6 +99,25 @@ function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200
 end
 
 """
+    run_assembler(label, run_fn)
+
+Run an assembler helper with timing and error reporting.
+"""
+function run_assembler(label, run_fn)
+    result = nothing
+    runtime = missing
+    try
+        runtime = @elapsed begin
+            result = run_fn()
+        end
+        println("  $(label) completed in $(round(runtime, digits=2))s")
+    catch e
+        @warn "$(label) failed" exception=e
+    end
+    return result, runtime
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Run metaSPAdes assembler for metagenomic short read assembly.
@@ -435,6 +454,28 @@ function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm", bloom_filter=-
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm $(cmd_args)`)
     end
     return (;outdir, hifiasm_outprefix)
+end
+
+"""
+    hifiasm_primary_contigs(hifiasm_result) -> Union{String,Nothing}
+
+Return the primary contigs FASTA path produced by `run_hifiasm`, if present.
+"""
+function hifiasm_primary_contigs(hifiasm_result)
+    if hifiasm_result === nothing
+        return nothing
+    end
+
+    candidates = [
+        hifiasm_result.hifiasm_outprefix * ".p_ctg.fa",
+        hifiasm_result.hifiasm_outprefix * ".p_ctg.fasta"
+    ]
+    for candidate in candidates
+        if isfile(candidate)
+            return candidate
+        end
+    end
+    return nothing
 end
 
 # disabled due to poor performance relative to other long read metagenomic assemblers in tests

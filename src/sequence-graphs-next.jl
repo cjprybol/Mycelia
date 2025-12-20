@@ -2519,12 +2519,8 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:A
         return Vector{Vector{T}}()
     end
 
-    # Convert vertex indices back to labels
-    # graph.vertex_labels is index -> label, so we can use it directly
-    index_to_label = graph.vertex_labels
-
     # Convert path from indices to labels
-    label_path = [index_to_label[idx] for idx in path]
+    label_path = [MetaGraphsNext.label_for(graph, idx) for idx in path]
 
     return [label_path]
 end

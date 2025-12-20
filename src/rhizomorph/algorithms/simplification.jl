@@ -311,7 +311,7 @@ function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
     to_delete = Set{eltype(labels)}()
 
     for label in labels
-        idx = MetaGraphsNext.labelindex(graph, label)
+        idx = MetaGraphsNext.code_for(graph, label)
         indeg = Graphs.indegree(graph.graph, idx)
         outdeg = Graphs.outdegree(graph.graph, idx)
         if indeg == 0 || outdeg == 0
@@ -327,7 +327,8 @@ function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
     end
 
     for label in to_delete
-        MetaGraphsNext.rem_vertex!(graph, label)
+        idx = MetaGraphsNext.code_for(graph, label)
+        MetaGraphsNext.rem_vertex!(graph, idx)
     end
 
     return graph
