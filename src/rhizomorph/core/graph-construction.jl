@@ -1184,15 +1184,18 @@ function build_ngram_graph_singlestrand(
     for (string_idx, input_string) in enumerate(strings)
         observation_id = "string_$(lpad(string_idx, 6, '0'))"
 
-        # Skip strings shorter than n
-        if length(input_string) < n
+        chars = collect(input_string)
+        char_count = length(chars)
+
+        # Skip strings shorter than n (by character count)
+        if char_count < n
             continue
         end
 
         # Extract n-grams with positions (1-indexed)
         ngrams_with_positions = [
-            (input_string[i:i+n-1], i)
-            for i in 1:(length(input_string) - n + 1)
+            (String(chars[i:i+n-1]), i)
+            for i in 1:(char_count - n + 1)
         ]
 
         # Add vertices and evidence
@@ -1696,7 +1699,7 @@ This preserves the biological sequence type and per-base quality scores.
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph with BioSequence vertices and quality data
 
 # Key Features
-- Vertices are complete BioSequences (LongDNA or LongRNA)
+- Vertices are complete BioSequences (LongDNA, LongRNA, or LongAA)
 - Quality scores preserved for each sequence
 - Edges represent suffix-prefix overlaps between sequences
 - Odd-length overlaps only
@@ -1738,9 +1741,9 @@ function build_fastq_graph_olc(
     first_seq_str = String(FASTX.sequence(records[1]))
     biosequence = parentmodule(Rhizomorph).convert_sequence(first_seq_str)
 
-    # Only DNA and RNA support quality scores (not amino acids)
-    if !(biosequence isa Union{BioSequences.LongDNA, BioSequences.LongRNA})
-        error("FASTQ graphs only support DNA and RNA sequences, got: $(typeof(biosequence))")
+    # FASTQ graphs support DNA, RNA, and amino acid sequences
+    if !(biosequence isa Union{BioSequences.LongDNA, BioSequences.LongRNA, BioSequences.LongAA})
+        error("FASTQ graphs only support DNA, RNA, or AA sequences, got: $(typeof(biosequence))")
     end
 
     # Validate all records are same type
@@ -1757,6 +1760,8 @@ function build_fastq_graph_olc(
         return _build_fastq_graph_olc_core(records, BioSequences.LongDNA{4}, dataset_id, min_overlap)
     elseif biosequence isa BioSequences.LongRNA
         return _build_fastq_graph_olc_core(records, BioSequences.LongRNA{4}, dataset_id, min_overlap)
+    elseif biosequence isa BioSequences.LongAA
+        return _build_fastq_graph_olc_core(records, BioSequences.LongAA, dataset_id, min_overlap)
     else
         error("Unsupported sequence type for FASTQ graph: $(typeof(biosequence))")
     end

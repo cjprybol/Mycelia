@@ -10,40 +10,35 @@ import MetaGraphsNext
 
 Test.@testset "AA BioSequence SingleStrand Quality Graph" begin
     test_aa = BioSequences.aa"MKTV"
+    # TODO: use Mycelia functions to do this for additional testing depth
     high_quality = [40, 40, 40, 40]
     qual_str = String([Char(q + 33) for q in high_quality])
+    expected_quality = UInt8.(high_quality .+ 33)
     fastq_record = FASTX.FASTQ.Record("test", string(test_aa), qual_str)
     reads = [fastq_record]
 
-    graph = Mycelia.build_biosequence_quality_graph(reads; graph_mode=Mycelia.SingleStrand)
+    graph = Mycelia.Rhizomorph.build_fastq_graph(reads; dataset_id="aa_fastq_test", min_overlap=3)
 
     vertices = collect(MetaGraphsNext.labels(graph))
-    Test.@test length(vertices) >= 1
-    Test.@test MetaGraphsNext.ne(graph) >= 0
+    Test.@test length(vertices) == 1
+    Test.@test MetaGraphsNext.ne(graph) == 0
 
     for vertex_label in vertices
         vertex_data = graph[vertex_label]
-        if hasfield(typeof(vertex_data), :coverage)
-            Test.@test !isempty(vertex_data.coverage)
-            for cov_entry in vertex_data.coverage
-                if length(cov_entry) == 4
-                    obs_id, pos, strand, quality = cov_entry
-                    Test.@test obs_id isa Int
-                    Test.@test pos isa Int
-                    Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
-                    Test.@test quality isa Vector{Int}
-                    Test.@test all(q -> 0 <= q <= 60, quality)
-                end
-            end
-        end
-        if hasfield(typeof(vertex_data), :average_quality)
-            Test.@test vertex_data.average_quality >= 0.0
-        end
-        if hasfield(typeof(vertex_data), :quality_scores)
-            Test.@test !isempty(vertex_data.quality_scores)
-            for qual_vec in vertex_data.quality_scores
-                Test.@test isa(qual_vec, Vector{Int})
-                Test.@test all(q -> 0 <= q <= 60, qual_vec)
+        Test.@test hasfield(typeof(vertex_data), :evidence)
+        dataset_ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex_data)
+        Test.@test "aa_fastq_test" in dataset_ids
+        obs_ids = Mycelia.Rhizomorph.get_all_observation_ids(vertex_data, "aa_fastq_test")
+        Test.@test "test" in obs_ids
+        obs_evidence = Mycelia.Rhizomorph.get_observation_evidence(vertex_data, "aa_fastq_test", "test")
+        Test.@test !isnothing(obs_evidence)
+        if !isnothing(obs_evidence)
+            for entry in obs_evidence
+                Test.@test entry.position == 1
+                Test.@test entry.strand == Mycelia.Rhizomorph.Forward
+                Test.@test entry.quality_scores isa Vector{UInt8}
+                Test.@test length(entry.quality_scores) == length(test_aa)
+                Test.@test entry.quality_scores == expected_quality
             end
         end
     end

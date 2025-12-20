@@ -113,7 +113,7 @@ Test.@testset "Complete Assembly Workflow Tests" begin
             graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:doublestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
-            # In doublestrand mode, forward and reverse complement k-mers should be merged
+            # In doublestrand mode, forward and reverse complement k-mers remain distinct
             # Find paths
             paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
@@ -233,17 +233,25 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             # Find paths
             paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+            if isempty(paths)
+                paths = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=1)
+            end
             Test.@test paths isa Vector
 
             # At least one path should produce a non-empty sequence
             reconstructed_any = false
-            for path in paths
-                if length(path) > 1
-                    reconstructed = Mycelia.Rhizomorph.path_to_sequence(path, graph)
-                    if length(reconstructed) > 0
-                        reconstructed_any = true
-                        break
-                    end
+            for path_entry in paths
+                reconstructed = if path_entry isa Mycelia.Rhizomorph.ContigPath
+                    path_entry.sequence
+                elseif !isempty(path_entry)
+                    Mycelia.Rhizomorph.path_to_sequence(path_entry, graph)
+                else
+                    nothing
+                end
+
+                if reconstructed !== nothing && length(reconstructed) > 0
+                    reconstructed_any = true
+                    break
                 end
             end
             Test.@test reconstructed_any

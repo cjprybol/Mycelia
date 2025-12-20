@@ -46,7 +46,7 @@ based on suffix-prefix overlaps, preserving quality information.
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph with BioSequence vertices and quality
 
 # Key Concepts
-- **Vertices**: Complete BioSequences (LongDNA or LongRNA) with quality
+- **Vertices**: Complete BioSequences (LongDNA, LongRNA, or LongAA) with quality
 - **Edges**: Suffix-prefix overlaps between sequences
 - **Overlap Requirement**: Only odd-length overlaps allowed
 - **Evidence**: Tracks which sequences overlap with quality scores
@@ -246,7 +246,7 @@ Dictionary with:
 - `:min_overlap_length`: Minimum overlap length
 - `:max_overlap_length`: Maximum overlap length
 - `:mean_sequence_length`: Mean sequence length across all vertices
-- `:sequence_type`: Type of sequences (DNA or RNA)
+- `:sequence_type`: Type of sequences (DNA, RNA, or AA)
 - `:mean_quality`: Mean quality score across all sequences
 
 # Examples
@@ -283,6 +283,8 @@ function get_fastq_graph_statistics(
         "DNA"
     elseif first_seq isa BioSequences.LongRNA
         "RNA"
+    elseif first_seq isa BioSequences.LongAA
+        "AA"
     else
         "Unknown"
     end
@@ -401,4 +403,3 @@ function find_high_quality_sequences(
 
     return result
 end
-

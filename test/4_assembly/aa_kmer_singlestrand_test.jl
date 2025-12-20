@@ -22,7 +22,7 @@ Test.@testset "AA K-mer SingleStrand Graph (Rhizomorph)" begin
     )
 
     vertices = collect(MetaGraphsNext.labels(graph))
-    Test.@test Set(vertices) == Set([BioSequences.AAKmer{3}("MKT"), BioSequences.AAKmer{3}("KTV")])
+    Test.@test Set(vertices) == Set([Kmers.AAKmer{3}("MKT"), Kmers.AAKmer{3}("KTV")])
     Test.@test MetaGraphsNext.ne(graph) == 1
 
     for vertex_label in vertices
@@ -46,5 +46,5 @@ Test.@testset "AA K-mer SingleStrand Graph (Rhizomorph)" begin
     ]
     graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
     reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
-    Test.@test reconstructed == "MKTV"
+    Test.@test string(reconstructed) == "MKTV"
 end

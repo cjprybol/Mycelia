@@ -217,6 +217,25 @@ Test.@testset "Evidence Helper Functions" begin
         Test.@test total_entries == 3  # 3 total evidence entries
     end
 
+    Test.@testset "collect_evidence_entries and strands" begin
+        kmer = Kmers.DNAKmer{3}("ATG")
+        vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
+
+        Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
+                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+        Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
+                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Reverse))
+
+        entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex.evidence)
+        Test.@test length(entries) == 2
+
+        strands = Mycelia.Rhizomorph.collect_evidence_strands(vertex.evidence)
+        Test.@test Set(strands) == Set([Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse])
+
+        first_strand = Mycelia.Rhizomorph.first_evidence_strand(vertex.evidence)
+        Test.@test first_strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+    end
+
     Test.@testset "filter_evidence_by_strand" begin
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)

@@ -63,7 +63,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             test_string = "ABCDEFABCDEF"
             n = 3
             
-            ngram_graph = Mycelia.string_to_ngram_graph(s=test_string, n=n)
+            ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], n; dataset_id="test")
             
             # Type checking
             Test.@test ngram_graph isa MetaGraphsNext.MetaGraph
@@ -89,7 +89,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@testset "DNA K-mer Graphs" begin
                 k = 5
                 kmer_type = Kmers.DNAKmer{k}
-                dna_graph = Mycelia.build_kmer_graph_next(kmer_type, dna_records)
+                dna_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, k; dataset_id="test", mode=:doublestrand)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test dna_graph isa MetaGraphsNext.MetaGraph
@@ -104,9 +104,11 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                 # Test vertex data
                 for label in MetaGraphsNext.labels(dna_graph)
                     vertex_data = dna_graph[label]
-                    Test.@test vertex_data isa Mycelia.KmerVertexData
-                    Test.@test vertex_data.canonical_kmer == label
-                    Test.@test vertex_data.coverage isa Vector{Tuple{Int, Int, Mycelia.StrandOrientation}}
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+                    Test.@test vertex_data.Kmer == label
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                    Test.@test !isempty(evidence_entries)
+                    Test.@test all(entry -> entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse), evidence_entries)
                 end
             end
             
@@ -114,7 +116,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@testset "RNA K-mer Graphs" begin
                 k = 4
                 kmer_type = Kmers.RNAKmer{k}
-                rna_graph = Mycelia.build_kmer_graph_next(kmer_type, rna_records)
+                rna_graph = Mycelia.Rhizomorph.build_kmer_graph(rna_records, k; dataset_id="test", mode=:doublestrand)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test rna_graph isa MetaGraphsNext.MetaGraph
@@ -124,6 +126,9 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                 for label in MetaGraphsNext.labels(rna_graph)
                     Test.@test length(label) == k
                     Test.@test label isa Kmers.RNAKmer{k}
+                    vertex_data = rna_graph[label]
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+                    Test.@test vertex_data.Kmer == label
                 end
             end
             
@@ -131,7 +136,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@testset "Amino Acid K-mer Graphs" begin
                 k = 3
                 kmer_type = Kmers.AAKmer{k}
-                aa_graph = Mycelia.build_kmer_graph_next(kmer_type, protein_records)
+                aa_graph = Mycelia.Rhizomorph.build_kmer_graph(protein_records, k; dataset_id="test", mode=:singlestrand)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test aa_graph isa MetaGraphsNext.MetaGraph
@@ -141,6 +146,9 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                 for label in MetaGraphsNext.labels(aa_graph)
                     Test.@test length(label) == k
                     Test.@test label isa Kmers.AAKmer{k}
+                    vertex_data = aa_graph[label]
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+                    Test.@test vertex_data.Kmer == label
                 end
             end
         end
@@ -151,7 +159,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             # Test DNA qualmer graphs
             Test.@testset "DNA Qualmer Graphs" begin
                 k = 5
-                qualmer_graph = Mycelia.build_qualmer_graph(fastq_records, k=k)
+                qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_records, k; dataset_id="test", mode=:doublestrand)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
@@ -159,20 +167,20 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                 # Verify fixed-length vertices with quality information
                 for label in MetaGraphsNext.labels(qualmer_graph)
                     vertex_data = qualmer_graph[label]
-                    Test.@test vertex_data isa Mycelia.QualmerVertexData
-                    Test.@test vertex_data.canonical_qualmer.kmer isa Kmers.DNAKmer{k}
-                    Test.@test length(vertex_data.canonical_qualmer.kmer) == k
-                    Test.@test length(vertex_data.canonical_qualmer.qualities) == k
-                    Test.@test vertex_data.joint_probability isa Float64
-                    Test.@test 0.0 <= vertex_data.joint_probability <= 1.0
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.QualmerVertexData
+                    Test.@test vertex_data.Kmer isa Kmers.DNAKmer{k}
+                    Test.@test length(vertex_data.Kmer) == k
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                    Test.@test !isempty(evidence_entries)
+                    Test.@test all(entry -> length(entry.quality_scores) == k, evidence_entries)
                 end
                 
-                # Test edge data with quality weights
+                # Test edge data with quality evidence
                 for (src, dst) in MetaGraphsNext.edge_labels(qualmer_graph)
                     edge_data = qualmer_graph[src, dst]
-                    Test.@test edge_data isa Mycelia.QualmerEdgeData
-                    Test.@test edge_data.quality_weight isa Float64
-                    Test.@test edge_data.quality_weight > 0.0
+                    Test.@test edge_data isa Mycelia.Rhizomorph.QualmerEdgeData
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(edge_data.evidence)
+                    Test.@test !isempty(evidence_entries)
                 end
             end
         end
@@ -184,16 +192,14 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             # Create N-gram graph first
             test_string = "ABCDEFABCDEF"
             n = 3
-            ngram_graph = Mycelia.string_to_ngram_graph(s=test_string, n=n)
-            
-            # Test string graph operations (simplified from N-gram)
-            collapsed_graph = Mycelia.collapse_unbranching_paths(ngram_graph)
+            ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], n; dataset_id="test")
             
             # Type checking
-            Test.@test collapsed_graph isa MetaGraphsNext.MetaGraph
+            Test.@test ngram_graph isa MetaGraphsNext.MetaGraph
             
             # Test assembly from string graph
-            assembled_strings = Mycelia.assemble_strings(collapsed_graph)
+            paths = Mycelia.Rhizomorph.find_eulerian_paths_next(ngram_graph)
+            assembled_strings = [Mycelia.Rhizomorph.path_to_sequence(path, ngram_graph) for path in paths]
             Test.@test assembled_strings isa Vector{String}
             Test.@test !isempty(assembled_strings)
             
@@ -209,7 +215,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             
             # Test direct BioSequence graph construction
             Test.@testset "Direct BioSequence Graph from FASTA" begin
-                biosequence_graph = Mycelia.build_biosequence_graph(dna_records)
+                biosequence_graph = Mycelia.Rhizomorph.build_fasta_graph(dna_records; dataset_id="test", min_overlap=3)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test biosequence_graph isa MetaGraphsNext.MetaGraph
@@ -220,7 +226,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                     Test.@test label isa BioSequences.LongDNA{4}
                     Test.@test length(label) > 0  # Variable length
                     vertex_data = biosequence_graph[label]
-                    Test.@test vertex_data isa Mycelia.BioSequenceVertexData
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.BioSequenceVertexData
                     Test.@test vertex_data.sequence == label
                 end
             end
@@ -229,10 +235,10 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@testset "K-mer to BioSequence Graph Conversion" begin
                 k = 5
                 kmer_type = Kmers.DNAKmer{k}
-                kmer_graph = Mycelia.build_kmer_graph_next(kmer_type, dna_records)
+                kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, k; dataset_id="test", mode=:doublestrand)
                 
                 # Convert to BioSequence graph
-                biosequence_graph = Mycelia.kmer_graph_to_biosequence_graph(kmer_graph)
+                biosequence_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(kmer_graph)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test biosequence_graph isa MetaGraphsNext.MetaGraph
@@ -243,8 +249,9 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                     Test.@test label isa BioSequences.LongDNA{4}
                     Test.@test length(label) >= k  # Should be at least k bases
                     vertex_data = biosequence_graph[label]
-                    Test.@test vertex_data isa Mycelia.BioSequenceVertexData
-                    Test.@test !isempty(vertex_data.constituent_kmers)
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.BioSequenceVertexData
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                    Test.@test !isempty(evidence_entries)
                 end
             end
         end
@@ -254,7 +261,7 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             
             # Test direct quality-aware BioSequence graph construction
             Test.@testset "Direct Quality BioSequence Graph from FASTQ" begin
-                quality_graph = Mycelia.build_quality_biosequence_graph(fastq_records)
+                quality_graph = Mycelia.Rhizomorph.build_fastq_graph(fastq_records; dataset_id="test", min_overlap=3)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test quality_graph isa MetaGraphsNext.MetaGraph
@@ -265,21 +272,21 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                     Test.@test label isa BioSequences.LongDNA{4}
                     Test.@test length(label) > 0  # Variable length
                     vertex_data = quality_graph[label]
-                    Test.@test vertex_data isa Mycelia.QualityBioSequenceVertexData
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
                     Test.@test vertex_data.sequence == label
-                    Test.@test length(vertex_data.quality_scores) == length(label)
-                    Test.@test vertex_data.joint_probability isa Float64
-                    Test.@test 0.0 <= vertex_data.joint_probability <= 1.0
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                    Test.@test !isempty(evidence_entries)
+                    Test.@test all(entry -> length(entry.quality_scores) == length(label), evidence_entries)
                 end
             end
             
             # Test Qualmer graph to quality-aware BioSequence graph conversion
             Test.@testset "Qualmer to Quality BioSequence Graph Conversion" begin
                 k = 5
-                qualmer_graph = Mycelia.build_qualmer_graph(fastq_records, k=k)
+                qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_records, k; dataset_id="test", mode=:doublestrand)
                 
                 # Convert to quality-aware BioSequence graph
-                quality_biosequence_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                quality_biosequence_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
                 
                 # Type checking - NO STRING CONVERSIONS
                 Test.@test quality_biosequence_graph isa MetaGraphsNext.MetaGraph
@@ -290,30 +297,23 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
                     Test.@test label isa BioSequences.LongDNA{4}
                     Test.@test length(label) >= k  # Should be at least k bases
                     vertex_data = quality_biosequence_graph[label]
-                    Test.@test vertex_data isa Mycelia.QualityBioSequenceVertexData
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
                     Test.@test vertex_data.sequence == label
-                    Test.@test length(vertex_data.quality_scores) == length(label)
-                    Test.@test !isempty(vertex_data.constituent_qualmers)
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                    Test.@test !isempty(evidence_entries)
                 end
             end
             
-            # Test FASTQ conversion roundtrip
-            Test.@testset "FASTQ Conversion Roundtrip" begin
-                quality_graph = Mycelia.build_quality_biosequence_graph(fastq_records)
-                
-                # Convert back to FASTQ records
-                reconstructed_fastq = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
-                
-                # Type checking
-                Test.@test reconstructed_fastq isa Vector{FASTX.FASTQ.Record}
-                Test.@test !isempty(reconstructed_fastq)
+            # Test FASTQ evidence preservation
+            Test.@testset "FASTQ Evidence Preservation" begin
+                quality_graph = Mycelia.Rhizomorph.build_fastq_graph(fastq_records; dataset_id="test", min_overlap=3)
                 
                 # Quality preservation
-                for record in reconstructed_fastq
-                    Test.@test record isa FASTX.FASTQ.Record
-                    Test.@test !isempty(FASTX.FASTQ.sequence(record))
-                    Test.@test !isempty(FASTX.FASTQ.quality_scores(record))
-                    Test.@test length(FASTX.FASTQ.sequence(record)) == length(FASTX.FASTQ.quality_scores(record))
+                for label in MetaGraphsNext.labels(quality_graph)
+                    vertex_data = quality_graph[label]
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                    Test.@test !isempty(evidence_entries)
+                    Test.@test all(entry -> length(entry.quality_scores) == length(label), evidence_entries)
                 end
             end
         end
@@ -328,35 +328,36 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             k = 4
             
             # 1. N-gram graphs → strings
-            ngram_graph = Mycelia.string_to_ngram_graph(s="ABCDEFABCDEF", n=3)
+            ngram_graph = Mycelia.Rhizomorph.build_ngram_graph(["ABCDEFABCDEF"], 3; dataset_id="test")
             Test.@test all(label -> label isa String, MetaGraphsNext.labels(ngram_graph))
             
             # 2. K-mer graphs → DNAKmer types
-            kmer_graph = Mycelia.build_kmer_graph_next(Kmers.DNAKmer{k}, dna_records)
+            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, k; dataset_id="test", mode=:doublestrand)
             Test.@test all(label -> label isa Kmers.DNAKmer{k}, MetaGraphsNext.labels(kmer_graph))
             
             # 3. Qualmer graphs → Qualmer types
-            qualmer_graph = Mycelia.build_qualmer_graph(fastq_records, k=k)
+            qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_records, k; dataset_id="test", mode=:doublestrand)
             for label in MetaGraphsNext.labels(qualmer_graph)
                 vertex_data = qualmer_graph[label]
-                Test.@test vertex_data.canonical_qualmer.kmer isa Kmers.DNAKmer{k}
+                Test.@test vertex_data.Kmer isa Kmers.DNAKmer{k}
             end
             
             # 4. String graphs → strings (variable length)
-            collapsed_graph = Mycelia.collapse_unbranching_paths(ngram_graph)
-            assembled_strings = Mycelia.assemble_strings(collapsed_graph)
+            paths = Mycelia.Rhizomorph.find_eulerian_paths_next(ngram_graph)
+            assembled_strings = [Mycelia.Rhizomorph.path_to_sequence(path, ngram_graph) for path in paths]
             Test.@test all(s -> s isa String, assembled_strings)
             
             # 5. BioSequence graphs → BioSequence types
-            biosequence_graph = Mycelia.build_biosequence_graph(dna_records)
+            biosequence_graph = Mycelia.Rhizomorph.build_fasta_graph(dna_records; dataset_id="test", min_overlap=3)
             Test.@test all(label -> label isa BioSequences.LongDNA{4}, MetaGraphsNext.labels(biosequence_graph))
             
             # 6. Quality BioSequence graphs → BioSequence types with quality
-            quality_graph = Mycelia.build_quality_biosequence_graph(fastq_records)
+            quality_graph = Mycelia.Rhizomorph.build_fastq_graph(fastq_records; dataset_id="test", min_overlap=3)
             Test.@test all(label -> label isa BioSequences.LongDNA{4}, MetaGraphsNext.labels(quality_graph))
             for label in MetaGraphsNext.labels(quality_graph)
                 vertex_data = quality_graph[label]
-                Test.@test length(vertex_data.quality_scores) == length(label)
+                evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                Test.@test !isempty(evidence_entries)
             end
         end
         
@@ -367,14 +368,15 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@testset "SingleStrand Mode" begin
                 k = 4
                 kmer_type = Kmers.DNAKmer{k}
-                single_strand_graph = Mycelia.build_kmer_graph_next(kmer_type, dna_records, graph_mode=Mycelia.SingleStrand)
+                single_strand_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, k; dataset_id="test", mode=:singlestrand)
                 
                 # Check strand information in edges
                 for (src, dst) in MetaGraphsNext.edge_labels(single_strand_graph)
                     edge_data = single_strand_graph[src, dst]
-                    Test.@test edge_data isa Mycelia.KmerEdgeData
-                    Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
-                    Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
+                    Test.@test edge_data isa Mycelia.Rhizomorph.KmerEdgeData
+                    evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(edge_data.evidence)
+                    Test.@test !isempty(evidence_entries)
+                    Test.@test all(entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
                 end
             end
             
@@ -382,12 +384,12 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             Test.@testset "DoubleStrand Mode" begin
                 k = 4
                 kmer_type = Kmers.DNAKmer{k}
-                double_strand_graph = Mycelia.build_kmer_graph_next(kmer_type, dna_records, graph_mode=Mycelia.DoubleStrand)
+                double_strand_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, k; dataset_id="test", mode=:doublestrand)
                 
-                # Check canonical representation
+                # Check label consistency
                 for label in MetaGraphsNext.labels(double_strand_graph)
                     vertex_data = double_strand_graph[label]
-                    Test.@test vertex_data.canonical_kmer == label
+                    Test.@test vertex_data.Kmer == label
                 end
             end
         end
@@ -450,16 +452,16 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
         Test.@testset "Fixed-Length vs Variable-Length Memory" begin
             dna_records, fastq_records, _, _ = create_test_data()
             
-            # Test that fixed-length graphs use canonical representation
+            # Test that canonical fixed-length graphs use canonical representation
             k = 4
-            kmer_graph = Mycelia.build_kmer_graph_next(Kmers.DNAKmer{k}, dna_records)
+            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, k; dataset_id="test", mode=:canonical)
             
             # All vertices should be unique k-mers (canonical representation)
             unique_labels = Set(MetaGraphsNext.labels(kmer_graph))
             Test.@test length(unique_labels) == length(collect(MetaGraphsNext.labels(kmer_graph)))
             
             # Variable-length graphs should be simplified
-            biosequence_graph = Mycelia.kmer_graph_to_biosequence_graph(kmer_graph)
+            biosequence_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(kmer_graph)
             Test.@test length(collect(MetaGraphsNext.labels(biosequence_graph))) <= length(collect(MetaGraphsNext.labels(kmer_graph)))
         end
         
@@ -467,15 +469,20 @@ Test.@testset "Complete 6-Graph Hierarchy Tests" begin
             _, fastq_records, _, _ = create_test_data()
             
             # Test that quality information is preserved efficiently
-            quality_graph = Mycelia.build_quality_biosequence_graph(fastq_records)
+            quality_graph = Mycelia.Rhizomorph.build_fastq_graph(fastq_records; dataset_id="test", min_overlap=3)
             
             for label in MetaGraphsNext.labels(quality_graph)
                 vertex_data = quality_graph[label]
-                # Quality scores should match sequence length
-                Test.@test length(vertex_data.quality_scores) == length(vertex_data.sequence)
-                # Joint probability should be meaningful
-                Test.@test vertex_data.joint_probability > 0.0
-                Test.@test vertex_data.mean_quality > 0.0
+                evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                Test.@test !isempty(evidence_entries)
+                Test.@test all(entry -> length(entry.quality_scores) == length(vertex_data.sequence), evidence_entries)
+
+                dataset_ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex_data)
+                if !isempty(dataset_ids)
+                    mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, first(dataset_ids))
+                    Test.@test mean_quality !== nothing
+                    Test.@test all(q -> q >= 0.0, mean_quality)
+                end
             end
         end
     end

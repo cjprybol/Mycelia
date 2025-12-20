@@ -4,7 +4,7 @@ import Mycelia
 Test.@testset "Bandage download and CLI (opt-in)" begin
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
     if !Sys.islinux() || !(run_all || get(ENV, "MYCELIA_RUN_BANDAGE_DOWNLOAD", "false") == "true")
-        @info "Skipping Bandage download/invoke test (requires Linux and MYCELIA_RUN_BANDAGE_DOWNLOAD=true)"
+        @info "Skipping Bandage download/invoke test (requires Linux and MYCELIA_RUN_BANDAGE_DOWNLOAD=true or MYCELIA_RUN_ALL=true)"
         return
     end
 

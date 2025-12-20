@@ -45,6 +45,52 @@ function GraphPath(steps::Vector{WalkStep{T}}) where T
     return GraphPath{T}(steps)
 end
 
+"""
+Edge data for probabilistic path algorithms with strand awareness.
+"""
+struct StrandWeightedEdgeData
+    weight::Float64
+    src_strand::StrandOrientation
+    dst_strand::StrandOrientation
+end
+
+"""
+    weighted_graph_from_rhizomorph(source_graph; default_weight=1e-10)
+
+Convert a Rhizomorph evidence graph into a weighted graph suitable for
+probabilistic path algorithms. Edge weights are derived from evidence counts,
+and strand orientation is inferred from the first evidence entry when present.
+"""
+function weighted_graph_from_rhizomorph(
+    source_graph::MetaGraphsNext.MetaGraph;
+    default_weight::Float64=1e-10
+)
+    labels = collect(MetaGraphsNext.labels(source_graph))
+    label_type = isempty(labels) ? String : typeof(first(labels))
+
+    weighted = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=label_type,
+        vertex_data_type=Any,
+        edge_data_type=StrandWeightedEdgeData,
+        weight_function=edge_data -> edge_data.weight,
+        default_weight=0.0,
+    )
+
+    for label in labels
+        weighted[label] = nothing
+    end
+
+    for (src, dst) in MetaGraphsNext.edge_labels(source_graph)
+        edge_data = source_graph[src, dst]
+        weight = Float64(count_evidence(edge_data))
+        strand = first_evidence_strand(edge_data.evidence; default=Forward)
+        weighted[src, dst] = StrandWeightedEdgeData(weight > 0 ? weight : default_weight, strand, strand)
+    end
+
+    return weighted
+end
+
 function probabilistic_walk_next(
     graph::MetaGraphsNext.MetaGraph,
     start_vertex::T,

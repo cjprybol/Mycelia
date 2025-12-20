@@ -3,12 +3,13 @@ import Mycelia
 import DataFrames
 import StableRNGs
 
-const RUN_EXTERNAL = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+const RUN_EXTERNAL = RUN_ALL || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
 Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
 
     if !RUN_EXTERNAL
-        @info "Skipping integration tests; set MYCELIA_RUN_EXTERNAL=true to run external tools"
+        @info "Skipping integration tests; set MYCELIA_RUN_EXTERNAL=true or MYCELIA_RUN_ALL=true to run external tools"
         return
     end
 

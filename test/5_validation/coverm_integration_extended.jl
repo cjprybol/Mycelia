@@ -5,15 +5,17 @@ import StableRNGs
 
 """
 CoverM integration test on a real (or fallback simulated) genome.
-Runs only when `MYCELIA_RUN_COVERM=true` or `MYCELIA_RUN_EXTENDED=true`.
+Runs only when `MYCELIA_RUN_COVERM=true`, `MYCELIA_RUN_EXTENDED=true`, or `MYCELIA_RUN_ALL=true`.
 Uses: ART read simulation -> minimap2 mapping -> CoverM contig/genome.
 """
 Test.@testset "CoverM integration (extended)" begin
-    should_run = get(ENV, "MYCELIA_RUN_COVERM", "false") == "true" ||
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    should_run = run_all ||
+                 get(ENV, "MYCELIA_RUN_COVERM", "false") == "true" ||
                  get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
 
     if !should_run
-        Test.@test_skip "CoverM integration skipped (set MYCELIA_RUN_COVERM=true or MYCELIA_RUN_EXTENDED=true)"
+        Test.@test_skip "CoverM integration skipped (set MYCELIA_RUN_COVERM=true, MYCELIA_RUN_EXTENDED=true, or MYCELIA_RUN_ALL=true)"
     else
         mktempdir() do tmp
             rng = StableRNGs.StableRNG(7)

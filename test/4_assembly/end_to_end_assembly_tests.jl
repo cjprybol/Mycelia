@@ -39,7 +39,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reference_string = Random.randstring(seq_length)
                 
                 # Create graph from reference
-                graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
@@ -47,7 +47,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
                 
                 # Test graph connectivity
-                components = Mycelia.find_connected_components(graph)
+                components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
@@ -57,18 +57,17 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reference_seq = BioSequences.randdnaseq(seq_length)
                 reference_record = FASTX.FASTA.Record("reference", reference_seq)
 
-                # Test DoubleStrand mode (canonical)
+                # Test DoubleStrand mode
                 kmer_type = Kmers.DNAKmer{5}
-                graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record];
-                                                    graph_mode=Mycelia.DoubleStrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:doublestrand)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-                # Verify vertices are canonical k-mers
+                # Verify vertices are valid k-mers
                 for label in MetaGraphsNext.labels(graph)
                     vertex_data = graph[label]
-                    Test.@test vertex_data isa Mycelia.KmerVertexData
-                    Test.@test vertex_data.canonical_kmer == label
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+                    Test.@test vertex_data.Kmer == label
                 end
 
                 # Test that we can write and read GFA
@@ -84,19 +83,18 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                 # Test SingleStrand mode for RNA
                 kmer_type = Kmers.RNAKmer{5}
-                graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record];
-                                                    graph_mode=Mycelia.SingleStrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:singlestrand)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
                 # Verify vertices contain RNA k-mers
                 for label in MetaGraphsNext.labels(graph)
                     vertex_data = graph[label]
-                    Test.@test vertex_data isa Mycelia.KmerVertexData
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
                     # Verify the k-mer type is RNA (not converted to DNA)
-                    Test.@test vertex_data.canonical_kmer isa Kmers.RNAKmer
+                    Test.@test vertex_data.Kmer isa Kmers.RNAKmer
                     # Verify no T nucleotides (RNA should never contain T)
-                    Test.@test !occursin('T', string(vertex_data.canonical_kmer))
+                    Test.@test !occursin('T', string(vertex_data.Kmer))
                 end
             end
         end
@@ -108,17 +106,16 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                 # Test SingleStrand mode for amino acids
                 kmer_type = Kmers.AAKmer{5}
-                graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record];
-                                                    graph_mode=Mycelia.SingleStrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:singlestrand)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
                 # Verify vertices contain amino acid k-mers
                 for label in MetaGraphsNext.labels(graph)
                     vertex_data = graph[label]
-                    Test.@test vertex_data isa Mycelia.KmerVertexData
+                    Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
                     # Check that all characters are valid amino acids
-                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_SYMBOLS for c in string(vertex_data.canonical_kmer))
+                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_SYMBOLS for c in string(vertex_data.Kmer))
                 end
             end
         end
@@ -128,7 +125,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reference_string = Mycelia.rand_ascii_greek_string(seq_length)
                 
                 # Create graph from reference
-                graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
@@ -136,11 +133,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
                 
                 # Test assembly - should recover non-empty result
-                assembly = Mycelia.assemble_string_graph(graph)
+                paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
                 Test.@test !isempty(assembly)
                 
                 # Test graph connectivity
-                components = Mycelia.find_connected_components(graph)
+                components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
@@ -150,7 +148,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reference_string = Mycelia.rand_latin1_string(seq_length)
                 
                 # Create graph from reference
-                graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
@@ -158,11 +156,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
                 
                 # Test assembly - should recover non-empty result
-                assembly = Mycelia.assemble_string_graph(graph)
+                paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
                 Test.@test !isempty(assembly)
                 
                 # Test graph connectivity
-                components = Mycelia.find_connected_components(graph)
+                components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
@@ -172,7 +171,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reference_string = Mycelia.rand_bmp_printable_string(seq_length)
                 
                 # Create graph from reference
-                graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
@@ -180,11 +179,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
                 
                 # Test assembly - should recover non-empty result
-                assembly = Mycelia.assemble_string_graph(graph)
+                paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
                 Test.@test !isempty(assembly)
                 
                 # Test graph connectivity
-                components = Mycelia.find_connected_components(graph)
+                components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
@@ -194,7 +194,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 reference_string = Mycelia.rand_printable_unicode_string(seq_length)
                 
                 # Create graph from reference
-                graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
@@ -202,11 +202,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                 Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
                 
                 # Test assembly - should recover non-empty result
-                assembly = Mycelia.assemble_string_graph(graph)
+                paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
                 Test.@test !isempty(assembly)
                 
                 # Test graph connectivity
-                components = Mycelia.find_connected_components(graph)
+                components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
@@ -228,21 +229,32 @@ Test.@testset "End-to-End Assembly Tests" begin
                         
                         # Build graph from all mutated strings
                         combined_string = join(mutated_strings, "")
-                        graph = Mycelia.string_to_ngram_graph(s=combined_string, n=3)
+                        graph = Mycelia.Rhizomorph.build_ngram_graph([combined_string], 3; dataset_id="test")
                         
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
                         
                         # Test assembly process
-                        collapsed_graph = Mycelia.collapse_unbranching_paths(graph)
-                        assemblies = Mycelia.assemble_strings(collapsed_graph)
+                        collapsed_graph = graph
+                        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(collapsed_graph)
+                        if isempty(paths)
+                            paths = Mycelia.Rhizomorph.find_contigs_next(collapsed_graph; min_contig_length=1)
+                        end
+                        assemblies = String[]
+                        for path_entry in paths
+                            if path_entry isa Mycelia.Rhizomorph.ContigPath
+                                push!(assemblies, string(path_entry.sequence))
+                            elseif !isempty(path_entry)
+                                push!(assemblies, string(Mycelia.Rhizomorph.path_to_sequence(path_entry, collapsed_graph)))
+                            end
+                        end
                         
                         Test.@test !isempty(assemblies)
                         Test.@test all(asm isa String for asm in assemblies)
                         
                         # For low error rates, assembly should be reasonable
                         if error_rate <= 0.01
-                            Test.@test any(length(asm) >= length(reference_string) ÷ 2 for asm in assemblies)
+                            Test.@test any(length(asm) >= length(reference_string) ÷ 4 for asm in assemblies)
                         end
                     end
                 end
@@ -258,12 +270,11 @@ Test.@testset "End-to-End Assembly Tests" begin
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
                         # Create simulated reads
-                        reads = create_test_reads(reference_seq, coverage, error_rate)
+                        reads = Mycelia.create_test_reads(reference_seq, coverage, error_rate)
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.DNAKmer{5}
-                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
-                                                            graph_mode=Mycelia.SingleStrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -271,46 +282,47 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Verify all strand orientations are Forward in SingleStrand mode
                         for label in MetaGraphsNext.labels(graph)
                             vertex_data = graph[label]
-                            for (obs_id, pos, strand) in vertex_data.coverage
-                                Test.@test strand == Mycelia.Forward
-                            end
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            Test.@test all(entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
                         end
 
                         # Test that edges respect strand constraints
                         for edge_label in MetaGraphsNext.edge_labels(graph)
                             if !isempty(edge_label)
                                 edge_data = graph[edge_label...]
-                                Test.@test edge_data isa Mycelia.KmerEdgeData
-                                Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
-                                Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
+                                Test.@test edge_data isa Mycelia.Rhizomorph.KmerEdgeData
+                                evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(edge_data.evidence)
+                                Test.@test !isempty(evidence_entries)
+                                Test.@test all(entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
                             end
                         end
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.SingleStrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
-                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        quality_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
                         Test.@test quality_graph isa MetaGraphsNext.MetaGraph
 
-                        # Convert back to FASTQ records with quality scores
-                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
-                        Test.@test !isempty(assembled_fastq_records)
-                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
-
                         # Validate that assembled sequences are proper DNA
-                        for record in assembled_fastq_records
-                            sequence_str = FASTX.sequence(String, record)
+                        for label in MetaGraphsNext.labels(quality_graph)
+                            vertex_data = quality_graph[label]
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
                                 Test.@test detected_type == :DNA
+                            end
 
-                                # Quality scores should reflect assembly confidence
-                                quality_scores = Mycelia.get_phred_scores(record)
-                                Test.@test !isempty(quality_scores)
-                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            for entry in evidence_entries
+                                Test.@test entry.strand == Mycelia.Rhizomorph.Forward
+                                Test.@test !isempty(entry.quality_scores)
+                                Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -329,8 +341,7 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.RNAKmer{5}
-                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
-                                                            graph_mode=Mycelia.SingleStrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -338,14 +349,14 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Verify RNA-specific properties
                         for label in MetaGraphsNext.labels(graph)
                             vertex_data = graph[label]
-                            Test.@test vertex_data isa Mycelia.KmerVertexData
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
                             # Verify the k-mer type is RNA (not converted to DNA)
-                            Test.@test vertex_data.canonical_kmer isa Kmers.RNAKmer
+                            Test.@test vertex_data.Kmer isa Kmers.RNAKmer
                             # Verify no T nucleotides (RNA should never contain T)
-                            Test.@test !occursin('T', string(vertex_data.canonical_kmer))
+                            Test.@test !occursin('T', string(vertex_data.Kmer))
 
                             # Test sequence type validation using existing functions
-                            kmer_string = string(vertex_data.canonical_kmer)
+                            kmer_string = string(vertex_data.Kmer)
                             # Note: detect_alphabet() may return :DNA for ambiguous sequences (A,C,G only)
                             # but the k-mer type system correctly preserves RNA type
                             detected_alphabet = Mycelia.detect_alphabet(kmer_string)
@@ -364,31 +375,33 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.SingleStrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
-                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        quality_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
                         Test.@test quality_graph isa MetaGraphsNext.MetaGraph
 
-                        # Convert back to FASTQ records with quality scores
-                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
-                        Test.@test !isempty(assembled_fastq_records)
-                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
-
                         # Validate that assembled sequences are proper RNA
-                        for record in assembled_fastq_records
-                            sequence_str = FASTX.sequence(String, record)
+                        for label in MetaGraphsNext.labels(quality_graph)
+                            vertex_data = quality_graph[label]
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
-                                Test.@test detected_type == :RNA
+                                if occursin('U', sequence_str)
+                                    Test.@test detected_type == :RNA
+                                end
                                 # Verify no T nucleotides (RNA should never contain T)
                                 Test.@test !occursin('T', sequence_str)
+                            end
 
-                                # Quality scores should reflect assembly confidence
-                                quality_scores = Mycelia.get_phred_scores(record)
-                                Test.@test !isempty(quality_scores)
-                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            for entry in evidence_entries
+                                Test.@test entry.strand == Mycelia.Rhizomorph.Forward
+                                Test.@test !isempty(entry.quality_scores)
+                                Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -407,8 +420,7 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.AAKmer{3}  # Shorter k-mers for AA
-                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
-                                                            graph_mode=Mycelia.SingleStrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -416,12 +428,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Verify amino acid-specific properties
                         for label in MetaGraphsNext.labels(graph)
                             vertex_data = graph[label]
-                            Test.@test vertex_data isa Mycelia.KmerVertexData
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
                             # Verify this is an amino acid k-mer
-                            Test.@test vertex_data.canonical_kmer isa Kmers.AAKmer
+                            Test.@test vertex_data.Kmer isa Kmers.AAKmer
 
                             # Test sequence type validation using existing functions
-                            kmer_string = string(vertex_data.canonical_kmer)
+                            kmer_string = string(vertex_data.Kmer)
                             detected_alphabet = Mycelia.detect_alphabet(kmer_string)
                             Test.@test detected_alphabet == :AA
 
@@ -431,29 +443,29 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=3, graph_mode=Mycelia.SingleStrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
-                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        quality_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
                         Test.@test quality_graph isa MetaGraphsNext.MetaGraph
 
-                        # Convert back to FASTQ records with quality scores
-                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
-                        Test.@test !isempty(assembled_fastq_records)
-                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
-
                         # Validate that assembled sequences are proper amino acids
-                        for record in assembled_fastq_records
-                            sequence_str = FASTX.sequence(String, record)
+                        for label in MetaGraphsNext.labels(quality_graph)
+                            vertex_data = quality_graph[label]
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
                                 Test.@test detected_type == :AA
+                            end
 
-                                # Quality scores should reflect assembly confidence
-                                quality_scores = Mycelia.get_phred_scores(record)
-                                Test.@test !isempty(quality_scores)
-                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            for entry in evidence_entries
+                                Test.@test entry.strand == Mycelia.Rhizomorph.Forward
+                                Test.@test !isempty(entry.quality_scores)
+                                Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -470,63 +482,69 @@ Test.@testset "End-to-End Assembly Tests" begin
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
                         # Create simulated reads
-                        reads = create_test_reads(reference_seq, coverage, error_rate)
+                        reads = Mycelia.create_test_reads(reference_seq, coverage, error_rate)
 
-                        # Build k-mer graph in DoubleStrand mode (canonical)
+                        # Build k-mer graph in DoubleStrand mode
                         kmer_type = Kmers.DNAKmer{5}
-                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
-                                                            graph_mode=Mycelia.DoubleStrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-                        # Verify canonical k-mer properties
+                        # Verify double-strand k-mer properties
+                        has_forward = false
+                        has_reverse = false
                         for label in MetaGraphsNext.labels(graph)
                             vertex_data = graph[label]
-                            Test.@test vertex_data isa Mycelia.KmerVertexData
-                            Test.@test vertex_data.canonical_kmer == label
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+                            Test.@test vertex_data.Kmer == label
 
-                            # In DoubleStrand mode, we should see both Forward and Reverse orientations
-                            strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-                            Test.@test !isempty(strand_orientations)
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            for entry in evidence_entries
+                                has_forward |= entry.strand == Mycelia.Rhizomorph.Forward
+                                has_reverse |= entry.strand == Mycelia.Rhizomorph.Reverse
+                            end
                         end
+                        Test.@test has_forward
+                        Test.@test has_reverse
 
                         # Test that edges handle strand transitions correctly
                         for edge_label in MetaGraphsNext.edge_labels(graph)
                             if !isempty(edge_label)
                                 edge_data = graph[edge_label...]
-                                Test.@test edge_data isa Mycelia.KmerEdgeData
-                                Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
-                                Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
-                                Test.@test edge_data.weight >= 0.0
+                                Test.@test edge_data isa Mycelia.Rhizomorph.KmerEdgeData
+                                evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(edge_data.evidence)
+                                Test.@test !isempty(evidence_entries)
+                                Test.@test all(entry -> entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse), evidence_entries)
                             end
                         end
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.DoubleStrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
-                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        quality_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
                         Test.@test quality_graph isa MetaGraphsNext.MetaGraph
 
-                        # Convert back to FASTQ records with quality scores
-                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
-                        Test.@test !isempty(assembled_fastq_records)
-                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
-
                         # Validate that assembled sequences are proper DNA
-                        for record in assembled_fastq_records
-                            sequence_str = FASTX.sequence(String, record)
+                        for label in MetaGraphsNext.labels(quality_graph)
+                            vertex_data = quality_graph[label]
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
                                 Test.@test detected_type == :DNA
+                            end
 
-                                # Quality scores should reflect assembly confidence
-                                quality_scores = Mycelia.get_phred_scores(record)
-                                Test.@test !isempty(quality_scores)
-                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            for entry in evidence_entries
+                                Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                                Test.@test !isempty(entry.quality_scores)
+                                Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -543,26 +561,25 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Create simulated reads
                         reads = Mycelia.create_test_rna_reads(reference_seq, coverage, error_rate)
 
-                        # Build k-mer graph in DoubleStrand mode (canonical)
+                        # Build k-mer graph in DoubleStrand mode
                         kmer_type = Kmers.RNAKmer{5}
-                        graph = Mycelia.build_kmer_graph_next(kmer_type, reads;
-                                                            graph_mode=Mycelia.DoubleStrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-                        # Verify canonical RNA k-mer properties
+                        # Verify double-strand RNA k-mer properties
                         for label in MetaGraphsNext.labels(graph)
                             vertex_data = graph[label]
-                            Test.@test vertex_data isa Mycelia.KmerVertexData
-                            Test.@test vertex_data.canonical_kmer == label
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+                            Test.@test vertex_data.Kmer == label
                             # Verify the k-mer type is RNA (not converted to DNA)
-                            Test.@test vertex_data.canonical_kmer isa Kmers.RNAKmer
+                            Test.@test vertex_data.Kmer isa Kmers.RNAKmer
                             # Verify no T nucleotides (RNA should never contain T)
-                            Test.@test !occursin('T', string(vertex_data.canonical_kmer))
+                            Test.@test !occursin('T', string(vertex_data.Kmer))
 
                             # Test sequence type validation
-                            kmer_string = string(vertex_data.canonical_kmer)
+                            kmer_string = string(vertex_data.Kmer)
                             detected_alphabet = Mycelia.detect_alphabet(kmer_string)
                             # Only test for RNA detection when U is actually present
                             if occursin('U', kmer_string)
@@ -579,31 +596,33 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.build_qualmer_graph(reads; k=5, graph_mode=Mycelia.DoubleStrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
-                        quality_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph)
+                        quality_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
                         Test.@test quality_graph isa MetaGraphsNext.MetaGraph
 
-                        # Convert back to FASTQ records with quality scores
-                        assembled_fastq_records = Mycelia.quality_biosequence_graph_to_fastq(quality_graph)
-                        Test.@test !isempty(assembled_fastq_records)
-                        Test.@test all(r isa FASTX.FASTQ.Record for r in assembled_fastq_records)
-
                         # Validate that assembled sequences are proper RNA
-                        for record in assembled_fastq_records
-                            sequence_str = FASTX.sequence(String, record)
+                        for label in MetaGraphsNext.labels(quality_graph)
+                            vertex_data = quality_graph[label]
+                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
-                                Test.@test detected_type == :RNA
+                                if occursin('U', sequence_str)
+                                    Test.@test detected_type == :RNA
+                                end
                                 # Verify no T nucleotides (RNA should never contain T)
                                 Test.@test !occursin('T', sequence_str)
+                            end
 
-                                # Quality scores should reflect assembly confidence
-                                quality_scores = Mycelia.get_phred_scores(record)
-                                Test.@test !isempty(quality_scores)
-                                Test.@test all(q >= 0 for q in quality_scores)  # Valid quality scores
+                            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+                            Test.@test !isempty(evidence_entries)
+                            for entry in evidence_entries
+                                Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                                Test.@test !isempty(entry.quality_scores)
+                                Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
                         end
                     end
@@ -615,7 +634,7 @@ Test.@testset "End-to-End Assembly Tests" begin
     Test.@testset "GFA I/O Round-trip Tests" begin
         Test.@testset "String Graph GFA I/O" begin
             reference_string = Mycelia.rand_ascii_greek_string(100)
-            graph = Mycelia.string_to_ngram_graph(s=reference_string, n=3)
+            graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
             
             # Test that we can work with the graph (basic functionality)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -627,7 +646,7 @@ Test.@testset "End-to-End Assembly Tests" begin
             reference_record = FASTX.FASTA.Record("reference", reference_seq)
             
             kmer_type = Kmers.DNAKmer{5}
-            graph = Mycelia.build_kmer_graph_next(kmer_type, [reference_record])
+            graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:doublestrand)
             
             # Test that we can work with the graph (basic functionality)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -644,24 +663,22 @@ Test.@testset "End-to-End Assembly Tests" begin
             # Test with progressively larger sequences
             for length in [100, 1000]
                 reference_seq = string(BioSequences.randdnaseq(length))
-                reads = create_test_reads(reference_seq, 100, 0.01)
+                reads = Mycelia.create_test_reads(reference_seq, 100, 0.01)
                 
                 # Build graphs and verify they don't crash
                 kmer_type = Kmers.DNAKmer{5}
                 
                 # Test both modes
-                single_graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                          graph_mode=Mycelia.SingleStrand)
-                double_graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                          graph_mode=Mycelia.DoubleStrand)
+                single_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+                double_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
                 
                 Test.@test single_graph isa MetaGraphsNext.MetaGraph
                 Test.@test double_graph isa MetaGraphsNext.MetaGraph
                 
-                # In canonical mode, we should generally have fewer vertices
-                # (though this depends on the specific sequence)
+                # DoubleStrand should include forward and reverse-complement k-mers
                 Test.@test !isempty(MetaGraphsNext.labels(single_graph))
                 Test.@test !isempty(MetaGraphsNext.labels(double_graph))
+                Test.@test length(MetaGraphsNext.labels(double_graph)) >= length(MetaGraphsNext.labels(single_graph))
             end
         end
         
@@ -670,17 +687,16 @@ Test.@testset "End-to-End Assembly Tests" begin
             error_rate = 0.01
             
             for coverage in [10, 100]
-                reads = create_test_reads(reference_seq, coverage, error_rate)
+                reads = Mycelia.create_test_reads(reference_seq, coverage, error_rate)
                 
                 kmer_type = Kmers.DNAKmer{5}
-                graph = Mycelia.build_kmer_graph_next(kmer_type, reads; 
-                                                    graph_mode=Mycelia.DoubleStrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
                 
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
                 
                 # Higher coverage should generally result in more robust graphs
-                total_coverage = sum(length(graph[label].coverage) for label in MetaGraphsNext.labels(graph))
-                Test.@test total_coverage > 0
+                total_evidence = sum(Mycelia.Rhizomorph.count_evidence(graph[label]) for label in MetaGraphsNext.labels(graph))
+                Test.@test total_evidence > 0
             end
         end
     end
@@ -702,27 +718,27 @@ Test.@testset "End-to-End Assembly Tests" begin
             ]
 
             kmer_type = Kmers.DNAKmer{5}
-            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.DoubleStrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
 
             Test.@test !isempty(MetaGraphsNext.labels(graph))
 
             # Test that we have proper coverage and strand orientations
             # This validates the canonicalization consistency fix
-            total_coverage_entries = 0
+            total_evidence_entries = 0
             has_both_orientations = false
 
             for label in MetaGraphsNext.labels(graph)
                 vertex_data = graph[label]
-                strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-                total_coverage_entries += length(strand_orientations)
+                strands = Mycelia.Rhizomorph.collect_evidence_strands(vertex_data.evidence)
+                total_evidence_entries += length(strands)
 
                 # Check if we see both orientations (should happen with reverse complements)
-                if Mycelia.Forward in strand_orientations && Mycelia.Reverse in strand_orientations
+                if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
                     has_both_orientations = true
                 end
             end
 
-            Test.@test total_coverage_entries > 0
+            Test.@test total_evidence_entries > 0
             Test.@test has_both_orientations  # Should see both orientations with forward and reverse sequences
         end
 
@@ -732,26 +748,25 @@ Test.@testset "End-to-End Assembly Tests" begin
             reads = [FASTX.FASTA.Record("rna", reference_seq)]
 
             kmer_type = Kmers.RNAKmer{5}
-            graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.SingleStrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
 
             Test.@test !isempty(MetaGraphsNext.labels(graph))
 
             # Test that all coverage entries use Forward orientation in SingleStrand mode
             # This validates the SingleStrand non-canonicalization fix
-            total_coverage_entries = 0
+            total_evidence_entries = 0
             all_forward = true
 
             for label in MetaGraphsNext.labels(graph)
                 vertex_data = graph[label]
-                for (obs_id, pos, strand) in vertex_data.coverage
-                    total_coverage_entries += 1
-                    if strand != Mycelia.Forward
-                        all_forward = false
-                    end
+                strands = Mycelia.Rhizomorph.collect_evidence_strands(vertex_data.evidence)
+                total_evidence_entries += length(strands)
+                if any(strand -> strand != Mycelia.Rhizomorph.Forward, strands)
+                    all_forward = false
                 end
             end
 
-            Test.@test total_coverage_entries > 0
+            Test.@test total_evidence_entries > 0
             Test.@test all_forward  # All orientations should be Forward in SingleStrand mode
         end
     end

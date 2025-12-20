@@ -196,7 +196,7 @@ Test.@testset "SentencePiece Integration Tests" begin
     # Conditional integration tests that require conda/sentencepiece to be installed
     # These tests are skipped by default and can be enabled via environment variable
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
-    run_sentencepiece = get(ENV, "MYCELIA_RUN_SENTENCEPIECE_INTEGRATION", "false") == "true"
+    run_sentencepiece = run_all || get(ENV, "MYCELIA_RUN_SENTENCEPIECE_INTEGRATION", "false") == "true"
 
     if run_all || run_sentencepiece
         Test.@testset "SentencePiece Integration (Requires Installation)" begin
@@ -383,7 +383,7 @@ Test.@testset "SentencePiece Integration Tests" begin
         end
     else
         Test.@testset "SentencePiece Integration (Skipped)" begin
-            Test.@test_skip "Set MYCELIA_RUN_SENTENCEPIECE_INTEGRATION=true to run integration tests"
+            Test.@test_skip "Set MYCELIA_RUN_SENTENCEPIECE_INTEGRATION=true or MYCELIA_RUN_ALL=true to run integration tests"
         end
     end
 end

@@ -24,43 +24,28 @@ import FASTX
 import Kmers
 
 Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
-    
     # Helper function to create a simple test graph
     function create_test_graph()
         graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData,
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
             weight_function=edge_data -> edge_data.weight,
-            default_weight=0.0
+            default_weight=0.0,
         )
         
         # Add vertices: ATC -> TCG -> CGA
-        graph["ATC"] = Mycelia.KmerVertexData("ATC")
-        graph["TCG"] = Mycelia.KmerVertexData("TCG")  
-        graph["CGA"] = Mycelia.KmerVertexData("CGA")
+        graph["ATC"] = nothing
+        graph["TCG"] = nothing
+        graph["CGA"] = nothing
         
         # Add edges with different coverage (weight is calculated automatically)
         # High coverage edge (3 observations)
-        high_coverage = [
-            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Forward)),
-            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Forward)),
-            ((3, 1, Mycelia.Forward), (3, 2, Mycelia.Forward))
-        ]
-        graph["ATC", "TCG"] = Mycelia.KmerEdgeData(
-            high_coverage,
-            Mycelia.Forward, Mycelia.Forward
-        )
+        graph["ATC", "TCG"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
         
         # Low coverage edge (1 observation)
-        low_coverage = [
-            ((1, 2, Mycelia.Forward), (1, 3, Mycelia.Forward))
-        ]
-        graph["TCG", "CGA"] = Mycelia.KmerEdgeData(
-            low_coverage,
-            Mycelia.Forward, Mycelia.Forward
-        )
+        graph["TCG", "CGA"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(1.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
         
         return graph
     end
@@ -175,7 +160,8 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         observations = [seq1, seq2]
         
         kmer_type = Kmers.DNAKmer{3}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, observations)
+        base_graph = Mycelia.Rhizomorph.build_kmer_graph(observations, 3; dataset_id="test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(base_graph)
         
         if !isempty(MetaGraphsNext.labels(graph))
             start_vertex = first(MetaGraphsNext.labels(graph))
@@ -214,24 +200,17 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData,
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
             weight_function=edge_data -> edge_data.weight,
-            default_weight=0.0
+            default_weight=0.0,
         )
         
-        graph["ATC"] = Mycelia.KmerVertexData("ATC")
-        graph["GAT"] = Mycelia.KmerVertexData("GAT")  # Reverse complement of ATC
+        graph["ATC"] = nothing
+        graph["GAT"] = nothing
         
         # Add edge requiring strand compatibility
-        strand_coverage = [
-            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Reverse)),
-            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Reverse))
-        ]
-        graph["ATC", "GAT"] = Mycelia.KmerEdgeData(
-            strand_coverage,
-            Mycelia.Forward, Mycelia.Reverse  # Forward ATC -> Reverse GAT
-        )
+        graph["ATC", "GAT"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
         
         # Test that algorithms respect strand constraints
         path = Mycelia.Rhizomorph.probabilistic_walk_next(graph, "ATC", 5; seed=42)
@@ -249,8 +228,8 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         empty_graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
         )
         
         # Should handle empty graphs gracefully
@@ -261,10 +240,10 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         single_graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
         )
-        single_graph["ATC"] = Mycelia.KmerVertexData("ATC")
+        single_graph["ATC"] = nothing
         
         # Should work with single vertex
         single_path = Mycelia.Rhizomorph.probabilistic_walk_next(single_graph, "ATC", 5; seed=42)

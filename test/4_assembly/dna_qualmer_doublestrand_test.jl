@@ -23,8 +23,8 @@ Test.@testset "DNA Qualmer Doublestrand Graph" begin
         graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3; dataset_id="test")
 
         # In "ATGCAT": ATG, TGC, GCA, CAT
-        # Canonical: ATG (for ATG and CAT), GCA (for TGC and GCA)
-        Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2
+        # Doublestrand preserves forward + RC vertices (no canonical merge here)
+        Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 4
     end
 
     Test.@testset "Quality Scores Preserved in Canonical Form" begin

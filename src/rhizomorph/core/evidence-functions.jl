@@ -404,6 +404,53 @@ number of evidence entries on a vertex or edge.
 count_evidence(vertex_or_edge) = count_evidence_entries(vertex_or_edge)
 
 # ============================================================================
+# Evidence Collection Helpers
+# ============================================================================
+
+"""
+    collect_evidence_entries(evidence_map)
+
+Flatten a nested evidence map into a vector of evidence entries.
+"""
+function collect_evidence_entries(evidence_map)
+    entries = Any[]
+    for dataset_evidence in values(evidence_map)
+        for evidence_set in values(dataset_evidence)
+            append!(entries, evidence_set)
+        end
+    end
+    return entries
+end
+
+"""
+    collect_evidence_strands(evidence_map)
+
+Return strand orientations for all entries in an evidence map.
+"""
+function collect_evidence_strands(evidence_map)
+    return [entry.strand for entry in collect_evidence_entries(evidence_map)]
+end
+
+"""
+    first_evidence_strand(evidence_map; default=Forward)
+
+Return the first strand orientation found in an evidence map.
+Falls back to `default` if no strand field is present.
+"""
+function first_evidence_strand(evidence_map; default::StrandOrientation=Forward)
+    for dataset_evidence in values(evidence_map)
+        for evidence_set in values(dataset_evidence)
+            for entry in evidence_set
+                if hasfield(typeof(entry), :strand)
+                    return entry.strand
+                end
+            end
+        end
+    end
+    return default
+end
+
+# ============================================================================
 # Filtering Functions
 # ============================================================================
 

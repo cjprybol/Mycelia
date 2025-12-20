@@ -10,8 +10,9 @@ import MetaGraphsNext
 Test.@testset "String N-gram SingleStrand Graph" begin
     test_string = "ABCDEF"
     reads = [FASTX.FASTA.Record("test", test_string)]
+    strings = [String(FASTX.sequence(reads[1]))]
 
-    graph = Mycelia.build_string_ngram_graph_next(reads, 3; graph_mode=Mycelia.SingleStrand)
+    graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 3; dataset_id="test")
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) == 4  # ABC, BCD, CDE, DEF
@@ -19,16 +20,15 @@ Test.@testset "String N-gram SingleStrand Graph" begin
 
     for vertex_label in vertices
         vertex_data = graph[vertex_label]
-        if hasfield(typeof(vertex_data), :coverage)
-            Test.@test !isempty(vertex_data.coverage)
-            for cov_entry in vertex_data.coverage
-                obs_id, pos, strand = cov_entry
-                Test.@test obs_id isa Int
-                Test.@test pos isa Int
-                Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
+        Test.@test vertex_data isa Mycelia.Rhizomorph.StringVertexData
+        Test.@test !isempty(vertex_data.evidence)
+        for evidence_map in values(vertex_data.evidence)
+            for entries in values(evidence_map)
+                for entry in entries
+                    Test.@test entry isa Mycelia.Rhizomorph.EvidenceEntry
+                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                end
             end
-        elseif vertex_data isa Integer
-            Test.@test vertex_data > 0
         end
     end
 
@@ -65,7 +65,7 @@ Test.@testset "String N-gram SingleStrand Graph" begin
         reduced = Mycelia.reduce_amino_acid_alphabet(full_seq, :CHEMICAL6)  # includes '-' and '+'
         records = [FASTX.FASTA.Record("reduced_seq", reduced)]
 
-        graph_reduced = Mycelia.build_string_ngram_graph_next(records, 3; graph_mode=Mycelia.SingleStrand)
+        graph_reduced = Mycelia.Rhizomorph.build_ngram_graph([String(FASTX.sequence(records[1]))], 3; dataset_id="reduced_seq")
         vertices_reduced = collect(MetaGraphsNext.labels(graph_reduced))
 
         Test.@test !isempty(vertices_reduced)

@@ -6,6 +6,7 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
+import Kmers
 import MetaGraphsNext
 
 Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
@@ -22,10 +23,10 @@ Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test Set(vertices) == Set([
-        BioSequences.DNAKmer{3}("ATC"),
-        BioSequences.DNAKmer{3}("TCG"),
-        BioSequences.DNAKmer{3}("CGA"),
-        BioSequences.DNAKmer{3}("GAT"),
+        Kmers.DNAKmer{3}("ATC"),
+        Kmers.DNAKmer{3}("TCG"),
+        Kmers.DNAKmer{3}("CGA"),
+        Kmers.DNAKmer{3}("GAT"),
     ])
     Test.@test MetaGraphsNext.ne(graph) == 4
 
@@ -40,5 +41,5 @@ Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
     Test.@test !isempty(paths)
 
     reconstructed = Mycelia.Rhizomorph.path_to_sequence(first(paths), graph)
-    Test.@test reconstructed == "ATCGATCG"
+    Test.@test string(reconstructed) == "ATCGATC"
 end

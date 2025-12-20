@@ -15,7 +15,9 @@ Test.@testset "QUAST wrapper" begin
     Test.@test_throws ErrorException Mycelia.run_quast(["/nonexistent.fasta"])
     Test.@test_throws ErrorException Mycelia.run_quast([tempname() * ".fasta"], reference="/nonexistent_ref.fasta")
 
-    should_run = get(ENV, "MYCELIA_RUN_QUAST", "false") == "true" ||
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    should_run = run_all ||
+                 get(ENV, "MYCELIA_RUN_QUAST", "false") == "true" ||
                  get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
 
     if should_run
@@ -47,7 +49,7 @@ Test.@testset "QUAST wrapper" begin
             end
         end
     else
-        Test.@test_skip "QUAST run skipped (set MYCELIA_RUN_QUAST=true or MYCELIA_RUN_EXTENDED=true to enable)"
+        Test.@test_skip "QUAST run skipped (set MYCELIA_RUN_QUAST=true, MYCELIA_RUN_EXTENDED=true, or MYCELIA_RUN_ALL=true to enable)"
     end
 end
 
@@ -63,7 +65,9 @@ Test.@testset "BUSCO wrapper" begin
     """
     Test.@test Mycelia._parse_busco_dataset_list(sample_list_output) == ["bacteria_odb10", "archaea_odb10"]
 
-    should_run = get(ENV, "MYCELIA_RUN_BUSCO", "false") == "true" ||
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    should_run = run_all ||
+                 get(ENV, "MYCELIA_RUN_BUSCO", "false") == "true" ||
                  get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
 
     if should_run
@@ -94,6 +98,6 @@ Test.@testset "BUSCO wrapper" begin
             Test.@test isa(list_info.datasets, Vector{String})
         end
     else
-        Test.@test_skip "BUSCO run skipped (set MYCELIA_RUN_BUSCO=true or MYCELIA_RUN_EXTENDED=true to enable)"
+        Test.@test_skip "BUSCO run skipped (set MYCELIA_RUN_BUSCO=true, MYCELIA_RUN_EXTENDED=true, or MYCELIA_RUN_ALL=true to enable)"
     end
 end

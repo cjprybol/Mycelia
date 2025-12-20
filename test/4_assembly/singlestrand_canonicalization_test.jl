@@ -40,7 +40,7 @@ Test.@testset "SingleStrand Mode Fix Test (Rhizomorph)" begin
     for label in MetaGraphsNext.labels(graph)
         vertex_data = graph[label]
         Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
-        strands = Set(obs.orientation for obs in Iterators.flatten(values(vertex_data.evidence["ss_fix"])))
+        strands = Set(obs.strand for obs in Iterators.flatten(values(vertex_data.evidence["ss_fix"])))
         if isempty(strands)
             all_forward = false
         else

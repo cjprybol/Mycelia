@@ -980,6 +980,199 @@ function prefix_fastq_reads(
     return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
 end
 
+function uuid_fastq_reads(
+    fastq_file::AbstractString;
+    out_fastq::AbstractString,
+    mapping_out::Union{Nothing,String}=nothing,
+    mapping_format::Symbol=:arrow,
+    source_fastq::Union{Nothing,String}=nothing,
+    force::Bool=false,
+    compress_threads::Integer=get_default_threads()
+)
+    @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
+    @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
+    source_fastq = isnothing(source_fastq) ? fastq_file : source_fastq
+    mkpath(dirname(out_fastq))
+
+    if mapping_out !== nothing
+        mkpath(dirname(mapping_out))
+    end
+
+    nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
+    input_bytes = filesize(fastq_file)
+
+    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") : out_fastq
+    tmp_fastq_plain = out_fastq_plain * ".tmp"
+
+    map_plain = nothing
+    tmp_map_plain = nothing
+    if mapping_out !== nothing
+        if mapping_format == :arrow
+            endswith(mapping_out, ".gz") && error("Arrow mapping_out should not be gzipped: $mapping_out")
+        else
+            map_plain = endswith(mapping_out, ".gz") ? replace(mapping_out, r"\.gz$" => "") : mapping_out
+            tmp_map_plain = map_plain * ".tmp"
+        end
+    end
+
+    if !force && nonempty_file(out_fastq) && (mapping_out === nothing || nonempty_file(mapping_out))
+        return (out_fastq=out_fastq, mapping_out=mapping_out)
+    end
+
+    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) && nonempty_file(out_fastq_plain)
+        mapping_ready = if mapping_out === nothing
+            true
+        elseif mapping_format == :arrow
+            nonempty_file(mapping_out)
+        elseif endswith(mapping_out, ".gz")
+            nonempty_file(map_plain) || nonempty_file(mapping_out)
+        else
+            nonempty_file(mapping_out)
+        end
+
+        if mapping_ready
+            if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) && nonempty_file(map_plain)
+                Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            end
+            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+            return (out_fastq=out_fastq, mapping_out=mapping_out)
+        end
+    end
+
+    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+    if tmp_map_plain !== nothing
+        isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+    end
+
+    if input_bytes == 0
+        open(tmp_fastq_plain, "w") do _
+        end
+        if mapping_out !== nothing
+            if mapping_format == :tsv
+                open(tmp_map_plain, "w") do io
+                    write(io, "source_fastq\toriginal_read_id\tuuid\n")
+                end
+            else
+                tmp_arrow = mapping_out * ".tmp"
+                isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+                Arrow.write(tmp_arrow, DataFrames.DataFrame(source_fastq=String[], original_read_id=String[], uuid=String[]))
+                mv(tmp_arrow, mapping_out; force=true)
+            end
+        end
+
+        mv(tmp_fastq_plain, out_fastq_plain; force=true)
+        if mapping_out !== nothing && mapping_format == :tsv
+            mv(tmp_map_plain, map_plain; force=true)
+        end
+        if endswith(out_fastq, ".gz")
+            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+        end
+        if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
+            Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+        end
+        return (out_fastq=out_fastq, mapping_out=mapping_out)
+    end
+
+    tsv_io = nothing
+    mapping_rows = mapping_out === nothing ? nothing : Vector{NamedTuple}()
+    if mapping_out !== nothing
+        if mapping_format == :tsv
+            tsv_io = open(tmp_map_plain, "w")
+            write(tsv_io, "source_fastq\toriginal_read_id\tuuid\n")
+        else
+            mapping_rows = Vector{NamedTuple}()
+        end
+    end
+
+    out_io = open(tmp_fastq_plain, "w")
+    writer = FASTX.FASTQ.Writer(out_io)
+    reader = nothing
+    try
+        reader = Mycelia.open_fastx(fastq_file)
+        for record in reader
+            original_id = String(FASTX.identifier(record))
+            new_id = string(UUIDs.uuid4())
+            new_record = FASTX.FASTQ.Record(new_id, FASTX.sequence(record), FASTX.quality(record))
+            FASTX.write(writer, new_record)
+            if mapping_out !== nothing
+                if mapping_format == :tsv
+                    write(tsv_io, string(source_fastq, '\t', original_id, '\t', new_id, '\n'))
+                else
+                    push!(mapping_rows, (source_fastq=source_fastq, original_read_id=original_id, uuid=new_id))
+                end
+            end
+        end
+    catch err
+        msg = sprint(showerror, err)
+        try
+            reader !== nothing && close(reader)
+        catch
+        end
+        try
+            FASTX.close(writer)
+        catch
+        end
+        try
+            close(out_io)
+        catch
+        end
+        if mapping_out !== nothing && mapping_format == :tsv
+            try
+                close(tsv_io)
+            catch
+            end
+        end
+        if occursin("compressed stream may be truncated", msg) || occursin("ZlibError", msg)
+            error(
+                "Failed to read gzipped FASTQ (gzip stream appears truncated): $(fastq_file)\n" *
+                "This usually indicates an incomplete/corrupt `.gz` (e.g., partially copied, still being written, or 0-byte placeholder).\n" *
+                "Original error: $(msg)"
+            )
+        end
+        rethrow()
+    finally
+        try
+            reader !== nothing && close(reader)
+        catch
+        end
+        try
+            FASTX.close(writer)
+        catch
+        end
+        try
+            close(out_io)
+        catch
+        end
+        if mapping_out !== nothing && mapping_format == :tsv
+            try
+                close(tsv_io)
+            catch
+            end
+        end
+    end
+
+    mv(tmp_fastq_plain, out_fastq_plain; force=true)
+    if mapping_out !== nothing
+        if mapping_format == :tsv
+            mv(tmp_map_plain, map_plain; force=true)
+        else
+            tmp_arrow = mapping_out * ".tmp"
+            isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+            Arrow.write(tmp_arrow, DataFrames.DataFrame(mapping_rows))
+            mv(tmp_arrow, mapping_out; force=true)
+        end
+    end
+
+    if endswith(out_fastq, ".gz")
+        Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+    end
+    if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
+        Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+    end
+
+    return (out_fastq=out_fastq, mapping_out=mapping_out)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

@@ -153,7 +153,7 @@ Test.@testset "Basic Graph Type Construction Tests" begin
         contig_indices = component
         Test.@test contig_indices == [1, 2]
         all_labels = collect(MetaGraphsNext.labels(g))
-        Test.@test all_labels == [BioSequences.LongDNA{4}("ACGT"), BioSequences.LongDNA{4}("CGTA")]
+        Test.@test all_labels == [Kmers.DNAKmer{4}("ACGT"), Kmers.DNAKmer{4}("CGTA")]
         Test.@test length.(all_labels) == [4, 4]
     end
 end

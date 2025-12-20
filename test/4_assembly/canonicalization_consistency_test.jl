@@ -49,7 +49,7 @@ Test.@testset "K-mer Canonicalization Consistency Tests (Rhizomorph)" begin
             Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
             dataset_evidence = values(get(vertex_data.evidence, "canon_ds", Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()))
             total_evidence += sum(length, dataset_evidence)
-            strands = Set(obs.orientation for obs in Iterators.flatten(dataset_evidence))
+            strands = Set(obs.strand for obs in Iterators.flatten(dataset_evidence))
             if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
                 has_both_orientations = true
             end
@@ -80,7 +80,7 @@ Test.@testset "K-mer Canonicalization Consistency Tests (Rhizomorph)" begin
             Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
             dataset_evidence = values(get(vertex_data.evidence, "canon_ss", Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()))
             total_evidence += sum(length, dataset_evidence)
-            strands = Set(obs.orientation for obs in Iterators.flatten(dataset_evidence))
+            strands = Set(obs.strand for obs in Iterators.flatten(dataset_evidence))
             if isempty(strands)
                 all_forward = false
             else

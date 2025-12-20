@@ -42,7 +42,7 @@ function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::I
 
         path = find_linear_path(graph, start_vertex, visited)
 
-        if length(path) >= 2
+        if !isempty(path)
             sequence = generate_contig_sequence(graph, path)
             coverage_profile = generate_coverage_profile(graph, path)
 

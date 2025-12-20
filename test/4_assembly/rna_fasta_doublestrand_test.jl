@@ -12,7 +12,8 @@ Test.@testset "RNA BioSequence DoubleStrand Graph" begin
     test_rna = BioSequences.rna"AUCGAUCG"
     reads = [FASTX.FASTA.Record("test", test_rna)]
 
-    graph = Mycelia.build_biosequence_graph(reads; graph_mode=Mycelia.DoubleStrand)
+    singlestrand = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id="test", min_overlap=3)
+    graph = Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(singlestrand)
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) >= 1
@@ -20,16 +21,15 @@ Test.@testset "RNA BioSequence DoubleStrand Graph" begin
 
     for vertex_label in vertices
         vertex_data = graph[vertex_label]
-        if hasfield(typeof(vertex_data), :coverage)
-            Test.@test !isempty(vertex_data.coverage)
-            for cov_entry in vertex_data.coverage
-                obs_id, pos, strand = cov_entry
-                Test.@test obs_id isa Int
-                Test.@test pos isa Int
-                Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
+        Test.@test vertex_data isa Mycelia.Rhizomorph.BioSequenceVertexData
+        Test.@test !isempty(vertex_data.evidence)
+        for evidence_map in values(vertex_data.evidence)
+            for entries in values(evidence_map)
+                for entry in entries
+                    Test.@test entry isa Mycelia.Rhizomorph.EvidenceEntry
+                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                end
             end
-        elseif vertex_data isa Integer
-            Test.@test vertex_data > 0
         end
     end
 
