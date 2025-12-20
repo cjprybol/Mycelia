@@ -160,6 +160,7 @@ makedocs(
             "Architecture Overview" => "architecture.md",
             "Assembly Method Selection" => "assembly-method-selection.md",
             "Workflow & Tool Map" => "workflow-map.md",
+            "Metagenomic Workflow" => "metagenomic-workflow.md",
             "Function Coverage Audit" => "api/function-coverage.md",
             "Performance Guide" => "performance.md",
             "FAQ" => "faq.md"
