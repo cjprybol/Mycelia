@@ -54,7 +54,7 @@ flowchart TD
   Q --> LR_asm
   subgraph ASM [Metagenomic assembly]
     direction LR
-    SR_asm[Short read assembly<br/>MEGAHIT<br/>metaSPAdes<br/>MetaVelvet<br/>Penguinn]
+    SR_asm[Short read assembly<br/>MEGAHIT<br/>metaSPAdes<br/>MetaVelvet<br/>PenguiN]
     LR_asm[Long read assembly<br/>myloasm<br/>hifiasm meta (hifiasm-meta)<br/>metaMDBG (metamdbg)<br/>metaFlye (metaflye)]
   end
 
@@ -235,12 +235,21 @@ Direct classification of reads using minimap2 mapping against reference database
 * `Metabuli` - DNA/Amino acid joint analysis
 * `Kraken` - Exact k-mer classification
 
+### Sketch-Guided Pangenome Context Selection
+Use k-mer sketching against reference assemblies, sample reads, and pangenome reference paths to
+identify which contexts are present, then subset the reference set before mapping.
+
+- `mash` and `sourmash` containment and `sylph` coverage highlight supported contexts.
+- `mash` and `skani` distances can prune/cluster distant references when needed.
+- Use `select_sketch_supported_references` to keep the best-supported paths.
+- Map reads with `minimap2` against the filtered references for downstream QC/variants.
+
 ### Assembly Strategies
 
 **Short Read Assembly:**
 - MEGAHIT - memory-efficient assembly (iterative de Bruijn graph)
 - metaSPAdes - metagenome-specific assembly (high-quality short-read assembly)
-- Penguinn - guided assembly with protein references
+- PenguiN - guided assembly with protein references
 - MetaVelvet - extension of Velvet for metagenomics
 
 **Long Read Assembly:**
@@ -264,6 +273,25 @@ Direct classification of reads using minimap2 mapping against reference database
 - MMseqs2 against UniRef50, UniRef90, UniRef100
 - DIAMOND as a fast protein search alternative (where appropriate)
 - Sensitive homology detection for divergent sequences
+
+### Taxonomy-Aware ORF Calling
+
+Once contigs are classified, use the NCBI taxonomy graph to choose the correct translation
+table before calling ORFs with Prodigal or Pyrodigal.
+
+```julia
+ncbi_taxonomy = Mycelia.load_ncbi_taxonomy()
+tax_id = 562
+table_id = Mycelia.get_ncbi_genetic_code(ncbi_taxonomy, tax_id)
+
+orf_calls = Mycelia.run_pyrodigal(
+    fasta_file=contig_fasta,
+    out_dir="orf_calls",
+    translation_table=table_id
+)
+```
+
+Use `type=:mitochondrial` when working with mitochondrial contigs.
 
 ### Quality Control and Validation
 
@@ -298,6 +326,7 @@ Direct classification of reads using minimap2 mapping against reference database
 * `TaxVAMB` - Taxonomy-guided VAMB variant
 * `Taxometer` - Taxonomy-aware binning support
 * `VAMB` - Variational Autoencoder Microbial Binner
+* Wrapper functions available in `src/binning.jl` (e.g., `run_metabat2`, `run_vamb`, `run_taxvamb`, `run_taxometer`, `run_metacoag`, `run_genomeface`, `run_comebin`)
 
 ### Post-binning QC (MAGs)
 After binning, apply QC based on the bin’s classification/expected biology:
@@ -353,7 +382,7 @@ This section answers: “what does a tool consume (reads/contigs/bins/BAM) and w
 | Assembly QC (microbial) | CheckM2 | Microbial assemblies/bins | Completeness/contamination metrics | Wrapped: `run_checkm2` |
 | Assembly QC (viral) | CheckV, geNomad | Viral contigs/bins | Viral QC + viral/mobile element calls | Wrapped: `run_checkv`, `run_genomad` |
 | Assembly (short) | MEGAHIT, metaSPAdes, MetaVelvet | Short reads | Contigs FASTA | Wrapped: `run_megahit`, `run_metaspades`, `run_metavelvet` |
-| Assembly (short, option) | Penguinn | Short reads | Contigs FASTA | Mentioned as an option; runner wrapper not present in `src/` yet |
+| Assembly (short, option) | PenguiN | Short reads | Contigs FASTA | Wrapped: `run_penguin_nuclassemble`, `run_penguin_guided_nuclassemble` |
 | Assembly (long) | metaFlye, metaMDBG, hifiasm-meta | Long reads | Contigs FASTA | Wrapped: `run_metaflye`, `run_metamdbg`, `run_hifiasm_meta` |
 | Assembly (long, option) | myloasm | Long reads | Contigs FASTA | Mentioned as an option; runner wrapper not present in `src/` yet |
 | Assembly (hybrid) | Unicycler | Short + long reads | Contigs FASTA | Wrapped: `run_unicycler` |

@@ -20,6 +20,51 @@ import CSV
 import CodecZlib
 import DataFrames
 
+Test.@testset "datasets CLI version" begin
+    version = Mycelia.datasets_cli_version()
+    Test.@test !isempty(strip(version))
+end
+
+Test.@testset "datasets genome summary (E. coli)" begin
+    summary = Mycelia.datasets_genome_summary(taxon="562")
+    Test.@test isa(summary, DataFrames.DataFrame)
+    Test.@test nrow(summary) > 0
+end
+
+Test.@testset "datasets dehydrated download + rehydrate" begin
+    accession = "GCF_000819615.1"
+    result = Mycelia.datasets_download_genome(accession;
+        input_type="accession",
+        include=["genome"],
+        dehydrated=true,
+        extract=true
+    )
+    Test.@test isfile(result.zip_path)
+    Test.@test isdir(result.directory)
+    pre_files = Mycelia.recursively_list_files(result.directory)
+    Test.@test !any(x -> occursin(r"\.fna(\.gz)?$", x), pre_files)
+    Mycelia.datasets_rehydrate(result.directory; gzip=true, max_workers=2)
+    post_files = Mycelia.recursively_list_files(result.directory)
+    Test.@test any(x -> occursin(r"\.fna(\.gz)?$", x), post_files)
+    rm(result.directory, recursive=true, force=true)
+    rm(result.zip_path; force=true)
+end
+
+Test.@testset "datasets gene download (BRCA1)" begin
+    result = Mycelia.datasets_download_gene("BRCA1";
+        input_type="symbol",
+        taxon="human",
+        include=["gene"],
+        extract=true
+    )
+    Test.@test isfile(result.zip_path)
+    Test.@test isdir(result.directory)
+    files = Mycelia.recursively_list_files(result.directory)
+    Test.@test any(x -> occursin(r"gene\.fna(\.gz)?$", basename(x)), files)
+    rm(result.directory, recursive=true, force=true)
+    rm(result.zip_path; force=true)
+end
+
 Test.@testset "download_genome_by_accession" begin
     ## const phiX174_accession_id = "NC_001422.1"
     result = Mycelia.download_genome_by_accession(accession="NC_001422")

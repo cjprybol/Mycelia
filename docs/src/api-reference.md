@@ -196,12 +196,14 @@ Mycelia.run_coverm_genome
 
 Functions for gene prediction and annotation (using external tools):
 
-- Pyrodigal integration
+- Prodigal, Pyrodigal, and Prodigal-gv gene prediction
+- Augustus and MetaEuk eukaryotic gene prediction
 - BLAST+ searches
 - MMSeqs2 searches
 - TransTerm terminator prediction
 - tRNAscan-SE tRNA detection
 - MLST typing
+- NCBI translation table lookup for taxonomy-aware ORF calling
 
 ## Comparative Genomics
 

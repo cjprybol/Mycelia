@@ -163,6 +163,7 @@ remaining_files = [
     "quality-control-and-benchmarking.jl",
     "read-quality-control.jl",
     "busco-datasets.jl",
+    "ncbi-datasets-cli.jl",
     "rclone.jl",
     "reference-databases.jl",
     "sentencepiece.jl",

@@ -81,6 +81,41 @@ for (i, file) in enumerate(genome_files)
     println("  Genome $i: $file ($(size) bytes)")
 end
 
+# ## Part 2b: Sketch-Guided Pangenome Context Selection
+#
+# Use k-mer sketching against references, sequences, and reference paths to
+# identify which pangenome contexts are supported by the sample, then map
+# against the reduced reference set.
+
+println("\n=== Sketch-Guided Pangenome Context Selection ===")
+
+# Mock sketch scores (e.g., sourmash containment or sylph coverage)
+mock_sketch_scores = Dict(
+    genome_files[1] => 0.18,
+    genome_files[2] => 0.02,
+    genome_files[3] => 0.12,
+    genome_files[4] => 0.00,
+    genome_files[5] => 0.07
+)
+
+supported_contexts = Mycelia.select_sketch_supported_references(
+    mock_sketch_scores;
+    min_score=0.05,
+    max_refs=3
+)
+
+println("Sketch-supported references:")
+for (reference, score) in supported_contexts
+    println("  $reference (score=$(round(score, digits=3)))")
+end
+
+# In practice:
+# - Run Mycelia.run_sourmash_sketch + run_sourmash_search/gather for containment
+# - Run Mycelia.run_sylph_profile for coverage/ANI evidence
+# - Optionally run Mycelia.run_mash_comparison for distance-based pruning
+# - Subset pangenome reference paths to supported contexts
+# - Map reads with minimap2 against the filtered references
+
 # ## Part 3: Gene Clustering and Ortholog Identification
 #
 # Identify orthologous genes across genomes

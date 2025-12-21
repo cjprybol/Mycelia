@@ -97,6 +97,25 @@ println("  Predicted genes: $(length(predicted_genes))")
 println("  Mean confidence: $(round(Statistics.mean([g["confidence"] for g in predicted_genes]), digits=3))")
 println("  Coding density: $(round(sum([g["end"] - g["start"] + 1 for g in predicted_genes]) / genome_size * 100, digits=1))%")
 
+# ### Taxonomy-Aware ORF Calling
+#
+# When contigs are classified against NCBI, select the translation table before ORF
+# calling so start/stop codons match the expected genetic code.
+#
+# ```julia
+# ncbi_taxonomy = Mycelia.load_ncbi_taxonomy()
+# tax_id = 562
+# table_id = Mycelia.get_ncbi_genetic_code(ncbi_taxonomy, tax_id)
+#
+# orf_calls = Mycelia.run_pyrodigal(
+#     fasta_file=genome_file,
+#     out_dir="orf_calls",
+#     translation_table=table_id
+# )
+# ```
+#
+# Use `type=:mitochondrial` for mitochondrial contigs.
+
 # ### Homology-Based Gene Prediction
 #
 # Use similarity to known genes for prediction
@@ -134,6 +153,16 @@ println("--- RNA-seq Guided Prediction ---")
 # - Identify transcribed regions
 # - Predict exon-intron structure
 # - Handle alternative splicing
+
+# ### Eukaryotic Gene Prediction
+#
+# Use Augustus for ab initio eukaryotic gene prediction or MetaEuk for metagenomic
+# contigs with reference databases.
+#
+# ```julia
+# augustus = Mycelia.run_augustus(fasta_file=genome_file, species="human")
+# metaeuk = Mycelia.run_metaeuk(fasta_file=genome_file, db_file="uniref50_db")
+# ```
 
 # ### Regulatory Element Prediction
 #

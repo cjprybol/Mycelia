@@ -16,6 +16,7 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 6. [Gene Annotation](generated/tutorials/06_gene_annotation.md) - Gene prediction and annotation
 7. [Comparative Genomics](generated/tutorials/07_comparative_genomics.md) - Pangenome and phylogenetic analysis
 8. [Tool Integration](generated/tutorials/08_tool_integration.md) - Working with external bioinformatics tools
+9. [Binning Workflow](generated/tutorials/14_binning_workflow.md) - Binning and post-binning workflows
 
 ## Specialized Topics
 

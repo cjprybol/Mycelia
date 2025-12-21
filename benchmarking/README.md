@@ -62,6 +62,11 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - Thread scaling for coverage and abundance summarization
 - End-to-end timing from BAM generation through CoverM
 
+### 7. Binning Benchmarks (`07_binning_benchmark.jl`)
+- Opt-in timing for binning/post-binning wrappers
+- Uses user-supplied contigs/depth/coverage inputs
+- Records wall-clock durations for tool runs
+
 ## Usage
 
 ### Prerequisites

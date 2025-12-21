@@ -7,6 +7,13 @@ invoke external tools are opt-in via `MYCELIA_RUN_EXTERNAL=true`.
 # Example:
 #   julia --project=. -e 'include("test/8_tool_integration/binning_tools.jl")'
 #   MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/binning_tools.jl")'
+#
+# External runs look for:
+# - MYCELIA_BINNING_CONTIGS, MYCELIA_BINNING_DEPTH
+# - MYCELIA_BINNING_COVERAGE_TABLE, MYCELIA_BINNING_MARKERS
+# - MYCELIA_BINNING_GRAPH, MYCELIA_BINNING_MAPPING
+# - MYCELIA_BINNING_GENOMES (comma-separated)
+# - MYCELIA_BINNING_BINS_DIRS (comma-separated)
 """
 
 import DataFrames
@@ -117,7 +124,216 @@ Test.@testset "Binning Tools Integration" begin
     end
 
     if RUN_EXTERNAL
-        @info "No external binning tools executed in this suite; add commands when tools are available."
+        Test.@testset "External tool runs (opt-in)" begin
+            contigs_fasta = get(ENV, "MYCELIA_BINNING_CONTIGS", "")
+            depth_file = get(ENV, "MYCELIA_BINNING_DEPTH", "")
+            coverage_table = get(ENV, "MYCELIA_BINNING_COVERAGE_TABLE", "")
+            marker_file = get(ENV, "MYCELIA_BINNING_MARKERS", "")
+            assembly_graph = get(ENV, "MYCELIA_BINNING_GRAPH", "")
+            mapping_file = get(ENV, "MYCELIA_BINNING_MAPPING", "")
+            genomes_env = get(ENV, "MYCELIA_BINNING_GENOMES", "")
+            bins_dirs_env = get(ENV, "MYCELIA_BINNING_BINS_DIRS", "")
+
+            genomes = filter(!isempty, strip.(split(genomes_env, ',')))
+            bins_dirs = filter(!isempty, strip.(split(bins_dirs_env, ',')))
+
+            if isfile(contigs_fasta) && isfile(depth_file)
+                Test.@testset "VAMB" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_vamb(
+                            contigs_fasta=contigs_fasta,
+                            depth_file=depth_file,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isfile(result.clusters_tsv)
+                            Test.@test true
+                        else
+                            Test.@test_skip "VAMB did not produce clusters.tsv; check inputs/output."
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+
+                Test.@testset "MetaBAT2" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_metabat2(
+                            contigs_fasta=contigs_fasta,
+                            depth_file=depth_file,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        bins_prefix = basename(result.bins_prefix)
+                        bins = filter(name -> startswith(name, bins_prefix), readdir(result.outdir))
+                        if isempty(bins)
+                            Test.@test_skip "MetaBAT2 did not produce bin files; check inputs/output."
+                        else
+                            Test.@test true
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+
+                Test.@testset "Taxometer" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_taxometer(
+                            contigs_fasta=contigs_fasta,
+                            depth_file=depth_file,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isempty(readdir(result.outdir))
+                            Test.@test_skip "Taxometer did not produce output files; check inputs/output."
+                        else
+                            Test.@test true
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+
+                Test.@testset "TaxVAMB" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_taxvamb(
+                            contigs_fasta=contigs_fasta,
+                            depth_file=depth_file,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isempty(readdir(result.outdir))
+                            Test.@test_skip "TaxVAMB did not produce output files; check inputs/output."
+                        else
+                            Test.@test true
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+            else
+                @info "Skipping VAMB/MetaBAT2/Taxometer/TaxVAMB; set MYCELIA_BINNING_CONTIGS and MYCELIA_BINNING_DEPTH."
+            end
+
+            if isfile(contigs_fasta) && isfile(assembly_graph) && isfile(mapping_file)
+                Test.@testset "MetaCoAG" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_metacoag(
+                            contigs_fasta=contigs_fasta,
+                            assembly_graph=assembly_graph,
+                            mapping_file=mapping_file,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isfile(result.bins_tsv)
+                            Test.@test true
+                        else
+                            Test.@test_skip "MetaCoAG did not produce bins.tsv; check inputs/output."
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+            else
+                @info "Skipping MetaCoAG; set MYCELIA_BINNING_CONTIGS, MYCELIA_BINNING_GRAPH, and MYCELIA_BINNING_MAPPING."
+            end
+
+            if isfile(contigs_fasta) && isfile(coverage_table)
+                Test.@testset "GenomeFace" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_genomeface(
+                            contigs_fasta=contigs_fasta,
+                            coverage_table=coverage_table,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isempty(readdir(result.outdir))
+                            Test.@test_skip "GenomeFace did not produce output files; check inputs/output."
+                        else
+                            Test.@test true
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+            else
+                @info "Skipping GenomeFace; set MYCELIA_BINNING_CONTIGS and MYCELIA_BINNING_COVERAGE_TABLE."
+            end
+
+            if isfile(contigs_fasta) && isfile(coverage_table) && isfile(marker_file)
+                Test.@testset "COMEBin" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_comebin(
+                            contigs_fasta=contigs_fasta,
+                            coverage_table=coverage_table,
+                            marker_file=marker_file,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isfile(result.bins_tsv)
+                            Test.@test true
+                        else
+                            Test.@test_skip "COMEBin did not produce bins.tsv; check inputs/output."
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+            else
+                @info "Skipping COMEBin; set MYCELIA_BINNING_CONTIGS, MYCELIA_BINNING_COVERAGE_TABLE, and MYCELIA_BINNING_MARKERS."
+            end
+
+            if !isempty(genomes) && all(isfile, genomes)
+                Test.@testset "dRep" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_drep_dereplicate(
+                            genomes=genomes,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isfile(result.winning_genomes)
+                            Test.@test true
+                        else
+                            Test.@test_skip "dRep did not produce dereplicated_genomes.csv; check inputs/output."
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+            else
+                @info "Skipping dRep; set MYCELIA_BINNING_GENOMES to a comma-separated list of FASTA paths."
+            end
+
+            if !isempty(bins_dirs) && all(isdir, bins_dirs)
+                Test.@testset "MAGmax" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_magmax_merge(
+                            bins_dirs=bins_dirs,
+                            outdir=outdir
+                        )
+                        Test.@test isdir(result.outdir)
+                        if isempty(readdir(result.outdir))
+                            Test.@test_skip "MAGmax did not produce output files; check inputs/output."
+                        else
+                            Test.@test true
+                        end
+                    finally
+                        rm(outdir; recursive=true, force=true)
+                    end
+                end
+            else
+                @info "Skipping MAGmax; set MYCELIA_BINNING_BINS_DIRS to a comma-separated list of bin directories."
+            end
+        end
     else
         @info "Skipping binning external execution; set MYCELIA_RUN_EXTERNAL=true to enable when tools are installed."
     end

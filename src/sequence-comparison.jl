@@ -129,6 +129,53 @@ function run_sylph_profile(reference_fastas::Vector{String};
 end
 
 """
+    select_sketch_supported_references(reference_scores::AbstractDict{<:AbstractString,<:Real};
+                                       min_score::Union{Nothing,Real}=nothing,
+                                       max_score::Union{Nothing,Real}=nothing,
+                                       max_refs::Union{Nothing,Int}=nothing,
+                                       prefer::Symbol=:higher)
+
+Filter and rank sketch scores to identify the pangenome contexts supported by a sample.
+
+Use `min_score` with containment/coverage scores (sourmash/sylph). Use `max_score` and
+`prefer=:lower` for distance-style scores (mash). Returns a vector of `Pair{String,Float64}`
+sorted by score.
+"""
+function select_sketch_supported_references(reference_scores::AbstractDict{<:AbstractString,<:Real};
+        min_score::Union{Nothing,Real}=nothing,
+        max_score::Union{Nothing,Real}=nothing,
+        max_refs::Union{Nothing,Int}=nothing,
+        prefer::Symbol=:higher)
+
+    prefer in (:higher, :lower) || error("prefer must be :higher or :lower")
+    if !isnothing(min_score) && !isnothing(max_score) && min_score > max_score
+        error("min_score must be <= max_score")
+    end
+    if !isnothing(max_refs) && max_refs < 0
+        error("max_refs must be non-negative")
+    end
+
+    selected = Pair{String,Float64}[]
+    for (reference, score) in reference_scores
+        score_value = Float64(score)
+        if !isnothing(min_score) && score_value < min_score
+            continue
+        end
+        if !isnothing(max_score) && score_value > max_score
+            continue
+        end
+        push!(selected, String(reference) => score_value)
+    end
+
+    sort!(selected, by=last, rev=(prefer == :higher))
+    if !isnothing(max_refs)
+        selected = selected[1:min(max_refs, length(selected))]
+    end
+
+    return selected
+end
+
+"""
     skani_triangle(fasta_files::Vector{String}; 
                    small_genomes::Bool=false,
                    sparse::Bool=true,

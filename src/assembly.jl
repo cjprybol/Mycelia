@@ -289,6 +289,7 @@ Run Flye assembler for long read assembly.
 - `outdir::String`: Output directory path (default: "flye_output")
 - `genome_size::String`: Estimated genome size (e.g., "5m", "1.2g") (default: nothing, auto-estimated)
 - `read_type::String`: Type of reads ("pacbio-raw", "pacbio-corr", "pacbio-hifi", "nano-raw", "nano-corr", "nano-hq")
+- `min_overlap::Int`: Minimum overlap between reads (default: nothing, auto-selected)
 
 # Returns
 Named tuple containing:
@@ -302,7 +303,7 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
-function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi", threads = min(get_default_threads(), FLYE_MAX_THREADS))
+function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi", min_overlap=nothing, threads = min(get_default_threads(), FLYE_MAX_THREADS))
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
 
@@ -310,6 +311,9 @@ function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(threads)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
+        end
+        if !isnothing(min_overlap)
+            push!(cmd_args, "--min-overlap", string(min_overlap))
         end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
@@ -1406,7 +1410,7 @@ function run_strainy(assembly_file::String, long_reads::String; outdir::String="
         # First map reads to assembly
         bam_file = joinpath(outdir, "mapped_reads.bam")
         if !isfile(bam_file)
-            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`, `samtools sort -@ $(threads) -o $(bam_file)`))
+            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`, `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`))
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`)
         end
         

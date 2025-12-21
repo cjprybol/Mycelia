@@ -26,6 +26,7 @@ Test.@testset "Long Read Isolate Assembly" begin
                     outdir=outdir,
                     genome_size="10k",
                     read_type="nano-hq",
+                    min_overlap=1000,
                     threads=threads
                 )
                 Test.@test result.outdir == outdir
@@ -62,4 +63,3 @@ Test.@testset "Long Read Isolate Assembly" begin
         end
     end
 end
-

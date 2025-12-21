@@ -2,6 +2,7 @@
 #
 # This file contains wrappers for metagenomic classification tools:
 # - sourmash: MinHash-based sequence search and classification
+# - mash: MinHash sketching and containment screening
 # - metaphlan: Marker-based taxonomic profiling
 # - metabuli: Fast metagenomic classification
 #
@@ -191,6 +192,282 @@ function run_sourmash_gather(;
     end
 
     return (; outdir, results_csv, results_matches)
+end
+
+# ============================================================================
+# Mash - MinHash sketching, screening, and distance
+# ============================================================================
+
+"""
+    run_mash_sketch(; input_files, outdir, k=21, s=1000, r=false,
+                    min_copies=nothing, threads=get_default_threads(),
+                    output_prefix=nothing, additional_args=String[])
+
+Create Mash sketches from input sequences or reads.
+
+# Arguments
+- `input_files::Vector{String}`: Input FASTA/FASTQ files
+- `outdir::String`: Output directory for sketch files
+- `k::Int`: K-mer size (default: 21)
+- `s::Int`: Sketch size (default: 1000)
+- `r::Bool`: Treat input as reads (`-r`, default: false)
+- `min_copies::Union{Nothing,Int}`: Minimum copies for reads (`-m`, requires `r=true`)
+- `threads::Int`: Thread count (`-p`)
+- `output_prefix::Union{Nothing,String}`: Optional prefix for sketch outputs
+- `additional_args::Vector{String}`: Extra CLI args appended to `mash sketch`
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory path
+- `sketches`: Vector of sketch file paths
+"""
+function run_mash_sketch(;
+        input_files::Vector{String},
+        outdir::String,
+        k::Int=21,
+        s::Int=1000,
+        r::Bool=false,
+        min_copies::Union{Nothing,Int}=nothing,
+        threads::Int=get_default_threads(),
+        output_prefix::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    for f in input_files
+        isfile(f) || error("Input file not found: $(f)")
+    end
+    k > 0 || error("k must be positive")
+    s > 0 || error("s must be positive")
+    threads > 0 || error("threads must be positive")
+    if !isnothing(min_copies)
+        min_copies > 0 || error("min_copies must be positive")
+        r || error("min_copies requires r=true for read sketching")
+    end
+
+    Mycelia.add_bioconda_env("mash")
+    mkpath(outdir)
+
+    sketches = String[]
+    for input_file in input_files
+        basename_clean = replace(basename(input_file), r"\.(fa|fasta|fq|fastq)(\.gz)?$"i => "")
+        prefix = if isnothing(output_prefix)
+            joinpath(outdir, basename_clean)
+        elseif length(input_files) == 1
+            joinpath(outdir, output_prefix)
+        else
+            joinpath(outdir, "$(output_prefix)_$(basename_clean)")
+        end
+        sketch_file = prefix * ".msh"
+
+        if !isfile(sketch_file)
+            sketch_args = ["sketch", "-k", string(k), "-s", string(s), "-p", string(threads), "-o", prefix]
+            if r
+                push!(sketch_args, "-r")
+            end
+            if !isnothing(min_copies)
+                append!(sketch_args, ["-m", string(min_copies)])
+            end
+            append!(sketch_args, additional_args)
+            push!(sketch_args, input_file)
+
+            sketch_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $sketch_args`
+            run(sketch_cmd)
+        end
+
+        push!(sketches, sketch_file)
+    end
+
+    return (; outdir, sketches)
+end
+
+"""
+    run_mash_paste(; out_file, in_files)
+
+Combine Mash sketch files into a single database sketch.
+
+# Arguments
+- `out_file::String`: Output sketch path (or prefix) for the combined database
+- `in_files::Vector{String}`: Input `.msh` files to combine
+
+# Returns
+`String` path to the combined `.msh` file.
+"""
+function run_mash_paste(;
+        out_file::String,
+        in_files::Vector{String})
+
+    for f in in_files
+        isfile(f) || error("Input sketch not found: $(f)")
+    end
+
+    Mycelia.add_bioconda_env("mash")
+
+    output_prefix = endswith(out_file, ".msh") ? out_file[1:end-4] : out_file
+    mkpath(dirname(output_prefix))
+    output_sketch = output_prefix * ".msh"
+
+    if !isfile(output_sketch)
+        paste_args = ["paste", output_prefix]
+        append!(paste_args, in_files)
+        paste_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $paste_args`
+        run(paste_cmd)
+    end
+
+    return output_sketch
+end
+
+"""
+    run_mash_dist(; reference, query, outdir, threads=get_default_threads(),
+                  output_tsv=nothing, additional_args=String[])
+
+Compute Mash distances between a reference and query.
+
+# Arguments
+- `reference::String`: Reference sketch or sequence
+- `query::String`: Query sketch or sequence
+- `outdir::String`: Output directory for results
+- `threads::Int`: Thread count (`-p`)
+- `output_tsv::Union{Nothing,String}`: Optional output file path
+- `additional_args::Vector{String}`: Extra CLI args appended to `mash dist`
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory path
+- `results_tsv`: Path to the distance output file
+"""
+function run_mash_dist(;
+        reference::String,
+        query::String,
+        outdir::String,
+        threads::Int=get_default_threads(),
+        output_tsv::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    isfile(reference) || error("Reference not found: $(reference)")
+    isfile(query) || error("Query not found: $(query)")
+    threads > 0 || error("threads must be positive")
+
+    Mycelia.add_bioconda_env("mash")
+    mkpath(outdir)
+
+    ref_base = replace(basename(reference), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    query_base = replace(basename(query), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    results_tsv = isnothing(output_tsv) ?
+        joinpath(outdir, "$(ref_base)_vs_$(query_base)_mash_dist.tsv") :
+        output_tsv
+
+    if !isfile(results_tsv)
+        dist_args = ["dist", "-p", string(threads)]
+        append!(dist_args, additional_args)
+        append!(dist_args, [reference, query])
+        dist_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $dist_args`
+        open(results_tsv, "w") do io
+            run(pipeline(dist_cmd, stdout=io))
+        end
+    end
+
+    return (; outdir, results_tsv)
+end
+
+"""
+    run_mash_screen(; reference, query, outdir, winner_takes_all=true,
+                    threads=get_default_threads(), min_identity=nothing,
+                    output_tsv=nothing, additional_args=String[])
+
+Screen query sequences against a reference sketch database for containment.
+
+# Arguments
+- `reference::String`: Reference sketch file (`.msh`)
+- `query::Union{String,Vector{String}}`: Query sequences (FASTA/FASTQ)
+- `outdir::String`: Output directory for results
+- `winner_takes_all::Bool`: Use Mash `-w` (default: true)
+- `threads::Int`: Thread count (`-p`)
+- `min_identity::Union{Nothing,Float64}`: Minimum identity threshold (`-i`)
+- `output_tsv::Union{Nothing,String}`: Optional output file path
+- `additional_args::Vector{String}`: Extra CLI args appended to `mash screen`
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory path
+- `results_tsv`: Path to the screen output file
+"""
+function run_mash_screen(;
+        reference::String,
+        query::Union{String,Vector{String}},
+        outdir::String,
+        winner_takes_all::Bool=true,
+        threads::Int=get_default_threads(),
+        min_identity::Union{Nothing,Float64}=nothing,
+        output_tsv::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    isfile(reference) || error("Reference not found: $(reference)")
+    query_files = query isa String ? [query] : query
+    for f in query_files
+        isfile(f) || error("Query not found: $(f)")
+    end
+    threads > 0 || error("threads must be positive")
+    if !isnothing(min_identity) && (min_identity < 0.0 || min_identity > 1.0)
+        error("min_identity must be between 0.0 and 1.0")
+    end
+
+    Mycelia.add_bioconda_env("mash")
+    mkpath(outdir)
+
+    query_base = replace(basename(query_files[1]), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    output_name = "$(basename(reference))_vs_$(query_base)_mash_screen.tsv"
+    results_tsv = isnothing(output_tsv) ? joinpath(outdir, output_name) : output_tsv
+
+    if !isfile(results_tsv)
+        screen_args = ["screen", "-p", string(threads)]
+        if winner_takes_all
+            push!(screen_args, "-w")
+        end
+        if !isnothing(min_identity)
+            append!(screen_args, ["-i", string(min_identity)])
+        end
+        append!(screen_args, additional_args)
+        push!(screen_args, reference)
+        append!(screen_args, query_files)
+
+        screen_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $screen_args`
+        open(results_tsv, "w") do io
+            run(pipeline(screen_cmd, stdout=io))
+        end
+    end
+
+    return (; outdir, results_tsv)
+end
+
+"""
+    parse_mash_dist_output(file)
+
+Parse a Mash distance output file into a DataFrame.
+"""
+function parse_mash_dist_output(file::String)
+    isfile(file) || error("Mash dist output not found: $(file)")
+    return CSV.read(
+        file,
+        DataFrames.DataFrame;
+        delim='\t',
+        header=["reference", "query", "distance", "p_value", "matching_hashes"],
+        comment="#"
+    )
+end
+
+"""
+    parse_mash_screen_output(file)
+
+Parse a Mash screen output file into a DataFrame.
+"""
+function parse_mash_screen_output(file::String)
+    isfile(file) || error("Mash screen output not found: $(file)")
+    return CSV.read(
+        file,
+        DataFrames.DataFrame;
+        delim='\t',
+        header=["identity", "shared_hashes", "median_multiplicity", "p_value", "query", "reference"],
+        comment="#"
+    )
 end
 
 # ============================================================================

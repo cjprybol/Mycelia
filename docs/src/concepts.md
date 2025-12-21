@@ -299,13 +299,13 @@ calculate_assembly_stats(contigs)
 - **Approach**: Use sequence signals (start codons, splice sites)
 - **Advantages**: No external data required
 - **Limitations**: Lower accuracy, misses non-canonical genes
-- **Tools**: Prodigal, Augustus, GeneMark
+- **Tools**: Prodigal, Pyrodigal, Augustus, GeneMark
 
 #### Homology-Based Prediction
 - **Approach**: Compare to known genes in databases
 - **Advantages**: Higher accuracy for conserved genes
 - **Limitations**: Misses novel genes, depends on database quality
-- **Tools**: BLAST, DIAMOND, MMseqs2
+- **Tools**: BLAST, DIAMOND, MMseqs2, MetaEuk
 
 #### RNA-seq Guided Prediction
 - **Approach**: Use transcriptome data to guide prediction
@@ -341,9 +341,10 @@ calculate_assembly_stats(contigs)
 
 | Genome Type | Method | Tools | Considerations |
 |-------------|---------|-------|---------------|
-| Bacterial | Ab initio | Prodigal | Simple gene structure |
-| Viral | Homology | BLAST | Small genomes, database dependent |
+| Bacterial | Ab initio | Prodigal / Pyrodigal | Simple gene structure |
+| Viral | Specialized | Prodigal-gv | Viral coding patterns |
 | Fungal | Hybrid | Augustus + BLAST | Moderate complexity |
+| Eukaryotic metagenome | Homology-guided | MetaEuk | Fragmented contigs |
 | Plant/Animal | RNA-seq guided | BRAKER | High complexity, alternative splicing |
 
 ### Mycelia Functions

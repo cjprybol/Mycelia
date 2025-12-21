@@ -26,6 +26,9 @@ ngrams("abcd", 2)   # Returns ["ab", "bc", "cd"]
 function ngrams(s::AbstractString, n::Int)
     # Convert to character array to handle Unicode properly
     chars = collect(s)
+    if n <= 0 || isempty(chars)
+        throw(BoundsError(s, n))
+    end
     len = length(chars)
     count = max(len - n + 1, 0)
     result = Vector{String}(undef, count)

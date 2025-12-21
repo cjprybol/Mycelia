@@ -96,6 +96,7 @@ tutorial_order = [
     ("6. Gene Annotation", "06_gene_annotation.md"),
     ("7. Comparative Genomics", "07_comparative_genomics.md"),
     ("8. Tool Integration", "08_tool_integration.md"),
+    ("9. Binning Workflow", "14_binning_workflow.md"),
     
     # Round-trip tutorial series (09) - temporarily disabled due to execution errors
     # TODO: Re-enable once example execution issues are resolved

@@ -1308,7 +1308,7 @@ Test.@testset "Strain-aware workflows (STRONG/Strainy)" begin
         metaflye_for_graph_outdir = joinpath(dir, "metaflye_for_graph")
         assembly_graph_gfa = joinpath(metaflye_for_graph_outdir, "assembly_graph.gfa")
         try
-            Mycelia.run_metaflye(fastq=mixed_fastq, outdir=metaflye_for_graph_outdir, genome_size="5k", read_type="nano-raw")
+            Mycelia.run_metaflye(fastq=mixed_fastq, outdir=metaflye_for_graph_outdir, genome_size="5k", read_type="nano-raw", min_overlap=1000)
 
             strong_outdir = joinpath(dir, "strong_assembly")
             if isfile(assembly_graph_gfa)
@@ -1342,7 +1342,7 @@ Test.@testset "Strain-aware workflows (STRONG/Strainy)" begin
         metaflye_for_strainy_outdir = joinpath(dir, "metaflye_for_strainy")
         metaflye_assembly = joinpath(metaflye_for_strainy_outdir, "assembly.fasta")
         try
-            Mycelia.run_metaflye(fastq=mixed_fastq, outdir=metaflye_for_strainy_outdir, genome_size="5k", read_type="nano-raw")
+            Mycelia.run_metaflye(fastq=mixed_fastq, outdir=metaflye_for_strainy_outdir, genome_size="5k", read_type="nano-raw", min_overlap=1000)
 
             if isfile(metaflye_assembly)
                 strainy_outdir = joinpath(dir, "strainy_assembly")

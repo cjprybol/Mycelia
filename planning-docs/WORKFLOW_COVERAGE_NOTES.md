@@ -29,6 +29,7 @@
   - Iterative likelihood-improvement handoff after external assembly.
   - Variant calling example (VCF normalization + evaluation).
   - Metagenomic binning + profiling paths.
+  - Sketch-guided pangenome context selection (sourmash/sylph/mash prefilter -> subset reference paths -> minimap2 mapping).
 
 ## Proposed actions
 

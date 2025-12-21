@@ -65,9 +65,9 @@ Test.@testset "NGram Assembly" begin
     alphabet = ['A', 'C', 'G', 'T']
     reads = ["ACGT", "CGTA", "GTAC", "TACG"]
     k = 3
+    graph = Mycelia.Rhizomorph.build_ngram_graph(reads, k; dataset_id="test")
 
     Test.@testset "Graph Construction" begin
-        graph = Mycelia.Rhizomorph.build_ngram_graph(reads, k; dataset_id="test")
         Test.@test !isnothing(graph)
         ## Further tests on graph structure, nodes, edges, etc.
     end

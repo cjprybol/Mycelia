@@ -2233,6 +2233,7 @@ Downloads and constructs a MetaDiGraph representation of the NCBI taxonomy datab
     - `:scientific_name`, `:common_name`, etc.: Name properties
     - `:rank`: Taxonomic rank
     - `:division_id`, `:division_cde`, `:division_name`: Division information
+    - `:genetic_code_id`, `:mitochondrial_genetic_code_id`: NCBI translation table IDs
   - Edges represent parent-child relationships in the taxonomy
 
 # Dependencies
@@ -2313,13 +2314,24 @@ function load_ncbi_taxonomy(;
     divisions
 
     node_2_taxid_map = map(index -> ncbi_taxonomy.vprops[index][:tax_id], Graphs.vertices(ncbi_taxonomy))
+    MetaGraphs.set_prop!(ncbi_taxonomy, :node_2_taxid_map, node_2_taxid_map)
     ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/nodes.dmp"), String), "\t|\n")
         if isempty(line)
             continue
         else
-            (tax_id_string, parent_tax_id_string, rank, embl_code, division_id_string) = split(line, "\t|\t")
+            fields = split(line, "\t|\t")
+            @assert length(fields) >= 9
+            tax_id_string = fields[1]
+            parent_tax_id_string = fields[2]
+            rank = fields[3]
+            embl_code = fields[4]
+            division_id_string = fields[5]
+            genetic_code_id_string = fields[7]
+            mitochondrial_genetic_code_id_string = fields[9]
 
             division_id = parse(Int, division_id_string)
+            genetic_code_id = parse(Int, genetic_code_id_string)
+            mitochondrial_genetic_code_id = parse(Int, mitochondrial_genetic_code_id_string)
 
             tax_id = parse(Int, tax_id_string)
             lightgraphs_tax_ids = searchsorted(node_2_taxid_map, tax_id)
@@ -2337,12 +2349,82 @@ function load_ncbi_taxonomy(;
             MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_id, division_id)
             MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_cde, divisions[division_id][:division_cde])
             MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_name, divisions[division_id][:division_name])
+            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :genetic_code_id, genetic_code_id)
+            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :mitochondrial_genetic_code_id, mitochondrial_genetic_code_id)
         end
     end
     # JLD2 graph killed a colab instance after 200Gb of size!
     # JLD2.save("$(homedir())/workspace/blastdb/taxdump/ncbi_taxonomy.jld2", "ncbi_taxonomy", ncbi_taxonomy)
     # return (;ncbi_taxonomy, path_to_prebuilt_graph)
     return ncbi_taxonomy
+end
+
+function _get_ncbi_tax_id_map(ncbi_taxonomy)
+    graph_props = MetaGraphs.props(ncbi_taxonomy)
+    if haskey(graph_props, :node_2_taxid_map)
+        return graph_props[:node_2_taxid_map]
+    end
+    node_2_taxid_map = map(index -> ncbi_taxonomy.vprops[index][:tax_id], Graphs.vertices(ncbi_taxonomy))
+    MetaGraphs.set_prop!(ncbi_taxonomy, :node_2_taxid_map, node_2_taxid_map)
+    return node_2_taxid_map
+end
+
+function _ncbi_tax_id_to_vertex(ncbi_taxonomy, tax_id::Int)
+    node_2_taxid_map = _get_ncbi_tax_id_map(ncbi_taxonomy)
+    tax_id_positions = searchsorted(node_2_taxid_map, tax_id)
+    if length(tax_id_positions) == 1
+        return first(tax_id_positions)
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return the NCBI translation table ID for a taxonomy node.
+
+# Arguments
+- `ncbi_taxonomy`: Output from `load_ncbi_taxonomy`
+- `tax_id`: NCBI taxonomy identifier
+
+# Keywords
+- `type::Symbol=:genomic`: `:genomic` or `:mitochondrial`
+- `inherit::Bool=true`: Walk up the parent lineage if the code is missing/zero
+
+# Returns
+`Int` translation table ID, or `missing` if not found.
+"""
+function get_ncbi_genetic_code(ncbi_taxonomy, tax_id::Int; type::Symbol=:genomic, inherit::Bool=true)
+    prop = if type === :genomic
+        :genetic_code_id
+    elseif type === :mitochondrial
+        :mitochondrial_genetic_code_id
+    else
+        throw(ArgumentError("type must be :genomic or :mitochondrial"))
+    end
+
+    vertex = _ncbi_tax_id_to_vertex(ncbi_taxonomy, tax_id)
+    if vertex === nothing
+        return missing
+    end
+
+    vertex_props = MetaGraphs.props(ncbi_taxonomy, vertex)
+    code = get(vertex_props, prop, missing)
+    if !inherit
+        return code
+    end
+
+    while code === missing || code == 0
+        parents = Graphs.outneighbors(ncbi_taxonomy, vertex)
+        if isempty(parents)
+            return code
+        end
+        vertex = first(parents)
+        vertex_props = MetaGraphs.props(ncbi_taxonomy, vertex)
+        code = get(vertex_props, prop, missing)
+    end
+
+    return code
 end
 
 """
