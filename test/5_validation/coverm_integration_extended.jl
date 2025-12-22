@@ -38,38 +38,52 @@ Test.@testset "CoverM integration (extended)" begin
                     threads=2
                 )
                 run(map_result.cmd)
-                bam_path = Mycelia.sort_bam(map_result.outfile; threads=2)
+                bam_path, _ = Mycelia.index_bam(map_result.outfile; threads=2)
 
                 # Contig mode
                 contig_df = Mycelia.run_coverm_contig(
                     bam_files=[bam_path],
-                    reference_fasta=assembly,
                     methods=["mean", "covered_fraction"],
                     threads=2,
                     outdir=joinpath(tmp, "coverm_contig"),
                     quiet=true
                 )
                 Test.@test DataFrames.nrow(contig_df) >= 1
-                Test.@test all(contig_df.mean .>= 0)
-                if "covered_fraction" in Symbol.(names(contig_df))
-                    Test.@test all((0 .<= contig_df.covered_fraction) .<= 1)
+                mean_cols = filter(name -> endswith(String(name), "_Mean"), names(contig_df))
+                Test.@test !isempty(mean_cols)
+                for col in mean_cols
+                    Test.@test all(contig_df[!, col] .>= 0)
+                end
+                covered_cols = filter(name -> endswith(String(name), "_Covered_Fraction"), names(contig_df))
+                for col in covered_cols
+                    Test.@test all((0 .<= contig_df[!, col]) .& (contig_df[!, col] .<= 1))
                 end
 
                 # Genome mode (single FASTA treated as one bin)
                 genome_df = Mycelia.run_coverm_genome(
                     bam_files=[bam_path],
                     genome_fasta_files=[assembly],
-                    methods=["relative_abundance", "mean_coverage"],
+                    methods=["relative_abundance", "mean"],
                     threads=2,
                     outdir=joinpath(tmp, "coverm_genome"),
                     quiet=true
                 )
-                Test.@test DataFrames.nrow(genome_df) == 1
-                if "relative_abundance" in Symbol.(names(genome_df))
-                    Test.@test genome_df.relative_abundance[1] > 0.0
+                Test.@test DataFrames.nrow(genome_df) >= 1
+                mapped_df = genome_df[genome_df.Genome .!= "unmapped", :]
+                Test.@test DataFrames.nrow(mapped_df) >= 1
+                abundance_cols = filter(name -> occursin("_Relative_Abundance", String(name)), names(genome_df))
+                for col in abundance_cols
+                    Test.@test all(mapped_df[!, col] .> 0)
                 end
-                if "mean_coverage" in Symbol.(names(genome_df))
-                    Test.@test genome_df.mean_coverage[1] > 0.0
+                mean_cols = filter(name -> endswith(String(name), "_Mean"), names(genome_df))
+                for col in mean_cols
+                    values = mapped_df[!, col]
+                    if eltype(values) <: AbstractString
+                        parsed = parse.(Float64, values)
+                        Test.@test all(parsed .> 0)
+                    else
+                        Test.@test all(values .> 0)
+                    end
                 end
 
             finally

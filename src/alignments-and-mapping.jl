@@ -548,6 +548,74 @@ function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1
     return (;cmd, outfile)
 end
 
+function build_sample_tag(name::AbstractString)
+    base = replace(basename(name), Mycelia.FASTQ_REGEX => "")
+    return replace(base, r"[^\w\.\-]+" => "_")
+end
+
+function build_output_label(paths::AbstractVector{<:AbstractString})
+    labels = replace.(basename.(paths), Mycelia.FASTQ_REGEX => "")
+    return length(labels) == 1 ? labels[1] : join(labels, "__")
+end
+
+function concatenate_mapping_tsv(mapping_files::AbstractVector{<:AbstractString}, output_path::AbstractString; threads=get_default_threads(), force=false)
+    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") : output_path
+    tmp_out = out_plain * ".tmp"
+    open(tmp_out, "w") do out_io
+        wrote_header = false
+        for file in mapping_files
+            in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
+            first_line = true
+            for line in eachline(in_io)
+                if first_line
+                    if !wrote_header
+                        write(out_io, line, '\n')
+                        wrote_header = true
+                    end
+                    first_line = false
+                    continue
+                end
+                write(out_io, line, '\n')
+            end
+            close(in_io)
+        end
+    end
+    mv(tmp_out, out_plain; force=true)
+    if endswith(output_path, ".gz")
+        Mycelia.gzip_file(out_plain; outfile=output_path, threads=threads, force=force, keep_input=false)
+    end
+    return output_path
+end
+
+function write_read_id_list(mapping_files::AbstractVector{<:AbstractString}, output_path::AbstractString; read_map_format::Symbol, read_id_column::Symbol)
+    open(output_path, "w") do out_io
+        for file in mapping_files
+            if read_map_format == :tsv
+                in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
+                first_line = true
+                for line in eachline(in_io)
+                    if first_line
+                        first_line = false
+                        continue
+                    end
+                    isempty(line) && continue
+                    tab_idx = findlast('\t', line)
+                    read_id = tab_idx === nothing ? line : line[tab_idx + 1:end]
+                    write(out_io, read_id, '\n')
+                end
+                close(in_io)
+            else
+                table = Arrow.Table(file)
+                ids = read_id_column == :uuid ? table.uuid : table.new_read_id
+                for id in ids
+                    write(out_io, String(id), '\n')
+                end
+            end
+        end
+    end
+    return output_path
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -556,12 +624,13 @@ Map reads using an existing minimap2 index file.
 # Arguments
 - `fasta`: Optional reference FASTA (used only if an index must be created).
 - `mapping_type`: Minimap2 preset.
-- `fastq`: Input reads.
+- `fastq`: Input reads (one or more FASTQs).
 - `index_file::String=""`: Optional prebuilt index path. If empty, one is created from `fasta`.
 - `mem_gb`, `threads`, `denominator`: Parameters forwarded to `minimap_index` and minimap2.
 - `sorted::Bool=true`: If true, pipe through `samtools sort` and emit a `.sorted.bam`.
 - `outfile::Union{Nothing,String}=nothing`: Override output BAM path.
 - `minimap_extra_args::Vector{<:AbstractString}=String[]`: Extra minimap2 flags.
+- `require_index::Bool=true`: Validate index exists (set false to build commands without files on disk).
 
 # Returns
 Named tuple `(cmd, outfile)` producing a BAM file from the mapping.
@@ -577,21 +646,36 @@ function minimap_map_with_index(;
         denominator=DEFAULT_MINIMAP_DENOMINATOR,
         sorted::Bool=true,
         outfile::Union{Nothing,String}=nothing,
-        minimap_extra_args::Vector{<:AbstractString}=String[]
+        minimap_extra_args::Vector{<:AbstractString}=String[],
+        require_index::Bool=true
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
+    fastq_inputs = fastq isa AbstractVector || fastq isa Tuple ? collect(fastq) : [fastq]
+    isempty(fastq_inputs) && error("Provide at least one FASTQ")
+    fastq_str = join(fastq_inputs, " ")
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     
     if !isempty(index_file)
-        @assert isfile(index_file) "index_file provided but not found: $index_file"
+        if require_index
+            @assert isfile(index_file) "index_file provided but not found: $index_file"
+        end
     else
         isnothing(fasta) && error("Provide fasta or index_file")
         index_file_result = Mycelia.minimap_index(fasta=fasta, mapping_type=mapping_type, mem_gb=mem_gb, threads=threads)
         index_file = index_file_result.outfile
     end
-    @assert isfile(index_file) "minimap2 index not found: $index_file"
+    if require_index
+        @assert isfile(index_file) "minimap2 index not found: $index_file"
+    end
     if isnothing(outfile)
-        outfile = fastq * "." * basename(index_file) * ".minimap2" * (sorted ? ".sorted" : "") * ".bam"
+        output_prefix = if length(fastq_inputs) == 1
+            fastq_inputs[1]
+        else
+            output_dir = dirname(first(fastq_inputs))
+            output_label = build_output_label(fastq_inputs)
+            joinpath(output_dir, output_label)
+        end
+        outfile = output_prefix * "." * basename(index_file) * ".minimap2" * (sorted ? ".sorted" : "") * ".bam"
     end
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
@@ -600,18 +684,18 @@ function minimap_map_with_index(;
         if sorted
             cmd =
             """
-            $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq) --split-prefix=$(outfile).tmp \\
+            $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
             | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -o $(outfile) -
             """
         else
             cmd =
             """
-            $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq) --split-prefix=$(outfile).tmp \\
+            $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
             | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
             """
         end
     else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(index_file) $(fastq) --split-prefix=$(outfile).tmp`
+        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(index_file) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
         if sorted
             sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -o $(outfile) -`
             cmd = pipeline(map, sort_cmd)
@@ -637,12 +721,14 @@ followed by SAM compression with pigz. Handles resource allocation and conda env
 
 # Arguments
 - `fasta`: Path to reference FASTA file
-- `fastq`: Path to query FASTQ file
+- `fastq`: Path(s) to query FASTQ file(s)
 - `mapping_type`: Alignment preset ("map-hifi", "map-ont", "map-pb", "sr", or "lr:hq")
 - `as_string`: If true, returns shell command as string; if false, returns command array
 - `mem_gb`: Available memory in GB for indexing (defaults to system free memory)
 - `threads`: Number of CPU threads to use (defaults to system threads)
 - `denominator`: Divisor for calculating minimap2 index size
+- `outfile::Union{Nothing,String}=nothing`: Override output path
+- `minimap_extra_args::Vector{<:AbstractString}=String[]`: Extra minimap2 flags
 
 # Returns
 Named tuple containing:
@@ -659,19 +745,32 @@ function minimap_map(;
         denominator=DEFAULT_MINIMAP_DENOMINATOR,
         output_format="bam",
         sorted=true,
-        quiet=true
+        quiet=true,
+        outfile::Union{Nothing,String}=nothing,
+        minimap_extra_args::Vector{<:AbstractString}=String[]
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     @assert output_format in ["sam", "sam.gz", "bam"] "output_format must be 'sam', 'sam.gz', or 'bam'"
+    fastq_inputs = fastq isa AbstractVector || fastq isa Tuple ? collect(fastq) : [fastq]
+    isempty(fastq_inputs) && error("Provide at least one FASTQ")
+    fastq_str = join(fastq_inputs, " ")
 
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
 
     # Construct output filename based on format
-    base_name = fastq * "." * basename(fasta) * ".minimap2"
-    if sorted
-        base_name *= ".sorted"
+    if isnothing(outfile)
+        base_name = if length(fastq_inputs) == 1
+            fastq_inputs[1] * "." * basename(fasta) * ".minimap2"
+        else
+            output_dir = dirname(first(fastq_inputs))
+            output_label = build_output_label(fastq_inputs)
+            joinpath(output_dir, output_label) * "." * basename(fasta) * ".minimap2"
+        end
+        if sorted
+            base_name *= ".sorted"
+        end
+        outfile = base_name * "." * output_format
     end
-    outfile = base_name * "." * output_format
 
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
@@ -680,19 +779,20 @@ function minimap_map(;
     if output_format == "sam"
         # Direct SAM output
         if as_string
+            extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp -o $(outfile)
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
@@ -700,9 +800,9 @@ function minimap_map(;
                 end
             else
                 if quiet
-                    cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)`, stdout=devnull, stderr=devnull)
+                    cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`, stdout=devnull, stderr=devnull)
                 else
-                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp -o $(outfile)`
+                    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`
                 end
             end
         end
@@ -710,27 +810,28 @@ function minimap_map(;
     elseif output_format == "sam.gz"
         # Gzipped SAM output using samtools for proper BGZF compression
         if as_string
+            extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
                     cmd = pipeline(cmd, stderr=devnull)
                 end
             else
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
                 view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, view_cmd)
                 if quiet
@@ -742,21 +843,22 @@ function minimap_map(;
     else  # output_format == "bam"
         # BAM output (default behavior)
         if as_string
+            extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                 """
             else
                 cmd = """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp \\
+                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
                 | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
                 """
             end
         else
             if sorted
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -`
                 compress_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd, compress_cmd)
@@ -764,7 +866,7 @@ function minimap_map(;
                     cmd = pipeline(cmd, stderr=devnull)
                 end
             else
-                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(fasta) $(fastq) --split-prefix=$(outfile).tmp`
+                map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
                 compress_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
                 cmd = pipeline(map_cmd, compress_cmd)
                 if quiet
@@ -902,9 +1004,8 @@ paired collections (forward, reverse). Additional minimap2 flags can be supplied
 # - For very large references, minimap2 may use a multi-part index; we pass `--split-prefix` to ensure SAM
 #   output contains @SQ header lines required by samtools.
 # - UUID mapping tables contain `source_fastq`, `original_read_id`, and `uuid` columns.
-# - Per-sample BAMs are named as `<fastq_basename_without_gz>.<minimap_target_basename>.sorted.bam`.
-#   If the FASTQ basename contains `.bam.` immediately before a fastq suffix (e.g., `.bam.fastq` or `.bam.fastplong.fq`),
-#   the `.bam.` marker is stripped. Paired inputs join both FASTQ basenames (with `.gz` removed) using `__` before the index basename.
+# - Per-sample BAMs are named as `<fastq_basename_without_fastq_suffix>.<minimap_target_basename>.sorted.bam`.
+#   Paired inputs join both FASTQ basenames (with FASTQ suffix removed via `Mycelia.FASTQ_REGEX`) using `__` before the index basename.
 
 # Returns
 Named tuple with commands, paths, and per-sample output metadata.
@@ -950,7 +1051,6 @@ function minimap_merge_map_and_split(;
     end
     tmpdir = isnothing(tmpdir) ? mktempdir() : tmpdir
     mkpath(tmpdir)
-    nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
     @assert read_id_strategy in (:uuid, :prefix)
     @assert fastq_mode in (:per_sample, :joint)
     if fastq_mode == :joint && read_id_strategy == :prefix
@@ -961,71 +1061,6 @@ function minimap_merge_map_and_split(;
     if fastq_mode == :joint && read_map_format_local == :arrow
         @warn "fastq_mode=:joint does not support read_map_format=:arrow; using :tsv instead"
         read_map_format_local = :tsv
-    end
-
-    # Helper to build sample tag from filenames
-    function build_sample_tag(name::AbstractString)
-        base = replace(basename(name), Mycelia.FASTQ_REGEX => "")
-        return replace(base, r"[^\w\.\-]+" => "_")
-    end
-
-    strip_gz_extension(name::AbstractString) = replace(name, r"\.gz$" => "")
-    function normalize_fastq_label(name::AbstractString)
-        label = strip_gz_extension(basename(name))
-        if (endswith(label, ".fq") || endswith(label, ".fastq")) && occursin(r"\.bam\.", label)
-            label = replace(label, r"\.bam\.(?=(?:fast|fq))" => "."; count=1)
-        end
-        return label
-    end
-    function build_output_label(paths::AbstractVector{<:AbstractString})
-        labels = normalize_fastq_label.(paths)
-        return length(labels) == 1 ? labels[1] : join(labels, "__")
-    end
-
-    function concatenate_mapping_tsv(mapping_files::Vector{String}, output_path::String)
-        out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") : output_path
-        tmp_out = out_plain * ".tmp"
-        open(tmp_out, "w") do out_io
-            wrote_header = false
-            for file in mapping_files
-                in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
-                first_line = true
-                for line in eachline(in_io)
-                    if first_line
-                        if !wrote_header
-                            write(out_io, line, '\n')
-                            wrote_header = true
-                        end
-                        first_line = false
-                        continue
-                    end
-                    write(out_io, line, '\n')
-                end
-                close(in_io)
-            end
-        end
-        mv(tmp_out, out_plain; force=true)
-        if endswith(output_path, ".gz")
-            Mycelia.gzip_file(out_plain; outfile=output_path, threads=threads, force=force, keep_input=false)
-        end
-        return output_path
-    end
-
-    function concatenate_fastx_streaming(inputs::Vector{String}, output_path::String)
-        mkpath(dirname(output_path))
-        out_io = endswith(output_path, ".gz") ? CodecZlib.GzipCompressorStream(open(output_path, "w")) : open(output_path, "w")
-        buffer = Vector{UInt8}(undef, 1 << 20)
-        for file in inputs
-            in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
-            while true
-                n = readbytes!(in_io, buffer)
-                n == 0 && break
-                write(out_io, view(buffer, 1:n))
-            end
-            close(in_io)
-        end
-        close(out_io)
-        return output_path
     end
 
     prefix_jobs = NamedTuple[]
@@ -1108,7 +1143,6 @@ function minimap_merge_map_and_split(;
     end
 
     target_label = basename(target)
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
     if isnothing(merged_bam)
         paired_str = join(sort(string.(paired_end_fastqs)), "\n")
         fingerprint = Mycelia.create_sha1_hash(
@@ -1218,7 +1252,7 @@ function minimap_merge_map_and_split(;
         joint_read_map = write_read_map_local ? joinpath(tmpdir, "joint.read_map.$mapping_suffix") : nothing
         mapping_fastqs = [joint_fastq]
         if need_prefixing
-            concatenate_fastx_streaming(prefixed_fastqs, joint_fastq)
+            Mycelia.concatenate_fastx(prefixed_fastqs; output_path=joint_fastq, threads=threads, force=force)
             if write_read_map_local
                 mapping_files = String[]
                 for info in sample_infos
@@ -1227,63 +1261,48 @@ function minimap_merge_map_and_split(;
                 if isempty(mapping_files)
                     error("read_id mappings requested but mapping files are missing")
                 end
-                concatenate_mapping_tsv(mapping_files, joint_read_map)
+                concatenate_mapping_tsv(mapping_files, joint_read_map; threads=threads, force=force)
             end
         end
     end
 
-    minimap_parts = [
-        Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
-        "-t", string(threads), "-x", mapping_type, "-I$(index_size)", "-a"
-    ]
-    # Required for multi-part indices to ensure @SQ lines are present in SAM output.
-    # Also safe for single-part indices and helps avoid samtools header/truncation errors.
-    split_prefix = merged_bam * ".minimap2.split"
-    push!(minimap_parts, "--split-prefix=$(split_prefix)")
-    append!(minimap_parts, minimap_extra_args)
-    push!(minimap_parts, target)
-    append!(minimap_parts, mapping_fastqs)
-
-    # Preflight argv size for many-input runs to avoid opaque "argument list too long" errors.
-    if run_mapping
-        arg_max = Mycelia.get_arg_max()
-        if arg_max !== nothing
-            argv_bytes = Mycelia.estimate_argv_bytes(minimap_parts)
-            headroom = 256_000 # env + runtime variance
-            if argv_bytes > (arg_max - headroom)
-                error(
-                    "minimap2 argv likely exceeds ARG_MAX (estimated argv bytes=$(argv_bytes), ARG_MAX=$(arg_max)).\n" *
-                    "Inputs: $(length(mapping_fastqs)) FASTQ(s). Consider:\n" *
-                    "  - Using a shorter `tmpdir` (and/or shorter input paths)\n" *
-                    "  - Running samples in batches and merging BAMs with `samtools merge`\n"
-                )
-            end
-        end
-    end
-
-    map_cmd = Cmd(minimap_parts)
-    sort_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", merged_bam, "-"])
-    minimap_cmd = pipeline(map_cmd, sort_cmd)
-    if fastq_mode == :joint && (!isempty(minimap_index) || !isnothing(index_file))
-        minimap_result = Mycelia.minimap_map_with_index(
-            fasta=isnothing(index_file) ? reference_fasta : nothing,
+    index_for_mapping = isempty(minimap_index) ? index_file : minimap_index
+    use_index = !isnothing(index_for_mapping) && !isempty(index_for_mapping)
+    minimap_result = if use_index
+        Mycelia.minimap_map_with_index(
+            fasta=reference_fasta,
             mapping_type=mapping_type,
-            fastq=first(mapping_fastqs),
-            index_file=isnothing(index_file) ? minimap_index : index_file,
+            fastq=mapping_fastqs,
+            index_file=index_for_mapping,
             mem_gb=mem_gb,
             threads=threads,
             as_string=as_string,
             denominator=denominator,
             sorted=true,
             outfile=merged_bam,
+            minimap_extra_args=minimap_extra_args,
+            require_index=run_mapping
+        )
+    else
+        Mycelia.minimap_map(
+            fasta=reference_fasta,
+            fastq=mapping_fastqs,
+            mapping_type=mapping_type,
+            as_string=as_string,
+            mem_gb=mem_gb,
+            threads=threads,
+            denominator=denominator,
+            output_format="bam",
+            sorted=true,
+            quiet=false,
+            outfile=merged_bam,
             minimap_extra_args=minimap_extra_args
         )
-        minimap_cmd = minimap_result.cmd
     end
+    minimap_cmd = minimap_result.cmd
+    split_prefix = merged_bam * ".tmp"
 
     if run_mapping
-        Mycelia.add_bioconda_env("minimap2")
-        Mycelia.add_bioconda_env("samtools")
         if nonempty_file(merged_bam) && !force
             # resume/caching: keep existing merged BAM
         else
@@ -1326,34 +1345,6 @@ function minimap_merge_map_and_split(;
     end
 
     read_id_column = read_id_strategy == :uuid ? :uuid : :new_read_id
-    function write_read_id_list(mapping_files::Vector{String}, output_path::String)
-        open(output_path, "w") do out_io
-            for file in mapping_files
-                if read_map_format_local == :tsv
-                    in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
-                    first_line = true
-                    for line in eachline(in_io)
-                        if first_line
-                            first_line = false
-                            continue
-                        end
-                        isempty(line) && continue
-                        tab_idx = findlast('\t', line)
-                        read_id = tab_idx === nothing ? line : line[tab_idx + 1:end]
-                        write(out_io, read_id, '\n')
-                    end
-                    close(in_io)
-                else
-                    table = Arrow.Table(file)
-                    ids = read_id_column == :uuid ? table.uuid : table.new_read_id
-                    for id in ids
-                        write(out_io, String(id), '\n')
-                    end
-                end
-            end
-        end
-        return output_path
-    end
 
     split_cmds = Dict{String,Cmd}()
     if run_splitting
@@ -1373,7 +1364,7 @@ function minimap_merge_map_and_split(;
             sample_bam = joinpath(sample_outdir, string(info.output_label, ".", target_label, ".sorted.bam"))
             isempty(info.mapping_files) && error("Missing read-id mapping files for sample $(sample_tag)")
             read_id_list = joinpath(tmpdir, "$(sample_tag).read_ids.txt")
-            write_read_id_list(info.mapping_files, read_id_list)
+            write_read_id_list(info.mapping_files, read_id_list; read_map_format=read_map_format_local, read_id_column=read_id_column)
             view_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "view", "-@", string(threads), "-h", "-N", read_id_list, merged_bam])
             sort_split_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", sample_bam, "-"])
             split_cmd = pipeline(view_cmd, sort_split_cmd)

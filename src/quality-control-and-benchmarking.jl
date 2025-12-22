@@ -1609,7 +1609,7 @@ busco_dir = Mycelia.run_busco(assemblies,
 - Results provide Complete, Fragmented, and Missing BUSCO counts
 """
 function run_busco(assembly_files::Vector{String};
-                   outdir::String="busco_results",
+                   outdir::Union{String,Nothing}=nothing,
                    lineage::Union{String,Nothing}=nothing,
                    mode::String="genome",
                    threads::Int=get_default_threads(),
@@ -1646,6 +1646,13 @@ function run_busco(assembly_files::Vector{String};
         auto_lineage = true
     end
     
+    # Derive default outdir from first assembly if not provided
+    if outdir === nothing
+        first_asm = assembly_files[1]
+        base = replace(basename(first_asm), Mycelia.FASTA_REGEX => "")
+        outdir = joinpath(dirname(first_asm), base * "_busco")
+    end
+
     # Create output directory
     mkpath(outdir)
     
@@ -1659,8 +1666,8 @@ function run_busco(assembly_files::Vector{String};
         # Build BUSCO command
         cmd_parts = [
             "busco",
-            "--input", assembly_file,
-            "--output", assembly_name,
+            "--in", assembly_file,
+            "--out", assembly_name,
             "--out_path", outdir,
             "--mode", mode,
             "--cpu", string(threads)
@@ -1692,8 +1699,20 @@ function run_busco(assembly_files::Vector{String};
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n busco $cmd_parts`)
             
             # Verify output files were created
-            summary_files = Glob.glob(joinpath(assembly_outdir, "short_summary*.txt"))
-            
+            summary_files = String[]
+            if isdir(assembly_outdir)
+                summary_files = filter(name -> occursin(r"^short_summary.*\.txt$", name), readdir(assembly_outdir))
+                if isempty(summary_files)
+                    for (root, _, files) in walkdir(assembly_outdir)
+                        for name in files
+                            if occursin(r"^short_summary.*\.txt$", name)
+                                push!(summary_files, joinpath(root, name))
+                            end
+                        end
+                    end
+                end
+            end
+
             if isempty(summary_files)
                 error("BUSCO failed to generate summary file for $(assembly_file)")
             end

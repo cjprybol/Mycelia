@@ -655,7 +655,7 @@ Run CoverM in *contig* mode to compute per-contig coverage statistics.
 
 # Arguments
 - `bam_files::Vector{String}`: Paths to BAM files containing read alignments.
-- `reference_fasta::Union{Nothing,String}=nothing`: Optional contig FASTA for reference lengths.
+- `reference_fasta::Union{Nothing,String}=nothing`: Optional contig FASTA for reference lengths (ignored for BAM inputs).
 - `outdir::Union{Nothing,String}=nothing`: Output directory (defaults to `coverm_contig` next to the first BAM).
 - `methods::Vector{String}=["mean", "covered_fraction"]`: Coverage statistics to compute.
 - `threads::Int=Sys.CPU_THREADS`: Number of threads for CoverM.
@@ -691,6 +691,14 @@ function run_coverm_contig(; bam_files::Vector{String},
     @assert !isempty(methods) "At least one CoverM method must be specified"
     @assert all(!isempty, methods) "CoverM methods cannot contain empty strings"
 
+    resolved_reference = reference_fasta
+    if reference_fasta !== nothing && quiet
+        resolved_reference = nothing
+    elseif reference_fasta !== nothing
+        @warn "CoverM contig does not accept --reference with BAM inputs; ignoring reference_fasta" reference_fasta
+        resolved_reference = nothing
+    end
+
     resolved_outdir = isnothing(outdir) ? joinpath(dirname(first(bam_files)), "coverm_contig") : outdir
     out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_contig.tsv") : output_tsv
     mkpath(dirname(out_path))
@@ -698,7 +706,7 @@ function run_coverm_contig(; bam_files::Vector{String},
     should_run = !isfile(out_path) || filesize(out_path) == 0
     if should_run
         Mycelia.add_bioconda_env("coverm")
-        args = _build_coverm_contig_args(; bam_files, reference_fasta, methods, threads,
+        args = _build_coverm_contig_args(; bam_files, reference_fasta=resolved_reference, methods, threads,
                                          min_read_percent_identity, min_covered_fraction,
                                          out_path, additional_args)
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n coverm coverm $args`
@@ -777,7 +785,7 @@ function run_coverm_genome(; bam_files::Vector{String},
                            genome_directory::Union{Nothing,String}=nothing,
                            genome_extension::String="fa",
                            outdir::Union{Nothing,String}=nothing,
-                           methods::Vector{String}=["relative_abundance", "mean_coverage"],
+                           methods::Vector{String}=["relative_abundance", "mean"],
                            threads::Int=Sys.CPU_THREADS,
                            output_tsv::Union{Nothing,String}=nothing,
                            additional_args::Vector{String}=String[],

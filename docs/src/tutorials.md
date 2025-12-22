@@ -4,7 +4,7 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 
 ## Getting Started
 
-- [Assembly in 5 Minutes](generated/tutorials/00_assembly_in_5_minutes.md) - Quick introduction to genome assembly with Mycelia
+- [Rhizomorph Assembly](generated/tutorials/13_rhizomorph_assembly.md) - Quick introduction to genome assembly with Mycelia
 
 ## Core Workflow Tutorials
 
@@ -55,6 +55,6 @@ include("tutorials/run_all_tutorials.jl")
 
 ## Next Steps
 
-- Review the [API Reference](api-reference.md) for detailed function documentation
+- Review the [Complete API Surface](api/all-functions.md) for detailed function documentation
 - See [Getting Started](getting-started.md) for installation and basic usage
-- Check [Examples](examples.md) for common workflow patterns
+- Check the [Workflow Map](workflow-map.md) for common workflow patterns

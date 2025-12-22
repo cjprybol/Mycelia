@@ -361,8 +361,8 @@
 - BCFtools — Tests: none. Docs: none. Tutorials: none. Benchmarks: none. TODO: add tests + docs + tutorial + benchmark.
 
 **Pangenome**:
-- PGGB — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (validation-only). Docs: `docs/src/workflow-map.md`, `docs/src/api/function-coverage.md`. Tutorials: none. Benchmarks: none. TODO: add end-to-end test + tutorial + benchmark.
-- Cactus — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (validation-only). Docs: `docs/src/workflow-map.md`, `docs/src/api/function-coverage.md`. Tutorials: none. Benchmarks: none. TODO: add end-to-end test + tutorial + benchmark.
+- PGGB — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (validation-only). Docs: `docs/src/workflow-map.md`, `planning-docs/FUNCTION_COVERAGE_AUDIT.md`. Tutorials: none. Benchmarks: none. TODO: add end-to-end test + tutorial + benchmark.
+- Cactus — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (validation-only). Docs: `docs/src/workflow-map.md`, `planning-docs/FUNCTION_COVERAGE_AUDIT.md`. Tutorials: none. Benchmarks: none. TODO: add end-to-end test + tutorial + benchmark.
 - vg toolkit — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (vg deconstruct validation). Docs: `docs/src/related-projects.md`. Tutorials: none. Benchmarks: none. TODO: add docs in workflow map + tutorial + benchmark + broader tests.
 
 ### Planned Integrations (not yet wrapped)
@@ -437,7 +437,7 @@
 **Docs/Tutorials/Benchmarks**:
 - `docs/src/metagenomic-workflow.md`
 - `docs/src/workflow-map.md`
-- `docs/src/api/function-coverage.md`
+- `planning-docs/FUNCTION_COVERAGE_AUDIT.md`
 - `docs/src/related-projects.md`
 - `tutorials/05_assembly_validation.jl`
 - `benchmarking/phix174_assembler_comparison.jl`

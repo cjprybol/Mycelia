@@ -24,6 +24,8 @@
 
 ## Collaboration Notes
 - Before large deletions or restructures, explain why the deletion is necessary and what logic is being kept/replaced, then proceed once agreed.
+- Do not re-enable deprecated/removed code or revert deprecations without explicit approval.
+- Rhizomorph and Mycelia do not export symbols by design; tests and callers must use fully qualified names.
 
 ## Tutorial & Benchmark Guidelines
 - Do not add generally useful functions inside `tutorials/`, `test/`, or `benchmarking/`. If a helper is broadly useful, add it under `src/` and use it from the tutorial.

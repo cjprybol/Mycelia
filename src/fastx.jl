@@ -1328,10 +1328,12 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Concatenate FASTQ/FASTA files (gz or plain) into a single gzipped output file.
+Concatenate FASTQ/FASTA files (gz or plain) into a single output file.
 Maintains input order and works for both single-end and paired-end files (one stream).
+Uses system `cat`/`zcat` (or `gzip -cd`) and optional `pigz`/`gzip` compression when
+the output path ends with `.gz`.
 """
-function concatenate_fastx(inputs::Vector{String}; output_path::String)
+function concatenate_fastx(inputs::AbstractVector{<:AbstractString}; output_path::AbstractString, threads=get_default_threads(), force=false)
     if isempty(inputs)
         error("No input files provided for concatenation")
     end
@@ -1341,17 +1343,46 @@ function concatenate_fastx(inputs::Vector{String}; output_path::String)
         end
     end
     mkpath(dirname(output_path))
-    out_io = CodecZlib.GzipCompressorStream(open(output_path, "w"))
-    for f in inputs
-        if endswith(f, ".gz")
-            in_io = CodecZlib.GzipDecompressorStream(open(f, "r"))
-            write(out_io, read(in_io))
-            close(in_io)
-        else
-            write(out_io, read(f))
+    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") : output_path
+    tmp_out = out_plain * ".tmp"
+    cat_cmd = Sys.which("cat")
+    zcat_cmd = Sys.which("zcat")
+    gzip_cmd = Sys.which("gzip")
+    has_gz_inputs = any(endswith.(inputs, ".gz"))
+    use_system = cat_cmd !== nothing && (!has_gz_inputs || zcat_cmd !== nothing || gzip_cmd !== nothing)
+    if use_system
+        open(tmp_out, "w") do out_io
+            for f in inputs
+                cmd = if endswith(f, ".gz")
+                    if zcat_cmd !== nothing
+                        Cmd([zcat_cmd, f])
+                    else
+                        Cmd([gzip_cmd, "-cd", f])
+                    end
+                else
+                    Cmd([cat_cmd, f])
+                end
+                run(pipeline(cmd, stdout=out_io))
+            end
+        end
+    else
+        open(tmp_out, "w") do out_io
+            buffer = Vector{UInt8}(undef, 1 << 20)
+            for f in inputs
+                in_io = endswith(f, ".gz") ? CodecZlib.GzipDecompressorStream(open(f, "r")) : open(f, "r")
+                while true
+                    n = readbytes!(in_io, buffer)
+                    n == 0 && break
+                    write(out_io, view(buffer, 1:n))
+                end
+                close(in_io)
+            end
         end
     end
-    close(out_io)
+    mv(tmp_out, out_plain; force=true)
+    if endswith(output_path, ".gz")
+        Mycelia.gzip_file(out_plain; outfile=output_path, threads=threads, force=force, keep_input=false)
+    end
     return output_path
 end
 

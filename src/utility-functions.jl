@@ -1,36 +1,9 @@
-# --- Helper function to generate ellipse points ---
-function get_ellipse_points(x_coords, y_coords; scale=3.5)
-    if length(x_coords) < 3
-        return CairoMakie.Point2f[], Dict()
-    end
-    
-    cov_matrix = Statistics.cov(hcat(x_coords, y_coords))
-    mean_vec = [Statistics.mean(x_coords), Statistics.mean(y_coords)]
-    
-    eigen = LinearAlgebra.eigen(cov_matrix)
-    vals, vecs = eigen.values, eigen.vectors
-    
-    angle = atan(vecs[2, 2], vecs[1, 2])
-    major_axis = scale * sqrt(vals[2])
-    minor_axis = scale * sqrt(vals[1])
-    
-    t = range(0, 2π, length=100)
-    ellipse_x = major_axis * cos.(t)
-    ellipse_y = minor_axis * sin.(t)
-    
-    rotated_x = ellipse_x * cos(angle) - ellipse_y * sin(angle) .+ mean_vec[1]
-    rotated_y = ellipse_x * sin(angle) + ellipse_y * cos(angle) .+ mean_vec[2]
-    
-    points = [CairoMakie.Point2f(x, y) for (x, y) in zip(rotated_x, rotated_y)]
-    
-    anchors = Dict(
-        :top => points[argmax(rotated_y)],
-        :bottom => points[argmin(rotated_y)],
-        :left => points[argmin(rotated_x)],
-        :right => points[argmax(rotated_x)]
-    )
-    
-    return points, anchors
+function strip_gz_extension(name::AbstractString)
+    return replace(name, r"\.gz$" => "")
+end
+
+function nonempty_file(path::AbstractString)
+    return isfile(path) && filesize(path) > 0
 end
 
 """

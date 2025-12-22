@@ -168,6 +168,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - [x] Remove false tool integration claims from old planning docs (updated Sylph/Skani status)
    - [ ] Correct "89/89 tests passing" claim
    - [ ] Add warnings about commented-out code
+   - [ ] Keep function coverage audit current via `planning-docs/generate_function_coverage.jl` → `planning-docs/FUNCTION_COVERAGE_AUDIT.md`
 
 4. **Tool Wrapper Validation Updates (done)**:
    - QUAST/BUSCO wrappers covered by opt-in extended tests (simulated + phiX NCBI download) and default to outdirs derived from input FASTA stem.

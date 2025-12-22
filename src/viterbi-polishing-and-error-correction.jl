@@ -831,7 +831,7 @@ function process_fastq_record_with_polishing(;record, graph, likely_valid_kmers,
     record_sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
 
     kmer_type = Kmers.DNAKmer{assembly_k}
-    record_kmers = last.(collect(Kmers.EveryKmer{kmer_type}(record_sequence)))
+    record_kmers = collect(Kmers.FwDNAMers{assembly_k}(record_sequence))
     record_quality_scores = collect(FASTX.quality_scores(record))
     record_kmer_quality_scores = [record_quality_scores[i:i+assembly_k-1] for i in 1:length(record_quality_scores)-assembly_k+1]
     
@@ -1002,8 +1002,8 @@ function polish_fastq(;fastq, k=1)
     for record in records
         record_quality_scores = collect(FASTX.quality_scores(record))
         record_quality_score_slices = [record_quality_scores[i:i+assembly_k-1] for i in 1:length(record_quality_scores)-assembly_k+1]
-        sequence = BioSequences.LongDNA{2}(FASTX.sequence(record))
-        for ((i, kmer), kmer_base_qualities) in zip(Kmers.EveryKmer{kmer_type}(sequence), record_quality_score_slices)
+        sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
+        for (kmer, kmer_base_qualities) in zip(Kmers.FwDNAMers{assembly_k}(sequence), record_quality_score_slices)
             if haskey(all_kmer_quality_support, kmer)
                 all_kmer_quality_support[kmer] = all_kmer_quality_support[kmer] .+ kmer_base_qualities
             else
@@ -1037,9 +1037,9 @@ function polish_fastq(;fastq, k=1)
     transition_likelihoods = SparseArrays.spzeros(total_states, total_states)
     for record in records
         sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
-        sources = Kmers.EveryKmer{kmer_type}(sequence[1:end-1])
-        destinations = Kmers.EveryKmer{kmer_type}(sequence[2:end])
-        for ((source_i, source), (destination_i, destination)) in zip(sources, destinations)
+        sources = Kmers.FwDNAMers{assembly_k}(sequence[1:end-1])
+        destinations = Kmers.FwDNAMers{assembly_k}(sequence[2:end])
+        for (source, destination) in zip(sources, destinations)
             source_index = kmer_indices[source]
             destination_index = kmer_indices[destination]
             transition_likelihoods[source_index, destination_index] += 1

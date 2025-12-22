@@ -198,35 +198,4 @@ Command-line interface tools are planned but not yet implemented.
 
 ### API Reference
 
-Browse the [complete API documentation](api.md) for detailed function references and examples.
-
-## Getting Help
-
-If you encounter issues:
-
-1. Check the [FAQ](faq.md) for common issues
-2. Browse [example workflows](examples.md)
-3. Report bugs on [GitHub Issues](https://github.com/cjprybol/Mycelia/issues)
-
-## Memory and Performance
-
-For large-scale analyses:
-
-```julia
-# Check memory requirements
-estimated_memory = Mycelia.estimate_memory_usage(input_file="large_reads.fastq")
-println("Estimated memory needed: $(estimated_memory) GB")
-
-# Monitor memory during analysis
-Mycelia.with_memory_monitoring() do
-    result = Mycelia.Rhizomorph.assemble_genome("large_reads.fastq")
-end
-```
-
-## Contributing
-
-Mycelia is open-source and welcomes contributions! See our [development guide](contributing.md) for details.
-
----
-
-*Ready to dive deeper? Check out our [workflow tutorials](tutorials.md) for complete biological analyses with real datasets.*
+Browse the [Complete API Surface](api/all-functions.md) for detailed function references and examples.

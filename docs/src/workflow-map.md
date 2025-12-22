@@ -143,7 +143,7 @@ This mirrors patch 2’s capability section and ensures everything is covered fr
 
 ### 3.1 Auto-included modules (from `src/Mycelia.jl`)
 
-These bullets are the distilled, user-facing summary from patch 1; keep this section short here and point to `api/function-coverage.md` and the planning doc for details.
+These bullets are a concise, user-facing summary of the auto-included modules.
 
 - **Core graph + I/O**: `utility-functions.jl`, `alphabets.jl`, `constants.jl`, `fastx.jl`, `graph-core.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`
   → Exposed via Rhizomorph: `build_string_graph`, `build_fasta_graph`, `build_qualmer_graph`, path-finding & simplification utilities.
@@ -151,8 +151,3 @@ These bullets are the distilled, user-facing summary from patch 1; keep this sec
 - **Analytics & QC**: `quality-control-and-benchmarking.jl`, `performance-benchmarks.jl`, `kmer-analysis.jl`, `distance-metrics.jl`.
 - **Taxonomy & annotation**: `taxonomy-and-trees.jl`, `classification.jl`, `reference-databases.jl`, `annotation.jl`.
 - **Wrappers & orchestration**: `bioconda.jl`, `rclone.jl`, `slurm-sbatch.jl`, `neo4jl.jl`, `xam.jl`.
-
-> For full coverage counts and which functions are currently documented vs missing, see:
->
-> - [`api/function-coverage.md`](api/function-coverage.md)
-> - `planning-docs/WORKFLOW_COVERAGE_NOTES.md`

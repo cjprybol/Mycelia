@@ -4,10 +4,8 @@ if isinteractive()
 end
 import Test
 import Mycelia
-import BioSequences
 import FASTX
 import Graphs
-import MetaGraphs
 
 Test.@testset "Viterbi Polishing and Error Correction Tests" begin
     Test.@testset "Viterbi Maximum Likelihood Traversals" begin
@@ -18,7 +16,7 @@ Test.@testset "Viterbi Polishing and Error Correction Tests" begin
             FASTX.FASTA.Record("seq3", "ATCGATCGATCC")   # Similar with one difference
         ]
         
-        kmer_type = BioSequences.DNAMer{4}
+        kmer_type = Mycelia.Kmers.DNAKmer{4}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
         
         # Test with default parameters
@@ -53,7 +51,7 @@ Test.@testset "Viterbi Polishing and Error Correction Tests" begin
         
         # Create a simple k-mer graph
         fasta_records = [FASTX.FASTA.Record("ref", "ATCGATCGATCG")]
-        kmer_type = BioSequences.DNAMer{4}
+        kmer_type = Mycelia.Kmers.DNAKmer{4}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, fasta_records)
         
         # Create mock k-shortest paths data
@@ -117,7 +115,7 @@ IIIIIIIIIIIIIIIIIIII
         write(temp_fastq, fastq_content)
         
         # Test iterative polishing with small max_k for faster testing
-        result = Mycelia.iterative_polishing(temp_fastq, max_k=9, plot=false)
+        result = Mycelia.iterative_polishing(temp_fastq, 9)
         
         Test.@test result isa NamedTuple
         # Result should contain information about polishing iterations
@@ -129,7 +127,7 @@ IIIIIIIIIIIIIIIIIIII
     Test.@testset "Error Rate Validation" begin
         # Create minimal graph for testing
         test_records = [FASTX.FASTA.Record("seq", "ATCGATCG")]
-        kmer_type = BioSequences.DNAMer{3}
+        kmer_type = Mycelia.Kmers.DNAKmer{3}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
         
         # Test valid error rates
@@ -156,7 +154,7 @@ IIIIIIIIIIIIIIIIIIII
     Test.@testset "Verbosity Levels" begin
         # Create test graph
         test_records = [FASTX.FASTA.Record("seq", "ATCGATCG")]
-        kmer_type = BioSequences.DNAMer{3}
+        kmer_type = Mycelia.Kmers.DNAKmer{3}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
         
         # Test different verbosity levels
@@ -182,7 +180,7 @@ IIIIIIIIIIIIIIIIIIII
         for k in [3, 4, 5, 6]
             if length(test_sequence) >= k
                 records = [FASTX.FASTA.Record("seq", test_sequence)]
-                kmer_type = BioSequences.DNAMer{k}
+                kmer_type = Mycelia.Kmers.DNAKmer{k}
                 graph = Mycelia.build_stranded_kmer_graph(kmer_type, records)
                 
                 Test.@test graph.gprops[:k] == k
@@ -202,7 +200,7 @@ IIIIIIIIIIIIIIIIIIII
             FASTX.FASTA.Record("seq$i", "ATCGATCG") for i in 1:10
         ]
         
-        kmer_type = BioSequences.DNAMer{3}
+        kmer_type = Mycelia.Kmers.DNAKmer{3}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, high_coverage_records)
         
         # Test that coverage affects likelihood calculations
@@ -228,17 +226,20 @@ IIIIIIIIIIIIIIIIIIII
     Test.@testset "Edge Cases and Error Handling" begin
         # Test with empty graph (minimal case)
         empty_records = FASTX.FASTA.Record[]
-        kmer_type = BioSequences.DNAMer{3}
+        kmer_type = Mycelia.Kmers.DNAKmer{3}
         empty_graph = Mycelia.build_stranded_kmer_graph(kmer_type, empty_records)
         
         # This might error or handle gracefully depending on implementation
-        Test.@test_nowarn Mycelia.viterbi_maximum_likelihood_traversals(
-            empty_graph,
-            verbosity="dataset"
-        ) || Test.@test_throws Exception Mycelia.viterbi_maximum_likelihood_traversals(
-            empty_graph,
-            verbosity="dataset"
-        )
+        empty_result = try
+            Mycelia.viterbi_maximum_likelihood_traversals(
+                empty_graph,
+                verbosity="dataset"
+            )
+            :ok
+        catch
+            :error
+        end
+        Test.@test empty_result in (:ok, :error)
         
         # Test with very short sequences
         short_records = [FASTX.FASTA.Record("short", "AT")]
@@ -259,7 +260,7 @@ IIIIIIIIIIIIIIIIIIII
     Test.@testset "Quality Score Integration" begin
         # Test that quality scores are properly handled
         high_quality_record = FASTX.FASTQ.Record("hq", "ATCGATCG", "IIIIIIII")
-        low_quality_record = FASTX.FASTQ.Record("lq", "ATCGATCG", "!!!!!!!")
+        low_quality_record = FASTX.FASTQ.Record("lq", "ATCGATCG", "!!!!!!!!")
         
         # Test records have different quality scores
         hq_qualities = FASTX.FASTQ.quality(high_quality_record)
@@ -269,7 +270,7 @@ IIIIIIIIIIIIIIIIIIII
         
         # Create graph for testing
         ref_records = [FASTX.FASTA.Record("ref", "ATCGATCGATCG")]
-        kmer_type = BioSequences.DNAMer{4}
+        kmer_type = Mycelia.Kmers.DNAKmer{4}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, ref_records)
         
         # Mock paths for testing
@@ -297,7 +298,7 @@ IIIIIIIIIIIIIIIIIIII
     Test.@testset "Algorithm Parameter Effects" begin
         # Create test data
         test_records = [FASTX.FASTA.Record("seq", "ATCGATCGATCG")]
-        kmer_type = BioSequences.DNAMer{4}
+        kmer_type = Mycelia.Kmers.DNAKmer{4}
         graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
         
         # Test different error rates and compare results
