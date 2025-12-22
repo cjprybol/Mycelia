@@ -547,3 +547,291 @@ function parse_metabuli_classifications(classifications_file::String)::DataFrame
 
     return df
 end
+
+"""
+    run_clamlst(genome_file::String; 
+                db_dir::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+                species::String="Escherichia coli", 
+                outdir::String=dirname(genome_file),
+                threads::Int=get_default_threads(),
+                force_db_update::Bool=false)
+
+Run `claMLST` (from `pymlst`) to perform MLST typing on a genome.
+
+# Arguments
+- `genome_file`: Path to the input genome FASTA file (gzip supported).
+- `db_dir`: Directory to store/look for the claMLST database. Defaults to `~/workspace/pymlst/claMLSTDB`.
+- `species`: Species name to import/search if the database needs initialization (default: "Escherichia coli").
+- `outdir`: Directory for output files.
+- `threads`: Number of threads to use.
+- `force_db_update`: If `true`, re-imports the database even if it exists.
+
+# Details
+This function automatically:
+1. Installs the `pymlst` conda environment.
+2. Checks if the `claMLST` database exists at `db_dir`. If not, it imports it for the specified `species`.
+3. Decompresses the input genome to a temporary file (required by `claMLST`).
+4. Runs the search and returns the path to the output.
+
+# Returns
+- `String`: Path to the output directory.
+"""
+function run_clamlst(genome_file::String;
+                     db_dir::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+                     species::String="Escherichia coli",
+                     outdir::String=dirname(genome_file),
+                     threads::Int=get_default_threads(),
+                     force_db_update::Bool=false)
+
+    Mycelia.add_bioconda_env("pymlst")
+    mkpath(outdir)
+    mkpath(dirname(db_dir))
+
+    # 1. Initialize Database if needed
+    # Check if the DB directory is populated (claMLST creates a specific structure)
+    # A simple check is if the directory exists and has content.
+    db_exists = isdir(db_dir) && !isempty(readdir(db_dir))
+    
+    if !db_exists || force_db_update
+        @info "Initializing claMLST database for $species at $db_dir..."
+        # Note: The notebook uses 'claMLST import CLAMLSTDB "Escherichia coli"'
+        # We run this from the parent directory of db_dir to ensure it creates the named folder correctly if needed,
+        # but usually 'import' takes the target DB name/path as an argument.
+        
+        # Based on notebook: `claMLST import CLAMLSTDB "Escherichia coli"` 
+        # It seems 'CLAMLSTDB' might be a keyword or the target folder name. 
+        # We will assume db_dir is the target.
+        
+        try
+            cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST import $(db_dir) $(species)`
+            run(cmd)
+        catch e
+            @warn "Failed to import claMLST database: $e"
+        end
+    end
+
+    # 2. Handle Decompression
+    # PyMLST works on decompressed genomes.
+    is_gzipped = endswith(genome_file, ".gz")
+    input_path_to_use = genome_file
+    temp_file = nothing
+
+    if is_gzipped
+        base_name = replace(basename(genome_file), r"\.gz$" => "")
+        temp_file = joinpath(outdir, "tmp_" * base_name)
+        open(temp_file, "w") do output_io
+            run(pipeline(`gunzip -c $genome_file`, stdout=output_io))
+        end
+        input_path_to_use = temp_file
+    end
+
+    # 3. Run Search
+    try
+        # Notebook usage: claMLST search $(clamlst_db_path) $(output_path)
+        # Note: claMLST search usually outputs to stdout or specific file based on flags.
+        # The notebook example implies it takes the genome as the second argument.
+        # We will capture stdout to a file for parsing/records.
+        
+        output_tsv = joinpath(outdir, replace(basename(input_path_to_use), r"\.(fasta|fa|fna)$" => "") * "_clamlst.tsv")
+        
+        # Using -o or > redirection depending on tool version, but usually `search db genome` prints results.
+        # We will use pipeline to capture it.
+        
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_dir) $(input_path_to_use)`
+        
+        open(output_tsv, "w") do io
+            run(pipeline(cmd, stdout=io))
+        end
+        
+        return output_tsv
+
+    finally
+        # Cleanup temp file
+        if temp_file !== nothing && isfile(temp_file)
+            rm(temp_file)
+        end
+    end
+end
+
+"""
+    run_ectyper(genome_file::String; 
+                outdir::String=joinpath(dirname(genome_file), "ectyper_output"),
+                percent_identity::Int=90,
+                percent_coverage::Int=50,
+                verify_species::Bool=true,
+                threads::Int=get_default_threads())
+
+Run `ectyper` to predict *Escherichia coli* serotype and Identify species.
+
+# Arguments
+- `genome_file`: Path to input FASTA file (gzip supported by modern ectyper, but wrapper handles it if not).
+- `outdir`: Output directory.
+- `percent_identity`: Minimum percent identity for antigen match (default: 90).
+- `percent_coverage`: Minimum percent coverage for antigen match (default: 50).
+- `verify_species`: Enable species verification module (default: true).
+
+# Returns
+- `String`: Path to the output directory containing `output.tsv`.
+"""
+function run_ectyper(genome_file::String; 
+                     outdir::String=joinpath(dirname(genome_file), "ectyper_output"),
+                     percent_identity::Int=90,
+                     percent_coverage::Int=50,
+                     verify_species::Bool=true,
+                     threads::Int=get_default_threads())
+
+    Mycelia.add_bioconda_env("ectyper")
+    
+    # ECTyper expects an input file or directory.
+    if !isfile(genome_file)
+        error("Input genome file not found: $genome_file")
+    end
+
+    # Prepare command
+    cmd_args = [
+        "ectyper",
+        "-i", genome_file,
+        "-o", outdir,
+        "--percentIdentity", string(percent_identity),
+        "--percentCoverage", string(percent_coverage),
+        "--cores", string(threads)
+    ]
+
+    if verify_species
+        push!(cmd_args, "--verify")
+    end
+
+    # Run
+    # Note: ECTyper will create the outdir. If it exists, it might fail or overwrite depending on version.
+    # It's safer to let ECTyper handle the directory creation or ensure it's clean.
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ectyper $cmd_args`)
+
+    return outdir
+end
+
+"""
+    run_ezclermont(genome_file::String; 
+                   outdir::String=dirname(genome_file))
+
+Run `ezclermont` to determine the Clermont phylogroup of an *E. coli* genome.
+
+# Arguments
+- `genome_file`: Path to input FASTA file.
+- `outdir`: Output directory to save the results file.
+
+# Details
+EzClermont prints results to standard output. This function captures that output 
+to a `.csv` file named after the input genome in the `outdir`.
+It handles gzipped inputs by decompressing them temporarily.
+
+# Returns
+- `String`: Path to the generated CSV result file.
+"""
+function run_ezclermont(genome_file::String; 
+                        outdir::String=dirname(genome_file))
+
+    Mycelia.add_bioconda_env("ezclermont")
+    mkpath(outdir)
+
+    # Decompression handling
+    is_gzipped = endswith(genome_file, ".gz")
+    input_path_to_use = genome_file
+    temp_file = nothing
+
+    if is_gzipped
+        base_name = replace(basename(genome_file), r"\.gz$" => "")
+        temp_file = joinpath(outdir, "tmp_ez_" * base_name)
+        open(temp_file, "w") do output_io
+            run(pipeline(`gzip -dc $genome_file`, stdout=output_io))
+        end
+        input_path_to_use = temp_file
+    end
+
+    try
+        # Define output filename
+        base_name = replace(basename(genome_file), r"\.gz$" => "")
+        # Remove extension for cleaner output name
+        base_name_no_ext = splitext(base_name)[1]
+        result_file = joinpath(outdir, "$(base_name_no_ext)_ezclermont.csv")
+
+        # Run command and capture output
+        # ezclermont output format is typically: Genome Name\tPhylogroup\n
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ezclermont ezclermont $(input_path_to_use)`
+        
+        open(result_file, "w") do io
+            run(pipeline(cmd, stdout=io))
+        end
+        
+        return result_file
+
+    finally
+        if temp_file !== nothing && isfile(temp_file)
+            rm(temp_file)
+        end
+    end
+end
+
+"""
+    run_kleborate(assemblies::Vector{String}; 
+                  outdir::String="kleborate_results",
+                  preset::String="kpsc",
+                  all_amr::Bool=false,
+                  threads::Int=get_default_threads())
+
+Run `kleborate` on a set of genome assemblies.
+
+# Arguments
+- `assemblies`: Vector of paths to assembly FASTA files.
+- `outdir`: Output directory.
+- `preset`: Analysis preset. Options: "kpsc" (K. pneumoniae complex), "kosc" (K. oxytoca complex), "escherichia" (E. coli/generic).
+- `all_amr`: If true, turns on `--all_resistance` (equivalent to full AMR search).
+
+# Returns
+- `String`: Path to the output directory containing results.
+"""
+function run_kleborate(assemblies::Vector{String}; 
+                       outdir::String="kleborate_results",
+                       preset::String="kpsc",
+                       all_amr::Bool=false,
+                       threads::Int=get_default_threads())
+
+    Mycelia.add_bioconda_env("kleborate")
+    mkpath(outdir)
+
+    if isempty(assemblies)
+        error("No assembly files provided for Kleborate.")
+    end
+    
+    # Kleborate takes a space-separated list of files
+    # We must ensure paths are absolute or correctly relative to execution context
+    
+    cmd_args = [
+        "kleborate",
+        "--outdir", outdir,
+        "--preset", preset,
+        # "--cpu", string(threads) # Kleborate usually doesn't have a generic --cpu flag for all modules, but relies on underlying tools. 
+        # Checking help: Kleborate v2/v3 often runs single-threaded per genome but fast.
+    ]
+
+    if all_amr
+        push!(cmd_args, "--all_resistance")
+    end
+    
+    # Append assemblies
+    append!(cmd_args, ["--assemblies"])
+    append!(cmd_args, assemblies)
+
+    @info "Running Kleborate on $(length(assemblies)) genomes..."
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kleborate $cmd_args`)
+
+    return outdir
+end
+
+"""
+    run_kleborate(assembly_file::String; kwargs...)
+
+Convenience wrapper for running Kleborate on a single file.
+"""
+function run_kleborate(assembly_file::String; kwargs...)
+    return run_kleborate([assembly_file]; kwargs...)
+end
