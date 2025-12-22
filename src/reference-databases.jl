@@ -2914,6 +2914,71 @@ function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     # DataFrames.DataFrame(data, header)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a reference table from a BLAST database with taxonomy lineage and sequence lengths.
+
+# Arguments
+- `blastdb::String`: BLAST database name or path prefix.
+- `blastdbs_dir::String=Mycelia.DEFAULT_BLASTDB_PATH`: Directory where BLAST databases are stored.
+- `download_if_missing::Bool=false`: Download the BLAST database if not found locally.
+- `reference_fasta::String=""`: Optional path for exported FASTA (defaults to `<blastdb>.fna.gz` in `blastdbs_dir`).
+- `taxonomy_map_out::String=""`: Optional path for seqid→taxid mapping output.
+- `table_out::String=""`: Optional CSV output path for the reference table.
+- `arrow_out::String=""`: Optional Arrow output path for the reference table.
+- `force::Bool=false`: Regenerate outputs even if present.
+
+# Returns
+- `DataFrames.DataFrame` with sequence_id, taxid, lineage columns, and length.
+"""
+function prepare_blast_reference_table(;
+    blastdb::String,
+    blastdbs_dir::String=Mycelia.DEFAULT_BLASTDB_PATH,
+    download_if_missing::Bool=false,
+    reference_fasta::String="",
+    taxonomy_map_out::String="",
+    table_out::String="",
+    arrow_out::String="",
+    force::Bool=false
+)
+    db_path = if download_if_missing
+        Mycelia.download_blast_db(db=blastdb, dbdir=blastdbs_dir)
+    elseif occursin('/', blastdb) || occursin('\\', blastdb)
+        blastdb
+    else
+        joinpath(blastdbs_dir, blastdb)
+    end
+
+    if isempty(reference_fasta)
+        reference_fasta = joinpath(blastdbs_dir, "$(basename(db_path)).fna.gz")
+    end
+    Mycelia.blastdb_to_fasta(blastdb=db_path, outfile=reference_fasta, force=force)
+
+    if isempty(taxonomy_map_out)
+        taxonomy_map_out = db_path * ".seqid2taxid.txt.gz"
+    end
+    Mycelia.export_blast_db_taxonomy_table(path_to_db=db_path, outfile=taxonomy_map_out)
+    accession_table = Mycelia.load_blast_db_taxonomy_table(taxonomy_map_out)
+    lineage = Mycelia.taxids2taxonkit_summarized_lineage_table(unique(accession_table.taxid))
+    reference_table = DataFrames.leftjoin(accession_table, lineage, on=:taxid)
+
+    lengths = Dict{String,Int}()
+    for record in Mycelia.open_fastx(reference_fasta)
+        lengths[String(FASTX.identifier(record))] = length(FASTX.sequence(record))
+    end
+    reference_table[!, :length] = [get(lengths, id, missing) for id in reference_table.sequence_id]
+
+    if !isempty(table_out)
+        CSV.write(table_out, reference_table)
+    end
+    if !isempty(arrow_out)
+        Arrow.write(arrow_out, reference_table)
+    end
+
+    return reference_table
+end
+
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 

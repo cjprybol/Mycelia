@@ -678,8 +678,8 @@ Test.@testset "Long Read Metagenomic Assembly" begin
             meta_flye_record2 = FASTX.FASTA.Record("meta_flye_genome_2", meta_flye_genome2)
             Mycelia.write_fasta(outfile=metaflye_ref_fasta, records=[meta_flye_record1, meta_flye_record2])
 
-            # Simulate reads with lower coverage for this specific test
-            meta_flye_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=metaflye_ref_fasta, quantity="10x", quiet=true)
+            # Simulate reads with moderate coverage to ensure overlaps in tiny genomes
+            meta_flye_simulated_reads = Mycelia.simulate_pacbio_reads(fasta=metaflye_ref_fasta, quantity="30x", quiet=true)
             meta_flye_fastq = joinpath(dir, "meta_flye_reads.fq")
             run(pipeline(`gunzip -c $(meta_flye_simulated_reads)`, meta_flye_fastq))
 
@@ -689,7 +689,13 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 rm(metaflye_outdir, recursive=true)
             end
             try
-                result = Mycelia.run_metaflye(fastq=meta_flye_fastq, outdir=metaflye_outdir, read_type="pacbio-hifi")
+                result = Mycelia.run_metaflye(
+                    fastq=meta_flye_fastq,
+                    outdir=metaflye_outdir,
+                    genome_size="7k",
+                    read_type="pacbio-hifi",
+                    min_overlap=1000,
+                )
                 Test.@test result.outdir == metaflye_outdir
                 Test.@test result.assembly == joinpath(metaflye_outdir, "assembly.fasta")
                 Test.@test isfile(result.assembly)

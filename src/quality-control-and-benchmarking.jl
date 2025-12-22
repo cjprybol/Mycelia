@@ -325,6 +325,49 @@ function precision_recall_f1(true_labels, pred_labels)
 end
 
 """
+    presence_precision_recall_f1(truth_ids, predicted_ids)
+
+Compute presence/absence precision, recall, and F1 for two sets of identifiers.
+"""
+function presence_precision_recall_f1(truth_ids::AbstractVector, predicted_ids::AbstractVector)
+    truth_set = Set(truth_ids)
+    pred_set = Set(predicted_ids)
+    tp = length(intersect(truth_set, pred_set))
+    fp = length(setdiff(pred_set, truth_set))
+    fn = length(setdiff(truth_set, pred_set))
+    precision = tp == 0 ? 0.0 : tp / (tp + fp)
+    recall = tp == 0 ? 0.0 : tp / (tp + fn)
+    f1 = (precision + recall) == 0 ? 0.0 : 2 * precision * recall / (precision + recall)
+    return (tp=tp, fp=fp, fn=fn, precision=precision, recall=recall, f1=f1)
+end
+
+"""
+    evaluate_taxonomy_presence_metrics(reference_table, truth_ids, predicted_ids; ranks=String[])
+
+Compute presence/absence precision/recall/F1 for taxonomy ranks derived from a reference table.
+Returns a DataFrame with one row per rank.
+"""
+function evaluate_taxonomy_presence_metrics(reference_table::DataFrames.DataFrame,
+        truth_ids::AbstractVector,
+        predicted_ids::AbstractVector;
+        ranks::Vector{String}=String[])
+    if isempty(ranks)
+        ranks = ["species", "genus", "family", "order", "class", "phylum", "kingdom", "realm", "domain"]
+    end
+    ranks = filter(col -> col in DataFrames.names(reference_table), ranks)
+    metrics = DataFrames.DataFrame(rank=String[], precision=Float64[], recall=Float64[], f1=Float64[], tp=Int[], fp=Int[], fn=Int[])
+    truth_set = Set(String.(truth_ids))
+    pred_set = Set(String.(predicted_ids))
+    for rank in ranks
+        truth_taxa = unique(skipmissing(reference_table[reference_table.sequence_id .∈ Ref(truth_set), rank]))
+        pred_taxa = unique(skipmissing(reference_table[reference_table.sequence_id .∈ Ref(pred_set), rank]))
+        scores = presence_precision_recall_f1(String.(truth_taxa), String.(pred_taxa))
+        DataFrames.push!(metrics, (rank=rank, precision=scores.precision, recall=scores.recall, f1=scores.f1, tp=scores.tp, fp=scores.fp, fn=scores.fn))
+    end
+    return metrics
+end
+
+"""
     accuracy(true_labels, pred_labels)
 
 Returns the overall accuracy.
@@ -740,7 +783,11 @@ function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".check
     add_bioconda_env("checkm2")
     if !isdir(db_dir)
         mkpath(db_dir)
-        run(`$(CONDA_RUNNER) run -n checkm2 checkm2 database --download --path $(db_dir)`)
+        try
+            run(`$(CONDA_RUNNER) run -n checkm2 checkm2 database --download --path $(db_dir)`)
+        catch e
+            @warn "CheckM2 database download failed; CheckM2 will not work until the database is installed." exception=e
+        end
     end
     return db_dir
 end

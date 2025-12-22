@@ -49,6 +49,9 @@ try
 
     println("\n=== Binning Benchmark ===")
     include("07_binning_benchmark.jl")
+
+    println("\n=== Round-Trip Benchmark ===")
+    include("15_round_trip_benchmark.jl")
     
     elapsed = round(time() - start_time, digits=1)
     println("\n✅ All benchmarks completed in $elapsed seconds!")

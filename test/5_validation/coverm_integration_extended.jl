@@ -3,11 +3,9 @@ import Mycelia
 import DataFrames
 import StableRNGs
 
-"""
-CoverM integration test on a real (or fallback simulated) genome.
-Runs only when `MYCELIA_RUN_COVERM=true`, `MYCELIA_RUN_EXTENDED=true`, or `MYCELIA_RUN_ALL=true`.
-Uses: ART read simulation -> minimap2 mapping -> CoverM contig/genome.
-"""
+# CoverM integration test on a real (or fallback simulated) genome.
+# Runs only when `MYCELIA_RUN_COVERM=true`, `MYCELIA_RUN_EXTENDED=true`, or `MYCELIA_RUN_ALL=true`.
+# Uses: ART read simulation -> minimap2 mapping -> CoverM contig/genome.
 Test.@testset "CoverM integration (extended)" begin
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
     should_run = run_all ||
@@ -29,7 +27,7 @@ Test.@testset "CoverM integration (extended)" begin
                 reads = Mycelia.simulate_illumina_reads(
                     fasta=assembly,
                     read_count=1_000,
-                    len=150,
+                    read_length=150,
                     rndSeed=rand(rng, 0:typemax(Int)),
                     quiet=true
                 )
