@@ -577,7 +577,7 @@ end
 """
     run_metabuli_classify(reads1::AbstractString;
                           reads2::Union{Nothing,AbstractString}=nothing,
-                          dbdir::AbstractString,
+                          dbdir::Union{Nothing,AbstractString}=nothing,
                           outdir::AbstractString,
                           jobid::AbstractString,
                           read_platform::Symbol=:illumina,
@@ -591,10 +591,13 @@ Run Metabuli `classify` on short or long reads (or contigs) and return parsed re
 
 Creates `jobid_*` outputs under `outdir`, skipping execution when outputs already
 exist unless `force=true`.
+
+When `dbdir` is not provided, uses `METABULI_DB`/`METABULI_DB_PATH` or falls back
+to `$(Mycelia.DEFAULT_METABULI_DB_PATH)`.
 """
 function run_metabuli_classify(reads1::AbstractString;
         reads2::Union{Nothing,AbstractString}=nothing,
-        dbdir::AbstractString,
+        dbdir::Union{Nothing,AbstractString}=nothing,
         outdir::AbstractString,
         jobid::AbstractString,
         read_platform::Symbol=:illumina,
@@ -603,6 +606,10 @@ function run_metabuli_classify(reads1::AbstractString;
         max_ram_gb::Int=128,
         additional_args::Vector{String}=String[],
         force::Bool=false)
+
+    if dbdir === nothing || isempty(dbdir)
+        dbdir = Mycelia.get_metabuli_db_path()
+    end
 
     input_files = isnothing(reads2) ? (reads1,) : (reads1, reads2)
     for file in input_files

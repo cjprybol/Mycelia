@@ -2227,17 +2227,13 @@ Downloads and constructs a MetaDiGraph representation of the NCBI taxonomy datab
 - `path_to_taxdump`: Directory path where taxonomy files will be downloaded and extracted
 
 # Returns
-- `MetaDiGraph`: A directed graph where:
-  - Vertices represent taxa with properties:
-    - `:tax_id`: NCBI taxonomy identifier
-    - `:scientific_name`, `:common_name`, etc.: Name properties
-    - `:rank`: Taxonomic rank
-    - `:division_id`, `:division_cde`, `:division_name`: Division information
-    - `:genetic_code_id`, `:mitochondrial_genetic_code_id`: NCBI translation table IDs
+- `MetaGraphsNext.MetaGraph`: A directed graph where:
+  - Vertex labels are `tax_id` values
+  - Vertex metadata stores name, rank, division, and genetic code properties
   - Edges represent parent-child relationships in the taxonomy
 
 # Dependencies
-Requires internet connection for initial download. Uses DataFrames, MetaGraphs, and ProgressMeter.
+Requires internet connection for initial download. Uses DataFrames, MetaGraphsNext, and ProgressMeter.
 """
 function load_ncbi_taxonomy(;
         path_to_taxdump=joinpath(Mycelia.DEFAULT_BLASTDB_PATH, "taxdump")
@@ -2275,33 +2271,36 @@ function load_ncbi_taxonomy(;
             push!(names_dmp, row)
         end
     end
-    unique_tax_ids = sort(unique(names_dmp[!, "tax_id"]))
-
-    ncbi_taxonomy = MetaGraphs.MetaDiGraph(length(unique_tax_ids))
-    ProgressMeter.@showprogress for (index, group) in enumerate(collect(DataFrames.groupby(names_dmp, "tax_id")))
-        MetaGraphs.set_prop!(ncbi_taxonomy, index, :tax_id, group[1, "tax_id"])
+    ncbi_taxonomy = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph();
+        label_type=Int,
+        vertex_data_type=Dict{Symbol, Any},
+        edge_data_type=Nothing,
+        graph_data=Dict{Symbol, Any}(),
+    )
+    ProgressMeter.@showprogress for group in DataFrames.groupby(names_dmp, "tax_id")
+        tax_id = group[1, "tax_id"]
+        vertex_data = Dict{Symbol, Any}(:tax_id => tax_id)
         for row in DataFrames.eachrow(group)
             unique_name = isempty(row["unique_name"]) ? row["name_txt"] : row["unique_name"]
             # remove quotes since neo4j doesn't like them
             unique_name = replace(unique_name, '"' => "")
             # replace spaces and dashes with underscores
             name_class = Symbol(replace(replace(row["name_class"], r"\s+" => "-"), "-" => "_"))
-    #         name_class = Symbol(row["name_class"])
-            if haskey(MetaGraphs.props(ncbi_taxonomy, index), name_class)
-                current_value = MetaGraphs.get_prop(ncbi_taxonomy, index, name_class)
-                if (current_value isa Array) && !(unique_name in current_value)
-                    new_value = [current_value..., unique_name]
-                    MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, new_value)
-                elseif !(current_value isa Array) && (current_value != unique_name)
-                    new_value = [current_value, unique_name]
-                    MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, new_value)
+            if haskey(vertex_data, name_class)
+                current_value = vertex_data[name_class]
+                if (current_value isa Vector) && !(unique_name in current_value)
+                    vertex_data[name_class] = [current_value..., unique_name]
+                elseif !(current_value isa Vector) && (current_value != unique_name)
+                    vertex_data[name_class] = [current_value, unique_name]
                 else
                     continue
                 end
             else
-                MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, unique_name)
+                vertex_data[name_class] = unique_name
             end
         end
+        ncbi_taxonomy[tax_id] = vertex_data
     end
     divisions = Dict()
     for line in split(read(open("$(taxdump_out)/division.dmp"), String), "\t|\n")
@@ -2313,8 +2312,6 @@ function load_ncbi_taxonomy(;
     end
     divisions
 
-    node_2_taxid_map = map(index -> ncbi_taxonomy.vprops[index][:tax_id], Graphs.vertices(ncbi_taxonomy))
-    MetaGraphs.set_prop!(ncbi_taxonomy, :node_2_taxid_map, node_2_taxid_map)
     ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/nodes.dmp"), String), "\t|\n")
         if isempty(line)
             continue
@@ -2334,23 +2331,23 @@ function load_ncbi_taxonomy(;
             mitochondrial_genetic_code_id = parse(Int, mitochondrial_genetic_code_id_string)
 
             tax_id = parse(Int, tax_id_string)
-            lightgraphs_tax_ids = searchsorted(node_2_taxid_map, tax_id)
-            @assert length(lightgraphs_tax_ids) == 1
-            lightgraphs_tax_id = first(lightgraphs_tax_ids)
-
             parent_tax_id = parse(Int, parent_tax_id_string)
-            lightgraphs_parent_tax_ids = searchsorted(node_2_taxid_map, parent_tax_id)
-            @assert length(lightgraphs_parent_tax_ids) == 1
-            lightgraphs_parent_tax_id = first(lightgraphs_parent_tax_ids)
+            if !haskey(ncbi_taxonomy, tax_id)
+                ncbi_taxonomy[tax_id] = Dict{Symbol, Any}(:tax_id => tax_id)
+            end
+            if !haskey(ncbi_taxonomy, parent_tax_id)
+                ncbi_taxonomy[parent_tax_id] = Dict{Symbol, Any}(:tax_id => parent_tax_id)
+            end
 
-            Graphs.add_edge!(ncbi_taxonomy, lightgraphs_tax_id, lightgraphs_parent_tax_id)
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :rank, rank)
+            Graphs.add_edge!(ncbi_taxonomy, tax_id, parent_tax_id)
+            vertex_data = ncbi_taxonomy[tax_id]
+            vertex_data[:rank] = rank
             # these should probably be broken out as independent nodes!
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_id, division_id)
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_cde, divisions[division_id][:division_cde])
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_name, divisions[division_id][:division_name])
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :genetic_code_id, genetic_code_id)
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :mitochondrial_genetic_code_id, mitochondrial_genetic_code_id)
+            vertex_data[:division_id] = division_id
+            vertex_data[:division_cde] = divisions[division_id][:division_cde]
+            vertex_data[:division_name] = divisions[division_id][:division_name]
+            vertex_data[:genetic_code_id] = genetic_code_id
+            vertex_data[:mitochondrial_genetic_code_id] = mitochondrial_genetic_code_id
         end
     end
     # JLD2 graph killed a colab instance after 200Gb of size!
@@ -2360,20 +2357,20 @@ function load_ncbi_taxonomy(;
 end
 
 function _get_ncbi_tax_id_map(ncbi_taxonomy)
-    graph_props = MetaGraphs.props(ncbi_taxonomy)
-    if haskey(graph_props, :node_2_taxid_map)
-        return graph_props[:node_2_taxid_map]
+    graph_data = ncbi_taxonomy[]
+    if (graph_data isa AbstractDict) && haskey(graph_data, :node_2_taxid_map)
+        return graph_data[:node_2_taxid_map]
     end
-    node_2_taxid_map = map(index -> ncbi_taxonomy.vprops[index][:tax_id], Graphs.vertices(ncbi_taxonomy))
-    MetaGraphs.set_prop!(ncbi_taxonomy, :node_2_taxid_map, node_2_taxid_map)
+    node_2_taxid_map = sort!(collect(MetaGraphsNext.labels(ncbi_taxonomy)))
+    if graph_data isa AbstractDict
+        graph_data[:node_2_taxid_map] = node_2_taxid_map
+    end
     return node_2_taxid_map
 end
 
 function _ncbi_tax_id_to_vertex(ncbi_taxonomy, tax_id::Int)
-    node_2_taxid_map = _get_ncbi_tax_id_map(ncbi_taxonomy)
-    tax_id_positions = searchsorted(node_2_taxid_map, tax_id)
-    if length(tax_id_positions) == 1
-        return first(tax_id_positions)
+    if haskey(ncbi_taxonomy, tax_id)
+        return tax_id
     end
     return nothing
 end
@@ -2408,20 +2405,20 @@ function get_ncbi_genetic_code(ncbi_taxonomy, tax_id::Int; type::Symbol=:genomic
         return missing
     end
 
-    vertex_props = MetaGraphs.props(ncbi_taxonomy, vertex)
-    code = get(vertex_props, prop, missing)
+    vertex_data = ncbi_taxonomy[vertex]
+    code = get(vertex_data, prop, missing)
     if !inherit
         return code
     end
 
     while code === missing || code == 0
-        parents = Graphs.outneighbors(ncbi_taxonomy, vertex)
+        parents = collect(MetaGraphsNext.outneighbor_labels(ncbi_taxonomy, vertex))
         if isempty(parents)
             return code
         end
         vertex = first(parents)
-        vertex_props = MetaGraphs.props(ncbi_taxonomy, vertex)
-        code = get(vertex_props, prop, missing)
+        vertex_data = ncbi_taxonomy[vertex]
+        code = get(vertex_data, prop, missing)
     end
 
     return code

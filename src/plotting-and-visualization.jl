@@ -3670,7 +3670,9 @@ function plot_generalized_pcoa(
             )
         end
         
-        CairoMakie.rowgap!(legend_layout, 1, 20)
+        if !isempty(marker_map)
+            CairoMakie.rowgap!(legend_layout, 1, 20)
+        end
     end
 
     # 9. Save and Return

@@ -50,7 +50,7 @@ function create_test_genome_fasta(;length::Int=5386, seed::Int=42)
 end
 
 """
-    Mycelia.get_test_genome_fasta(;use_ncbi=true, accession="GCF_000819615.1") -> NamedTuple
+    Mycelia.get_test_genome_fasta(;use_ncbi=true, accession="GCF_000819615.1", outdir=nothing, cleanup_at_exit=true) -> NamedTuple
 
 Get a FASTA file for testing, with automatic fallback to simulated genome.
 
@@ -61,6 +61,8 @@ robust test infrastructure that works both with and without network access.
 # Arguments
 - `use_ncbi::Bool=true`: Whether to attempt NCBI download (set false to always use simulated)
 - `accession::String="GCF_000819615.1"`: NCBI assembly accession to download (default: phiX174)
+- `outdir::Union{Nothing,AbstractString}=nothing`: Optional download directory (defaults to a temporary directory)
+- `cleanup_at_exit::Bool=true`: Register cleanup to run at process exit
 
 # Returns
 A `NamedTuple` with the following fields:
@@ -95,31 +97,51 @@ sim_genome = Mycelia.get_test_genome_fasta(use_ncbi=false)
 - Default accession (GCF_000819615.1) is phiX174, a 5.4kb bacteriophage genome
 - Simulated fallback uses the same length as the default phiX174 genome (5386 bp)
 - Cleanup function is always provided, but checks if files exist before deletion
+- When `cleanup_at_exit=true`, cleanup is also registered via `atexit` to run on test completion
 
 # See Also
 - [`Mycelia.ncbi_genome_download_accession`](@ref): Download genomes from NCBI
 - [`Mycelia.create_test_genome_fasta`](@ref): Create simulated test genomes
 """
-function get_test_genome_fasta(;use_ncbi::Bool=true, accession::String="GCF_000819615.1")
+function get_test_genome_fasta(;
+    use_ncbi::Bool=true,
+    accession::String="GCF_000819615.1",
+    outdir::Union{Nothing,AbstractString}=nothing,
+    cleanup_at_exit::Bool=true
+)
     if use_ncbi
+        download_root = nothing
+        created_tmp = false
         try
+            created_tmp = outdir === nothing
+            download_root = created_tmp ? mktempdir() : outdir
+            outfolder = joinpath(download_root, accession)
             # Clean up any existing partial downloads
-            if isdir(accession)
-                rm(accession, recursive=true)
+            if isdir(outfolder)
+                rm(outfolder, recursive=true, force=true)
             end
             dataset = ncbi_genome_download_accession(
                 accession=accession, 
                 include_string="genome",
+                outdir=download_root,
                 max_attempts=3,
                 initial_retry_delay=10.0
             )
+            cleanup_target = created_tmp ? download_root : outfolder
+            cleanup_fn = () -> isdir(cleanup_target) && rm(cleanup_target, recursive=true, force=true)
+            if cleanup_at_exit
+                atexit(cleanup_fn)
+            end
             return (
                 fasta = dataset.genome,
                 source = :ncbi,
-                cleanup = () -> isdir(accession) && rm(accession, recursive=true),
-                dataset_dir = accession
+                cleanup = cleanup_fn,
+                dataset_dir = outfolder
             )
         catch e
+            if created_tmp && download_root !== nothing && isdir(download_root)
+                rm(download_root, recursive=true, force=true)
+            end
             @warn "NCBI download failed after all retries, using simulated genome" exception=e
         end
     end
@@ -127,10 +149,14 @@ function get_test_genome_fasta(;use_ncbi::Bool=true, accession::String="GCF_0008
     # Fallback to simulated genome
     # Use same length as phiX174 for consistency
     temp_fasta = create_test_genome_fasta(length=5386, seed=42)
+    cleanup_fn = () -> isfile(temp_fasta) && rm(temp_fasta, force=true)
+    if cleanup_at_exit
+        atexit(cleanup_fn)
+    end
     return (
         fasta = temp_fasta,
         source = :simulated,
-        cleanup = () -> isfile(temp_fasta) && rm(temp_fasta),
+        cleanup = cleanup_fn,
         dataset_dir = nothing
     )
 end

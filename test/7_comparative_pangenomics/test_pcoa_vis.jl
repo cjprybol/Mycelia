@@ -144,17 +144,24 @@ ellipses = [
     )
 ]
 
-# 5. Execute Visualization
-fig = Mycelia.plot_generalized_pcoa(
-    x_all, 
-    y_all, 
-    series_list;
-    species_map = species_map,
-    marker_map = marker_map,
-    ellipses = ellipses,
-    title = "Pseudomonas aeruginosa Outbreak Investigation\nPCoA - Pairwise ANI Distance",
-    output_file = "pseudomonas_outbreak_pcoa.svg"
-)
+example_dir = mktempdir()
+output_file = joinpath(example_dir, "pseudomonas_outbreak_pcoa.svg")
+try
+    # 5. Execute Visualization
+    fig = Mycelia.plot_generalized_pcoa(
+        x_all, 
+        y_all, 
+        series_list;
+        species_map = species_map,
+        marker_map = marker_map,
+        ellipses = ellipses,
+        title = "Pseudomonas aeruginosa Outbreak Investigation\nPCoA - Pairwise ANI Distance",
+        output_file = output_file
+    )
 
-# Display result
-CairoMakie.display(fig)
+    # Display result
+    CairoMakie.display(fig)
+finally
+    isfile(output_file) && rm(output_file; force=true)
+    rm(example_dir; recursive=true, force=true)
+end

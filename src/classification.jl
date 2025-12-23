@@ -632,6 +632,28 @@ end
 # Metabuli - Fast metagenomic classification
 # ============================================================================
 
+function get_metabuli_db_path(;require::Bool=true)
+    candidates = String[]
+    for key in ("METABULI_DB", "METABULI_DB_PATH")
+        value = get(ENV, key, "")
+        if !isempty(value)
+            push!(candidates, value)
+        end
+    end
+    push!(candidates, Mycelia.DEFAULT_METABULI_DB_PATH)
+
+    for path in candidates
+        if isdir(path)
+            return path
+        end
+    end
+
+    if require
+        error("Metabuli database directory not found. Set METABULI_DB/METABULI_DB_PATH or install at $(Mycelia.DEFAULT_METABULI_DB_PATH).")
+    end
+    return nothing
+end
+
 """
     run_metabuli_classify(;input_files, outdir, database_path=nothing,
                           seq_mode="1", threads=get_default_threads(),
@@ -643,7 +665,7 @@ Run Metabuli for fast metagenomic classification.
 - `input_files::Vector{String}`: Input sequence files (FASTA/FASTQ)
 - `outdir::String`: Output directory
 - `database_path::Union{Nothing, String}`: Path to Metabuli database. If not provided,
-  checks METABULI_DB environment variable, then falls back to `\$HOME/workspace/metabuli`
+  checks METABULI_DB/METABULI_DB_PATH and then falls back to `$(Mycelia.DEFAULT_METABULI_DB_PATH)`
 - `seq_mode::String`: Sequence mode - "1" for single-end, "2" for paired-end (default: "1")
 - `threads::Int`: Number of threads (default: get_default_threads())
 - `min_score::Union{Nothing, Float64}`: Minimum score threshold
@@ -679,17 +701,8 @@ function run_metabuli_classify(;
     end
 
     # Determine database path
-    if database_path === nothing
-        database_path = get(ENV, "METABULI_DB", nothing)
-        if database_path === nothing
-            home_db = joinpath(homedir(), "workspace", "metabuli")
-            if isdir(home_db)
-                database_path = home_db
-            else
-                error("No database_path provided and no database found at default location ($(home_db)). " *
-                      "Set METABULI_DB environment variable or provide database_path parameter.")
-            end
-        end
+    if database_path === nothing || isempty(database_path)
+        database_path = get_metabuli_db_path()
     end
     isdir(database_path) || error("Database directory not found: $(database_path)")
     seq_mode in ["1", "2", "3"] || error("Invalid seq_mode: $(seq_mode). Use '1' for single-end, '2' for paired-end interleaved, '3' for paired-end separate")

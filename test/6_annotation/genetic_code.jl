@@ -4,22 +4,29 @@
 
 import Test
 import Mycelia
-import MetaGraphs
+import MetaGraphsNext
 import Graphs
 
 Test.@testset "NCBI genetic code lookup" begin
-    ncbi_taxonomy = MetaGraphs.MetaDiGraph(3)
+    ncbi_taxonomy = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph();
+        label_type=Int,
+        vertex_data_type=Dict{Symbol, Any},
+        edge_data_type=Nothing,
+        graph_data=Dict{Symbol, Any}(),
+    )
 
-    MetaGraphs.set_prop!(ncbi_taxonomy, 1, :tax_id, 1)
-    MetaGraphs.set_prop!(ncbi_taxonomy, 2, :tax_id, 2)
-    MetaGraphs.set_prop!(ncbi_taxonomy, 3, :tax_id, 3)
-
-    MetaGraphs.set_prop!(ncbi_taxonomy, 1, :genetic_code_id, 11)
-    MetaGraphs.set_prop!(ncbi_taxonomy, 1, :mitochondrial_genetic_code_id, 5)
-    MetaGraphs.set_prop!(ncbi_taxonomy, 2, :genetic_code_id, 0)
-    MetaGraphs.set_prop!(ncbi_taxonomy, 2, :mitochondrial_genetic_code_id, 0)
-
-    MetaGraphs.set_prop!(ncbi_taxonomy, :node_2_taxid_map, [1, 2, 3])
+    ncbi_taxonomy[1] = Dict{Symbol, Any}(
+        :tax_id => 1,
+        :genetic_code_id => 11,
+        :mitochondrial_genetic_code_id => 5,
+    )
+    ncbi_taxonomy[2] = Dict{Symbol, Any}(
+        :tax_id => 2,
+        :genetic_code_id => 0,
+        :mitochondrial_genetic_code_id => 0,
+    )
+    ncbi_taxonomy[3] = Dict{Symbol, Any}(:tax_id => 3)
 
     Graphs.add_edge!(ncbi_taxonomy, 2, 1)
     Graphs.add_edge!(ncbi_taxonomy, 3, 2)

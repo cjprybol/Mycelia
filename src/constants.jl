@@ -1,6 +1,7 @@
 # const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
 
 const DEFAULT_BLASTDB_PATH = "$(homedir())/workspace/blastdb"
+const DEFAULT_METABULI_DB_PATH = "$(homedir())/workspace/metabuli"
 
 # fix new error
 # ENV["MAMBA_ROOT_PREFIX"] = joinpath(DEPOT_PATH[1], "conda", "3", "x86_64")

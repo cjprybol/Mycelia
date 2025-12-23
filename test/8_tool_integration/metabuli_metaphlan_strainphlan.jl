@@ -14,10 +14,8 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
     end
 
     workdir = mktempdir()
-    genomes = Mycelia.get_test_genome_fasta.(;
-        use_ncbi=true,
-        accession=["NC_001422.1", "GCF_000819615.1"],
-    )
+    accessions = ["GCF_000819615.1", "GCF_000005845.2"]
+    genomes = [Mycelia.get_test_genome_fasta(; use_ncbi=true, accession=acc) for acc in accessions]
 
     refs = [g.fasta for g in genomes if isfile(g.fasta) && filesize(g.fasta) > 0]
     if length(refs) < 2
@@ -29,10 +27,10 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
     rng = StableRNGs.StableRNG(42)
 
     illumina_a = Mycelia.simulate_illumina_reads(
-        fasta=refs[1]; coverage=10, read_length=150, paired=true, quiet=true, rng=rng
+        fasta=refs[1]; read_count=5000, read_length=150, paired=true, quiet=true, rndSeed=rand(rng, 0:typemax(Int))
     )
     illumina_b = Mycelia.simulate_illumina_reads(
-        fasta=refs[2]; coverage=5, read_length=150, paired=true, quiet=true, rng=rng
+        fasta=refs[2]; read_count=15000, read_length=150, paired=true, quiet=true, rndSeed=rand(rng, 0:typemax(Int))
     )
 
     r1 = Mycelia.concatenate_fastx(
@@ -52,9 +50,9 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
         # ------------------------------------------------------------------
         # Metabuli: short, long, and contig modes
         # ------------------------------------------------------------------
-        metabuli_db = get(ENV, "METABULI_DB", "")
-        if isempty(metabuli_db) || !isdir(metabuli_db)
-            @info "Skipping Metabuli tests; METABULI_DB not set"
+        metabuli_db = Mycelia.get_metabuli_db_path(require=false)
+        if metabuli_db === nothing
+            @info "Skipping Metabuli tests; database not found at $(Mycelia.DEFAULT_METABULI_DB_PATH). Set METABULI_DB/METABULI_DB_PATH to override."
         else
             Test.@testset "Metabuli classify (short/long/contig)" begin
                 short_out = mkpath(joinpath(workdir, "metabuli_short"))

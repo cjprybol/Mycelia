@@ -55,15 +55,52 @@ struct StrandWeightedEdgeData
 end
 
 """
-    weighted_graph_from_rhizomorph(source_graph; default_weight=1e-10)
+    edge_quality_weight(edge_data)
+
+Compute an edge weight from quality evidence when available.
+Falls back to evidence counts for non-quality edges.
+"""
+function edge_quality_weight(edge_data)
+    entries = collect_evidence_entries(edge_data.evidence)
+    if isempty(entries)
+        return 0.0
+    end
+
+    total = 0.0
+    quality_found = false
+
+    for entry in entries
+        if entry isa EdgeQualityEvidenceEntry
+            quality_found = true
+            combined = vcat(
+                decode_quality_scores(entry.from_quality),
+                decode_quality_scores(entry.to_quality)
+            )
+            if !isempty(combined)
+                total += Statistics.mean(combined)
+            end
+        end
+    end
+
+    if quality_found && total > 0
+        return total
+    end
+
+    return Float64(count_evidence(edge_data))
+end
+
+"""
+    weighted_graph_from_rhizomorph(source_graph; default_weight=1e-10, edge_weight=count_evidence)
 
 Convert a Rhizomorph evidence graph into a weighted graph suitable for
-probabilistic path algorithms. Edge weights are derived from evidence counts,
-and strand orientation is inferred from the first evidence entry when present.
+probabilistic path algorithms. Edge weights are derived from evidence counts
+by default, and strand orientation is inferred from the first evidence entry
+when present. Undirected graphs are expanded into bidirectional edges.
 """
 function weighted_graph_from_rhizomorph(
     source_graph::MetaGraphsNext.MetaGraph;
-    default_weight::Float64=1e-10
+    default_weight::Float64=1e-10,
+    edge_weight::Function=count_evidence,
 )
     labels = collect(MetaGraphsNext.labels(source_graph))
     label_type = isempty(labels) ? String : typeof(first(labels))
@@ -81,11 +118,17 @@ function weighted_graph_from_rhizomorph(
         weighted[label] = nothing
     end
 
+    is_directed = Graphs.is_directed(source_graph.graph)
+
     for (src, dst) in MetaGraphsNext.edge_labels(source_graph)
         edge_data = source_graph[src, dst]
-        weight = Float64(count_evidence(edge_data))
+        weight_value = Float64(edge_weight(edge_data))
+        weight = weight_value > 0 ? weight_value : default_weight
         strand = first_evidence_strand(edge_data.evidence; default=Forward)
-        weighted[src, dst] = StrandWeightedEdgeData(weight > 0 ? weight : default_weight, strand, strand)
+        weighted[src, dst] = StrandWeightedEdgeData(weight, strand, strand)
+        if !is_directed
+            weighted[dst, src] = StrandWeightedEdgeData(weight, strand, strand)
+        end
     end
 
     return weighted

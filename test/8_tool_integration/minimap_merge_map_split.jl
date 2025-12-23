@@ -185,8 +185,7 @@ Test.@testset "Minimap merge/map/split helpers" begin
             Test.@test length(res.sample_outputs) == 1
             Test.@test res.index_file !== nothing
             sample = first(res.sample_outputs)
-            expected_fastq_label = replace(basename(fq), r"\.gz$" => "")
-            expected_fastq_label = replace(expected_fastq_label, r"\.bam\.(?=(?:fast|fq))" => "."; count=1)
+            expected_fastq_label = Mycelia.build_output_label([fq])
             expected_bam = joinpath(dirname(fq), "$(expected_fastq_label).$(basename(res.index_file)).sorted.bam")
             Test.@test sample.output_bam == expected_bam
             Test.@test isfile(sample.output_bam)
@@ -282,26 +281,38 @@ Test.@testset "Minimap merge/map/split helpers" begin
                 gzip_read_map_tsv=false,
                 gzip_prefixed_fastqs=false,
                 run_mapping=true,
-                run_splitting=true
+                run_splitting=true,
+                keep_prefixed_fastqs=true,
+                force=true
             )
 
-            Test.@test joint_res.joint_read_map !== nothing
-            Test.@test isfile(joint_res.joint_read_map)
-            uuid_to_source = Dict{String,String}()
-            for (i, line) in enumerate(eachline(joint_res.joint_read_map))
-                i == 1 && continue
-                isempty(line) && continue
-                fields = split(line, '\t')
-                uuid_to_source[fields[3]] = fields[1]
-            end
-            for sample in joint_res.sample_outputs
-                Test.@test isfile(sample.output_bam)
-                reader = Mycelia.open_xam(sample.output_bam; parser=:samtools)
-                for record in reader
-                    uuid = XAM.SAM.tempname(record)
-                    Test.@test uuid_to_source[uuid] in sample.source_fastqs
+            try
+                Test.@test joint_res.joint_read_map !== nothing
+                Test.@test isfile(joint_res.joint_read_map)
+                uuid_to_source = Dict{String,String}()
+                for sample in joint_res.sample_outputs
+                    for map_path in sample.mapping_files
+                        for (i, line) in enumerate(eachline(map_path))
+                            i == 1 && continue
+                            isempty(line) && continue
+                            fields = split(line, '\t')
+                            uuid = strip(fields[end])
+                            source = strip(fields[1])
+                            uuid_to_source[uuid] = source
+                        end
+                    end
                 end
-                close(reader)
+                for sample in joint_res.sample_outputs
+                    Test.@test isfile(sample.output_bam)
+                    reader = Mycelia.open_xam(sample.output_bam; parser=:samtools)
+                    for record in reader
+                        uuid = strip(XAM.SAM.tempname(record))
+                        Test.@test uuid_to_source[uuid] in sample.source_fastqs
+                    end
+                    close(reader)
+                end
+            finally
+                isdir(joint_res.tmpdir) && rm(joint_res.tmpdir; recursive=true, force=true)
             end
 
             fasta_res = Mycelia.minimap_merge_map_and_split(
@@ -373,7 +384,8 @@ Test.@testset "Minimap merge/map/split helpers" begin
                         df = df[df.ismapped .& df.isprimary, :]
                         tuples = Tuple{String,String,Int,Int}[]
                         for row in eachrow(df)
-                            read_id = get(id_map, row.template, row.template)
+                            read_key = String(row.template)
+                            read_id = get(id_map, read_key, read_key)
                             push!(tuples, (read_id, row.reference, first(row.position), row.alignlength))
                         end
                         return sort(tuples)
@@ -385,9 +397,12 @@ Test.@testset "Minimap merge/map/split helpers" begin
                             i == 1 && continue
                             isempty(line) && continue
                             fields = split(line, '\t')
-                            source = fields[1]
-                            original = fields[2]
-                            uuid = fields[3]
+                            if length(fields) < 3
+                                continue
+                            end
+                            source = String(strip(fields[1]))
+                            original = String(strip(fields[2]))
+                            uuid = String(strip(fields[3]))
                             if !haskey(mapping_by_source, source)
                                 mapping_by_source[source] = Dict{String,String}()
                             end

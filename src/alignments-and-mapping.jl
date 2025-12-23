@@ -651,6 +651,7 @@ function minimap_map_with_index(;
     )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     fastq_inputs = fastq isa AbstractVector || fastq isa Tuple ? collect(fastq) : [fastq]
+    fastq_inputs = map(String, fastq_inputs)
     isempty(fastq_inputs) && error("Provide at least one FASTQ")
     fastq_str = join(fastq_inputs, " ")
     index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
@@ -695,13 +696,24 @@ function minimap_map_with_index(;
             """
         end
     else
-        map = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(index_file) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
+        map_args = String[
+            Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
+            "-t", string(threads),
+            "-x", string(mapping_type),
+            "-I", string(index_size),
+            "-a"
+        ]
+        append!(map_args, minimap_extra_args)
+        push!(map_args, index_file)
+        append!(map_args, fastq_inputs)
+        push!(map_args, "--split-prefix=$(outfile).tmp")
+        map_cmd = Cmd(map_args)
         if sorted
             sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -o $(outfile) -`
-            cmd = pipeline(map, sort_cmd)
+            cmd = pipeline(map_cmd, sort_cmd)
         else
             compress = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -`
-            cmd = pipeline(map, compress)
+            cmd = pipeline(map_cmd, compress)
         end
     end
     return (;cmd, outfile)
@@ -1346,7 +1358,7 @@ function minimap_merge_map_and_split(;
 
     read_id_column = read_id_strategy == :uuid ? :uuid : :new_read_id
 
-    split_cmds = Dict{String,Cmd}()
+    split_cmds = Dict{String,Base.AbstractCmd}()
     if run_splitting
         @assert isfile(merged_bam) "Merged BAM not found: $(merged_bam). Run mapping or supply existing BAM."
         Mycelia.add_bioconda_env("samtools")
