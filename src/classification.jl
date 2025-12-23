@@ -474,10 +474,84 @@ end
 # MetaPhlAn - Marker-based taxonomic profiling
 # ============================================================================
 
+function resolve_metaphlan_db_index(; db_index::Union{Nothing, String}=nothing)
+    if db_index !== nothing && !isempty(db_index)
+        return db_index, true
+    end
+    value = get(ENV, "METAPHLAN_DB_INDEX", "")
+    if !isempty(value)
+        return value, true
+    end
+    return nothing, false
+end
+
+function _metaphlan_db_present(db_dir::AbstractString, db_index::Union{Nothing, String}=nothing)
+    if !isdir(db_dir)
+        return false
+    end
+    if db_index !== nothing && !isempty(db_index)
+        return isfile(joinpath(db_dir, "$(db_index).pkl"))
+    end
+    return any(name -> endswith(name, ".pkl"), readdir(db_dir))
+end
+
+function download_metaphlan_db(;
+        db_dir::AbstractString=Mycelia.DEFAULT_METAPHLAN_DB_PATH,
+        db_index::Union{Nothing, String}=nothing,
+        force::Bool=false)
+    db_index_val, _ = resolve_metaphlan_db_index(db_index=db_index)
+    if !force && _metaphlan_db_present(db_dir, db_index_val)
+        return db_dir
+    end
+    mkpath(db_dir)
+    Mycelia.add_bioconda_env("metaphlan")
+    cmd_args = String["metaphlan", "--install", "--db_dir", db_dir]
+    if db_index_val !== nothing && !isempty(db_index_val)
+        append!(cmd_args, ["--index", db_index_val])
+    end
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan $(cmd_args)`)
+    return db_dir
+end
+
+function get_metaphlan_db_path(;
+        require::Bool=true,
+        db_dir::Union{Nothing, String}=nothing,
+        db_index::Union{Nothing, String}=nothing,
+        download::Bool=true)
+    resolved_dir = db_dir
+    if resolved_dir === nothing || isempty(resolved_dir)
+        value = get(ENV, "METAPHLAN_DB_DIR", "")
+        if isempty(value)
+            value = get(ENV, "METAPHLAN_DB_PATH", "")
+        end
+        if isempty(value)
+            value = get(ENV, "METAPHLAN_BOWTIE2DB", "")
+            if !isempty(value)
+                @warn "METAPHLAN_BOWTIE2DB is deprecated; use METAPHLAN_DB_DIR instead."
+            end
+        end
+        resolved_dir = isempty(value) ? Mycelia.DEFAULT_METAPHLAN_DB_PATH : value
+    end
+
+    db_index_val, _ = resolve_metaphlan_db_index(db_index=db_index)
+    if _metaphlan_db_present(resolved_dir, db_index_val)
+        return resolved_dir
+    end
+
+    if download
+        return download_metaphlan_db(db_dir=resolved_dir, db_index=db_index_val)
+    end
+
+    if require
+        error("MetaPhlAn database not found at $(resolved_dir). Set METAPHLAN_DB_DIR (preferred) or METAPHLAN_DB_PATH to override.")
+    end
+    return nothing
+end
+
 """
     run_metaphlan(;input_file, outdir, input_type="fastq",
                   nprocs=get_default_threads(), db_dir=nothing,
-                  unknown_estimation=true, stat_q=0.2,
+                  db_index=nothing, unknown_estimation=true, stat_q=0.2,
                   long_reads=false)
 
 Run MetaPhlAn for marker-based taxonomic profiling.
@@ -488,6 +562,7 @@ Run MetaPhlAn for marker-based taxonomic profiling.
 - `input_type::String`: Input type - "fastq", "fasta", "mapout", "sam" (default: "fastq")
 - `nprocs::Int`: Number of threads (default: get_default_threads())
 - `db_dir::Union{Nothing, String}`: Path to database directory (passed to MetaPhlAn `--db_dir`)
+- `db_index::Union{Nothing, String}`: MetaPhlAn database index (optional; uses METAPHLAN_DB_INDEX when set; otherwise downloads MetaPhlAn's default database)
 - `unknown_estimation::Bool`: Include unknown/unclassified fraction estimation (default: true)
 - `stat_q::Float64`: Quantile for robust average (default: 0.2)
 - `long_reads::Bool`: Use long-read mode (MetaPhlAn `--long_reads`, uses minimap2)
@@ -497,6 +572,10 @@ Named tuple with:
 - `outdir`: Output directory path
 - `profile_txt`: Path to taxonomic profile output
 - `mapout`: Path to mapping output (also returned as `bowtie2_out` for compatibility)
+
+If `db_dir` is not provided, the MetaPhlAn database is resolved from
+METAPHLAN_DB_DIR (preferred) or `$(Mycelia.DEFAULT_METAPHLAN_DB_PATH)` and
+downloaded automatically when missing.
 
 # Example
 ```julia
@@ -513,12 +592,18 @@ function run_metaphlan(;
         input_type::String="fastq",
         nprocs::Int=get_default_threads(),
         db_dir::Union{Nothing, String}=nothing,
+        db_index::Union{Nothing, String}=nothing,
         unknown_estimation::Bool=true,
         stat_q::Float64=0.2,
         long_reads::Bool=false)
 
     isfile(input_file) || error("Input file not found: $(input_file)")
     input_type in ["fastq", "fasta", "mapout", "sam"] || error("Invalid input_type: $(input_type)")
+
+    resolved_index, index_explicit = resolve_metaphlan_db_index(db_index=db_index)
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = get_metaphlan_db_path(db_index=resolved_index)
+    end
 
     Mycelia.add_bioconda_env("metaphlan")
     mkpath(outdir)
@@ -542,6 +627,10 @@ function run_metaphlan(;
         if !isnothing(db_dir)
             push!(cmd_args, "--db_dir")
             push!(cmd_args, db_dir)
+        end
+        if index_explicit
+            push!(cmd_args, "--index")
+            push!(cmd_args, resolved_index)
         end
 
         if !unknown_estimation
@@ -632,24 +721,99 @@ end
 # Metabuli - Fast metagenomic classification
 # ============================================================================
 
-function get_metabuli_db_path(;require::Bool=true)
-    candidates = String[]
+function _metabuli_db_present(db_dir::AbstractString)
+    if !isdir(db_dir)
+        return false
+    end
+    for marker in ("db.info", "info")
+        if isfile(joinpath(db_dir, marker))
+            return true
+        end
+    end
+    return false
+end
+
+function _resolve_metabuli_db_dir(db_root::AbstractString, db_name::AbstractString)
+    target = joinpath(db_root, db_name)
+    if _metabuli_db_present(target)
+        return target
+    end
+    candidates = filter(path -> _metabuli_db_present(path), readdir(db_root; join=true))
+    if !isempty(candidates)
+        named = filter(path -> occursin(db_name, basename(path)), candidates)
+        if length(named) == 1
+            return first(named)
+        elseif length(candidates) == 1
+            return first(candidates)
+        end
+    end
+    error("Metabuli database download completed but no valid db.info/info was found under $(db_root).")
+end
+
+function download_metabuli_db(;
+        db_name::AbstractString,
+        db_root::AbstractString=Mycelia.DEFAULT_METABULI_DB_PATH,
+        force::Bool=false,
+        keep_archive::Bool=false)
+    url = get(Mycelia.METABULI_DB_URLS, db_name, nothing)
+    if url === nothing
+        valid = join(collect(keys(Mycelia.METABULI_DB_URLS)), ", ")
+        error("Unknown Metabuli database '$(db_name)'. Available options: $(valid).")
+    end
+    mkpath(db_root)
+
+    if !force && _metabuli_db_present(joinpath(db_root, db_name))
+        return joinpath(db_root, db_name)
+    end
+
+    archive_name = basename(url)
+    archive_path = joinpath(db_root, archive_name)
+    if force || !isfile(archive_path) || filesize(archive_path) == 0
+        Mycelia.with_retry() do
+            Downloads.download(url, archive_path)
+        end
+    end
+    Mycelia.tar_extract(tarchive=archive_path, directory=db_root)
+    db_dir = _resolve_metabuli_db_dir(db_root, db_name)
+    if !keep_archive && isfile(archive_path)
+        rm(archive_path; force=true)
+    end
+    return db_dir
+end
+
+function get_metabuli_db_path(;
+        require::Bool=true,
+        db_name::Union{Nothing, String}=nothing,
+        db_root::Union{Nothing, String}=nothing,
+        download::Bool=true)
     for key in ("METABULI_DB", "METABULI_DB_PATH")
         value = get(ENV, key, "")
         if !isempty(value)
-            push!(candidates, value)
+            if isdir(value)
+                return value
+            end
+            if require
+                error("Metabuli database directory not found at $(value). Set METABULI_DB/METABULI_DB_PATH to a valid path.")
+            end
+            return nothing
         end
     end
-    push!(candidates, Mycelia.DEFAULT_METABULI_DB_PATH)
 
-    for path in candidates
-        if isdir(path)
-            return path
-        end
+    root_value = get(ENV, "METABULI_DB_ROOT", "")
+    resolved_root = db_root === nothing ? (isempty(root_value) ? Mycelia.DEFAULT_METABULI_DB_PATH : root_value) : db_root
+    name_value = get(ENV, "METABULI_DB_NAME", "")
+    resolved_name = db_name === nothing ? (isempty(name_value) ? Mycelia.DEFAULT_METABULI_DB_NAME : name_value) : db_name
+    candidate = joinpath(resolved_root, resolved_name)
+    if _metabuli_db_present(candidate)
+        return candidate
+    end
+
+    if download
+        return download_metabuli_db(db_name=resolved_name, db_root=resolved_root)
     end
 
     if require
-        error("Metabuli database directory not found. Set METABULI_DB/METABULI_DB_PATH or install at $(Mycelia.DEFAULT_METABULI_DB_PATH).")
+        error("Metabuli database directory not found. Set METABULI_DB/METABULI_DB_PATH or METABULI_DB_NAME (default: $(Mycelia.DEFAULT_METABULI_DB_NAME)).")
     end
     return nothing
 end
@@ -665,7 +829,9 @@ Run Metabuli for fast metagenomic classification.
 - `input_files::Vector{String}`: Input sequence files (FASTA/FASTQ)
 - `outdir::String`: Output directory
 - `database_path::Union{Nothing, String}`: Path to Metabuli database. If not provided,
-  checks METABULI_DB/METABULI_DB_PATH and then falls back to `$(Mycelia.DEFAULT_METABULI_DB_PATH)`
+  uses METABULI_DB/METABULI_DB_PATH or auto-downloads the named database under
+  METABULI_DB_ROOT (default: `$(Mycelia.DEFAULT_METABULI_DB_PATH)`). Set
+  METABULI_DB_NAME to choose a download (default: `$(Mycelia.DEFAULT_METABULI_DB_NAME)`).
 - `seq_mode::String`: Sequence mode - "1" for single-end, "2" for paired-end (default: "1")
 - `threads::Int`: Number of threads (default: get_default_threads())
 - `min_score::Union{Nothing, Float64}`: Minimum score threshold
@@ -779,15 +945,17 @@ function run_metabuli_build_db(;
         isfile(f) || error("Required taxonomy file not found: $(f)")
     end
 
-    db_info_file = joinpath(outdir, "db.info")
-
-    if !isfile(db_info_file)
+    if !_metabuli_db_present(outdir)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli build
             $(reference_fasta)
             $(taxonomy_dir)
             $(outdir)
             --threads $(threads)
             --split-num $(split_num)`)
+    end
+
+    if !_metabuli_db_present(outdir)
+        error("Metabuli database build completed but no valid db.info/info was found under $(outdir).")
     end
 
     return (; database_path=outdir)

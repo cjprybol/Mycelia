@@ -3,16 +3,33 @@
 # curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel lts
 # Usage:
 #   Core tests:                 julia --project=. -e "import Pkg; Pkg.test()"
-#   Extended tests:             MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Extended tests:             MYCELIA_RUN_EXTERNAL=true MYCELIA_RUN_BANDAGE_DOWNLOAD=true MYCELIA_RUN_SENTENCEPIECE_INTEGRATION=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Extended tests - shorthand: MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Extended tests - portable:  LD_LIBRARY_PATH="" MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
+#   Full pipeline tests:        MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Legacy alias (deprecated):  MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full pipeline - portable:   LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
 
 const MYCELIA_RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 const PROJECT_ROOT = dirname(@__DIR__)
+
+const TEST_ARTIFACT_DIRS = [
+    joinpath(PROJECT_ROOT, "busco_downloads"),
+    joinpath(PROJECT_ROOT, "busco_results"),
+    joinpath(PROJECT_ROOT, "test", "busco_downloads"),
+    joinpath(PROJECT_ROOT, "test", "busco_results"),
+]
+
+function cleanup_test_artifacts()
+    for path in TEST_ARTIFACT_DIRS
+        if isdir(path)
+            rm(path; recursive=true, force=true)
+        end
+    end
+    return nothing
+end
+
+atexit(cleanup_test_artifacts)
 
 # Helper function to include all test files in a directory
 function include_all_tests(dir)
@@ -52,8 +69,10 @@ end
 # #     "2_preprocessing_qc/alphabets.jl",
 # #     "2_preprocessing_qc/constants.jl",
 # #     "2_preprocessing_qc/dimensionality_reduction_and_clustering.jl",
+# #     "2_preprocessing_qc/diversity_sampling.jl",
 # #     "2_preprocessing_qc/preprocessing.jl",
 # #     "2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl",
+# #     "2_preprocessing_qc/saturation_plot_test.jl",
 # #     "2_preprocessing_qc/sequence-complexity.jl",
 # #     "2_preprocessing_qc/sequence_io.jl",
 # # )
@@ -68,140 +87,141 @@ end
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-# Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
-# include_all_tests(joinpath(@__DIR__, "4_assembly"))
-for file in [
-        # "test/4_assembly/aa_fasta_singlestrand_test.jl",
-        # "test/4_assembly/aa_fastq_singlestrand_test.jl",
-        # "test/4_assembly/aa_kmer_graph_test.jl",
-        # "test/4_assembly/aa_kmer_singlestrand_test.jl",
-        # "test/4_assembly/aa_qualmer_graph_test.jl",
-        # "test/4_assembly/aa_qualmer_singlestrand_test.jl",
-        # "test/4_assembly/amino_acid_fastq_test.jl",
-        # "test/4_assembly/assembly_merging.jl",
-        # "test/4_assembly/bandage_integration.jl",
-        # "test/4_assembly/basic_graph_tests.jl",
-        # "test/4_assembly/canonicalization_consistency_test.jl",
-        # "test/4_assembly/complete_assembly_workflow_test.jl",
-        # "test/4_assembly/comprehensive_correctness_tests.jl",
-        # "test/4_assembly/comprehensive_fixes_tests.jl",
-        # "test/4_assembly/comprehensive_type_stable_corrected_tests.jl",
-        # "test/4_assembly/comprehensive_type_stable_tests.jl",
-        # "test/4_assembly/dna_fasta_doublestrand_test.jl",
-        # "test/4_assembly/dna_fasta_singlestrand_test.jl",
-        # "test/4_assembly/dna_fastq_doublestrand_test.jl",
-        # "test/4_assembly/dna_fastq_singlestrand_test.jl",
-        # "test/4_assembly/dna_kmer_doublestrand_test.jl",
-        # "test/4_assembly/dna_kmer_singlestrand_test.jl",
-        # "test/4_assembly/dna_qualmer_doublestrand_test.jl",
-        # "test/4_assembly/dna_qualmer_graph_test.jl",
-        # "test/4_assembly/dna_qualmer_singlestrand_test.jl",
-        # "test/4_assembly/doublestrand_canonicalization_test.jl",
-        # "test/4_assembly/end_to_end_assembly_tests.jl", # broken with infinite loop somewhere?
-        # "test/4_assembly/end_to_end_graph_tests.jl",
-        # "test/4_assembly/evidence_functions_test.jl",
-        # "test/4_assembly/evidence_structures_test.jl",
-        # "test/4_assembly/gfa_io_next.jl",
-        # "test/4_assembly/graph_algorithms_next.jl",
-        # "test/4_assembly/graph_conversion_test.jl",
-        # "test/4_assembly/graph_query_test.jl",
-        # "test/4_assembly/iterative_assembly_tests.jl",
-        # "test/4_assembly/kmer_edge_data_test.jl",
-        # "test/4_assembly/kmer_vertex_data_test.jl",
-        # "test/4_assembly/megahit_phix_workflow.jl",
-        # "test/4_assembly/path_finding_test.jl",
-        # "test/4_assembly/probabilistic_algorithms_next.jl",
-        # "test/4_assembly/quality_functions_test.jl",
-        # "test/4_assembly/rhizomorph_bubbles_and_gfa_test.jl",
-        # "test/4_assembly/rhizomorph_canonical_path_test.jl",
-        # "test/4_assembly/rhizomorph_conversion_errors_test.jl",
-        # "test/4_assembly/rhizomorph_doublestrand_files_test.jl",
-        # "test/4_assembly/rhizomorph_doublestrand_traversal_test.jl",
-        # "test/4_assembly/rhizomorph_kmer_mode_support_test.jl",
-        # "test/4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl",
-        # "test/4_assembly/rhizomorph_qualmer_rc_evidence_test.jl",
-        # "test/4_assembly/rna_fasta_doublestrand_test.jl",
-        # "test/4_assembly/rna_fasta_singlestrand_test.jl",
-        # "test/4_assembly/rna_fastq_doublestrand_test.jl",
-        # "test/4_assembly/rna_fastq_singlestrand_test.jl",
-        # "test/4_assembly/rna_kmer_doublestrand_test.jl",
-        # "test/4_assembly/rna_kmer_graph_test.jl",
-        # "test/4_assembly/rna_kmer_singlestrand_test.jl",
-        # "test/4_assembly/rna_qualmer_doublestrand_test.jl",
-        # "test/4_assembly/rna_qualmer_graph_test.jl",
-        # "test/4_assembly/rna_qualmer_singlestrand_test.jl",
-        # "test/4_assembly/sequence_graphs_next.jl",
-        # "test/4_assembly/simplification_test.jl",
-        # "test/4_assembly/singlestrand_canonicalization_test.jl",
-        # "test/4_assembly/six_graph_hierarchy_tests.jl",
-        # "test/4_assembly/strand_specific_graph_construction_test.jl",
-        # "test/4_assembly/string-graph-helpers.jl",
-        # "test/4_assembly/string_graphs.jl",
-        # "test/4_assembly/string_ngram_singlestrand_quality_test.jl",
-        # "test/4_assembly/string_ngram_singlestrand_test.jl",
-        # "test/4_assembly/string_variable_singlestrand_quality_test.jl",
-        # "test/4_assembly/string_variable_singlestrand_test.jl",
-        # "test/4_assembly/tda_metrics_test.jl",
-        # "test/4_assembly/third_party_assemblers.jl",
-        # "test/4_assembly/third_party_assemblers_hybrid.jl",
-        "test/4_assembly/third_party_assemblers_legacy.jl",
-        "test/4_assembly/third_party_assemblers_long_read_isolate.jl",
-        "test/4_assembly/third_party_assemblers_long_read_metagenomic.jl",
-        "test/4_assembly/third_party_assemblers_plass_penguin.jl",
-        "test/4_assembly/third_party_assemblers_short_read_isolate.jl",
-        "test/4_assembly/third_party_assemblers_short_read_metagenomic.jl",
-        "test/4_assembly/unicode-graph-assembly.jl",
-        "test/4_assembly/variable_length_reduced_alphabet_test.jl",
-        "test/4_assembly/variable_length_singlestrand_test.jl",
-        "test/4_assembly/variable_length_strand_conversion_test.jl"
-    ]
-    include(joinpath(PROJECT_ROOT, file))
-end
+# # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
+# # include_all_tests(joinpath(@__DIR__, "4_assembly"))
+# for file in [
+#         "test/4_assembly/aa_fasta_singlestrand_test.jl",
+#         "test/4_assembly/aa_fastq_singlestrand_test.jl",
+#         "test/4_assembly/aa_kmer_graph_test.jl",
+#         "test/4_assembly/aa_kmer_singlestrand_test.jl",
+#         "test/4_assembly/aa_qualmer_graph_test.jl",
+#         "test/4_assembly/aa_qualmer_singlestrand_test.jl",
+#         "test/4_assembly/amino_acid_fastq_test.jl",
+#         "test/4_assembly/assembly_merging.jl",
+#         "test/4_assembly/bandage_integration.jl",
+#         "test/4_assembly/basic_graph_tests.jl",
+#         "test/4_assembly/canonicalization_consistency_test.jl",
+#         "test/4_assembly/complete_assembly_workflow_test.jl",
+#         "test/4_assembly/comprehensive_correctness_tests.jl",
+#         "test/4_assembly/comprehensive_fixes_tests.jl",
+#         "test/4_assembly/comprehensive_type_stable_corrected_tests.jl",
+#         "test/4_assembly/comprehensive_type_stable_tests.jl",
+#         "test/4_assembly/dna_fasta_doublestrand_test.jl",
+#         "test/4_assembly/dna_fasta_singlestrand_test.jl",
+#         "test/4_assembly/dna_fastq_doublestrand_test.jl",
+#         "test/4_assembly/dna_fastq_singlestrand_test.jl",
+#         "test/4_assembly/dna_kmer_doublestrand_test.jl",
+#         "test/4_assembly/dna_kmer_singlestrand_test.jl",
+#         "test/4_assembly/dna_qualmer_doublestrand_test.jl",
+#         "test/4_assembly/dna_qualmer_graph_test.jl",
+#         "test/4_assembly/dna_qualmer_singlestrand_test.jl",
+#         "test/4_assembly/doublestrand_canonicalization_test.jl",
+#         "test/4_assembly/end_to_end_assembly_tests.jl", # broken with infinite loop somewhere?
+#         "test/4_assembly/end_to_end_graph_tests.jl",
+#         "test/4_assembly/evidence_functions_test.jl",
+#         "test/4_assembly/evidence_structures_test.jl",
+#         "test/4_assembly/gfa_io_next.jl",
+#         "test/4_assembly/graph_algorithms_next.jl",
+#         "test/4_assembly/graph_conversion_test.jl",
+#         "test/4_assembly/graph_query_test.jl",
+#         "test/4_assembly/iterative_assembly_tests.jl",
+#         "test/4_assembly/kmer_edge_data_test.jl",
+#         "test/4_assembly/kmer_vertex_data_test.jl",
+#         "test/4_assembly/megahit_phix_workflow.jl",
+#         "test/4_assembly/path_finding_test.jl",
+#         "test/4_assembly/probabilistic_algorithms_next.jl",
+#         "test/4_assembly/quality_functions_test.jl",
+#         "test/4_assembly/rhizomorph_bubbles_and_gfa_test.jl",
+#         "test/4_assembly/rhizomorph_canonical_path_test.jl",
+#         "test/4_assembly/rhizomorph_conversion_errors_test.jl",
+#         "test/4_assembly/rhizomorph_doublestrand_files_test.jl",
+#         "test/4_assembly/rhizomorph_doublestrand_traversal_test.jl",
+#         "test/4_assembly/rhizomorph_kmer_mode_support_test.jl",
+#         "test/4_assembly/rhizomorph_qualmer_canonical_traversal_test.jl",
+#         "test/4_assembly/rhizomorph_qualmer_rc_evidence_test.jl",
+#         "test/4_assembly/rna_fasta_doublestrand_test.jl",
+#         "test/4_assembly/rna_fasta_singlestrand_test.jl",
+#         "test/4_assembly/rna_fastq_doublestrand_test.jl",
+#         "test/4_assembly/rna_fastq_singlestrand_test.jl",
+#         "test/4_assembly/rna_kmer_doublestrand_test.jl",
+#         "test/4_assembly/rna_kmer_graph_test.jl",
+#         "test/4_assembly/rna_kmer_singlestrand_test.jl",
+#         "test/4_assembly/rna_qualmer_doublestrand_test.jl",
+#         "test/4_assembly/rna_qualmer_graph_test.jl",
+#         "test/4_assembly/rna_qualmer_singlestrand_test.jl",
+#         "test/4_assembly/sequence_graphs_next.jl",
+#         "test/4_assembly/simplification_test.jl",
+#         "test/4_assembly/singlestrand_canonicalization_test.jl",
+#         "test/4_assembly/six_graph_hierarchy_tests.jl",
+#         "test/4_assembly/strand_specific_graph_construction_test.jl",
+#         "test/4_assembly/string-graph-helpers.jl",
+#         "test/4_assembly/string_graphs.jl",
+#         "test/4_assembly/string_ngram_singlestrand_quality_test.jl",
+#         "test/4_assembly/string_ngram_singlestrand_test.jl",
+#         "test/4_assembly/string_variable_singlestrand_quality_test.jl",
+#         "test/4_assembly/string_variable_singlestrand_test.jl",
+#         "test/4_assembly/tda_metrics_test.jl",
+#         "test/4_assembly/third_party_assemblers.jl",
+#         "test/4_assembly/third_party_assemblers_hybrid.jl",
+#         "test/4_assembly/third_party_assemblers_legacy.jl",
+#         "test/4_assembly/third_party_assemblers_long_read_isolate.jl",
+#         "test/4_assembly/third_party_assemblers_long_read_metagenomic.jl",
+#         "test/4_assembly/third_party_assemblers_plass_penguin.jl",
+#         "test/4_assembly/third_party_assemblers_short_read_isolate.jl",
+#         "test/4_assembly/third_party_assemblers_short_read_metagenomic.jl",
+#         "test/4_assembly/unicode-graph-assembly.jl",
+#         "test/4_assembly/variable_length_reduced_alphabet_test.jl",
+#         "test/4_assembly/variable_length_singlestrand_test.jl",
+#         "test/4_assembly/variable_length_strand_conversion_test.jl"
+#     ]
+#     include(joinpath(PROJECT_ROOT, file))
+# end
 
 # Stage 5 (validation): focused suites (all other external-heavy validation stays opt-in for now).
-include_all_tests(joinpath(@__DIR__, "5_validation")) # broken
-# for file in (
-#     # "5_validation/coverm_integration_extended.jl", # broken
-#     "5_validation/coverm_wrappers.jl",
-#     "5_validation/mosdepth_coverage_qc.jl",
-#     # "5_validation/quast_busco_wrappers_test.jl", # need to add Glob to test dependencies
-# )
-#     include(file)
+# include_all_tests(joinpath(@__DIR__, "5_validation")) # broken
+# for file in [
+#     # "5_validation/checkm_tools.jl",
+#     # "5_validation/coverm_integration_extended.jl",
+#     # "5_validation/coverm_wrappers.jl",
+#     # "5_validation/mosdepth_coverage_qc.jl",
+#     "5_validation/quast_busco_wrappers_test.jl",
+#     "5_validation/validation.jl",
+#     "5_validation/viterbi_polishing_and_error_correction.jl",
+# ]
+#     include(joinpath(@__DIR__, file))
 # end
 
 # Stage 6 (annotation)
-include_all_tests(joinpath(@__DIR__, "6_annotation")) # broken
+# include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # for file in (
-#     # "6_annotation/annotation.jl", # broken
-#     # "6_annotation/codon_optimization.jl", # broken
-#     # "6_annotation/genome_features.jl", # broken
+#     # "6_annotation/annotation.jl",
+#     # "6_annotation/codon_optimization.jl",
+#     # "6_annotation/genetic_code.jl",
+#     "6_annotation/genome_features.jl",
+#     "6_annotation/orf_callers.jl"
 # )
 #     include(joinpath(@__DIR__, file))
 # end
 
-# # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
-include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
+
+
+# # # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
+# # include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # for file in (
+#     "7_comparative_pangenomics/blastdb_integration.jl",
+#     "7_comparative_pangenomics/comparative_analyses.jl",
 #     "7_comparative_pangenomics/distance_metrics.jl",
+#     "7_comparative_pangenomics/multiomics_alignment.jl",
 #     "7_comparative_pangenomics/pangenome.jl",
 #     "7_comparative_pangenomics/pangenome_wrappers.jl",
 #     "7_comparative_pangenomics/panproteome.jl",
 #     "7_comparative_pangenomics/pantranscriptome.jl",
 #     "7_comparative_pangenomics/phylogenetics.jl",
 #     "7_comparative_pangenomics/sequence_classification.jl",
+#     "7_comparative_pangenomics/sequence_comparison.jl",
+#     "7_comparative_pangenomics/test_pcoa_vis.jl"
 # )
-#     include(file)
-# end
-
-# # Network/tooling-heavy suites (NCBI downloads, conda tools) are opt-in.
-# if MYCELIA_RUN_EXTERNAL
-#     for file in (
-#         # "7_comparative_pangenomics/blastdb_integration.jl", # broken
-#         "7_comparative_pangenomics/multiomics_alignment.jl",
-#         "7_comparative_pangenomics/sequence_comparison.jl",
-#     )
-#         include(file)
-#     end
+#     include(joinpath(@__DIR__, file))
 # end
 
 # metaphlan issue to fix
@@ -218,9 +238,12 @@ include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # sentencepiece isn't working
 include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
 # for file in (
+#     "8_tool_integration/autocycler.jl",
 #     "8_tool_integration/bioconda.jl",
 #     "8_tool_integration/binning_tools.jl",
 #     "8_tool_integration/classification_tools.jl",
+#     "8_tool_integration/foldseek.jl",
+#     "8_tool_integration/mash.jl",
 #     "8_tool_integration/metabuli_metaphlan_strainphlan.jl",
 #     "8_tool_integration/minimap_merge_map_split.jl",
 #     "8_tool_integration/pantools.jl",
@@ -230,3 +253,34 @@ include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
 # )
 #     include(joinpath(@__DIR__, file))
 # end
+
+# In-development suites (opt-in; keep list up to date for bulk enabling).
+# include_all_tests(joinpath(@__DIR__, "in_development"))
+# for file in (
+#     "in_development/cross_validation_tests.jl",
+#     "in_development/ensemble_assembly.jl",
+#     "in_development/hybrid_assembly.jl",
+#     "in_development/intelligent_assembly_tests.jl",
+#     "in_development/polishing.jl",
+#     "in_development/reinforcement_learning_mcts_tests.jl",
+#     "in_development/reinforcement_learning_tests.jl",
+#     "in_development/strain_resolution.jl",
+#     "in_development/test_reinforcement_learning_comparison.jl",
+#     "in_development/test_viroid_assembly_workflow.jl",
+#     "in_development/viterbi_next.jl",
+# )
+#     include(joinpath(@__DIR__, file))
+# end
+
+# Deprecated suites (opt-in).
+# for file in (
+#     "deprecated/sequence_graphs.jl",
+# )
+#     include(joinpath(@__DIR__, file))
+# end
+
+# Metadata/fixture helpers (manual).
+# include(joinpath(@__DIR__, "metadata/download_comebin_data.jl"))
+
+# Integration harness (manual).
+# include(joinpath(@__DIR__, "run_integration_tests.jl"))

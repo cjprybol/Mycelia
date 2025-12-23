@@ -17,8 +17,9 @@ println("Start time: $(Dates.now())")
 const RUN_EXTERNAL = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 const contigs_fasta = get(ENV, "MYCELIA_BINNING_CONTIGS", "")
 const depth_file = get(ENV, "MYCELIA_BINNING_DEPTH", "")
+const taxonomy_file = get(ENV, "MYCELIA_BINNING_TAXONOMY", "")
+const bam_path = get(ENV, "MYCELIA_BINNING_BAM_PATH", "")
 const coverage_table = get(ENV, "MYCELIA_BINNING_COVERAGE_TABLE", "")
-const marker_file = get(ENV, "MYCELIA_BINNING_MARKERS", "")
 const assembly_graph = get(ENV, "MYCELIA_BINNING_GRAPH", "")
 const mapping_file = get(ENV, "MYCELIA_BINNING_MAPPING", "")
 const genomes = filter(!isempty, strip.(split(get(ENV, "MYCELIA_BINNING_GENOMES", ""), ',')))
@@ -28,11 +29,9 @@ if RUN_EXTERNAL
     println("External binning benchmarks enabled.")
 
     if isfile(contigs_fasta) && isfile(depth_file)
-        println("\n--- VAMB / MetaBAT2 / TaxVAMB / Taxometer ---")
+        println("\n--- VAMB / MetaBAT2 ---")
         outdir_vamb = mktempdir()
         outdir_metabat = mktempdir()
-        outdir_taxvamb = mktempdir()
-        outdir_taxometer = mktempdir()
         try
             start = time()
             Mycelia.run_vamb(contigs_fasta=contigs_fasta, depth_file=depth_file, outdir=outdir_vamb)
@@ -41,22 +40,42 @@ if RUN_EXTERNAL
             start = time()
             Mycelia.run_metabat2(contigs_fasta=contigs_fasta, depth_file=depth_file, outdir=outdir_metabat)
             println("MetaBAT2 elapsed: $(round(time() - start, digits=2))s")
-
-            start = time()
-            Mycelia.run_taxvamb(contigs_fasta=contigs_fasta, depth_file=depth_file, outdir=outdir_taxvamb)
-            println("TaxVAMB elapsed: $(round(time() - start, digits=2))s")
-
-            start = time()
-            Mycelia.run_taxometer(contigs_fasta=contigs_fasta, depth_file=depth_file, outdir=outdir_taxometer)
-            println("Taxometer elapsed: $(round(time() - start, digits=2))s")
         finally
             rm(outdir_vamb; recursive=true, force=true)
             rm(outdir_metabat; recursive=true, force=true)
+        end
+    else
+        println("Skipping VAMB/MetaBAT2 (missing contigs/depth inputs).")
+    end
+
+    if isfile(contigs_fasta) && isfile(depth_file) && isfile(taxonomy_file)
+        println("\n--- TaxVAMB / Taxometer ---")
+        outdir_taxvamb = mktempdir()
+        outdir_taxometer = mktempdir()
+        try
+            start = time()
+            Mycelia.run_taxvamb(
+                contigs_fasta=contigs_fasta,
+                depth_file=depth_file,
+                taxonomy_file=taxonomy_file,
+                outdir=outdir_taxvamb
+            )
+            println("TaxVAMB elapsed: $(round(time() - start, digits=2))s")
+
+            start = time()
+            Mycelia.run_taxometer(
+                contigs_fasta=contigs_fasta,
+                depth_file=depth_file,
+                taxonomy_file=taxonomy_file,
+                outdir=outdir_taxometer
+            )
+            println("Taxometer elapsed: $(round(time() - start, digits=2))s")
+        finally
             rm(outdir_taxvamb; recursive=true, force=true)
             rm(outdir_taxometer; recursive=true, force=true)
         end
     else
-        println("Skipping VAMB/MetaBAT2/TaxVAMB/Taxometer (missing contigs/depth inputs).")
+        println("Skipping TaxVAMB/Taxometer (missing contigs/depth/taxonomy inputs).")
     end
 
     if isfile(contigs_fasta) && isfile(assembly_graph) && isfile(mapping_file)
@@ -80,31 +99,19 @@ if RUN_EXTERNAL
 
     if isfile(contigs_fasta) && isfile(coverage_table)
         println("\n--- GenomeFace ---")
-        outdir_genomeface = mktempdir()
-        try
-            start = time()
-            Mycelia.run_genomeface(
-                contigs_fasta=contigs_fasta,
-                coverage_table=coverage_table,
-                outdir=outdir_genomeface
-            )
-            println("GenomeFace elapsed: $(round(time() - start, digits=2))s")
-        finally
-            rm(outdir_genomeface; recursive=true, force=true)
-        end
+        println("Skipping GenomeFace; wrapper disabled until genomeface executable is available again.")
     else
-        println("Skipping GenomeFace (missing contigs/coverage inputs).")
+        println("Skipping GenomeFace (missing contigs/coverage inputs; wrapper disabled until executable is available).")
     end
 
-    if isfile(contigs_fasta) && isfile(coverage_table) && isfile(marker_file)
+    if isfile(contigs_fasta) && (!isempty(bam_path)) && (isfile(bam_path) || isdir(bam_path))
         println("\n--- COMEBin ---")
         outdir_comebin = mktempdir()
         try
             start = time()
             Mycelia.run_comebin(
                 contigs_fasta=contigs_fasta,
-                coverage_table=coverage_table,
-                marker_file=marker_file,
+                bam_path=bam_path,
                 outdir=outdir_comebin
             )
             println("COMEBin elapsed: $(round(time() - start, digits=2))s")
@@ -112,7 +119,7 @@ if RUN_EXTERNAL
             rm(outdir_comebin; recursive=true, force=true)
         end
     else
-        println("Skipping COMEBin (missing contigs/coverage/marker inputs).")
+        println("Skipping COMEBin (missing contigs/BAM inputs).")
     end
 
     if !isempty(genomes) && all(isfile, genomes)

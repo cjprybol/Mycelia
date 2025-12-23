@@ -2,6 +2,15 @@
 
 const DEFAULT_BLASTDB_PATH = "$(homedir())/workspace/blastdb"
 const DEFAULT_METABULI_DB_PATH = "$(homedir())/workspace/metabuli"
+const DEFAULT_METABULI_DB_NAME = "refseq_release"
+const METABULI_DB_URLS = Dict(
+    "gtdb+virus+human" => "https://metabuli.steineggerlab.workers.dev/gtdb+virus+human.tar.gz",
+    "gtdb" => "https://metabuli.steineggerlab.workers.dev/gtdb.tar.gz",
+    "refseq_prokaryote_virus" => "https://metabuli.steineggerlab.workers.dev/refseq_prokaryote_virus.tar.gz",
+    "refseq_release" => "https://metabuli.steineggerlab.workers.dev/refseq_release.tar.gz",
+    "refseq_virus" => "https://metabuli.steineggerlab.workers.dev/refseq_virus.tar.gz"
+)
+const DEFAULT_METAPHLAN_DB_PATH = "$(homedir())/workspace/metaphlan"
 
 # fix new error
 # ENV["MAMBA_ROOT_PREFIX"] = joinpath(DEPOT_PATH[1], "conda", "3", "x86_64")

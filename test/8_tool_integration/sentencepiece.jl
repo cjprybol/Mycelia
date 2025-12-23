@@ -18,6 +18,7 @@
 import Test
 import Mycelia
 import BioSequences
+import DataFrames
 
 Test.@testset "SentencePiece Integration Tests" begin
 
@@ -194,11 +195,11 @@ Test.@testset "SentencePiece Integration Tests" begin
     end
 
     # Conditional integration tests that require conda/sentencepiece to be installed
-    # These tests are skipped by default and can be enabled via environment variable
+    # These tests are skipped by default and can be enabled via MYCELIA_RUN_EXTERNAL
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
-    run_sentencepiece = run_all || get(ENV, "MYCELIA_RUN_SENTENCEPIECE_INTEGRATION", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
-    if run_all || run_sentencepiece
+    if run_external
         Test.@testset "SentencePiece Integration (Requires Installation)" begin
 
             Test.@testset "Environment Setup" begin
@@ -277,7 +278,7 @@ Test.@testset "SentencePiece Integration Tests" begin
                     result = Mycelia.train_sentencepiece_model_from_sequences(
                         sequences=seqs,
                         model_prefix=model_prefix,
-                        vocab_size=30,
+                        vocab_size=10,
                         model_type=:unigram
                     )
 
@@ -313,7 +314,7 @@ Test.@testset "SentencePiece Integration Tests" begin
                     result = Mycelia.train_sentencepiece_model_from_sequences(
                         sequences=seqs,
                         model_prefix=model_prefix,
-                        vocab_size=20
+                        vocab_size=16
                     )
 
                     # Test vocab size
@@ -325,10 +326,11 @@ Test.@testset "SentencePiece Integration Tests" begin
                     # Test vocab DataFrame
                     vocab_df = Mycelia.get_sentencepiece_vocab(result.model_file)
                     Test.@test vocab_df isa DataFrames.DataFrame
-                    Test.@test :id in names(vocab_df)
-                    Test.@test :piece in names(vocab_df)
-                    Test.@test :score in names(vocab_df)
-                    Test.@test nrow(vocab_df) == vocab_size
+                    vocab_names = Symbol.(names(vocab_df))
+                    Test.@test :id in vocab_names
+                    Test.@test :piece in vocab_names
+                    Test.@test :score in vocab_names
+                    Test.@test DataFrames.nrow(vocab_df) == vocab_size
 
                     # Test model loading
                     model_info = Mycelia.load_sentencepiece_model(result.model_file)
@@ -353,7 +355,7 @@ Test.@testset "SentencePiece Integration Tests" begin
                     result = Mycelia.train_sentencepiece_model_from_sequences(
                         sequences=seqs,
                         model_prefix=model_prefix,
-                        vocab_size=20
+                        vocab_size=16
                     )
 
                     # Test batch encoding
@@ -371,7 +373,7 @@ Test.@testset "SentencePiece Integration Tests" begin
                         model_file=result.model_file,
                         input=batch_pieces
                     )
-                    Test.@test decoded isa Vector{String}
+                    Test.@test decoded isa Vector{<:AbstractString}
                     Test.@test length(decoded) == 3
                     Test.@test decoded == batch_input
 
@@ -383,7 +385,7 @@ Test.@testset "SentencePiece Integration Tests" begin
         end
     else
         Test.@testset "SentencePiece Integration (Skipped)" begin
-            Test.@test_skip "Set MYCELIA_RUN_SENTENCEPIECE_INTEGRATION=true or MYCELIA_RUN_ALL=true to run integration tests"
+            Test.@test_skip "Set MYCELIA_RUN_EXTERNAL=true to run integration tests"
         end
     end
 end
@@ -394,4 +396,4 @@ end
 # 3. Modifying the test environment
 #
 # To run integration tests:
-# MYCELIA_RUN_SENTENCEPIECE_INTEGRATION=true julia --project=. -e 'include("test/8_tool_integration/sentencepiece.jl")'
+# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/sentencepiece.jl")'

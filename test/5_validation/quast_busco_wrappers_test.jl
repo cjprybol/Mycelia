@@ -4,8 +4,7 @@ import Mycelia
 """
 QUAST and BUSCO wrapper tests.
 Execution is opt-in for extended runs:
-- Enable QUAST with `MYCELIA_RUN_QUAST=true` or `MYCELIA_RUN_EXTENDED=true`.
-- Enable BUSCO with `MYCELIA_RUN_BUSCO=true` or `MYCELIA_RUN_EXTENDED=true` (uses auto-lineage by default).
+- Enable with `MYCELIA_RUN_EXTERNAL=true` (uses auto-lineage by default for BUSCO).
 Wrappers auto-install required Bioconda envs.
 """
 
@@ -15,11 +14,9 @@ Test.@testset "QUAST wrapper" begin
     Test.@test_throws ErrorException Mycelia.run_quast([tempname() * ".fasta"], reference="/nonexistent_ref.fasta")
 
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
-    should_run = run_all ||
-                 get(ENV, "MYCELIA_RUN_QUAST", "false") == "true" ||
-                 get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
-    if should_run
+    if run_external
         mktempdir() do _
             # Simulated genome smoke (portable)
             sim_info = Mycelia.get_test_genome_fasta(use_ncbi=false)
@@ -48,7 +45,7 @@ Test.@testset "QUAST wrapper" begin
             end
         end
     else
-        Test.@test_skip "QUAST run skipped (set MYCELIA_RUN_QUAST=true, MYCELIA_RUN_EXTENDED=true, or MYCELIA_RUN_ALL=true to enable)"
+        Test.@test_skip "QUAST run skipped (set MYCELIA_RUN_EXTERNAL=true to enable)"
     end
 end
 
@@ -65,11 +62,9 @@ Test.@testset "BUSCO wrapper" begin
     Test.@test Mycelia._parse_busco_dataset_list(sample_list_output) == ["bacteria_odb10", "archaea_odb10"]
 
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
-    should_run = run_all ||
-                 get(ENV, "MYCELIA_RUN_BUSCO", "false") == "true" ||
-                 get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
-    if should_run
+    if run_external
         mktempdir() do _
             genome_info = Mycelia.get_test_genome_fasta(use_ncbi=true, accession="GCF_000005845.2")
             asm = genome_info.fasta
@@ -109,6 +104,6 @@ Test.@testset "BUSCO wrapper" begin
             Test.@test isa(list_info.datasets, Vector{String})
         end
     else
-        Test.@test_skip "BUSCO run skipped (set MYCELIA_RUN_BUSCO=true, MYCELIA_RUN_EXTENDED=true, or MYCELIA_RUN_ALL=true to enable)"
+        Test.@test_skip "BUSCO run skipped (set MYCELIA_RUN_EXTERNAL=true to enable)"
     end
 end

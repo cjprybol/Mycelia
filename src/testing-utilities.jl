@@ -313,3 +313,198 @@ function create_test_aa_reads(reference_sequence::Union{String, BioSequences.Lon
     
     return records
 end
+
+const _BINNING_TEST_INPUTS_CACHE = Ref{Union{Nothing,NamedTuple}}(nothing)
+
+function _build_simulated_binning_contigs(;n_contigs::Int, contig_length::Int, seed::Int)
+    @assert n_contigs > 0 "n_contigs must be positive"
+    @assert contig_length > 0 "contig_length must be positive"
+    rng = StableRNGs.StableRNG(seed)
+    records = FASTX.FASTA.Record[]
+    length_jitter = max(1, Int(round(contig_length * 0.1)))
+    for i in 1:n_contigs
+        base_len = contig_length + rand(rng, -length_jitter:length_jitter)
+        seq_len = max(base_len, 5000)
+        seq = BioSequences.randdnaseq(rng, seq_len)
+        record_id = "genome_$(i)"
+        push!(records, FASTX.FASTA.Record(record_id, seq))
+    end
+    return records
+end
+
+function _write_simple_gfa_from_fasta(fasta::String, gfa::String)
+    mkpath(dirname(gfa))
+    open(gfa, "w") do io
+        println(io, "H\tVN:Z:1.0")
+        for record in Mycelia.open_fastx(fasta)
+            record_id = Mycelia.sanitize_fastx_identifier(String(FASTX.identifier(record)))
+            sequence = FASTX.sequence(String, record)
+            println(io, "S\t$(record_id)\t$(sequence)")
+        end
+    end
+    return gfa
+end
+
+function _summarize_bam_depth_jgi(bam::String, depth_file::String)
+    if !isfile(depth_file) || filesize(depth_file) == 0
+        Mycelia.add_bioconda_env("metabat2")
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metabat2 jgi_summarize_bam_contig_depths --outputDepth $(depth_file) $(bam)`)
+    end
+    @assert isfile(depth_file) "JGI depth file not created: $(depth_file)"
+    return depth_file
+end
+
+"""
+    prepare_binning_test_inputs(;outdir=nothing, n_contigs=4, contig_length=50_000,
+                                seed=7, depth_target=20.0, readset=:illumina_pe150,
+                                threads=get_default_threads())
+
+Generate simulated inputs for binning tool integration tests.
+
+Returns a named tuple with contigs, depth table, coverage table, assembly graph,
+mapping file, genomes list, and bin directories.
+"""
+function prepare_binning_test_inputs(;
+    outdir::Union{Nothing,String}=nothing,
+    n_contigs::Int=4,
+    contig_length::Int=50_000,
+    seed::Int=7,
+    depth_target::Real=20.0,
+    readset::Symbol=:illumina_pe150,
+    threads::Int=get_default_threads()
+)
+    inputs_dir = outdir === nothing ? mktempdir() : outdir
+    mkpath(inputs_dir)
+    if outdir === nothing
+        atexit(() -> isdir(inputs_dir) && rm(inputs_dir; recursive=true, force=true))
+    end
+
+    contigs_fasta = joinpath(inputs_dir, "contigs.fna")
+    if !isfile(contigs_fasta)
+        records = _build_simulated_binning_contigs(n_contigs=n_contigs, contig_length=contig_length, seed=seed)
+        Mycelia.write_fasta(outfile=contigs_fasta, records=records, gzip=false)
+    end
+
+    contig_ids = String[]
+    contig_lengths = Int[]
+    for record in Mycelia.open_fastx(contigs_fasta)
+        push!(contig_ids, String(FASTX.identifier(record)))
+        push!(contig_lengths, length(FASTX.sequence(record)))
+    end
+    reference_table = DataFrames.DataFrame(sequence_id=contig_ids, length=contig_lengths)
+
+    taxonomy_file = joinpath(inputs_dir, "taxonomy.tsv")
+    if !isfile(taxonomy_file)
+        open(taxonomy_file, "w") do io
+            for (idx, contig_id) in enumerate(contig_ids)
+                println(io, "$(contig_id)\tk__Bacteria;p__Simulated;g__Sim$(idx)")
+            end
+        end
+    end
+
+    sim_outdir = joinpath(inputs_dir, "simulation")
+    sim = Mycelia.simulate_metagenome_community(
+        reference_fasta=contigs_fasta,
+        reference_table=reference_table,
+        n_organisms=length(contig_ids),
+        depth_target=depth_target,
+        abundance_profile=:log_normal,
+        readset=readset,
+        outdir=sim_outdir,
+        selected_ids=contig_ids,
+        rng=StableRNGs.StableRNG(seed),
+        emit_truth_reads=false,
+        cleanup=false
+    )
+
+    if readset != :illumina_pe150
+        error("Binning test inputs currently require illumina_pe150 readset")
+    end
+    forward_reads = sim.reads.forward
+    reverse_reads = sim.reads.reverse
+    @assert forward_reads !== nothing "Forward reads not generated"
+    @assert reverse_reads !== nothing "Reverse reads not generated"
+
+    mem_gb = (Int(Sys.total_memory()) / 1e9 * 0.85)
+    index_result = Mycelia.minimap_index(
+        fasta=contigs_fasta,
+        mapping_type="sr",
+        mem_gb=mem_gb,
+        threads=threads
+    )
+    if !isfile(index_result.outfile) || filesize(index_result.outfile) == 0
+        run(index_result.cmd)
+    end
+
+    bam_path = joinpath(inputs_dir, "contigs.minimap2.sorted.bam")
+    mapping = Mycelia.minimap_map_with_index(
+        fasta=contigs_fasta,
+        mapping_type="sr",
+        fastq=(forward_reads, reverse_reads),
+        index_file=index_result.outfile,
+        mem_gb=mem_gb,
+        outfile=bam_path,
+        threads=threads,
+        sorted=true
+    )
+    if !isfile(mapping.outfile) || filesize(mapping.outfile) == 0
+        run(mapping.cmd)
+    end
+
+    depth_file = joinpath(inputs_dir, "jgi_depth.tsv")
+    _summarize_bam_depth_jgi(mapping.outfile, depth_file)
+
+    coverage_table = joinpath(inputs_dir, "coverm_contig.tsv")
+    if !isfile(coverage_table) || filesize(coverage_table) == 0
+        Mycelia.run_coverm_contig(
+            bam_files=[mapping.outfile],
+            output_tsv=coverage_table,
+            threads=threads,
+            quiet=true
+        )
+    end
+
+    assembly_graph = joinpath(inputs_dir, "assembly_graph.gfa")
+    if !isfile(assembly_graph)
+        _write_simple_gfa_from_fasta(contigs_fasta, assembly_graph)
+    end
+
+    genomes = collect(values(sim.per_genome_fastas))
+    bins_root = joinpath(inputs_dir, "bins")
+    bins_a = joinpath(bins_root, "bins_a")
+    bins_b = joinpath(bins_root, "bins_b")
+    mkpath(bins_a)
+    mkpath(bins_b)
+    for (idx, genome) in enumerate(genomes)
+        bin_name = "bin_$(idx).fna"
+        cp(genome, joinpath(bins_a, bin_name); force=true)
+        cp(genome, joinpath(bins_b, bin_name); force=true)
+    end
+
+    return (
+        outdir=inputs_dir,
+        contigs_fasta=contigs_fasta,
+        depth_file=depth_file,
+        coverage_table=coverage_table,
+        marker_file=nothing,
+        taxonomy_file=taxonomy_file,
+        assembly_graph=assembly_graph,
+        mapping_file=coverage_table,
+        genomes=genomes,
+        bins_dirs=[bins_a, bins_b]
+    )
+end
+
+"""
+    get_binning_test_inputs(;force=false, kwargs...)
+
+Cache and return binning integration test inputs.
+"""
+function get_binning_test_inputs(;force::Bool=false, kwargs...)
+    if !force && _BINNING_TEST_INPUTS_CACHE[] !== nothing
+        return _BINNING_TEST_INPUTS_CACHE[]
+    end
+    inputs = prepare_binning_test_inputs(;kwargs...)
+    _BINNING_TEST_INPUTS_CACHE[] = inputs
+    return inputs
+end

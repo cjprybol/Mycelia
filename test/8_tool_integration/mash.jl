@@ -4,6 +4,9 @@ import DataFrames
 import FASTX
 
 Test.@testset "Mash Tool Integration" begin
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+
     Test.@testset "Mash Output Parsing" begin
         dist_file = tempname() * ".tsv"
         screen_file = tempname() * ".tsv"
@@ -23,7 +26,7 @@ Test.@testset "Mash Tool Integration" begin
     end
 
     Test.@testset "Mash External Tool Integration" begin
-        if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+        if run_external
             workdir = mktempdir()
 
             ref_record = Mycelia.random_fasta_record(moltype=:DNA, seed=7, L=400)

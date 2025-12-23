@@ -1,8 +1,35 @@
+function _vamb_env_name()
+    return "mycelia_vamb"
+end
+
+function _ensure_vamb_installed()
+    env_name = _vamb_env_name()
+    if !_check_conda_env_exists(env_name)
+        run(`$(Mycelia.CONDA_RUNNER) create -y -n $(env_name) python=3.11 pip`)
+    end
+
+    vamb_ok = false
+    try
+        vamb_ok = success(`$(Mycelia.CONDA_RUNNER) run -n $(env_name) vamb --version`)
+    catch
+        vamb_ok = false
+    end
+    if !vamb_ok
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) python -m pip install --upgrade pip setuptools wheel`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) python -m pip install vamb`)
+    end
+
+    vamb_ok = success(`$(Mycelia.CONDA_RUNNER) run -n $(env_name) vamb --version`)
+    vamb_ok || error("VAMB installation failed in conda env: $(env_name)")
+    return env_name
+end
+
 """
     run_vamb(; contigs_fasta, depth_file, outdir, minfasta::Int=2000,
              threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
 
 Run VAMB to bin contigs using sequence composition and coverage.
+Uses `vamb bin default`.
 
 # Arguments
 - `contigs_fasta::String`: FASTA file with assembled contigs
@@ -25,19 +52,20 @@ function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
     mkpath(outdir)
 
-    add_bioconda_env("vamb")
-
+    env_name = _ensure_vamb_installed()
     cmd_args = String[
-        "vamb", "run",
+        "vamb", "bin", "default",
         "--fasta", contigs_fasta,
         "--jgi", depth_file,
         "--outdir", outdir,
         "--minfasta", string(minfasta),
-        "--threads", string(threads),
     ]
+    if !any(arg -> arg == "-p" || startswith(arg, "--threads"), extra_args)
+        append!(cmd_args, ["-p", string(threads)])
+    end
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n vamb $(cmd_args)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
 
     clusters_tsv = joinpath(outdir, "clusters.tsv")
     return (; outdir, clusters_tsv)
@@ -122,7 +150,7 @@ function run_metacoag(; contigs_fasta::String, assembly_graph::String,
 
     bins_tsv = joinpath(outdir, "bins.tsv")
     cmd_args = String[
-        "MetaCoAG",
+        "metacoag",
         "-a", contigs_fasta,
         "-g", assembly_graph,
         "-m", mapping_file,
@@ -136,17 +164,24 @@ function run_metacoag(; contigs_fasta::String, assembly_graph::String,
 end
 
 """
-    run_comebin(; contigs_fasta, coverage_table, marker_file, outdir,
-                 threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+    run_comebin(; contigs_fasta, bam_path, outdir,
+                 views::Int=6, threads::Int=get_default_threads(),
+                 temperature::Union{Nothing,Float64}=nothing,
+                 embedding_size::Int=2048, coverage_embedding_size::Int=2048,
+                 batch_size::Int=1024, extra_args::Vector{String}=String[])
 
 Run COMEBin (constraint-based binning).
 
 # Arguments
 - `contigs_fasta::String`: Contig FASTA
-- `coverage_table::String`: Coverage table across samples
-- `marker_file::String`: Marker gene annotations
+- `bam_path::String`: Path to BAM file or directory containing BAMs
 - `outdir::String`: Output directory
+- `views::Int`: Number of contrastive learning views
 - `threads::Int`: Number of threads (default: all CPUs)
+- `temperature::Union{Nothing,Float64}`: Optional loss temperature (defaults to COMEBin heuristic)
+- `embedding_size::Int`: Embedding size for combine network
+- `coverage_embedding_size::Int`: Embedding size for coverage network
+- `batch_size::Int`: Training batch size
 - `extra_args::Vector{String}`: Additional COMEBin arguments
 
 # Returns
@@ -154,29 +189,43 @@ Named tuple with:
 - `outdir`: Output directory
 - `bins_tsv`: Contig → bin assignments table
 """
-function run_comebin(; contigs_fasta::String, coverage_table::String,
-        marker_file::String, outdir::String, threads::Int=get_default_threads(),
-        extra_args::Vector{String}=String[])
+function run_comebin(; contigs_fasta::String, bam_path::String, outdir::String,
+        views::Int=6, threads::Int=get_default_threads(),
+        temperature::Union{Nothing,Float64}=nothing,
+        embedding_size::Int=2048, coverage_embedding_size::Int=2048,
+        batch_size::Int=1024, extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
-    isfile(coverage_table) || error("Coverage table not found: $(coverage_table)")
-    isfile(marker_file) || error("Marker file not found: $(marker_file)")
+    if !(isfile(bam_path) || isdir(bam_path))
+        error("BAM path not found: $(bam_path)")
+    end
+    if isdir(bam_path)
+        bam_files = filter(name -> endswith(lowercase(name), ".bam"), readdir(bam_path))
+        isempty(bam_files) && error("No BAM files found in directory: $(bam_path)")
+    end
     mkpath(outdir)
 
     add_bioconda_env("comebin")
 
-    bins_tsv = joinpath(outdir, "bins.tsv")
     cmd_args = String[
-        "comebin",
-        "-i", contigs_fasta,
-        "-c", coverage_table,
-        "-m", marker_file,
+        "run_comebin.sh",
+        "-a", contigs_fasta,
         "-o", outdir,
+        "-p", bam_path,
+        "-n", string(views),
         "-t", string(threads),
+        "-e", string(embedding_size),
+        "-c", string(coverage_embedding_size),
+        "-b", string(batch_size),
     ]
+    if temperature !== nothing
+        push!(cmd_args, "-l")
+        push!(cmd_args, string(temperature))
+    end
     append!(cmd_args, extra_args)
 
     run(`$(CONDA_RUNNER) run --live-stream -n comebin $(cmd_args)`)
+    bins_tsv = joinpath(outdir, "bins.tsv")
     return (; outdir, bins_tsv)
 end
 
@@ -303,84 +352,82 @@ end
 # -----------------------------------------------------------------------------
 
 """
-    run_taxometer(; contigs_fasta, depth_file, outdir, threads=get_default_threads(), extra_args=String[])
+    run_taxometer(; contigs_fasta, depth_file, taxonomy_file, outdir,
+                  threads=get_default_threads(), extra_args=String[])
 
-Run Taxometer for contig binning using coverage and composition.
+Run Taxometer for contig binning using coverage and taxonomy priors.
+Uses `vamb taxometer`.
 """
-function run_taxometer(; contigs_fasta::String, depth_file::String, outdir::String,
-        threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+function run_taxometer(; contigs_fasta::String, depth_file::String, taxonomy_file::String,
+        outdir::String, threads::Int=get_default_threads(),
+        extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
+    isfile(taxonomy_file) || error("Taxonomy file not found: $(taxonomy_file)")
     mkpath(outdir)
 
-    add_bioconda_env("taxometer")
-
+    env_name = _ensure_vamb_installed()
     cmd_args = String[
-        "taxometer",
-        "-i", contigs_fasta,
-        "-d", depth_file,
-        "-o", outdir,
-        "-t", string(threads),
+        "vamb", "taxometer",
+        "--fasta", contigs_fasta,
+        "--jgi", depth_file,
+        "--taxonomy", taxonomy_file,
+        "--outdir", outdir,
     ]
+    if !any(arg -> arg == "-p" || startswith(arg, "--threads"), extra_args)
+        append!(cmd_args, ["-p", string(threads)])
+    end
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n taxometer $(cmd_args)`)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
     return (; outdir)
 end
 
 """
-    run_taxvamb(; contigs_fasta, depth_file, outdir, threads=get_default_threads(), extra_args=String[])
+    run_taxvamb(; contigs_fasta, depth_file, taxonomy_file, outdir,
+                threads=get_default_threads(), extra_args=String[])
 
 Run TaxVAMB hybrid binning (VAMB with taxonomy priors).
+Uses `vamb bin taxvamb`.
 """
-function run_taxvamb(; contigs_fasta::String, depth_file::String, outdir::String,
-        threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+function run_taxvamb(; contigs_fasta::String, depth_file::String, taxonomy_file::String,
+        outdir::String, threads::Int=get_default_threads(),
+        extra_args::Vector{String}=String[])
 
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
+    isfile(taxonomy_file) || error("Taxonomy file not found: $(taxonomy_file)")
     mkpath(outdir)
 
-    add_bioconda_env("taxvamb")
-
+    env_name = _ensure_vamb_installed()
     cmd_args = String[
-        "taxvamb",
+        "vamb", "bin", "taxvamb",
         "--fasta", contigs_fasta,
         "--jgi", depth_file,
+        "--taxonomy", taxonomy_file,
         "--outdir", outdir,
-        "--threads", string(threads),
     ]
+    if !any(arg -> arg == "-p" || startswith(arg, "--threads"), extra_args)
+        append!(cmd_args, ["-p", string(threads)])
+    end
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n taxvamb $(cmd_args)`)
-    return (; outdir)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
+    clusters_tsv = joinpath(outdir, "clusters.tsv")
+    return (; outdir, clusters_tsv)
 end
 
 """
     run_genomeface(; contigs_fasta, coverage_table, outdir, threads=get_default_threads(), extra_args=String[])
 
 Run GenomeFace for binning with marker- and coverage-aware clustering.
+
+Note: This wrapper is disabled until the `genomeface` executable can be located again.
 """
 function run_genomeface(; contigs_fasta::String, coverage_table::String, outdir::String,
         threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
-
-    isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
-    isfile(coverage_table) || error("Coverage table not found: $(coverage_table)")
-    mkpath(outdir)
-
-    add_bioconda_env("genomeface")
-
-    cmd_args = String[
-        "genomeface",
-        "-i", contigs_fasta,
-        "-c", coverage_table,
-        "-o", outdir,
-        "-t", string(threads),
-    ]
-    append!(cmd_args, extra_args)
-
-    run(`$(CONDA_RUNNER) run --live-stream -n genomeface $(cmd_args)`)
-    return (; outdir)
+    error("GenomeFace wrapper disabled: genomeface executable unavailable. Re-enable when the binary is found.")
 end
 
 """

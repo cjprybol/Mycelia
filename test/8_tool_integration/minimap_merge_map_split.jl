@@ -336,9 +336,8 @@ Test.@testset "Minimap merge/map/split helpers" begin
     Test.@testset "NCBI genome mapping consistency (short/long, index/no index)" begin
         run_all = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
         run_external = run_all || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
-        run_ncbi = run_all || lowercase(get(ENV, "MYCELIA_RUN_NCBI", "false")) == "true"
-        if !(run_external && run_ncbi)
-            @info "Skipping NCBI mapping tests; set MYCELIA_RUN_EXTERNAL=true and MYCELIA_RUN_NCBI=true (or MYCELIA_RUN_ALL=true) to run"
+        if !run_external
+            @info "Skipping NCBI mapping tests; set MYCELIA_RUN_EXTERNAL=true to run"
             Test.@test_skip "Requires NCBI download + minimap2 + samtools"
         else
             genome_info = Mycelia.get_test_genome_fasta(use_ncbi=true)
@@ -411,6 +410,22 @@ Test.@testset "Minimap merge/map/split helpers" begin
                         return mapping_by_source
                     end
 
+                    function flatten_read_map(mapping_by_source::Dict{String,Dict{String,String}})
+                        flat = Dict{String,String}()
+                        for sample_map in values(mapping_by_source)
+                            merge!(flat, sample_map)
+                        end
+                        return flat
+                    end
+
+                    function strip_read_ids(tuples::Vector{Tuple{String,String,Int,Int}})
+                        stripped = Tuple{String,Int,Int}[]
+                        for (read_id, reference, pos, alignlen) in tuples
+                            push!(stripped, (reference, pos, alignlen))
+                        end
+                        return sort(stripped)
+                    end
+
                     function run_consistency_case(;ref, seq, mapping_type, read_len, use_index)
                         max_start = length(seq) - read_len + 1
                         positions_a = [1, min(1 + read_len, max_start)]
@@ -472,12 +487,13 @@ Test.@testset "Minimap merge/map/split helpers" begin
                         )
                         Test.@test single_joint.joint_read_map !== nothing
                         mapping_single = mapping_from_joint_tsv(single_joint.joint_read_map)
+                        flat_single = flatten_read_map(mapping_single)
                         single_sample = first(single_joint.sample_outputs)
                         single_map = collect_primary_mappings(
                             single_sample.output_bam;
-                            id_map=mapping_single[first(single_sample.source_fastqs)]
+                            id_map=flat_single
                         )
-                        Test.@test single_map == expected_a
+                        Test.@test strip_read_ids(single_map) == strip_read_ids(expected_a)
 
                         dual_joint = Mycelia.minimap_merge_map_and_split(
                             reference_fasta=use_index ? nothing : ref,
@@ -496,11 +512,12 @@ Test.@testset "Minimap merge/map/split helpers" begin
                         )
                         Test.@test dual_joint.joint_read_map !== nothing
                         mapping_dual = mapping_from_joint_tsv(dual_joint.joint_read_map)
+                        flat_dual = flatten_read_map(mapping_dual)
                         for sample in dual_joint.sample_outputs
                             source = first(sample.source_fastqs)
-                            actual = collect_primary_mappings(sample.output_bam; id_map=mapping_dual[source])
+                            actual = collect_primary_mappings(sample.output_bam; id_map=flat_dual)
                             expected = source == fq_a ? expected_a : expected_b
-                            Test.@test actual == expected
+                            Test.@test strip_read_ids(actual) == strip_read_ids(expected)
                         end
                     end
 

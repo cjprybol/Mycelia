@@ -314,22 +314,15 @@ Test.@testset "Classification Tools Integration Tests" begin
 
         if RUN_EXTERNAL
             Test.@testset "Metabuli full execution" begin
-                # Note: Full Metabuli testing requires a pre-built database
-                # which can be several GB. This test is skipped unless a database
-                # path is provided via environment variable or default location exists.
-
-                db_path = Mycelia.get_metabuli_db_path(require=false)
-                if db_path === nothing
-                    @info "Skipping Metabuli classify test; database not found at $(Mycelia.DEFAULT_METABULI_DB_PATH). Set METABULI_DB/METABULI_DB_PATH to override."
-                    return
-                end
+                # Use the virus database for unit testing to avoid larger downloads.
+                db_path = Mycelia.get_metabuli_db_path(db_name="refseq_virus")
                 workdir = mktempdir()
 
                 try
                     # Download real genome (with fallback to simulated if NCBI unavailable)
                     test_genome_info = Mycelia.get_test_genome_fasta(
                         use_ncbi=true,
-                        accession="GCF_000005845.2"  # E. coli K-12 MG1655
+                        accession="GCF_000819615.1"  # phiX174 (virus)
                     )
                     test_fasta = test_genome_info.fasta
 

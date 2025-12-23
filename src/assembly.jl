@@ -586,6 +586,439 @@ function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_
 end
 
 # ============================================================================
+# Hybrid/Plasmid Assembly and Contig Reorientation
+# ============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Install the Hybracter databases in `db_dir` if missing.
+
+# Arguments
+- `db_dir::AbstractString`: Directory to store the databases.
+
+# Keywords
+- `force::Bool=false`: If true, re-download and overwrite the database directory.
+
+# Returns
+- `String`: Path to the database directory.
+"""
+function install_hybracter_db(db_dir::AbstractString; force::Bool=false)
+    db_dir = abspath(String(db_dir))
+    if isdir(db_dir) && !force && !isempty(readdir(db_dir))
+        @info "Hybracter database already present; skipping download." db_dir
+        return db_dir
+    end
+    if force && isdir(db_dir)
+        rm(db_dir; recursive=true, force=true)
+    end
+    mkpath(db_dir)
+    Mycelia.add_bioconda_env("hybracter")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hybracter hybracter install --databases $(db_dir)`)
+    return db_dir
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Hybracter hybrid assembly for a single isolate with long and short reads.
+
+# Arguments
+- `long_reads::AbstractString`: Long read FASTQ file.
+- `read1::AbstractString`: Short read R1 FASTQ file.
+- `read2::AbstractString`: Short read R2 FASTQ file.
+- `chrom_size::Int`: Estimated chromosome size (bp).
+
+# Keywords
+- `sample_name::AbstractString`: Sample identifier used in Hybracter outputs.
+- `outdir::AbstractString`: Output directory for the run.
+- `db_dir::Union{Nothing,AbstractString}=nothing`: Database directory (downloaded if missing).
+- `threads::Int=get_default_threads()`: Thread count.
+- `extra_args::Vector{String}=String[]`: Additional Hybracter CLI arguments.
+- `force::Bool=false`: If true, re-run and overwrite existing outputs.
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Output directory.
+- `sample_dir::String`: Sample subdirectory within the output directory.
+- `summary_tsv::String`: Summary TSV path.
+- `final_fasta::String`: Final assembly FASTA path.
+"""
+function run_hybracter_hybrid_single(long_reads::AbstractString,
+                                     read1::AbstractString,
+                                     read2::AbstractString,
+                                     chrom_size::Int;
+                                     sample_name::AbstractString,
+                                     outdir::AbstractString,
+                                     db_dir::Union{Nothing,AbstractString}=nothing,
+                                     threads::Int=get_default_threads(),
+                                     extra_args::Vector{String}=String[],
+                                     force::Bool=false)
+    isfile(long_reads) || error("Long read file not found: $(long_reads)")
+    isfile(read1) || error("Read 1 file not found: $(read1)")
+    isfile(read2) || error("Read 2 file not found: $(read2)")
+    isempty(sample_name) && error("sample_name cannot be empty")
+
+    outdir = abspath(String(outdir))
+    sample_dir = joinpath(outdir, sample_name)
+    final_fasta = joinpath(sample_dir, "final_assembly.fasta")
+    summary_tsv = joinpath(sample_dir, "summary.tsv")
+
+    if !force && isfile(final_fasta)
+        return (;outdir, sample_dir, summary_tsv, final_fasta)
+    end
+
+    if force && isdir(sample_dir)
+        rm(sample_dir; recursive=true, force=true)
+    end
+
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = joinpath(homedir(), "workspace", ".hybracter")
+    end
+    if !isdir(db_dir) || isempty(readdir(db_dir))
+        install_hybracter_db(db_dir; force=force)
+    end
+
+    Mycelia.add_bioconda_env("hybracter")
+
+    cmd_args = String[
+        "hybrid-single",
+        "--input", long_reads,
+        "--one", read1,
+        "--two", read2,
+        "--chromosome_size", string(chrom_size),
+        "--sample", sample_name,
+        "--output", outdir,
+        "--databases", db_dir
+    ]
+    if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
+        push!(cmd_args, "--threads", string(max(threads, 1)))
+    end
+    append!(cmd_args, extra_args)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hybracter hybracter $(cmd_args)`)
+    return (;outdir, sample_dir, summary_tsv, final_fasta)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Hybracter long-read-only assembly for a single isolate.
+
+# Arguments
+- `long_reads::AbstractString`: Long read FASTQ file.
+- `chrom_size::Int`: Estimated chromosome size (bp).
+
+# Keywords
+- `sample_name::AbstractString`: Sample identifier used in Hybracter outputs.
+- `outdir::AbstractString`: Output directory for the run.
+- `db_dir::Union{Nothing,AbstractString}=nothing`: Database directory (downloaded if missing).
+- `threads::Int=get_default_threads()`: Thread count.
+- `extra_args::Vector{String}=String[]`: Additional Hybracter CLI arguments.
+- `force::Bool=false`: If true, re-run and overwrite existing outputs.
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Output directory.
+- `sample_dir::String`: Sample subdirectory within the output directory.
+- `summary_tsv::String`: Summary TSV path.
+- `final_fasta::String`: Final assembly FASTA path.
+"""
+function run_hybracter_long_single(long_reads::AbstractString,
+                                   chrom_size::Int;
+                                   sample_name::AbstractString,
+                                   outdir::AbstractString,
+                                   db_dir::Union{Nothing,AbstractString}=nothing,
+                                   threads::Int=get_default_threads(),
+                                   extra_args::Vector{String}=String[],
+                                   force::Bool=false)
+    isfile(long_reads) || error("Long read file not found: $(long_reads)")
+    isempty(sample_name) && error("sample_name cannot be empty")
+
+    outdir = abspath(String(outdir))
+    sample_dir = joinpath(outdir, sample_name)
+    final_fasta = joinpath(sample_dir, "final_assembly.fasta")
+    summary_tsv = joinpath(sample_dir, "summary.tsv")
+
+    if !force && isfile(final_fasta)
+        return (;outdir, sample_dir, summary_tsv, final_fasta)
+    end
+
+    if force && isdir(sample_dir)
+        rm(sample_dir; recursive=true, force=true)
+    end
+
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = joinpath(homedir(), "workspace", ".hybracter")
+    end
+    if !isdir(db_dir) || isempty(readdir(db_dir))
+        install_hybracter_db(db_dir; force=force)
+    end
+
+    Mycelia.add_bioconda_env("hybracter")
+
+    cmd_args = String[
+        "long-single",
+        "--input", long_reads,
+        "--chromosome_size", string(chrom_size),
+        "--sample", sample_name,
+        "--output", outdir,
+        "--databases", db_dir
+    ]
+    if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
+        push!(cmd_args, "--threads", string(max(threads, 1)))
+    end
+    append!(cmd_args, extra_args)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hybracter hybracter $(cmd_args)`)
+    return (;outdir, sample_dir, summary_tsv, final_fasta)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run DNAapler to reorient contigs in FASTA or GFA format.
+
+# Arguments
+- `input_file::AbstractString`: Contigs FASTA/GFA file.
+
+# Keywords
+- `outdir::AbstractString`: Output directory.
+- `prefix::AbstractString="dnaapler"`: Output prefix.
+- `threads::Int=get_default_threads()`: Thread count.
+- `extra_args::Vector{String}=String[]`: Additional DNAapler CLI arguments.
+- `force::Bool=false`: If true, re-run and overwrite existing outputs.
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Output directory.
+- `reoriented::String`: Expected reoriented contig file path.
+"""
+function run_dnaapler_all(input_file::AbstractString;
+                          outdir::AbstractString,
+                          prefix::AbstractString="dnaapler",
+                          threads::Int=get_default_threads(),
+                          extra_args::Vector{String}=String[],
+                          force::Bool=false)
+    isfile(input_file) || error("Input file not found: $(input_file)")
+
+    outdir = abspath(String(outdir))
+    mkpath(outdir)
+
+    lower_name = lowercase(input_file)
+    ext = (endswith(lower_name, ".gfa") || endswith(lower_name, ".gfa.gz")) ? ".gfa" : ".fasta"
+    reoriented = joinpath(outdir, "$(prefix)_reoriented$(ext)")
+
+    if !force && isfile(reoriented)
+        return (;outdir, reoriented)
+    end
+
+    Mycelia.add_bioconda_env("dnaapler")
+
+    cmd_args = String[
+        "all",
+        "--input", input_file,
+        "--output", outdir,
+        "--prefix", prefix
+    ]
+    if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
+        push!(cmd_args, "--threads", string(max(threads, 1)))
+    end
+    if force
+        push!(cmd_args, "--force")
+    end
+    append!(cmd_args, extra_args)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n dnaapler dnaapler $(cmd_args)`)
+    return (;outdir, reoriented)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Install the Plassembler database in `db_dir` if missing.
+
+# Arguments
+- `db_dir::AbstractString`: Directory to store the database.
+
+# Keywords
+- `force::Bool=false`: If true, re-download and overwrite the database directory.
+
+# Returns
+- `String`: Path to the database directory.
+"""
+function install_plassembler_db(db_dir::AbstractString; force::Bool=false)
+    db_dir = abspath(String(db_dir))
+    if isdir(db_dir) && !force && !isempty(readdir(db_dir))
+        @info "Plassembler database already present; skipping download." db_dir
+        return db_dir
+    end
+    if force && isdir(db_dir)
+        rm(db_dir; recursive=true, force=true)
+    end
+    mkpath(db_dir)
+    Mycelia.add_bioconda_env("plassembler")
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plassembler plassembler download -d $(db_dir)`)
+    return db_dir
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Plassembler for hybrid plasmid assembly.
+
+# Arguments
+- `long_reads::AbstractString`: Long read FASTQ file.
+- `read1::AbstractString`: Short read R1 FASTQ file.
+- `read2::AbstractString`: Short read R2 FASTQ file.
+- `chrom_size::Int`: Estimated chromosome size (bp).
+
+# Keywords
+- `outdir::AbstractString`: Output directory.
+- `db_dir::Union{Nothing,AbstractString}=nothing`: Database directory (downloaded if missing).
+- `threads::Int=get_default_threads()`: Thread count.
+- `extra_args::Vector{String}=String[]`: Additional Plassembler CLI arguments.
+- `force::Bool=false`: If true, re-run and overwrite existing outputs.
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Output directory.
+- `plasmids_fasta::String`: Plasmid assemblies FASTA path.
+- `chromosome_fasta::String`: Chromosome assembly FASTA path (if produced).
+- `summary_tsv::String`: Summary TSV path.
+"""
+function run_plassembler(long_reads::AbstractString,
+                         read1::AbstractString,
+                         read2::AbstractString,
+                         chrom_size::Int;
+                         outdir::AbstractString,
+                         db_dir::Union{Nothing,AbstractString}=nothing,
+                         threads::Int=get_default_threads(),
+                         extra_args::Vector{String}=String[],
+                         force::Bool=false)
+    isfile(long_reads) || error("Long read file not found: $(long_reads)")
+    isfile(read1) || error("Read 1 file not found: $(read1)")
+    isfile(read2) || error("Read 2 file not found: $(read2)")
+
+    outdir = abspath(String(outdir))
+    plasmids_fasta = joinpath(outdir, "plassembler_plasmids.fasta")
+    chromosome_fasta = joinpath(outdir, "chromosome.fasta")
+    summary_tsv = joinpath(outdir, "plassembler_summary.tsv")
+
+    if !force && isfile(plasmids_fasta)
+        return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+    end
+
+    if force && isdir(outdir)
+        rm(outdir; recursive=true, force=true)
+    end
+    mkpath(outdir)
+
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = joinpath(homedir(), "workspace", ".plassembler")
+    end
+    if !isdir(db_dir) || isempty(readdir(db_dir))
+        install_plassembler_db(db_dir; force=force)
+    end
+
+    Mycelia.add_bioconda_env("plassembler")
+
+    cmd_args = String[
+        "run",
+        "-l", long_reads,
+        "-1", read1,
+        "-2", read2,
+        "-c", string(chrom_size),
+        "-o", outdir,
+        "-d", db_dir
+    ]
+    if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
+        push!(cmd_args, "-t", string(max(threads, 1)))
+    end
+    if force
+        push!(cmd_args, "--force")
+    end
+    append!(cmd_args, extra_args)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plassembler plassembler $(cmd_args)`)
+    return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Plassembler for long-read-only plasmid assembly.
+
+# Arguments
+- `long_reads::AbstractString`: Long read FASTQ file.
+- `chrom_size::Int`: Estimated chromosome size (bp).
+
+# Keywords
+- `outdir::AbstractString`: Output directory.
+- `db_dir::Union{Nothing,AbstractString}=nothing`: Database directory (downloaded if missing).
+- `threads::Int=get_default_threads()`: Thread count.
+- `extra_args::Vector{String}=String[]`: Additional Plassembler CLI arguments.
+- `force::Bool=false`: If true, re-run and overwrite existing outputs.
+
+# Returns
+Named tuple containing:
+- `outdir::String`: Output directory.
+- `plasmids_fasta::String`: Plasmid assemblies FASTA path.
+- `chromosome_fasta::String`: Chromosome assembly FASTA path (if produced).
+- `summary_tsv::String`: Summary TSV path.
+"""
+function run_plassembler_long(long_reads::AbstractString,
+                              chrom_size::Int;
+                              outdir::AbstractString,
+                              db_dir::Union{Nothing,AbstractString}=nothing,
+                              threads::Int=get_default_threads(),
+                              extra_args::Vector{String}=String[],
+                              force::Bool=false)
+    isfile(long_reads) || error("Long read file not found: $(long_reads)")
+
+    outdir = abspath(String(outdir))
+    plasmids_fasta = joinpath(outdir, "plassembler_plasmids.fasta")
+    chromosome_fasta = joinpath(outdir, "chromosome.fasta")
+    summary_tsv = joinpath(outdir, "plassembler_summary.tsv")
+
+    if !force && isfile(plasmids_fasta)
+        return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+    end
+
+    if force && isdir(outdir)
+        rm(outdir; recursive=true, force=true)
+    end
+    mkpath(outdir)
+
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = joinpath(homedir(), "workspace", ".plassembler")
+    end
+    if !isdir(db_dir) || isempty(readdir(db_dir))
+        install_plassembler_db(db_dir; force=force)
+    end
+
+    Mycelia.add_bioconda_env("plassembler")
+
+    cmd_args = String[
+        "long",
+        "-l", long_reads,
+        "-c", string(chrom_size),
+        "-o", outdir,
+        "-d", db_dir
+    ]
+    if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
+        push!(cmd_args, "-t", string(max(threads, 1)))
+    end
+    if force
+        push!(cmd_args, "--force")
+    end
+    append!(cmd_args, extra_args)
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plassembler plassembler $(cmd_args)`)
+    return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+end
+
+# ============================================================================
 # PLASS / PenguiN Assemblers (protein and nucleotide)
 # ============================================================================
 

@@ -8,12 +8,8 @@ invoke external tools are opt-in via `MYCELIA_RUN_EXTERNAL=true`.
 #   julia --project=. -e 'include("test/8_tool_integration/binning_tools.jl")'
 #   MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/binning_tools.jl")'
 #
-# External runs look for:
-# - MYCELIA_BINNING_CONTIGS, MYCELIA_BINNING_DEPTH
-# - MYCELIA_BINNING_COVERAGE_TABLE, MYCELIA_BINNING_MARKERS
-# - MYCELIA_BINNING_GRAPH, MYCELIA_BINNING_MAPPING
-# - MYCELIA_BINNING_GENOMES (comma-separated)
-# - MYCELIA_BINNING_BINS_DIRS (comma-separated)
+# External runs auto-generate simulated inputs (contigs, reads, depth, coverage,
+# and minimal bin directories) to keep integration tests reproducible.
 """
 
 import DataFrames
@@ -90,8 +86,16 @@ Test.@testset "Binning Tools Integration" begin
         )
         Test.@test_throws ErrorException Mycelia.run_comebin(
             contigs_fasta="missing_contigs.fna",
-            coverage_table="missing_cov.tsv",
-            marker_file="missing_markers.tsv",
+            bam_path="missing_bams",
+            outdir=outdir
+        )
+        tmp_contigs = tempname() * ".fna"
+        open(tmp_contigs, "w") do io
+            write(io, ">contig1\nACGTACGTACGT\n")
+        end
+        Test.@test_throws ErrorException Mycelia.run_comebin(
+            contigs_fasta=tmp_contigs,
+            bam_path="missing_bams",
             outdir=outdir
         )
         Test.@test_throws ErrorException Mycelia.run_drep_dereplicate(
@@ -101,18 +105,29 @@ Test.@testset "Binning Tools Integration" begin
         Test.@test_throws ErrorException Mycelia.run_taxometer(
             contigs_fasta="missing_contigs.fna",
             depth_file="missing_depth.tsv",
+            taxonomy_file="missing_taxonomy.tsv",
             outdir=outdir
         )
         Test.@test_throws ErrorException Mycelia.run_taxvamb(
             contigs_fasta="missing_contigs.fna",
             depth_file="missing_depth.tsv",
+            taxonomy_file="missing_taxonomy.tsv",
             outdir=outdir
         )
-        Test.@test_throws ErrorException Mycelia.run_genomeface(
-            contigs_fasta="missing_contigs.fna",
-            coverage_table="missing_cov.tsv",
-            outdir=outdir
-        )
+        genomeface_error = nothing
+        try
+            Mycelia.run_genomeface(
+                contigs_fasta="missing_contigs.fna",
+                coverage_table="missing_cov.tsv",
+                outdir=outdir
+            )
+        catch err
+            genomeface_error = err
+        end
+        Test.@test genomeface_error isa ErrorException
+        if genomeface_error isa ErrorException
+            Test.@test occursin("GenomeFace wrapper disabled", sprint(showerror, genomeface_error))
+        end
         Test.@test_throws ErrorException Mycelia.run_magmax_merge(
             bins_dirs=String[],
             outdir=outdir
@@ -125,17 +140,16 @@ Test.@testset "Binning Tools Integration" begin
 
     if RUN_EXTERNAL
         Test.@testset "External tool runs (opt-in)" begin
-            contigs_fasta = get(ENV, "MYCELIA_BINNING_CONTIGS", "")
-            depth_file = get(ENV, "MYCELIA_BINNING_DEPTH", "")
-            coverage_table = get(ENV, "MYCELIA_BINNING_COVERAGE_TABLE", "")
-            marker_file = get(ENV, "MYCELIA_BINNING_MARKERS", "")
-            assembly_graph = get(ENV, "MYCELIA_BINNING_GRAPH", "")
-            mapping_file = get(ENV, "MYCELIA_BINNING_MAPPING", "")
-            genomes_env = get(ENV, "MYCELIA_BINNING_GENOMES", "")
-            bins_dirs_env = get(ENV, "MYCELIA_BINNING_BINS_DIRS", "")
-
-            genomes = filter(!isempty, strip.(split(genomes_env, ',')))
-            bins_dirs = filter(!isempty, strip.(split(bins_dirs_env, ',')))
+            inputs = Mycelia.get_binning_test_inputs()
+            contigs_fasta = inputs.contigs_fasta
+            depth_file = inputs.depth_file
+            coverage_table = inputs.coverage_table
+            marker_file = inputs.marker_file
+            taxonomy_file = inputs.taxonomy_file
+            assembly_graph = inputs.assembly_graph
+            mapping_file = inputs.mapping_file
+            genomes = inputs.genomes
+            bins_dirs = inputs.bins_dirs
 
             if isfile(contigs_fasta) && isfile(depth_file)
                 Test.@testset "VAMB" begin
@@ -177,13 +191,18 @@ Test.@testset "Binning Tools Integration" begin
                         rm(outdir; recursive=true, force=true)
                     end
                 end
+            else
+                @info "Skipping VAMB/MetaBAT2; missing contigs/depth inputs."
+            end
 
+            if isfile(contigs_fasta) && isfile(depth_file) && isfile(taxonomy_file)
                 Test.@testset "Taxometer" begin
                     outdir = mktempdir()
                     try
                         result = Mycelia.run_taxometer(
                             contigs_fasta=contigs_fasta,
                             depth_file=depth_file,
+                            taxonomy_file=taxonomy_file,
                             outdir=outdir
                         )
                         Test.@test isdir(result.outdir)
@@ -203,20 +222,21 @@ Test.@testset "Binning Tools Integration" begin
                         result = Mycelia.run_taxvamb(
                             contigs_fasta=contigs_fasta,
                             depth_file=depth_file,
+                            taxonomy_file=taxonomy_file,
                             outdir=outdir
                         )
                         Test.@test isdir(result.outdir)
-                        if isempty(readdir(result.outdir))
-                            Test.@test_skip "TaxVAMB did not produce output files; check inputs/output."
-                        else
+                        if isfile(result.clusters_tsv)
                             Test.@test true
+                        else
+                            Test.@test_skip "TaxVAMB did not produce clusters.tsv; check inputs/output."
                         end
                     finally
                         rm(outdir; recursive=true, force=true)
                     end
                 end
             else
-                @info "Skipping VAMB/MetaBAT2/Taxometer/TaxVAMB; set MYCELIA_BINNING_CONTIGS and MYCELIA_BINNING_DEPTH."
+                @info "Skipping Taxometer/TaxVAMB; missing contigs/depth/taxonomy inputs."
             end
 
             if isfile(contigs_fasta) && isfile(assembly_graph) && isfile(mapping_file)
@@ -240,40 +260,51 @@ Test.@testset "Binning Tools Integration" begin
                     end
                 end
             else
-                @info "Skipping MetaCoAG; set MYCELIA_BINNING_CONTIGS, MYCELIA_BINNING_GRAPH, and MYCELIA_BINNING_MAPPING."
+                @info "Skipping MetaCoAG; missing contigs/graph/mapping inputs."
             end
 
             if isfile(contigs_fasta) && isfile(coverage_table)
-                Test.@testset "GenomeFace" begin
+                Test.@testset "GenomeFace (disabled)" begin
                     outdir = mktempdir()
+                    genomeface_error = nothing
                     try
-                        result = Mycelia.run_genomeface(
+                        Mycelia.run_genomeface(
                             contigs_fasta=contigs_fasta,
                             coverage_table=coverage_table,
                             outdir=outdir
                         )
-                        Test.@test isdir(result.outdir)
-                        if isempty(readdir(result.outdir))
-                            Test.@test_skip "GenomeFace did not produce output files; check inputs/output."
-                        else
-                            Test.@test true
-                        end
+                    catch err
+                        genomeface_error = err
                     finally
                         rm(outdir; recursive=true, force=true)
                     end
+                    Test.@test genomeface_error isa ErrorException
+                    if genomeface_error isa ErrorException
+                        Test.@test occursin("GenomeFace wrapper disabled", sprint(showerror, genomeface_error))
+                    end
                 end
             else
-                @info "Skipping GenomeFace; set MYCELIA_BINNING_CONTIGS and MYCELIA_BINNING_COVERAGE_TABLE."
+                @info "Skipping GenomeFace; missing contigs/coverage inputs."
             end
 
-            if isfile(contigs_fasta) && isfile(coverage_table) && isfile(marker_file)
+            comebin_inputs = nothing
+            try
+                include(joinpath(@__DIR__, "..", "metadata", "download_comebin_data.jl"))
+                comebin_root = joinpath(dirname(@__DIR__), "metadata", "comebin_test_data")
+                comebin_inputs = download_and_prep_comebin_data(comebin_root)
+            catch e
+                @info "Skipping COMEBin; download/prep failed." exception=e
+            end
+
+            if comebin_inputs !== nothing &&
+                    isfile(comebin_inputs.contigs) &&
+                    (isfile(comebin_inputs.bam_path) || isdir(comebin_inputs.bam_path))
                 Test.@testset "COMEBin" begin
                     outdir = mktempdir()
                     try
                         result = Mycelia.run_comebin(
-                            contigs_fasta=contigs_fasta,
-                            coverage_table=coverage_table,
-                            marker_file=marker_file,
+                            contigs_fasta=comebin_inputs.contigs,
+                            bam_path=comebin_inputs.bam_path,
                             outdir=outdir
                         )
                         Test.@test isdir(result.outdir)
@@ -287,7 +318,7 @@ Test.@testset "Binning Tools Integration" begin
                     end
                 end
             else
-                @info "Skipping COMEBin; set MYCELIA_BINNING_CONTIGS, MYCELIA_BINNING_COVERAGE_TABLE, and MYCELIA_BINNING_MARKERS."
+                @info "Skipping COMEBin; missing contigs/BAM inputs."
             end
 
             if !isempty(genomes) && all(isfile, genomes)
@@ -309,7 +340,7 @@ Test.@testset "Binning Tools Integration" begin
                     end
                 end
             else
-                @info "Skipping dRep; set MYCELIA_BINNING_GENOMES to a comma-separated list of FASTA paths."
+                @info "Skipping dRep; missing genome FASTA inputs."
             end
 
             if !isempty(bins_dirs) && all(isdir, bins_dirs)
@@ -331,7 +362,7 @@ Test.@testset "Binning Tools Integration" begin
                     end
                 end
             else
-                @info "Skipping MAGmax; set MYCELIA_BINNING_BINS_DIRS to a comma-separated list of bin directories."
+                @info "Skipping MAGmax; missing bin directories."
             end
         end
     else

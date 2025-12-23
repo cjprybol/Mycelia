@@ -9,6 +9,7 @@
 ## Build, Test, and Development Commands
 - Install deps: `julia --project=. -e "using Pkg; Pkg.instantiate()"`
 - Core tests: `julia --project=. -e "using Pkg; Pkg.test()"` (runs Aqua and optional JET).
+- External tool tests: `MYCELIA_RUN_EXTERNAL=true julia --project=. -e "using Pkg; Pkg.test()"` (no extra flags required).
 - Tutorials sweep: `julia --project=. run_extended_tests.jl tutorials` (manual; small datasets).
 - Benchmarks: `julia --project=. run_extended_tests.jl benchmarks` or `--hpc` to submit via SLURM using `benchmarking/run_all_benchmarks.sh` (resource-intensive).
 - Docs: `julia --project=docs docs/make.jl` to build the site into `docs/build`.
@@ -35,6 +36,7 @@
 ## Testing Guidelines
 - Place new tests in the relevant stage directory; name files after the feature (e.g., `assembly_merging.jl`). Use `Test.@testset` with descriptive labels; do not skip/disable tests for broken functionality—fix the code instead.
 - Use small fixtures from `assembly_test_data/` and deterministic seeds (`StableRNGs`) for reproducibility.
+- External tool tests must run when `MYCELIA_RUN_EXTERNAL=true` without requiring extra tool-specific flags; use simulated inputs and default database paths where possible.
 - Extended tutorials/benchmarks are opt-in; note runtime or external-tool needs.
 
 ## Commit & Pull Request Guidelines
