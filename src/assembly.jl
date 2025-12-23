@@ -101,6 +101,132 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Build a bash command string to run MEGAHIT and downstream graph export.
+
+This is intended for use with SLURM `sbatch --wrap` (e.g. via `scg_sbatch`).
+
+# Arguments
+- `fastq1::String`: Path to first paired-end FASTQ file
+- `fastq2::Union{Nothing,String}`: Path to second paired-end FASTQ file (optional for single-end)
+- `outdir::Union{Nothing,String}`: Output directory path (default: inferred from FASTQ prefix + "_megahit")
+- `min_contig_len::Int`: Minimum contig length (default: 200)
+- `k_list::String`: k-mer sizes to use (default: "21,29,39,59,79,99,119,141")
+- `threads::Int`: Number of CPU threads
+
+# Returns
+Named tuple containing:
+- `cmd::String`: Bash snippet that assembles with MEGAHIT and exports FASTG + GFA
+- `outdir::String`: Path to output directory
+- `contigs::String`: Expected path to final contigs file
+- `fastg::String`: Expected path to MEGAHIT FASTG export
+- `gfa::String`: Expected path to GFA converted with gfatools
+
+# Notes
+- The generated bash is idempotent:
+  - Skips assembly if `final.contigs.fa` already exists.
+  - Skips FASTG/GFA export if their files already exist.
+- The MEGAHIT environment is ensured on the Julia side via `Mycelia.add_bioconda_env`.
+"""
+function megahit_cmd(;
+    fastq1,
+    fastq2::Union{Nothing,String}=nothing,
+    outdir::Union{Nothing,String}=nothing,
+    min_contig_len::Int=200,
+    k_list::String="21,29,39,59,79,99,119,141",
+    threads::Int=get_default_threads(),
+)
+    # Ensure environments exist (shared filesystem, so compute nodes will see them)
+    Mycelia.add_bioconda_env("megahit")
+    Mycelia.add_bioconda_env("gfatools")
+
+    # Derive default outdir as in run_megahit
+    if isnothing(outdir)
+        cleaned1 = replace(fastq1, Mycelia.FASTQ_REGEX => "")
+        if isnothing(fastq2)
+            prefix = cleaned1
+        else
+            cleaned2 = replace(fastq2, Mycelia.FASTQ_REGEX => "")
+            prefix = Mycelia.find_matching_prefix(cleaned1, cleaned2)
+            if isempty(prefix)
+                prefix = cleaned1
+            end
+        end
+        outdir = prefix * "_megahit"
+    end
+
+    contigs_path = joinpath(outdir, "final.contigs.fa")
+    fastg_path   = replace(contigs_path, ".fa" => ".fastg")
+    gfa_path     = fastg_path * ".gfa"
+
+    lines = String[]
+
+    # Safe shell behaviour
+    push!(lines, "set -euo pipefail")
+    push!(lines, "")
+    push!(lines, "# MEGAHIT assembly")
+    push!(lines, "if [ ! -f \"$(contigs_path)\" ]; then")
+    push!(lines, "  rm -rf \"$(outdir)\" || true")
+    if isnothing(fastq2)
+        push!(lines,
+            "  $(Mycelia.CONDA_RUNNER) run --live-stream -n megahit " *
+            "megahit -r \"$(fastq1)\" -o \"$(outdir)\" " *
+            "--min-contig-len $(min_contig_len) --k-list $(k_list) -t $(threads)"
+        )
+    else
+        push!(lines,
+            "  $(Mycelia.CONDA_RUNNER) run --live-stream -n megahit " *
+            "megahit -1 \"$(fastq1)\" -2 \"$(fastq2)\" -o \"$(outdir)\" " *
+            "--min-contig-len $(min_contig_len) --k-list $(k_list) -t $(threads)"
+        )
+    end
+    push!(lines, "fi")
+    push!(lines, "")
+
+    # Infer final k on the node (AWK version of infer_final_k)
+    push!(lines, "# Convert contigs to FASTG")
+    push!(lines, "if [ ! -f \"$(fastg_path)\" ]; then")
+    push!(lines, "  final_k=\$(awk '")
+    push!(lines, "    /^>k[0-9]+/ {")
+    push!(lines, "      header = substr(\$0, 2)      # drop leading >")
+    push!(lines, "      sub(/^k/, \"\", header)      # drop leading k")
+    push!(lines, "      split(header, a, \"_\")      # e.g. 141_1 -> a[1]=141")
+    push!(lines, "      ks[a[1]] = 1")
+    push!(lines, "    }")
+    push!(lines, "    END {")
+    push!(lines, "      n = 0")
+    push!(lines, "      for (k in ks) { last = k; n++ }")
+    push!(lines,
+        "      if (n == 0) { print \"ERROR: Could not infer k-mer size from contig identifiers in $(contigs_path)\" > \"/dev/stderr\"; exit 1 }"
+    )
+    push!(lines,
+        "      if (n > 1)  { print \"ERROR: Expected a single final k-mer size, found multiple values\" > \"/dev/stderr\"; exit 1 }"
+    )
+    push!(lines, "      print last")
+    push!(lines, "    }")
+    push!(lines, "  ' \"$(contigs_path)\")")
+    push!(lines,
+        "  $(Mycelia.CONDA_RUNNER) run --live-stream -n megahit " *
+        "megahit_core contig2fastg \"\$final_k\" \"$(contigs_path)\" > \"$(fastg_path)\""
+    )
+    push!(lines, "fi")
+    push!(lines, "")
+
+    push!(lines, "# Convert FASTG to GFA")
+    push!(lines, "if [ ! -f \"$(gfa_path)\" ]; then")
+    push!(lines,
+        "  $(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools " *
+        "gfatools view \"$(fastg_path)\" > \"$(gfa_path)\""
+    )
+    push!(lines, "fi")
+
+    cmd = join(lines, "\n")
+    return (; cmd, outdir, contigs=contigs_path, fastg=fastg_path, gfa=gfa_path)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Run metaSPAdes assembler for metagenomic short read assembly.
 
 # Arguments
