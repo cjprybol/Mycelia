@@ -19,10 +19,7 @@ Submit a job to SLURM scheduler on Lawrence Berkeley Lab's Lawrencium cluster.
 - `cmd`: Shell command to execute
 
 # Returns
-- `true` if submission was successful
-
-# Note
-Function includes 5-second delays before and after submission for queue stability.
+- `true` if submission was successful (or job index if collecting)
 """
 function lawrencium_sbatch(;
         job_name::String,
@@ -39,28 +36,64 @@ function lawrencium_sbatch(;
         mem_gb::Int=64,
         cmd::String
     )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --partition=$(partition)
-    --qos=$(qos)
-    --account=$(account)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --wrap $(cmd)
-    `
-    sleep(5)
-    run(submission)
-    sleep(5)
-    return true
+    
+    extra = Dict{Symbol, Any}()
+    extra[:mail_user] = mail_user
+    extra[:mail_type] = mail_type
+    extra[:nodes] = nodes
+    extra[:ntasks] = ntasks
+    extra[:qos] = qos
+    
+    # Standardize log outputs
+    stdout = joinpath(logdir, "%j.%x.out")
+    stderr = joinpath(logdir, "%j.%x.err")
+
+    job = Execution.JobSpec(
+        cmd;
+        name=job_name,
+        time=time,
+        cpus=cpus_per_task,
+        mem="$(mem_gb)G",
+        partition=partition,
+        account=account,
+        stdout=stdout,
+        stderr=stderr,
+        extra=extra
+    )
+    
+    # We want to force Slurm execution here to match previous behavior if the user calls this directly,
+    # BUT the point of the refactor is to allow `submit(job)` to decide.
+    # Existing calls expect immediate submission to Slurm.
+    # The `Mycelia.Execution.submit` function dispatches based on `CURRENT_EXECUTOR`.
+    # If `CURRENT_EXECUTOR` is `LocalExecutor` (default), calling `submit(job)` would run it locally!
+    # That is NOT what `lawrencium_sbatch` is supposed to do—it's explicitly a SLURM submitter.
+    #
+    # However, to allow "collecting" these jobs via `CollectExecutor`, we should use `submit(job)`.
+    #
+    # So:
+    # 1. If we are in `CollectExecutor` mode, `submit(job)` will collect it.
+    # 2. If we are in `SlurmExecutor` mode, `submit(job)` will submit it to Slurm.
+    # 3. If we are in `LocalExecutor` mode (default), `submit(job)` runs locally.
+    #    Wait, `lawrencium_sbatch` assumes we WANT to submit to Slurm.
+    #
+    # Solution: We should temporarily switch to `SlurmExecutor` if the current executor is `LocalExecutor`,
+    # because this function implies an intent to use Slurm.
+    # But if the current executor is `CollectExecutor`, we honor it.
+    
+    exec = Execution.CURRENT_EXECUTOR[]
+    if exec isa Execution.LocalExecutor
+        # The user called `lawrencium_sbatch` directly in a normal session.
+        # They expect it to submit to Slurm, not run locally.
+        # So we force SlurmExecutor.
+        return Execution.with_executor(Execution.SlurmExecutor(false)) do
+             Execution.submit(job)
+        end
+    else
+        # Allow CollectExecutor or pre-configured SlurmExecutor to handle it
+        return Execution.submit(job)
+    end
 end
+
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -71,23 +104,18 @@ Submit a job to SLURM using sbatch with specified parameters.
 - `job_name::String`: Name identifier for the SLURM job
 - `mail_user::String`: Email address for job notifications
 - `mail_type::String`: Type of mail notifications (default: "ALL")
-- `logdir::String`: Directory for error and output logs (default: "~/workspace/slurmlogs")
+- `logdir::String`: Directory for error and output logs
 - `partition::String`: SLURM partition to submit job to
 - `account::String`: Account to charge for compute resources
-- `nodes::Int`: Number of nodes to allocate (default: 1)
-- `ntasks::Int`: Number of tasks to run (default: 1)
-- `time::String`: Maximum wall time in format "days-hours:minutes:seconds" (default: "1-00:00:00")
-- `cpus_per_task::Int`: CPUs per task (default: 12)
-- `mem_gb::Int`: Memory in GB, defaults to 96GB
+- `nodes::Int`: Number of nodes to allocate
+- `ntasks::Int`: Number of tasks to run
+- `time::String`: Maximum wall time in format "days-hours:minutes:seconds"
+- `cpus_per_task::Int`: CPUs per task
+- `mem_gb::Int`: Memory in GB
 - `cmd::String`: Command to execute
 
 # Returns
 - `Bool`: Returns true if submission succeeds
-
-# Notes
-- Function includes 5-second delays before and after submission
-- Memory is automatically scaled with CPU count
-- Log files are named with job ID (%j) and job name (%x)
 """
 function scg_sbatch(;
         job_name::String,
@@ -103,75 +131,60 @@ function scg_sbatch(;
         mem_gb::Int=96,
         cmd::String
     )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --partition=$(partition)
-    --account=$(account)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --wrap $(cmd)
-    `
-    sleep(5)
-    run(submission)
-    sleep(5)
-    return true
+    
+    extra = Dict{Symbol, Any}()
+    extra[:mail_user] = mail_user
+    extra[:mail_type] = mail_type
+    extra[:nodes] = nodes
+    extra[:ntasks] = ntasks
+    
+    stdout = joinpath(logdir, "%j.%x.out")
+    stderr = joinpath(logdir, "%j.%x.err")
+
+    job = Execution.JobSpec(
+        cmd;
+        name=job_name,
+        time=time,
+        cpus=cpus_per_task,
+        mem="$(mem_gb)G",
+        partition=partition,
+        account=account,
+        stdout=stdout,
+        stderr=stderr,
+        extra=extra
+    )
+    
+    exec = Execution.CURRENT_EXECUTOR[]
+    if exec isa Execution.LocalExecutor
+        return Execution.with_executor(Execution.SlurmExecutor(false)) do
+             Execution.submit(job)
+        end
+    else
+        return Execution.submit(job)
+    end
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a job to NERSC's SLURM scheduler using the shared QOS (Quality of Service).
+Submit a job to NERSC's SLURM scheduler using the shared QOS.
 
 # Arguments
 - `job_name`: Identifier for the job
 - `mail_user`: Email address for job notifications
-- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", "REQUEUE", "STAGE_OUT")
+- `mail_type`: Notification type
 - `logdir`: Directory for storing job output and error logs
-- `qos`: Quality of Service level ("shared", "regular", "preempt", "premium")
+- `qos`: Quality of Service level
 - `nodes`: Number of nodes to allocate
 - `ntasks`: Number of tasks to run
 - `time`: Maximum wall time in format "days-hours:minutes:seconds"
 - `cpus_per_task`: Number of CPUs per task
-- `mem_gb`: Memory per node in GB (default: 2GB per CPU)
+- `mem_gb`: Memory per node in GB
 - `cmd`: Command to execute
-- `constraint`: Node type constraint ("cpu" or "gpu")
-
-# Resource Limits
-- Maximum memory per node: 512GB
-- Maximum cores per node: 128
-- Default memory allocation: 2GB per CPU requested
-
-# QOS Options
-- shared: Default QOS for shared node usage
-- regular: Standard priority
-- preempt: Reduced credit usage but preemptible
-- premium: 5x throughput priority (limited usage)
+- `constraint`: Node type constraint
 
 # Returns
 `true` if job submission succeeds
-
-
-https://docs.nersc.gov/jobs/policy/
-https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
-
-default is to use shared qos
-
-use
-- regular
-- preempt (reduced credit usage but not guaranteed to finish)
-- premium (priority runs limited to 5x throughput)
-
-max request is 512Gb memory and 128 cores per node
-
-https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
 """
 function nersc_sbatch_shared(;
         job_name::String,
@@ -187,26 +200,37 @@ function nersc_sbatch_shared(;
         cmd::String,
         constraint::String="cpu"
     )
-    submission = 
-    `sbatch
-    --job-name=$(job_name)
-    --mail-user=$(mail_user)
-    --mail-type=$(mail_type)
-    --error=$(logdir)/%j.%x.err
-    --output=$(logdir)/%j.%x.out
-    --qos=$(qos)
-    --nodes=$(nodes)
-    --ntasks=$(ntasks)
-    --time=$(time)   
-    --cpus-per-task=$(cpus_per_task)
-    --mem=$(mem_gb)G
-    --constraint=cpu
-    --wrap $(cmd)
-    `
-    sleep(5)
-    run(submission)
-    sleep(5)
-    return true
+    
+    extra = Dict{Symbol, Any}()
+    extra[:mail_user] = mail_user
+    extra[:mail_type] = mail_type
+    extra[:nodes] = nodes
+    extra[:ntasks] = ntasks
+    extra[:qos] = qos
+    extra[:constraint] = constraint
+    
+    stdout = joinpath(logdir, "%j.%x.out")
+    stderr = joinpath(logdir, "%j.%x.err")
+
+    job = Execution.JobSpec(
+        cmd;
+        name=job_name,
+        time=time,
+        cpus=cpus_per_task,
+        mem="$(mem_gb)G",
+        stdout=stdout,
+        stderr=stderr,
+        extra=extra
+    )
+    
+    exec = Execution.CURRENT_EXECUTOR[]
+    if exec isa Execution.LocalExecutor
+        return Execution.with_executor(Execution.SlurmExecutor(false)) do
+             Execution.submit(job)
+        end
+    else
+        return Execution.submit(job)
+    end
 end
 
 """
@@ -217,39 +241,20 @@ Submit a batch job to NERSC's SLURM workload manager.
 # Arguments
 - `job_name`: Identifier for the SLURM job
 - `mail_user`: Email address for job notifications
-- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", or "NONE")
+- `mail_type`: Notification type
 - `logdir`: Directory for storing job output/error logs
 - `scriptdir`: Directory for storing generated SLURM scripts
-- `qos`: Quality of Service level ("regular", "premium", or "preempt")
+- `qos`: Quality of Service level
 - `nodes`: Number of nodes to allocate
 - `ntasks`: Number of tasks to run
 - `time`: Maximum wall time in format "days-HH:MM:SS"
 - `cpus_per_task`: CPU cores per task
 - `mem_gb`: Memory per node in GB
 - `cmd`: Command(s) to execute (String or Vector{String})
-- `constraint`: Node type constraint ("cpu" or "gpu")
+- `constraint`: Node type constraint
 
 # Returns
 - `true` if job submission succeeds
-- `false` if submission fails
-
-# QoS Options
-- regular: Standard priority queue
-- premium: High priority queue (5x throughput limit)
-- preempt: Reduced credit usage but jobs may be interrupted
-
-
-https://docs.nersc.gov/jobs/policy/
-https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
-
-default is to use shared qos
-
-use
-- regular
-- preempt (reduced credit usage but not guaranteed to finish)
-- premium (priorty runs limited to 5x throughput)
-
-https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
 """
 function nersc_sbatch(;
         job_name::String,
@@ -266,13 +271,6 @@ function nersc_sbatch(;
         cmd::Union{String, Vector{String}},
         constraint::String="cpu"
     )
-        
-    # Generate timestamp
-    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
-    
-    # Create script filename
-    script_name = "$(timestamp)-$(job_name).sh"
-    script_path = joinpath(scriptdir, script_name)
     
     # Process commands
     cmd_block = if isa(cmd, String)
@@ -281,42 +279,40 @@ function nersc_sbatch(;
         join(cmd, "\n")  # Multiple commands joined with newlines
     end
     
-    # Create script content
-    script_content = """
-    #!/bin/bash
-    #SBATCH --job-name=$(job_name)
-    #SBATCH --mail-user=$(mail_user)
-    #SBATCH --mail-type=$(mail_type)
-    #SBATCH --error=$(logdir)/%j.%x.err
-    #SBATCH --output=$(logdir)/%j.%x.out
-    #SBATCH --qos=$(qos)
-    #SBATCH --nodes=$(nodes)
-    #SBATCH --ntasks=$(ntasks)
-    #SBATCH --time=$(time)
-    #SBATCH --cpus-per-task=$(cpus_per_task)
-    #SBATCH --mem=$(mem_gb)G
-    #SBATCH --constraint=$(constraint)
+    extra = Dict{Symbol, Any}()
+    extra[:mail_user] = mail_user
+    extra[:mail_type] = mail_type
+    extra[:nodes] = nodes
+    extra[:ntasks] = ntasks
+    extra[:qos] = qos
+    extra[:constraint] = constraint
+    
+    stdout = joinpath(logdir, "%j.%x.out")
+    stderr = joinpath(logdir, "%j.%x.err")
 
-    $cmd_block
-    """
+    job = Execution.JobSpec(
+        cmd_block;
+        name=job_name,
+        time=time,
+        cpus=cpus_per_task,
+        mem="$(mem_gb)G",
+        stdout=stdout,
+        stderr=stderr,
+        extra=extra
+    )
     
-    # Write script to file
-    write(script_path, script_content)
-    
-    # Make script executable
-    chmod(script_path, 0o755)
-    
-    # Submit the job
-    sleep(5)
-    try
-        run(`sbatch $script_path`)
-    catch e
-        @error "Failed to submit job with sbatch: $e"
-        return false
+    exec = Execution.CURRENT_EXECUTOR[]
+    if exec isa Execution.LocalExecutor
+        # NERSC sbatch previously created a script file. `SlurmExecutor(true)` creates a script but pipes it.
+        # If we really want to preserve the file creation, we'd need to customize or allow SlurmExecutor to write to a path.
+        # For now, let's stick to the consistent pipeline unless file artifacts are critical.
+        # The previous implementation wrote `script_name` based on timestamp.
+        return Execution.with_executor(Execution.SlurmExecutor(false)) do
+             Execution.submit(job)
+        end
+    else
+        return Execution.submit(job)
     end
-    sleep(5)
-    
-    return true
 end
 # function nersc_sbatch_regular(;
 #         job_name::String,

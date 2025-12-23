@@ -94,6 +94,7 @@ import XMLDict
 # Dependency-ordered loading to ensure type-stable definitions
 # Core types and utilities must be loaded first
 include("utility-functions.jl")
+include("execution.jl")
 include("alphabets.jl")
 include("constants.jl")
 include("fastx.jl")

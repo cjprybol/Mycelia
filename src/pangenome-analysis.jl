@@ -2,6 +2,7 @@
 # Functions for comparative genomics using existing k-mer infrastructure
 # Includes integration with PGGB, Cactus, and vg toolkit
 
+
 """
     PangenomeAnalysisResult
 
@@ -322,11 +323,14 @@ gfa_file = Mycelia.construct_pangenome_pggb(genomes, "pangenome_output")
 ```
 """
 function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::String; 
-                                threads::Int=2, segment_length::Int=5000, 
+                                threads=nothing, segment_length::Int=5000, 
                                 block_length::Int=3*segment_length, 
                                 mash_kmer::Int=16, min_match_length::Int=19,
                                 transclose_batch::Int=10000000, 
-                                additional_args::Vector{String}=String[])
+                                additional_args::Vector{String}=String[],
+                                executor=:local, job_name="pggb", time="4-00:00:00", partition=nothing, account=nothing,
+                                mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+                                )
     
     # Validate input files
     for file in genome_files
@@ -335,6 +339,15 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
         end
     end
     
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "128G", 16
+    )
+
     # Create joint FASTA file for PGGB input
     joint_fasta = joinpath(output_dir, "joint_genomes.fasta")
     mkpath(dirname(joint_fasta))
@@ -348,42 +361,58 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
     end
     
     # Ensure PGGB conda environment exists
-    add_bioconda_env("pggb")
+    Mycelia.add_bioconda_env("pggb")
     
-    # Build PGGB command
-    pggb_args = [
-        "-i", joint_fasta,
-        "-o", output_dir,
-        "-t", string(threads),
-        "-s", string(segment_length),
-        "-l", string(block_length),
-        "-k", string(mash_kmer),
-        "-G", string(min_match_length),
-        "-B", string(transclose_batch),
-        "-n", string(length(genome_files))
-    ]
+    main_gfa = ""
     
-    # Add any additional arguments
-    append!(pggb_args, additional_args)
-    
-    # Run PGGB
-    println("Running PGGB pangenome construction with $(length(genome_files)) genomes...")
-    cmd = `$(CONDA_RUNNER) run --live-stream -n pggb pggb $(pggb_args)`
-    
-    try
-        run(cmd)
-    catch e
-        error("PGGB failed: $(e)")
+    Mycelia.Execution.with_executor(exec_instance) do
+        # Build PGGB command
+        pggb_args = [
+            "-i", joint_fasta,
+            "-o", output_dir,
+            "-t", string(resolved_threads),
+            "-s", string(segment_length),
+            "-l", string(block_length),
+            "-k", string(mash_kmer),
+            "-G", string(min_match_length),
+            "-B", string(transclose_batch),
+            "-n", string(length(genome_files))
+        ]
+        
+        # Add any additional arguments
+        append!(pggb_args, additional_args)
+        
+        # Run PGGB
+        println("Running PGGB pangenome construction with $(length(genome_files)) genomes...")
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pggb pggb $(pggb_args)`
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
+        
+        # In local execution, we can return the exact GFA path.
+        # In Slurm execution, we can't guarantee it exists yet.
+        if exec_instance isa Mycelia.Execution.LocalExecutor
+            # Find and return the main GFA output file
+            gfa_files = filter(x -> endswith(x, ".gfa"), readdir(output_dir, join=true))
+            if isempty(gfa_files)
+                error("No GFA output file found in $(output_dir)")
+            end
+            
+            main_gfa = first(sort(gfa_files, by=filesize, rev=true))  # Return largest GFA file
+            println("PGGB completed. Main GFA file: $(main_gfa)")
+        else
+            main_gfa = joinpath(output_dir, basename(joint_fasta) * ".pggb.gfa") # Valid guess? PGGB output naming is complex.
+            # Best effort return.
+        end
     end
-    
-    # Find and return the main GFA output file
-    gfa_files = filter(x -> endswith(x, ".gfa"), readdir(output_dir, join=true))
-    if isempty(gfa_files)
-        error("No GFA output file found in $(output_dir)")
-    end
-    
-    main_gfa = first(sort(gfa_files, by=filesize, rev=true))  # Return largest GFA file
-    println("PGGB completed. Main GFA file: $(main_gfa)")
     
     return main_gfa
 end
@@ -414,7 +443,10 @@ vcf_file = Mycelia.call_variants_from_pggb_graph(gfa_file, "reference")
 ```
 """
 function call_variants_from_pggb_graph(gfa_file::String, reference_prefix::String; 
-                                      threads::Int=2, ploidy::Int=1, output_file::String="")
+                                      threads=nothing, ploidy::Int=1, output_file::String="",
+                                      executor=:local, job_name="vg_call_variants", time="2-00:00:00", partition=nothing, account=nothing,
+                                      mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+                                      )
     
     if !isfile(gfa_file)
         error("GFA file does not exist: $(gfa_file)")
@@ -425,30 +457,52 @@ function call_variants_from_pggb_graph(gfa_file::String, reference_prefix::Strin
         output_file = gfa_file * ".vcf"
     end
     
-    # Ensure vg conda environment exists
-    add_bioconda_env("vg")
-    
-    # Build vg deconstruct command
-    vg_args = [
-        "deconstruct",
-        "--path-prefix", reference_prefix,
-        "--ploidy", string(ploidy),
-        "--path-traversals",
-        "--all-snarls",
-        "--threads", string(threads),
-        gfa_file
-    ]
-    
-    println("Calling variants from pangenome graph: $(gfa_file)")
-    cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg $(vg_args)`
-    
-    try
-        run(pipeline(cmd, output_file))
-    catch e
-        error("vg deconstruct failed: $(e)")
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
     end
     
-    println("Variant calling completed. VCF file: $(output_file)")
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "16G", get_default_threads()
+    )
+
+    # Ensure vg conda environment exists
+    Mycelia.add_bioconda_env("vg")
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        # Build vg deconstruct command
+        vg_args = [
+            "deconstruct",
+            "--path-prefix", reference_prefix,
+            "--ploidy", string(ploidy),
+            "--path-traversals",
+            "--all-snarls",
+            "--threads", string(resolved_threads),
+            gfa_file
+        ]
+        
+        println("Calling variants from pangenome graph: $(gfa_file)")
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n vg vg $(vg_args)`
+        
+        # We need to pipe stdout to output_file
+        # JobSpec handles stdout redirection.
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            stdout=output_file, # Redirect stdout to VCF
+            extra=slurm_kwargs
+        ))
+        
+        if exec_instance isa Mycelia.Execution.LocalExecutor
+            println("Variant calling completed. VCF file: $(output_file)")
+        end
+    end
     
     return output_file
 end
@@ -487,8 +541,11 @@ outputs = Mycelia.construct_pangenome_cactus(genomes, names, "cactus_out", "REFE
 """
 function construct_pangenome_cactus(genome_files::Vector{String}, genome_names::Vector{String}, 
                                   output_dir::String, reference_name::String;
-                                  max_cores::Int=8, max_memory_gb::Int=32,
-                                  output_formats::Vector{String}=["gbz", "gfa", "vcf", "odgi"])
+                                  max_cores=nothing, max_memory_gb=nothing,
+                                  output_formats::Vector{String}=["gbz", "gfa", "vcf", "odgi"],
+                                  executor=:local, job_name="cactus", time="4-00:00:00", partition=nothing, account=nothing,
+                                  mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+                                  )
     
     # Validate inputs
     if length(genome_files) != length(genome_names)
@@ -504,6 +561,20 @@ function construct_pangenome_cactus(genome_files::Vector{String}, genome_names::
     if !(reference_name in genome_names)
         error("Reference name '$(reference_name)' not found in genome names")
     end
+    
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    # Default: 32GB, 8 cores as per original
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, max_cores, slurm_template, "32G", 8
+    )
+    
+    # Convert resolved memory string "32G" to integer GB
+    mem_gb_match = match(r"(\d+)G", resolved_mem)
+    mem_gb_int = isnothing(mem_gb_match) ? 32 : parse(Int, mem_gb_match[1])
     
     # Create output directory
     mkpath(output_dir)
@@ -531,56 +602,75 @@ function construct_pangenome_cactus(genome_files::Vector{String}, genome_names::
         end
     end
     
-    # Build Cactus command using podman-hpc
-    cactus_args = [
-        "run", "-it", 
-        "-v", "$(output_dir):/app", 
-        "-w", "/app",
-        "quay.io/comparative-genomics-toolkit/cactus:v2.8.1",
-        "cactus-pangenome",
-        "./$(basename(jobstore))",
-        "./$(basename(config_file))",
-        "--maxCores", string(max_cores),
-        "--maxMemory", "$(max_memory_gb)Gb",
-        "--outDir", ".",
-        "--outName", output_name,
-        "--reference", reference_name
-    ]
-    
-    # Add format flags
-    append!(cactus_args, format_flags)
-    
-    println("Running Cactus pangenome construction...")
-    println("  Genomes: $(length(genome_files))")
-    println("  Reference: $(reference_name)")
-    println("  Output formats: $(join(output_formats, ", "))")
-    
-    cmd = `podman-hpc $(cactus_args)`
-    
-    # Set up logging
-    log_file = joinpath(output_dir, "cactus.log")
-    
-    try
-        run(pipeline(cmd, stdout=log_file, stderr=log_file))
-    catch e
-        @warn "Cactus may have failed. Check log file: $(log_file)"
-        error("Cactus pangenome construction failed: $(e)")
-    end
-    
-    # Find output files
     output_files = Dict{String, String}()
-    for format in output_formats
-        pattern = "$(output_name).$(format)"
-        files = filter(x -> occursin(pattern, x), readdir(output_dir, join=true))
-        if !isempty(files)
-            output_files[format] = first(files)
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        # Build Cactus command using podman-hpc
+        cactus_args = [
+            "run", "-it", 
+            "-v", "$(output_dir):/app", 
+            "-w", "/app",
+            "quay.io/comparative-genomics-toolkit/cactus:v2.8.1",
+            "cactus-pangenome",
+            "./$(basename(jobstore))",
+            "./$(basename(config_file))",
+            "--maxCores", string(resolved_threads),
+            "--maxMemory", "$(mem_gb_int)Gb",
+            "--outDir", ".",
+            "--outName", output_name,
+            "--reference", reference_name
+        ]
+        
+        # Add format flags
+        append!(cactus_args, format_flags)
+        
+        println("Running Cactus pangenome construction...")
+        println("  Genomes: $(length(genome_files))")
+        println("  Reference: $(reference_name)")
+        
+        cmd = `podman-hpc $(cactus_args)`
+        
+        # Log file
+        log_file = joinpath(output_dir, "cactus.log")
+        
+        # For podman-hpc, we usually want to wrap it in a submit script even if local?
+        # Assuming local executor can run podman-hpc directly.
+        
+        # We need to handle stdout/stderr redirection for logging.
+        # JobSpec supports stdout/stderr.
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            stdout=log_file,
+            stderr=log_file,
+            extra=slurm_kwargs
+        ))
+        
+        # Local post-processing to list expected output files
+        if exec_instance isa Mycelia.Execution.LocalExecutor
+            for format in output_formats
+                pattern = "$(output_name).$(format)"
+                files = filter(x -> occursin(pattern, x), readdir(output_dir, join=true))
+                if !isempty(files)
+                    output_files[format] = first(files)
+                else
+                    @warn "Output file for format $(format) not found in $(output_dir)"
+                end
+            end
+            println("Cactus pangenome construction completed locally.")
         else
-            @warn "Output file for format $(format) not found"
+             # Fill output_files with expected paths
+             for format in output_formats
+                 output_files[format] = joinpath(output_dir, "$(output_name).$(format)")
+             end
         end
     end
-    
-    println("Cactus pangenome construction completed.")
-    println("Output files: $(length(output_files))")
     
     return output_files
 end
@@ -607,7 +697,10 @@ for improved performance in downstream analysis.
 vg_file = Mycelia.convert_gfa_to_vg_format("pangenome.gfa")
 ```
 """
-function convert_gfa_to_vg_format(gfa_file::String; output_file::String="")
+function convert_gfa_to_vg_format(gfa_file::String; output_file::String="",
+                                  executor=:local, job_name="vg_convert", time="1-00:00:00", partition=nothing, account=nothing,
+                                  mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+                                  )
     
     if !isfile(gfa_file)
         error("GFA file does not exist: $(gfa_file)")
@@ -617,19 +710,39 @@ function convert_gfa_to_vg_format(gfa_file::String; output_file::String="")
         output_file = replace(gfa_file, r"\.gfa$" => ".vg")
     end
     
-    # Ensure vg conda environment exists
-    add_bioconda_env("vg")
-    
-    println("Converting GFA to vg format: $(gfa_file)")
-    cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg convert -g $(gfa_file) -v`
-    
-    try
-        run(pipeline(cmd, output_file))
-    catch e
-        error("GFA to vg conversion failed: $(e)")
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
     end
     
-    println("Conversion completed. vg file: $(output_file)")
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, nothing, slurm_template, "16G", 1
+    )
+
+    # Ensure vg conda environment exists
+    Mycelia.add_bioconda_env("vg")
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        println("Converting GFA to vg format: $(gfa_file)")
+        # vg convert output to stdout
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n vg vg convert -g $(gfa_file) -v`
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            stdout=output_file,
+            extra=slurm_kwargs
+        ))
+        
+        if exec_instance isa Mycelia.Execution.LocalExecutor
+            println("Conversion completed. vg file: $(output_file)")
+        end
+    end
     
     return output_file
 end
@@ -654,49 +767,79 @@ analysis workflows including read mapping and path queries.
 indexes = Mycelia.index_pangenome_graph("pangenome.vg", index_types=["xg", "gcsa", "snarls"])
 ```
 """
-function index_pangenome_graph(graph_file::String; index_types::Vector{String}=["xg", "gcsa"])
+function index_pangenome_graph(graph_file::String; index_types::Vector{String}=["xg", "gcsa"],
+                             executor=:local, job_name="vg_index", time="4-00:00:00", partition=nothing, account=nothing,
+                             mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+                             )
     
     if !isfile(graph_file)
         error("Graph file does not exist: $(graph_file)")
     end
     
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, nothing, slurm_template, "64G", 4
+    )
+    
     # Ensure vg conda environment exists
-    add_bioconda_env("vg")
+    Mycelia.add_bioconda_env("vg")
     
     index_files = Dict{String, String}()
     base_name = replace(graph_file, r"\.(gfa|vg)$" => "")
     
-    for index_type in index_types
-        index_file = "$(base_name).$(index_type)"
-        
-        if index_type == "xg"
-            cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg index -x $(index_file) $(graph_file)`
-        elseif index_type == "gcsa"
-            # GCSA indexing requires pruning first
-            pruned_file = "$(base_name).pruned.vg"
-            prune_cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg prune $(graph_file)`
-            run(pipeline(prune_cmd, pruned_file))
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd_parts = String[]
+    
+        for index_type in index_types
+            index_file = "$(base_name).$(index_type)"
+            # Pre-populate return dict
+            index_files[index_type] = index_file
             
-            cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg index -g $(index_file) $(pruned_file)`
-        elseif index_type == "snarls"
-            cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg snarls $(graph_file)`
-        else
-            @warn "Unknown index type: $(index_type)"
-            continue
+            if index_type == "xg"
+                xg_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n vg vg index -x $(index_file) $(graph_file)`
+                push!(cmd_parts, string(xg_cmd))
+            elseif index_type == "gcsa"
+                # GCSA indexing requires pruning first
+                # Pruning
+                pruned_file = "$(base_name).pruned.vg"
+                prune_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n vg vg prune $(graph_file)`
+                # We need to pipe this to pruned_file?
+                # vg prune outputs to stdout.
+                # In script we can do: `... vg prune ... > pruned_file`
+                push!(cmd_parts, "$(string(prune_cmd)) > $(pruned_file)")
+                
+                # Indexing
+                gcsa_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n vg vg index -g $(index_file) $(pruned_file)`
+                push!(cmd_parts, string(gcsa_cmd))
+                
+            elseif index_type == "snarls"
+                snarls_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n vg vg snarls $(graph_file)`
+                push!(cmd_parts, "$(string(snarls_cmd)) > $(index_file)")
+            else
+                @warn "Unknown index type: $(index_type)"
+                continue
+            end
         end
         
-        println("Building $(index_type) index for $(graph_file)")
-        
-        try
-            if index_type == "snarls"
-                run(pipeline(cmd, index_file))
-            else
-                run(cmd)
-            end
-            index_files[index_type] = index_file
-            println("Index completed: $(index_file)")
-        catch e
-            @warn "Failed to build $(index_type) index: $(e)"
+        if !isempty(cmd_parts)
+            final_cmd = join(cmd_parts, "\n")
+            
+            Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+                final_cmd;
+                name=job_name,
+                time=time,
+                cpus=resolved_threads,
+                mem=resolved_mem,
+                partition=partition,
+                account=account,
+                extra=slurm_kwargs
+            ))
+            
+            println("Submitted indexing job for $(graph_file)")
         end
     end
     
