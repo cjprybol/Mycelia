@@ -19,7 +19,6 @@
 
 import Mycelia
 import FASTX
-import Graphs
 import Test
 import Statistics
 
@@ -75,25 +74,37 @@ k = 7
 println("\n" * "="^60)
 println("Building qualmer graph with k=$k...")
 
-qualmer_graph = Mycelia.build_qualmer_graph(fastq_records; k=k, graph_mode=Mycelia.DoubleStrand)
+qualmer_dataset_id = "qualmer_demo"
+qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+    fastq_records,
+    k;
+    dataset_id=qualmer_dataset_id,
+    mode=:doublestrand
+)
+qualmer_labels = collect(Mycelia.MetaGraphsNext.labels(qualmer_graph))
 
 # Examine graph properties
 println("\nQualmer graph statistics:")
-println("  Number of vertices (unique k-mers): ", Graphs.nv(qualmer_graph))
-println("  Number of edges: ", Graphs.ne(qualmer_graph))
+println("  Number of vertices (unique k-mers): ", length(qualmer_labels))
+println("  Number of edges: ", Mycelia.MetaGraphsNext.ne(qualmer_graph))
 
 # ### Inspect qualmer properties
 println("\n" * "="^60)
 println("Examining qualmer vertices and their properties:")
 
 # Get first few vertices to examine
-for v in Iterators.take(Graphs.vertices(qualmer_graph), 5)
-    vertex_data = qualmer_graph[v]
-    println("\nVertex $v:")
-    println("  K-mer: ", vertex_data.kmer)
-    println("  Coverage: ", vertex_data.coverage)
-    println("  Mean quality: ", round(vertex_data.mean_quality, digits=2))
-    println("  Joint probability: ", round(vertex_data.joint_probability, digits=4))
+for label in Iterators.take(qualmer_labels, 5)
+    vertex_data = qualmer_graph[label]
+    joint_quality = Mycelia.Rhizomorph.get_vertex_joint_quality(vertex_data, qualmer_dataset_id)
+    mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, qualmer_dataset_id)
+    joint_mean = isnothing(joint_quality) ? 0.0 : Statistics.mean(Float64.(joint_quality))
+    mean_mean = isnothing(mean_quality) ? 0.0 : Statistics.mean(mean_quality)
+    coverage = Mycelia.Rhizomorph.count_evidence_entries(vertex_data)
+    println("\nVertex $label:")
+    println("  K-mer: ", label)
+    println("  Coverage: ", coverage)
+    println("  Mean quality: ", round(mean_mean, digits=2))
+    println("  Joint quality: ", round(joint_mean, digits=2))
 end
 
 # ## Part 3: Quality-Aware vs Coverage-Only Assembly
@@ -105,38 +116,60 @@ println("\n" * "="^60)
 println("Finding high-confidence paths through the qualmer graph...")
 
 # Get all vertices sorted by joint probability (confidence)
-vertices_by_confidence = sort(collect(Graphs.vertices(qualmer_graph)), 
-    by=v -> qualmer_graph[v].joint_probability, rev=true)
+vertices_by_confidence = sort(
+    qualmer_labels,
+    by=v -> Mycelia.Rhizomorph.mean_joint_quality(qualmer_graph, v, qualmer_dataset_id),
+    rev=true
+)
 
 println("\nTop 5 most confident k-mers:")
 for v in vertices_by_confidence[1:min(5, length(vertices_by_confidence))]
     vdata = qualmer_graph[v]
-    println("  ", vdata.kmer, 
-            " - Coverage: ", vdata.coverage,
-            ", Joint prob: ", round(vdata.joint_probability, digits=4),
-            ", Mean quality: ", round(vdata.mean_quality, digits=1))
+    coverage = Mycelia.Rhizomorph.count_evidence_entries(vdata)
+    joint_mean = Mycelia.Rhizomorph.mean_joint_quality(qualmer_graph, v, qualmer_dataset_id)
+    mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vdata, qualmer_dataset_id)
+    mean_mean = isnothing(mean_quality) ? 0.0 : Statistics.mean(mean_quality)
+    println("  ", v,
+            " - Coverage: ", coverage,
+            ", Joint Q: ", round(joint_mean, digits=2),
+            ", Mean Q: ", round(mean_mean, digits=1))
 end
 
 # ### Compare with coverage-only approach
-vertices_by_coverage = sort(collect(Graphs.vertices(qualmer_graph)), 
-    by=v -> qualmer_graph[v].coverage, rev=true)
+vertices_by_coverage = sort(
+    qualmer_labels,
+    by=v -> Mycelia.Rhizomorph.count_evidence_entries(qualmer_graph[v]),
+    rev=true
+)
 
 println("\nTop 5 highest coverage k-mers:")
 for v in vertices_by_coverage[1:min(5, length(vertices_by_coverage))]
     vdata = qualmer_graph[v]
-    println("  ", vdata.kmer, 
-            " - Coverage: ", vdata.coverage,
-            ", Joint prob: ", round(vdata.joint_probability, digits=4),
-            ", Mean quality: ", round(vdata.mean_quality, digits=1))
+    coverage = Mycelia.Rhizomorph.count_evidence_entries(vdata)
+    joint_mean = Mycelia.Rhizomorph.mean_joint_quality(qualmer_graph, v, qualmer_dataset_id)
+    mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vdata, qualmer_dataset_id)
+    mean_mean = isnothing(mean_quality) ? 0.0 : Statistics.mean(mean_quality)
+    println("  ", v,
+            " - Coverage: ", coverage,
+            ", Joint Q: ", round(joint_mean, digits=2),
+            ", Mean Q: ", round(mean_mean, digits=1))
 end
 
 # ## Part 4: Quality-Aware Path Finding
 #
-# Use the package function to find the most likely path through the graph.
+# Use Rhizomorph path finding and quality scoring to select a likely path.
 
-# Find best starting vertex (highest confidence)
-start_vertex = vertices_by_confidence[1]
-quality_path = Mycelia.find_quality_weighted_path(qualmer_graph, start_vertex)
+# Find candidate paths and select the highest-quality path
+paths = Mycelia.Rhizomorph.find_eulerian_paths_next(qualmer_graph)
+quality_path = []
+best_path_score = 0.0
+for path in paths
+    score = Mycelia.Rhizomorph.mean_path_quality(qualmer_graph, path, qualmer_dataset_id)
+    if score > best_path_score
+        best_path_score = score
+        quality_path = path
+    end
+end
 
 println("\n" * "="^60)
 println("Quality-weighted path through graph:")
@@ -145,9 +178,9 @@ println("Path length: ", length(quality_path), " vertices")
 # Show path k-mers and qualities
 println("\nPath details:")
 for (i, v) in enumerate(quality_path[1:min(10, length(quality_path))])
-    vdata = qualmer_graph[v]
-    println("  Step $i: ", vdata.kmer, 
-            " (prob: ", round(vdata.joint_probability, digits=3), ")")
+    joint_mean = Mycelia.Rhizomorph.mean_joint_quality(qualmer_graph, v, qualmer_dataset_id)
+    println("  Step $i: ", v,
+            " (mean joint Q: ", round(joint_mean, digits=2), ")")
 end
 
 # ## Part 5: Converting to Quality-Aware BioSequence Graph
@@ -158,21 +191,23 @@ println("\n" * "="^60)
 println("Converting qualmer graph to quality-aware BioSequence graph...")
 
 # Convert to FASTQ graph (variable-length with quality)
-fastq_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph, k)
+fastq_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
+fastq_labels = collect(Mycelia.MetaGraphsNext.labels(fastq_graph))
 
 println("\nFASTQ graph statistics:")
-println("  Number of vertices: ", Graphs.nv(fastq_graph))
-println("  Number of edges: ", Graphs.ne(fastq_graph))
+println("  Number of vertices: ", length(fastq_labels))
+println("  Number of edges: ", Mycelia.MetaGraphsNext.ne(fastq_graph))
 
 # Examine simplified vertices
 println("\nExamining quality-aware sequence vertices:")
-for v in Iterators.take(Graphs.vertices(fastq_graph), 3)
-    vertex_data = fastq_graph[v]
-    println("\nVertex $v:")
-    println("  Sequence: ", vertex_data.sequence)
+for label in Iterators.take(fastq_labels, 3)
+    vertex_data = fastq_graph[label]
+    mean_quality = Statistics.mean(Mycelia.Rhizomorph.decode_quality_scores(vertex_data.quality_scores))
+    println("\nVertex: ", label)
+    println("  Sequence: ", string(vertex_data.sequence))
     println("  Length: ", length(vertex_data.sequence))
     println("  Quality scores: ", vertex_data.quality_scores[1:min(20, length(vertex_data.quality_scores))], "...")
-    println("  Mean quality: ", round(Statistics.mean(vertex_data.quality_scores), digits=1))
+    println("  Mean quality: ", round(mean_quality, digits=1))
 end
 
 # ## Part 6: Round-Trip Reconstruction
@@ -183,7 +218,7 @@ println("\n" * "="^60)
 println("Reconstructing FASTQ records from the graph...")
 
 # Extract paths and convert to FASTQ records
-reconstructed_records = Mycelia.quality_biosequence_graph_to_fastq(fastq_graph, "reconstructed")
+reconstructed_records = Mycelia.Rhizomorph.fastq_graph_to_records(fastq_graph, "reconstructed")
 
 println("\nReconstructed ", length(reconstructed_records), " FASTQ records")
 
@@ -221,45 +256,53 @@ error_reads = [
 ]
 
 # Build qualmer graph
-error_graph = Mycelia.build_qualmer_graph(error_reads; k=5, graph_mode=Mycelia.SingleStrand)
+error_dataset_id = "error_demo"
+error_graph = Mycelia.Rhizomorph.build_qualmer_graph(error_reads, 5; dataset_id=error_dataset_id, mode=:singlestrand)
+error_labels = collect(Mycelia.MetaGraphsNext.labels(error_graph))
 
 println("\nAnalyzing k-mers around error position:")
 # The error creates k-mers: GATCT (wrong) vs GATCG (correct)
-for v in Graphs.vertices(error_graph)
-    vdata = error_graph[v]
-    kmer_str = String(vdata.kmer)
+for label in error_labels
+    vdata = error_graph[label]
+    kmer_str = string(label)
     if occursin("GATC", kmer_str)
+        coverage = Mycelia.Rhizomorph.count_evidence_entries(vdata)
+        joint_mean = Mycelia.Rhizomorph.mean_joint_quality(error_graph, label, error_dataset_id)
         println("  K-mer: ", kmer_str,
-                " - Coverage: ", vdata.coverage,
-                ", Joint prob: ", round(vdata.joint_probability, digits=4))
+                " - Coverage: ", coverage,
+                ", Joint Q: ", round(joint_mean, digits=2))
     end
 end
 
-# Use package function to identify potential errors
-potential_errors = Mycelia.identify_potential_errors(error_graph)
+# Use quality filtering to identify potential errors
+high_quality = Mycelia.Rhizomorph.find_high_quality_kmers(error_graph, 30; dataset_id=error_dataset_id)
+potential_errors = [label for label in error_labels if !(label in high_quality)]
 println("\nPotential error k-mers identified: ", length(potential_errors))
 
-for error_v in potential_errors
-    vdata = error_graph[error_v]
-    println("  Error k-mer: ", vdata.kmer,
-            " - Coverage: ", vdata.coverage,
-            ", Quality: ", round(vdata.mean_quality, digits=1),
-            ", Confidence: ", round(vdata.joint_probability, digits=4))
+for error_label in potential_errors
+    vdata = error_graph[error_label]
+    coverage = Mycelia.Rhizomorph.count_evidence_entries(vdata)
+    mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vdata, error_dataset_id)
+    mean_mean = isnothing(mean_quality) ? 0.0 : Statistics.mean(mean_quality)
+    joint_mean = Mycelia.Rhizomorph.mean_joint_quality(error_graph, error_label, error_dataset_id)
+    println("  Error k-mer: ", error_label,
+            " - Coverage: ", coverage,
+            ", Mean Q: ", round(mean_mean, digits=1),
+            ", Joint Q: ", round(joint_mean, digits=2))
 end
 
 # ## Part 8: Advanced Quality Metrics
 #
 # Calculate assembly quality metrics using the package function.
 
-metrics = Mycelia.calculate_assembly_quality_metrics(qualmer_graph)
+metrics = Mycelia.Rhizomorph.get_qualmer_statistics(qualmer_graph; dataset_id=qualmer_dataset_id)
 
 println("\n" * "="^60)
 println("Assembly quality metrics:")
-println("  Mean k-mer coverage: ", round(metrics.mean_coverage, digits=2))
-println("  Mean quality score: ", round(metrics.mean_quality, digits=1))
-println("  Mean k-mer confidence: ", round(metrics.mean_confidence, digits=4))
-println("  Fraction of low-confidence k-mers: ", round(metrics.low_confidence_fraction, digits=3))
-println("  Total unique k-mers: ", metrics.total_kmers)
+println("  Mean joint quality: ", round(metrics[:mean_joint_quality], digits=2))
+println("  Min joint quality: ", metrics[:min_joint_quality])
+println("  Max joint quality: ", metrics[:max_joint_quality])
+println("  Total unique k-mers: ", metrics[:num_vertices])
 
 # ## Part 9: Practical Example - Assembling a Small Genome Region
 #
@@ -299,30 +342,37 @@ println("True sequence: ", true_seq)
 println("Number of reads: ", length(genome_reads))
 
 # Build qualmer graph
-genome_graph = Mycelia.build_qualmer_graph(genome_reads; k=9, graph_mode=Mycelia.SingleStrand)
+genome_dataset_id = "genome_demo"
+genome_graph = Mycelia.Rhizomorph.build_qualmer_graph(genome_reads, 9; dataset_id=genome_dataset_id, mode=:singlestrand)
 
 # Convert to sequence graph and extract contigs
-seq_graph = Mycelia.qualmer_graph_to_quality_biosequence_graph(genome_graph, 9)
+seq_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(genome_graph)
+genome_labels = collect(Mycelia.MetaGraphsNext.labels(genome_graph))
+seq_labels = collect(Mycelia.MetaGraphsNext.labels(seq_graph))
 
 println("\nAssembly results:")
-println("  Qualmer graph: ", Graphs.nv(genome_graph), " vertices, ", Graphs.ne(genome_graph), " edges")
-println("  Sequence graph: ", Graphs.nv(seq_graph), " vertices, ", Graphs.ne(seq_graph), " edges")
+println("  Qualmer graph: ", length(genome_labels), " vertices, ", Mycelia.MetaGraphsNext.ne(genome_graph), " edges")
+println("  Sequence graph: ", length(seq_labels), " vertices, ", Mycelia.MetaGraphsNext.ne(seq_graph), " edges")
 
 # Use package function to find quality-weighted path
-if Graphs.nv(genome_graph) > 0
-    ## Start from highest confidence vertex
-    confidence_sorted = sort(collect(Graphs.vertices(genome_graph)), 
-        by=v -> genome_graph[v].joint_probability, rev=true)
-    best_path = Mycelia.find_quality_weighted_path(genome_graph, confidence_sorted[1])
+if !isempty(genome_labels)
+    paths = Mycelia.Rhizomorph.find_eulerian_paths_next(genome_graph)
+    best_path = []
+    best_score = 0.0
+    for path in paths
+        score = Mycelia.Rhizomorph.mean_path_quality(genome_graph, path, genome_dataset_id)
+        if score > best_score
+            best_score = score
+            best_path = path
+        end
+    end
     
     println("\nBest quality-weighted path:")
     println("  Path length: ", length(best_path), " k-mers")
     
     ## Reconstruct sequence from path
     if length(best_path) > 1
-        path_kmers = [String(genome_graph[v].kmer) for v in best_path]
-        ## Simple reconstruction: first k-mer + last base of each subsequent k-mer
-        reconstructed = path_kmers[1] * join([kmer[end] for kmer in path_kmers[2:end]])
+        reconstructed = string(Mycelia.Rhizomorph.path_to_sequence(best_path, genome_graph))
         
         println("  Reconstructed length: ", length(reconstructed))
         println("  Reconstructed: ", reconstructed)
@@ -343,16 +393,21 @@ if Graphs.nv(genome_graph) > 0
 end
 
 # Find longest path (contig) from sequence graph
-if Graphs.nv(seq_graph) > 0
-    ## Get vertex with longest sequence
-    longest_v = argmax(v -> length(seq_graph[v].sequence), Graphs.vertices(seq_graph))
-    longest_seq = seq_graph[longest_v].sequence
-    longest_qual = seq_graph[longest_v].quality_scores
+if !isempty(seq_labels)
+    contigs = Mycelia.Rhizomorph.find_contigs_next(seq_graph; min_contig_length=1)
+    if isempty(contigs)
+        longest_seq = seq_graph[seq_labels[argmax(length.(seq_labels))]].sequence
+        longest_qual = seq_graph[seq_labels[argmax(length.(seq_labels))]].quality_scores
+    else
+        longest_contig = contigs[argmax(length.(getfield.(contigs, :sequence)))]
+        longest_seq = longest_contig.sequence
+        longest_qual = seq_graph[longest_contig.vertices[1]].quality_scores
+    end
     
     println("\nLongest contig from simplified graph:")
     println("  Length: ", length(longest_seq))
     println("  Sequence: ", longest_seq)
-    println("  Mean quality: ", round(Statistics.mean(longest_qual), digits=1))
+    println("  Mean quality: ", round(Statistics.mean(Mycelia.Rhizomorph.decode_quality_scores(longest_qual)), digits=1))
     
     ## Check accuracy
     if String(longest_seq) == true_seq
@@ -372,12 +427,11 @@ if Graphs.nv(seq_graph) > 0
 end
 
 # Calculate final quality metrics for the genome assembly
-final_metrics = Mycelia.calculate_assembly_quality_metrics(genome_graph)
+final_metrics = Mycelia.Rhizomorph.get_qualmer_statistics(genome_graph; dataset_id=genome_dataset_id)
 println("\nFinal assembly quality metrics:")
-println("  Mean coverage: ", round(final_metrics.mean_coverage, digits=2))
-println("  Mean quality: ", round(final_metrics.mean_quality, digits=1))
-println("  Mean confidence: ", round(final_metrics.mean_confidence, digits=4))
-println("  Low confidence fraction: ", round(final_metrics.low_confidence_fraction, digits=3))
+println("  Mean joint quality: ", round(final_metrics[:mean_joint_quality], digits=2))
+println("  Min joint quality: ", final_metrics[:min_joint_quality])
+println("  Max joint quality: ", final_metrics[:max_joint_quality])
 
 # ## Summary
 #
@@ -386,10 +440,10 @@ println("  Low confidence fraction: ", round(final_metrics.low_confidence_fracti
 # 1. **Qualmer Construction**: Building quality-aware k-mer graphs from FASTQ data
 # 2. **Joint Probability**: How multiple observations with different qualities are combined
 # 3. **Quality vs Coverage**: The advantage of using quality scores over coverage alone
-# 4. **Package Functions**: Using Mycelia's built-in functions for quality-weighted analysis:
-#    - `find_quality_weighted_path()` for optimal path finding
-#    - `calculate_assembly_quality_metrics()` for comprehensive quality assessment
-#    - `identify_potential_errors()` for error detection
+# 4. **Package Functions**: Using Mycelia.Rhizomorph utilities for quality-weighted analysis:
+#    - `find_eulerian_paths_next()` + `path_to_sequence()` for path-based reconstruction
+#    - `get_qualmer_statistics()` for quality assessment
+#    - `find_high_quality_kmers()` for error screening
 # 5. **Round-Trip Conversion**: Maintaining quality information through graph transformations
 # 6. **Practical Assembly**: Using quality information for more accurate genome assembly
 #

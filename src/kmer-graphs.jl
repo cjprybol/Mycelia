@@ -72,7 +72,7 @@ function build_kmer_graph_next(
         label_type = actual_kmer_type,
         vertex_data_type = KmerVertexData{actual_kmer_type},
         edge_data_type = KmerEdgeData,
-        weight_function = edge_data -> edge_data.weight,
+        weight_function = edge_data_weight,
         default_weight = 0.0,
     )
 
@@ -156,7 +156,7 @@ function _create_empty_kmer_graph(kmer_type)
         label_type = kmer_type,
         vertex_data_type = KmerVertexData{kmer_type},
         edge_data_type = KmerEdgeData,
-        weight_function = edge_data -> edge_data.weight,
+        weight_function = edge_data_weight,
         default_weight = 0.0,
     )
 end
@@ -276,4 +276,3 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
 
     return outfile
 end
-

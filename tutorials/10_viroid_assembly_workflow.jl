@@ -138,7 +138,7 @@ println("  Mean quality: $(round(Statistics.mean(quality_scores), digits=2))")
 println("\n## Step 5: Quality-Aware Rhizomorph Assembly")
 
 # Configure assembly parameters
-assembly_config = Mycelia.AssemblyConfig(
+assembly_config = Mycelia.Rhizomorph.AssemblyConfig(
     k = 15,                    # K-mer size optimized for viroid assembly
     use_quality_scores = true, # Enable quality-aware assembly
     bubble_resolution = true,  # Enable bubble detection and resolution
@@ -223,7 +223,7 @@ println("  Mean quality: $(round(get(rna_result.assembly_stats, "mean_quality", 
 println("\n## Step 8: Protein Assembly using Qualmer Graph")
 
 # Use smaller k-mer size for protein assembly due to amino acid alphabet
-protein_config = Mycelia.AssemblyConfig(
+protein_config = Mycelia.Rhizomorph.AssemblyConfig(
     k = 5,                     # Smaller k for amino acids
     use_quality_scores = true,
     bubble_resolution = true,

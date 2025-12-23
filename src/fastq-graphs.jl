@@ -107,7 +107,7 @@ function build_quality_biosequence_graph(fastq_records::Vector{FASTX.FASTQ.Recor
         label_type=biosequence_type,
         vertex_data_type=QualityBioSequenceVertexData{biosequence_type},
         edge_data_type=QualityBioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
     
@@ -227,7 +227,7 @@ function qualmer_graph_to_quality_biosequence_graph(qualmer_graph::MetaGraphsNex
         label_type=biosequence_type,
         vertex_data_type=QualityBioSequenceVertexData{biosequence_type},
         edge_data_type=QualityBioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
     
@@ -686,7 +686,7 @@ function build_string_qualmer_ngram_graph_next(fastq_records::Vector{FASTX.FASTQ
         label_type=String,
         vertex_data_type=QualityStringVertexData,
         edge_data_type=QualityStringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -756,7 +756,7 @@ function build_string_qualmer_biosequence_graph_next(fastq_records::Vector{FASTX
         label_type=String,
         vertex_data_type=QualityStringVertexData,
         edge_data_type=QualityStringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 

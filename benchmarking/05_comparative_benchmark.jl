@@ -101,6 +101,29 @@ println("\n--- Pangenome Construction Benchmarks ---")
 # - Memory usage with large genome collections
 # - Parallel processing scalability
 
+# ## Sketch-Guided Pangenome Context Selection Benchmarks
+#
+# Evaluate the prefilter step that uses sketch scores to select supported
+# reference contexts before minimap2 mapping.
+
+println("\n--- Sketch-Guided Pangenome Context Selection Benchmarks ---")
+
+mock_sketch_scores = Dict(
+    "ref_a" => 0.12,
+    "ref_b" => 0.02,
+    "ref_c" => 0.31,
+    "ref_d" => 0.07,
+    "ref_e" => 0.15,
+    "ref_f" => 0.01
+)
+
+selection_trial = BenchmarkTools.@benchmark Mycelia.select_sketch_supported_references(
+    $mock_sketch_scores;
+    min_score=0.05,
+    max_refs=4
+)
+println(selection_trial)
+
 # ## Phylogenetic Analysis Benchmarks
 #
 # Test phylogenetic analysis performance

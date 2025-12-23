@@ -21,212 +21,130 @@ import MetaGraphsNext
 import Graphs
 import BioSequences
 import FASTX
+import Kmers
 
-Test.@testset "Next-Generation Sequence Graphs Tests" begin
-    
-    Test.@testset "Type-Stable Metadata Structures" begin
-        # Test StrandOrientation enum
-        Test.@test Mycelia.Forward isa Mycelia.StrandOrientation
-        Test.@test Mycelia.Reverse isa Mycelia.StrandOrientation
-        Test.@test Bool(Mycelia.Forward) == true
-        Test.@test Bool(Mycelia.Reverse) == false
-        
-        # Test GraphMode enum
-        Test.@test Mycelia.SingleStrand isa Mycelia.GraphMode
-        Test.@test Mycelia.DoubleStrand isa Mycelia.GraphMode
-        
-        # Test KmerVertexData construction
-        vertex_data = Mycelia.KmerVertexData("ATCG")
-        Test.@test vertex_data.canonical_kmer == "ATCG"
-        Test.@test isempty(vertex_data.coverage)
-        Test.@test vertex_data.coverage isa Vector{Tuple{Int, Int, Mycelia.StrandOrientation}}
-        
-        # Test adding coverage data with strand information
-        push!(vertex_data.coverage, (1, 1, Mycelia.Forward))
-        push!(vertex_data.coverage, (2, 5, Mycelia.Reverse))
-        Test.@test length(vertex_data.coverage) == 2
-        Test.@test vertex_data.coverage[1] == (1, 1, Mycelia.Forward)
-        Test.@test vertex_data.coverage[2] == (2, 5, Mycelia.Reverse)
-        
-        # Test KmerEdgeData construction
-        edge_data = Mycelia.KmerEdgeData(Mycelia.Forward, Mycelia.Reverse)
-        Test.@test isempty(edge_data.coverage)
-        Test.@test edge_data.weight == 0.0
-        Test.@test edge_data.src_strand == Mycelia.Forward
-        Test.@test edge_data.dst_strand == Mycelia.Reverse
-        
-        # Test edge data with coverage
-        coverage = [((1, 1, Mycelia.Forward), (1, 2, Mycelia.Forward)), 
-                   ((2, 5, Mycelia.Reverse), (2, 6, Mycelia.Reverse))]
-        edge_data_with_coverage = Mycelia.KmerEdgeData(coverage, Mycelia.Forward, Mycelia.Forward)
-        Test.@test length(edge_data_with_coverage.coverage) == 2
-        Test.@test edge_data_with_coverage.weight == 2.0  # weight equals coverage count
-        Test.@test edge_data_with_coverage.src_strand == Mycelia.Forward
-        Test.@test edge_data_with_coverage.dst_strand == Mycelia.Forward
+Test.@testset "Rhizomorph Sequence Graphs" begin
+    dna_records = [FASTX.FASTA.Record("dna", "ATCGATCG")]
+    mixed_records = [
+        FASTX.FASTA.Record("dna1", "ATCGATCG"),
+        FASTX.FASTA.Record("dna2", "TCGATCGA"),
+    ]
+
+    Test.@testset "Enums and evidence structs" begin
+        Test.@test Mycelia.Rhizomorph.Forward isa Mycelia.Rhizomorph.StrandOrientation
+        Test.@test Mycelia.Rhizomorph.Reverse isa Mycelia.Rhizomorph.StrandOrientation
+        Test.@test Bool(Mycelia.Rhizomorph.Forward)
+        Test.@test !Bool(Mycelia.Rhizomorph.Reverse)
+        Test.@test Mycelia.Rhizomorph.SingleStrand isa Mycelia.Rhizomorph.GraphMode
+        Test.@test Mycelia.Rhizomorph.DoubleStrand isa Mycelia.Rhizomorph.GraphMode
+
+        kmer = Kmers.DNAKmer{3}("ATC")
+        vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(vertex, "ds1", "obs1", Mycelia.Rhizomorph.EvidenceEntry(1, Mycelia.Rhizomorph.Forward))
+        Test.@test Mycelia.Rhizomorph.count_evidence(vertex) == 1
+
+        edge = Mycelia.Rhizomorph.KmerEdgeData()
+        Mycelia.Rhizomorph.add_evidence!(edge, "ds1", "obs1", Mycelia.Rhizomorph.EdgeEvidenceEntry(1, 2, Mycelia.Rhizomorph.Reverse))
+        Test.@test Mycelia.Rhizomorph.compute_edge_weight(edge) == 1
     end
-    
-    Test.@testset "Next-Generation K-mer Graph Construction" begin
-        # Create test sequences
-        seq1 = FASTX.FASTA.Record("test1", "ATCGATCG")
-        seq2 = FASTX.FASTA.Record("test2", "TCGATCGA")
-        observations = [seq1, seq2]
-        
-        # Test with 3-mers
-        kmer_type = BioSequences.DNAKmer{3}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, observations)
-        
-        Test.@test graph isa MetaGraphsNext.MetaGraph
-        Test.@test !isempty(MetaGraphsNext.labels(graph))
-        
-        # Check that vertices exist for expected k-mers
-        expected_kmers = ["ATC", "TCG", "CGA", "GAT", "ATG", "GTC"]  # some from sequences
-        found_kmers = collect(MetaGraphsNext.labels(graph))
-        
-        # At least some expected k-mers should be present
-        Test.@test !isempty(intersect(expected_kmers, found_kmers))
-        
-        # Test vertex metadata
-        for label in found_kmers
-            vertex_data = graph[label]
-            Test.@test vertex_data isa Mycelia.KmerVertexData
-            Test.@test vertex_data.coverage isa Vector{Tuple{Int, Int, Bool}}
-        end
-        
-        # Test edge metadata (if edges exist)
-        for edge in MetaGraphsNext.edge_labels(graph)
-            edge_data = graph[edge...]
-            Test.@test edge_data isa Mycelia.KmerEdgeData
-            Test.@test edge_data.weight >= 0.0
-        end
+
+    Test.@testset "Evidence helpers" begin
+        kmer = Kmers.DNAKmer{3}("ATC")
+        vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
+        Mycelia.Rhizomorph.add_evidence!(vertex, "ds", "obsA", Mycelia.Rhizomorph.EvidenceEntry(2, Mycelia.Rhizomorph.Forward))
+        ds_evidence = Mycelia.Rhizomorph.get_dataset_evidence(vertex, "ds")
+        Test.@test length(ds_evidence) == 1
+        obs_evidence = Mycelia.Rhizomorph.get_observation_evidence(vertex, "ds", "obsA")
+        Test.@test !isnothing(obs_evidence)
+
+        edge = Mycelia.Rhizomorph.KmerEdgeData()
+        Mycelia.Rhizomorph.add_evidence!(edge, "ds", "obsA", Mycelia.Rhizomorph.EdgeEvidenceEntry(1, 2, Mycelia.Rhizomorph.Forward))
+        Test.@test Mycelia.Rhizomorph.compute_edge_weight(edge) == 1
+        Test.@test Mycelia.Rhizomorph.compute_edge_coverage(edge) == 1
     end
-    
-    Test.@testset "Graph Modes: SingleStrand vs DoubleStrand" begin
+
+    Test.@testset "K-mer graph construction" begin
+        ss_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, 3; dataset_id="rhizo_ss", mode=:singlestrand)
+        ds_graph = Mycelia.Rhizomorph.build_kmer_graph(mixed_records, 3; dataset_id="rhizo_ds", mode=:doublestrand)
+
+        for (graph, dsid) in ((ss_graph, "rhizo_ss"), (ds_graph, "rhizo_ds"))
+            Test.@test graph isa MetaGraphsNext.MetaGraph
+            Test.@test !isempty(MetaGraphsNext.labels(graph))
+
+            first_label = first(MetaGraphsNext.labels(graph))
+            vdata = graph[first_label]
+            Test.@test vdata isa Mycelia.Rhizomorph.KmerVertexData
+            Test.@test haskey(vdata.evidence, dsid)
+
+            edges = collect(MetaGraphsNext.edge_labels(graph))
+            if !isempty(edges)
+                edge_data = graph[first(edges)...]
+                Test.@test Mycelia.Rhizomorph.compute_edge_weight(edge_data) >= 1
+            end
+        end
+
+        ds_labels = collect(MetaGraphsNext.labels(ds_graph))
+        Test.@test all(label isa Kmers.DNAKmer{3} for label in ds_labels)
+        rc_present = BioSequences.reverse_complement(first(ds_labels)) in ds_labels
+        Test.@test rc_present  # doublestrand includes RC orientations
+    end
+
+    Test.@testset "Graph modes and strand awareness" begin
+        k = 3
         seq = FASTX.FASTA.Record("test", "ATCG")
-        observations = [seq]
-        kmer_type = BioSequences.DNAKmer{3}
-        
-        # Test DoubleStrand graph (default) - uses canonical k-mers
-        double_strand_graph = Mycelia.build_kmer_graph_next(kmer_type, observations; graph_mode=Mycelia.DoubleStrand)
-        double_strand_labels = collect(MetaGraphsNext.labels(double_strand_graph))
-        
-        # Test SingleStrand graph - uses k-mers as-is
-        single_strand_graph = Mycelia.build_kmer_graph_next(kmer_type, observations; graph_mode=Mycelia.SingleStrand)
-        single_strand_labels = collect(MetaGraphsNext.labels(single_strand_graph))
-        
-        # Both should be valid graphs
-        Test.@test double_strand_graph isa MetaGraphsNext.MetaGraph
-        Test.@test single_strand_graph isa MetaGraphsNext.MetaGraph
-        
-        # In DoubleStrand mode, vertices should be canonical k-mers
-        # In SingleStrand mode, vertices should be observed k-mers
-        Test.@test !isempty(double_strand_labels)
-        Test.@test !isempty(single_strand_labels)
-        
-        # Test that vertices contain canonical k-mers in DoubleStrand mode
-        for label in double_strand_labels
-            vertex_data = double_strand_graph[label]
-            Test.@test vertex_data isa Mycelia.KmerVertexData
-            Test.@test vertex_data.canonical_kmer == label
-        end
+        ds_graph = Mycelia.Rhizomorph.build_kmer_graph([seq], k; dataset_id="ds_mode", mode=:doublestrand)
+        ss_graph = Mycelia.Rhizomorph.build_kmer_graph([seq], k; dataset_id="ss_mode", mode=:singlestrand)
+
+        Test.@test length(MetaGraphsNext.labels(ds_graph)) >= length(MetaGraphsNext.labels(ss_graph))
+        Test.@test !haskey(ss_graph, BioSequences.reverse_complement(first(MetaGraphsNext.labels(ss_graph))))
+
+        ds_label = first(MetaGraphsNext.labels(ds_graph))
+        ds_data = ds_graph[ds_label]
+        Test.@test Mycelia.Rhizomorph.count_evidence(ds_data) > 0
     end
-    
-    Test.@testset "Empty and Edge Cases" begin
-        kmer_type = BioSequences.DNAKmer{3}
-        
-        # Test with empty observations
-        empty_graph = Mycelia.build_kmer_graph_next(kmer_type, FASTX.FASTA.Record[])
-        Test.@test empty_graph isa MetaGraphsNext.MetaGraph
-        Test.@test isempty(MetaGraphsNext.labels(empty_graph))
-        
-        # Test with sequence shorter than k
-        short_seq = FASTX.FASTA.Record("short", "AT")  # length 2 < k=3
-        short_graph = Mycelia.build_kmer_graph_next(kmer_type, [short_seq])
+
+    Test.@testset "Canonical conversion" begin
+        records = [
+            FASTX.FASTA.Record("f1", "ATCGA"),
+            FASTX.FASTA.Record("f2", "TCGAT"),
+        ]
+        ss_graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="canon_ss", mode=:singlestrand)
+        canonical = Mycelia.Rhizomorph.convert_to_canonical(ss_graph)
+        Test.@test canonical isa MetaGraphsNext.MetaGraph
+        Test.@test length(MetaGraphsNext.labels(canonical)) <= length(MetaGraphsNext.labels(ss_graph))
+    end
+
+    Test.@testset "Empty and short inputs" begin
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.build_kmer_graph(FASTX.FASTA.Record[], 3; dataset_id="empty", mode=:singlestrand)
+
+        short_graph = Mycelia.Rhizomorph.build_kmer_graph([FASTX.FASTA.Record("short", "AT")], 3; dataset_id="short", mode=:singlestrand)
         Test.@test short_graph isa MetaGraphsNext.MetaGraph
-        # Should warn but not crash
+        Test.@test isempty(MetaGraphsNext.labels(short_graph))
     end
-    
-    Test.@testset "Strand-Aware Coverage Tracking" begin
-        # Create sequences with overlapping k-mers that test strand awareness
-        seq1 = FASTX.FASTA.Record("seq1", "ATCGATCG")  # Forward: ATC, TCG, CGA, GAT, ATC, TCG
-        seq2 = FASTX.FASTA.Record("seq2", "CGATCG")    # Forward: CGA, GAT, ATC, TCG  
-        observations = [seq1, seq2]
-        
-        kmer_type = BioSequences.DNAKmer{3}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, observations; graph_mode=Mycelia.DoubleStrand)
-        
-        # All vertices should represent canonical k-mers
+
+    Test.@testset "Strand-aware coverage tracking" begin
+        seq1 = FASTX.FASTA.Record("seq1", "ATCGATCG")
+        seq2 = FASTX.FASTA.Record("seq2", "CGATCG")
+        graph = Mycelia.Rhizomorph.build_kmer_graph([seq1, seq2], 3; dataset_id="cov", mode=:doublestrand)
+
         for label in MetaGraphsNext.labels(graph)
-            vertex_data = graph[label]
-            Test.@test vertex_data isa Mycelia.KmerVertexData
-            Test.@test vertex_data.canonical_kmer == label
-            
-            # Check that coverage includes strand information
-            for (obs_id, pos, strand) in vertex_data.coverage
-                Test.@test obs_id in [1, 2]  # From one of our sequences
-                Test.@test pos >= 1
-                Test.@test strand isa Mycelia.StrandOrientation
-            end
+            vdata = graph[label]
+            Test.@test vdata isa Mycelia.Rhizomorph.KmerVertexData
+            Test.@test Mycelia.Rhizomorph.count_evidence(vdata) >= 1
         end
-        
-        # Check that edges have strand-aware metadata
+
         for edge_label in MetaGraphsNext.edge_labels(graph)
-            if !isempty(edge_label)
-                edge_data = graph[edge_label...]
-                Test.@test edge_data isa Mycelia.KmerEdgeData
-                Test.@test edge_data.src_strand isa Mycelia.StrandOrientation
-                Test.@test edge_data.dst_strand isa Mycelia.StrandOrientation
-                Test.@test edge_data.weight >= 0.0
-            end
+            edge_data = graph[edge_label...]
+            Test.@test edge_data isa Mycelia.Rhizomorph.KmerEdgeData
+            Test.@test Mycelia.Rhizomorph.compute_edge_weight(edge_data) >= 1
         end
     end
-end
 
-Test.@testset "Legacy Compatibility Layer" begin
-    Test.@testset "Legacy Graph Detection" begin
-        # This would test actual MetaGraphs if we had a legacy graph
-        # For now, test the detection function with mock inputs
-        
-        # Test with next-generation graph
-        next_graph = MetaGraphsNext.MetaGraph(
-            MetaGraphsNext.DiGraph(),
-            label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData
-        )
-        
-        Test.@test !Mycelia.is_legacy_graph(next_graph)
-        Test.@test Mycelia.ensure_next_graph(next_graph) === next_graph
+    Test.@testset "N-gram graph integration" begin
+        ngram = Mycelia.Rhizomorph.build_ngram_graph(["ABCABC"], 2; dataset_id="text")
+        Test.@test ngram isa MetaGraphsNext.MetaGraph
+        Test.@test !isempty(MetaGraphsNext.labels(ngram))
+        vdata = ngram[first(MetaGraphsNext.labels(ngram))]
+        Test.@test Mycelia.Rhizomorph.count_evidence(vdata) >= 1
     end
-    
-    Test.@testset "Ensure Next Graph Function" begin
-        # Test that ensure_next_graph passes through next-generation graphs unchanged
-        next_graph = MetaGraphsNext.MetaGraph(
-            MetaGraphsNext.DiGraph(),
-            label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData
-        )
-        
-        result = Mycelia.ensure_next_graph(next_graph)
-        Test.@test result === next_graph  # Should be identical object
-        Test.@test result isa MetaGraphsNext.MetaGraph
-    end
-end
-
-Test.@testset "Integration with Existing String Graphs" begin
-    # Test that both string graphs and k-mer graphs use compatible MetaGraphsNext structures
-    
-    # Create a string graph
-    string_graph = Mycelia.string_to_ngram_graph(s="ABCABC", n=2)
-    Test.@test string_graph isa MetaGraphsNext.MetaGraph
-    
-    # Create a k-mer graph
-    seq = FASTX.FASTA.Record("test", "ATCGATCG")
-    kmer_type = BioSequences.DNAKmer{3}
-    kmer_graph = Mycelia.build_kmer_graph_next(kmer_type, [seq])
-    Test.@test kmer_graph isa MetaGraphsNext.MetaGraph
-    
-    # Both should use MetaGraphsNext - this confirms API unification
-    Test.@test typeof(string_graph).name.module == MetaGraphsNext
-    Test.@test typeof(kmer_graph).name.module == MetaGraphsNext
 end

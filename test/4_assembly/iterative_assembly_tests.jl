@@ -46,35 +46,39 @@ Test.@testset "Iterative Assembly Tests" begin
             for (i, seq) in enumerate(sequences)
         ]
         
-        # Build test graph
-        graph = Mycelia.build_qualmer_graph(test_records, k=7)
-        
-        # Test sequence likelihood calculation
-        seq = sequences[1]
-        qual = repeat("I", length(seq))
-        likelihood = Mycelia.calculate_sequence_likelihood(seq, qual, graph, 7)
-        Test.@test isa(likelihood, Float64)
-        Test.@test likelihood <= 0.0  # Log likelihood should be <= 0
-        
-        # Test optimal sequence path finding
-        improved_seq, improvement = Mycelia.find_optimal_sequence_path(seq, qual, graph, 7)
-        Test.@test isa(improved_seq, String)
-        Test.@test isa(improvement, Float64)
-        Test.@test length(improved_seq) == length(seq)  # Should maintain length
-        
-        # Test single read improvement
-        read = test_records[1]
-        improved_read, was_improved = Mycelia.improve_read_likelihood(read, graph, 7)
-        Test.@test isa(improved_read, FASTX.FASTQ.Record)
-        Test.@test isa(was_improved, Bool)
-        Test.@test FASTX.identifier(improved_read) == FASTX.identifier(read)  # ID should be preserved
-        
-        # Test read set improvement
-        updated_reads, improvements_made = Mycelia.improve_read_set_likelihood(test_records, graph, 7)
-        Test.@test length(updated_reads) == length(test_records)
-        Test.@test isa(improvements_made, Int)
-        Test.@test improvements_made >= 0
-        Test.@test improvements_made <= length(test_records)
+        graph_modes = (:singlestrand, :doublestrand, :canonical)
+        for mode in graph_modes
+            Test.@testset "Mode $(mode)" begin
+                graph = Mycelia.Rhizomorph.build_qualmer_graph(test_records, 7; dataset_id="test", mode=mode)
+
+                # Test sequence likelihood calculation
+                seq = sequences[1]
+                qual = repeat("I", length(seq))
+                likelihood = Mycelia.calculate_sequence_likelihood(seq, qual, graph, 7; graph_mode=mode)
+                Test.@test isa(likelihood, Float64)
+                Test.@test likelihood <= 0.0  # Log likelihood should be <= 0
+
+                # Test optimal sequence path finding
+                improved_seq, improvement = Mycelia.find_optimal_sequence_path(seq, qual, graph, 7; graph_mode=mode)
+                Test.@test isa(improved_seq, String)
+                Test.@test isa(improvement, Float64)
+                Test.@test length(improved_seq) == length(seq)  # Should maintain length
+
+                # Test single read improvement
+                read = test_records[1]
+                improved_read, was_improved = Mycelia.improve_read_likelihood(read, graph, 7; graph_mode=mode)
+                Test.@test isa(improved_read, FASTX.FASTQ.Record)
+                Test.@test isa(was_improved, Bool)
+                Test.@test FASTX.identifier(improved_read) == FASTX.identifier(read)  # ID should be preserved
+
+                # Test read set improvement
+                updated_reads, improvements_made = Mycelia.improve_read_set_likelihood(test_records, graph, 7; graph_mode=mode)
+                Test.@test length(updated_reads) == length(test_records)
+                Test.@test isa(improvements_made, Int)
+                Test.@test improvements_made >= 0
+                Test.@test improvements_made <= length(test_records)
+            end
+        end
     end
     
     Test.@testset "Decision Making Functions" begin
@@ -119,17 +123,22 @@ Test.@testset "Iterative Assembly Tests" begin
             for (i, seq) in enumerate(sequences)
         ]
         
-        graph = Mycelia.build_qualmer_graph(test_records, k=5)
-        
-        # Test alternative generation for an existing k-mer
-        test_kmer = "ATCGA"
-        alternatives = Mycelia.generate_kmer_alternatives(test_kmer, graph)
-        Test.@test isa(alternatives, Vector{String})
-        Test.@test all(alt -> length(alt) == length(test_kmer), alternatives)
-        
-        # All alternatives should be valid DNA sequences
-        for alt in alternatives
-            Test.@test all(c -> c in ['A', 'T', 'G', 'C'], alt)
+        graph_modes = (:singlestrand, :doublestrand, :canonical)
+        for mode in graph_modes
+            Test.@testset "Mode $(mode)" begin
+                graph = Mycelia.Rhizomorph.build_qualmer_graph(test_records, 5; dataset_id="test", mode=mode)
+
+                # Test alternative generation for an existing k-mer
+                test_kmer = "ATCGA"
+                alternatives = Mycelia.generate_kmer_alternatives(test_kmer, graph; graph_mode=mode)
+                Test.@test isa(alternatives, Vector)
+                Test.@test all(alt -> length(string(alt)) == length(test_kmer), alternatives)
+
+                # All alternatives should be valid DNA sequences
+                for alt in alternatives
+                    Test.@test all(c -> c in ['A', 'T', 'G', 'C'], string(alt))
+                end
+            end
         end
     end
     
@@ -254,35 +263,40 @@ Test.@testset "Iterative Assembly Tests" begin
         # Test the improvement function with empty input - create a minimal mock graph
         mock_sequences = ["ATCGATCGATCGATCGATCGATCG"]
         mock_records = [FASTX.FASTQ.Record("mock", mock_sequences[1], repeat("I", length(mock_sequences[1])))]
-        mock_graph = Mycelia.build_qualmer_graph(mock_records, k=5)
-        
-        # Should handle empty input gracefully
-        updated_empty, improvements_empty = Mycelia.improve_read_set_likelihood(empty_records, mock_graph, 5)
-        Test.@test length(updated_empty) == 0
-        Test.@test improvements_empty == 0
-        
-        # Test with very short sequences
-        short_sequences = ["AT", "GC"]
-        short_records = [
-            FASTX.FASTQ.Record("short$i", seq, repeat("I", length(seq)))
-            for (i, seq) in enumerate(short_sequences)
-        ]
-        
-        # Should handle short sequences without crashing - use longer sequences for k=3
-        longer_short_sequences = ["ATCG", "GCTA"]
-        longer_short_records = [
-            FASTX.FASTQ.Record("short$i", seq, repeat("I", length(seq)))
-            for (i, seq) in enumerate(longer_short_sequences)
-        ]
-        short_graph = Mycelia.build_qualmer_graph(longer_short_records, k=3)
-        
-        # Test likelihood calculation with short sequence
-        short_likelihood = Mycelia.calculate_sequence_likelihood("ATCG", "IIII", short_graph, 3)
-        Test.@test isa(short_likelihood, Float64)
-        
-        # Test sufficient improvements with edge cases
-        Test.@test Mycelia.sufficient_improvements(0, 0, 0.05) == false  # Zero total reads
-        Test.@test Mycelia.sufficient_improvements(5, 0, 0.05) == false  # Zero total reads (invalid case)
+        graph_modes = (:singlestrand, :doublestrand, :canonical)
+        for mode in graph_modes
+            Test.@testset "Mode $(mode)" begin
+                mock_graph = Mycelia.Rhizomorph.build_qualmer_graph(mock_records, 5; dataset_id="test", mode=mode)
+
+                # Should handle empty input gracefully
+                updated_empty, improvements_empty = Mycelia.improve_read_set_likelihood(empty_records, mock_graph, 5; graph_mode=mode)
+                Test.@test length(updated_empty) == 0
+                Test.@test improvements_empty == 0
+
+                # Test with very short sequences
+                short_sequences = ["AT", "GC"]
+                short_records = [
+                    FASTX.FASTQ.Record("short$i", seq, repeat("I", length(seq)))
+                    for (i, seq) in enumerate(short_sequences)
+                ]
+
+                # Should handle short sequences without crashing - use longer sequences for k=3
+                longer_short_sequences = ["ATCG", "GCTA"]
+                longer_short_records = [
+                    FASTX.FASTQ.Record("short$i", seq, repeat("I", length(seq)))
+                    for (i, seq) in enumerate(longer_short_sequences)
+                ]
+                short_graph = Mycelia.Rhizomorph.build_qualmer_graph(longer_short_records, 3; dataset_id="test", mode=mode)
+
+                # Test likelihood calculation with short sequence
+                short_likelihood = Mycelia.calculate_sequence_likelihood("ATCG", "IIII", short_graph, 3; graph_mode=mode)
+                Test.@test isa(short_likelihood, Float64)
+
+                # Test sufficient improvements with edge cases
+                Test.@test Mycelia.sufficient_improvements(0, 0, 0.05) == false  # Zero total reads
+                Test.@test Mycelia.sufficient_improvements(5, 0, 0.05) == false  # Zero total reads (invalid case)
+            end
+        end
     end
     
     Test.@testset "Enhanced Statistical Path Improvement (Phase 5.2b)" begin
@@ -298,10 +312,34 @@ Test.@testset "Iterative Assembly Tests" begin
             FASTX.FASTQ.Record("read$i", seq, repeat("I", length(seq)))
             for (i, seq) in enumerate(sequences)
         ]
-        
-        # Build k-mer graph
+
+        graph_modes = (:singlestrand, :doublestrand)
+        for mode in graph_modes
+            Test.@testset "Mode $(mode)" begin
+                k = 7
+                graph = Mycelia.Rhizomorph.build_qualmer_graph(test_records, k; dataset_id="test", mode=mode)
+
+                test_sequence = "ATCGATCGATCGATCGTTCGATCG"  # Sequence with potential error
+                test_quality = repeat("I", length(test_sequence))
+
+                viterbi_result = Mycelia.try_viterbi_path_improvement(test_sequence, test_quality, graph, k; graph_mode=mode)
+                Test.@test isa(viterbi_result, Union{Tuple{String, Float64}, Nothing})
+
+                statistical_result = Mycelia.try_statistical_path_resampling(test_sequence, test_quality, graph, k; graph_mode=mode)
+                Test.@test isa(statistical_result, Union{Tuple{String, Float64}, Nothing})
+
+                original_likelihood = Mycelia.calculate_sequence_likelihood(test_sequence, test_quality, graph, k; graph_mode=mode)
+                local_result = Mycelia.try_local_path_improvements(test_sequence, test_quality, graph, k, original_likelihood; graph_mode=mode)
+                Test.@test isa(local_result, Tuple{String, Float64})
+
+                enhanced_result = Mycelia.find_optimal_sequence_path(test_sequence, test_quality, graph, k; graph_mode=mode)
+                Test.@test isa(enhanced_result, Tuple{String, Float64})
+            end
+        end
+
+        # Build canonical graph
         k = 7
-        graph = Mycelia.build_qualmer_graph(test_records, k=k)
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(test_records, k; dataset_id="test", mode=:canonical)
         
         # Test individual enhancement functions
         
@@ -309,17 +347,17 @@ Test.@testset "Iterative Assembly Tests" begin
         test_sequence = "ATCGATCGATCGATCGTTCGATCG"  # Sequence with potential error
         test_quality = repeat("I", length(test_sequence))
         
-        viterbi_result = Mycelia.try_viterbi_path_improvement(test_sequence, test_quality, graph, k)
+        viterbi_result = Mycelia.try_viterbi_path_improvement(test_sequence, test_quality, graph, k; graph_mode=:canonical)
         # Should either return improvement or nothing (graceful degradation)
         Test.@test isa(viterbi_result, Union{Tuple{String, Float64}, Nothing})
         
         # Test statistical path resampling
-        statistical_result = Mycelia.try_statistical_path_resampling(test_sequence, test_quality, graph, k)
+        statistical_result = Mycelia.try_statistical_path_resampling(test_sequence, test_quality, graph, k; graph_mode=:canonical)
         Test.@test isa(statistical_result, Union{Tuple{String, Float64}, Nothing})
         
         # Test local path improvements (fallback)
-        original_likelihood = Mycelia.calculate_sequence_likelihood(test_sequence, test_quality, graph, k)
-        local_result = Mycelia.try_local_path_improvements(test_sequence, test_quality, graph, k, original_likelihood)
+        original_likelihood = Mycelia.calculate_sequence_likelihood(test_sequence, test_quality, graph, k; graph_mode=:canonical)
+        local_result = Mycelia.try_local_path_improvements(test_sequence, test_quality, graph, k, original_likelihood; graph_mode=:canonical)
         Test.@test isa(local_result, Tuple{String, Float64})
         improved_seq, improvement = local_result
         Test.@test isa(improved_seq, String)
@@ -342,7 +380,7 @@ Test.@testset "Iterative Assembly Tests" begin
         Test.@test reconstructed_seq == test_sequence  # Should perfectly reconstruct
         
         # Test enhanced find_optimal_sequence_path function
-        enhanced_result = Mycelia.find_optimal_sequence_path(test_sequence, test_quality, graph, k)
+        enhanced_result = Mycelia.find_optimal_sequence_path(test_sequence, test_quality, graph, k; graph_mode=:canonical)
         Test.@test isa(enhanced_result, Tuple{String, Float64})
         enhanced_seq, likelihood_improvement = enhanced_result
         Test.@test isa(enhanced_seq, String)
@@ -381,14 +419,14 @@ Test.@testset "Iterative Assembly Tests" begin
             FASTX.FASTQ.Record("min$i", seq, repeat("I", length(seq)))
             for (i, seq) in enumerate(minimal_sequences)
         ]
-        minimal_graph = Mycelia.build_qualmer_graph(minimal_records, k=k)
+        minimal_graph = Mycelia.Rhizomorph.build_qualmer_graph(minimal_records, k; dataset_id="test", mode=:canonical)
         
-        minimal_result = Mycelia.find_optimal_sequence_path("ATCGATC", "IIIIIII", minimal_graph, k)
+        minimal_result = Mycelia.find_optimal_sequence_path("ATCGATC", "IIIIIII", minimal_graph, k; graph_mode=:canonical)
         Test.@test isa(minimal_result, Tuple{String, Float64})
         
         # Test that the enhancement doesn't break existing functionality
         original_read = FASTX.FASTQ.Record("test", test_sequence, test_quality)
-        enhanced_read, was_improved = Mycelia.improve_read_likelihood(original_read, graph, k)
+        enhanced_read, was_improved = Mycelia.improve_read_likelihood(original_read, graph, k; graph_mode=:canonical)
         Test.@test isa(enhanced_read, FASTX.FASTQ.Record)
         Test.@test isa(was_improved, Bool)
         Test.@test FASTX.identifier(enhanced_read) == FASTX.identifier(original_read)
@@ -460,8 +498,8 @@ Test.@testset "Iterative Assembly Tests" begin
             low_quality = repeat("!", length(test_sequence))  # PHRED score ~0
             high_quality = repeat("I", length(test_sequence))  # PHRED score ~40
             
-            low_qual_result = Mycelia.find_optimal_sequence_path(test_sequence, low_quality, graph, k)
-            high_qual_result = Mycelia.find_optimal_sequence_path(test_sequence, high_quality, graph, k)
+            low_qual_result = Mycelia.find_optimal_sequence_path(test_sequence, low_quality, graph, k; graph_mode=:canonical)
+            high_qual_result = Mycelia.find_optimal_sequence_path(test_sequence, high_quality, graph, k; graph_mode=:canonical)
             
             Test.@test isa(low_qual_result, Tuple{String, Float64})
             Test.@test isa(high_qual_result, Tuple{String, Float64})
@@ -476,18 +514,18 @@ Test.@testset "Iterative Assembly Tests" begin
             # Minimal graph (2 sequences)
             minimal_seqs = ["ATCGATC", "TCGATCG"]
             minimal_records = [FASTX.FASTQ.Record("min$i", seq, repeat("I", length(seq))) for (i, seq) in enumerate(minimal_seqs)]
-            minimal_graph = Mycelia.build_qualmer_graph(minimal_records, k=k)
+            minimal_graph = Mycelia.Rhizomorph.build_qualmer_graph(minimal_records, k; dataset_id="test", mode=:canonical)
             
-            minimal_result = Mycelia.find_optimal_sequence_path("ATCGATC", "IIIIIII", minimal_graph, k)
+            minimal_result = Mycelia.find_optimal_sequence_path("ATCGATC", "IIIIIII", minimal_graph, k; graph_mode=:canonical)
             Test.@test isa(minimal_result, Tuple{String, Float64})
             
             # Large graph (many sequences)
             large_seqs = ["ATCGATCGATC", "TCGATCGATCG", "CGATCGATCGA", "GATCGATCGAT", 
                          "ATCGATCGATG", "TCGATCGATCA", "CGATCGATCGT", "GATCGATCGAC"]
             large_records = [FASTX.FASTQ.Record("large$i", seq, repeat("I", length(seq))) for (i, seq) in enumerate(large_seqs)]
-            large_graph = Mycelia.build_qualmer_graph(large_records, k=k)
+            large_graph = Mycelia.Rhizomorph.build_qualmer_graph(large_records, k; dataset_id="test", mode=:canonical)
             
-            large_result = Mycelia.find_optimal_sequence_path("ATCGATCGATC", repeat("I", 11), large_graph, k)
+            large_result = Mycelia.find_optimal_sequence_path("ATCGATCGATC", repeat("I", 11), large_graph, k; graph_mode=:canonical)
             Test.@test isa(large_result, Tuple{String, Float64})
         end
         
@@ -503,26 +541,26 @@ Test.@testset "Iterative Assembly Tests" begin
             realistic_seqs = [replace(seq, "_" => "") for seq in realistic_seqs]  # Remove gap markers
             
             realistic_records = [FASTX.FASTQ.Record("real$i", seq, repeat("I", length(seq))) for (i, seq) in enumerate(realistic_seqs)]
-            realistic_graph = Mycelia.build_qualmer_graph(realistic_records, k=k)
+            realistic_graph = Mycelia.Rhizomorph.build_qualmer_graph(realistic_records, k; dataset_id="test", mode=:canonical)
             
             # Test that all enhancement methods handle realistic data
             for (i, seq) in enumerate(realistic_seqs)
                 quality = repeat("I", length(seq))
                 
                 # Test main enhancement function
-                result = Mycelia.find_optimal_sequence_path(seq, quality, realistic_graph, k)
+                result = Mycelia.find_optimal_sequence_path(seq, quality, realistic_graph, k; graph_mode=:canonical)
                 Test.@test isa(result, Tuple{String, Float64})
                 Test.@test length(result[1]) > 0
                 
                 # Test individual methods
-                viterbi_result = Mycelia.try_viterbi_path_improvement(seq, quality, realistic_graph, k)
+                viterbi_result = Mycelia.try_viterbi_path_improvement(seq, quality, realistic_graph, k; graph_mode=:canonical)
                 Test.@test isa(viterbi_result, Union{Tuple{String, Float64}, Nothing})
                 
-                stat_result = Mycelia.try_statistical_path_resampling(seq, quality, realistic_graph, k)
+                stat_result = Mycelia.try_statistical_path_resampling(seq, quality, realistic_graph, k; graph_mode=:canonical)
                 Test.@test isa(stat_result, Union{Tuple{String, Float64}, Nothing})
                 
-                original_likelihood = Mycelia.calculate_sequence_likelihood(seq, quality, realistic_graph, k)
-                local_result = Mycelia.try_local_path_improvements(seq, quality, realistic_graph, k, original_likelihood)
+                original_likelihood = Mycelia.calculate_sequence_likelihood(seq, quality, realistic_graph, k; graph_mode=:canonical)
+                local_result = Mycelia.try_local_path_improvements(seq, quality, realistic_graph, k, original_likelihood; graph_mode=:canonical)
                 Test.@test isa(local_result, Tuple{String, Float64})
             end
         end

@@ -24,99 +24,90 @@ import FASTX
 import Kmers
 
 Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
-    
     # Helper function to create a simple test graph
     function create_test_graph()
         graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData,
-            weight_function=edge_data -> edge_data.weight,
-            default_weight=0.0
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function=Mycelia.edge_data_weight,
+            default_weight=0.0,
         )
         
         # Add vertices: ATC -> TCG -> CGA
-        graph["ATC"] = Mycelia.KmerVertexData("ATC")
-        graph["TCG"] = Mycelia.KmerVertexData("TCG")  
-        graph["CGA"] = Mycelia.KmerVertexData("CGA")
+        graph["ATC"] = nothing
+        graph["TCG"] = nothing
+        graph["CGA"] = nothing
         
         # Add edges with different coverage (weight is calculated automatically)
         # High coverage edge (3 observations)
-        high_coverage = [
-            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Forward)),
-            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Forward)),
-            ((3, 1, Mycelia.Forward), (3, 2, Mycelia.Forward))
-        ]
-        graph["ATC", "TCG"] = Mycelia.KmerEdgeData(
-            high_coverage,
-            Mycelia.Forward, Mycelia.Forward
-        )
+        graph["ATC", "TCG"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
         
         # Low coverage edge (1 observation)
-        low_coverage = [
-            ((1, 2, Mycelia.Forward), (1, 3, Mycelia.Forward))
-        ]
-        graph["TCG", "CGA"] = Mycelia.KmerEdgeData(
-            low_coverage,
-            Mycelia.Forward, Mycelia.Forward
-        )
+        graph["TCG", "CGA"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(1.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
         
         return graph
     end
     
+    inverse_edge_data_weight(edge_data) = 1.0 / edge_data.weight
+
     Test.@testset "WalkStep and GraphPath Construction" begin
         # Test WalkStep creation
-        step = Mycelia.WalkStep("ATC", Mycelia.Forward, 0.8, 0.8)
+        step = Mycelia.Rhizomorph.WalkStep("ATC", Mycelia.Rhizomorph.Forward, 0.8, 0.8)
         Test.@test step.vertex_label == "ATC"
-        Test.@test step.strand == Mycelia.Forward
+        Test.@test step.strand == Mycelia.Rhizomorph.Forward
         Test.@test step.probability == 0.8
         Test.@test step.cumulative_probability == 0.8
         
         # Test GraphPath creation
         steps = [
-            Mycelia.WalkStep("ATC", Mycelia.Forward, 1.0, 1.0),
-            Mycelia.WalkStep("TCG", Mycelia.Forward, 0.9, 0.9),
-            Mycelia.WalkStep("CGA", Mycelia.Forward, 0.7, 0.63)
+            Mycelia.Rhizomorph.WalkStep("ATC", Mycelia.Rhizomorph.Forward, 1.0, 1.0),
+            Mycelia.Rhizomorph.WalkStep("TCG", Mycelia.Rhizomorph.Forward, 0.9, 0.9),
+            Mycelia.Rhizomorph.WalkStep("CGA", Mycelia.Rhizomorph.Forward, 0.7, 0.63)
         ]
         
-        path = Mycelia.GraphPath(steps)
+        path = Mycelia.Rhizomorph.GraphPath(steps)
         Test.@test path.steps == steps
         Test.@test path.total_probability == 0.63
-        Test.@test path.sequence isa String
-        Test.@test length(path.sequence) > 0
+        graph = create_test_graph()
+        sequence = Mycelia.Rhizomorph.path_to_sequence(path, graph)
+        Test.@test sequence isa String
+        Test.@test length(sequence) > 0
     end
     
     Test.@testset "Probabilistic Walk" begin
         graph = create_test_graph()
         
         # Test basic walk
-        path = Mycelia.probabilistic_walk_next(graph, "ATC", 10; seed=42)
-        Test.@test path isa Mycelia.GraphPath
+        path = Mycelia.Rhizomorph.probabilistic_walk_next(graph, "ATC", 10; seed=42)
+        Test.@test path isa Mycelia.Rhizomorph.GraphPath
         Test.@test !isempty(path.steps)
         Test.@test first(path.steps).vertex_label == "ATC"
-        Test.@test first(path.steps).strand == Mycelia.Forward
+        Test.@test first(path.steps).strand == Mycelia.Rhizomorph.Forward
         Test.@test first(path.steps).probability == 1.0
         
         # Test that path respects max_steps
-        short_path = Mycelia.probabilistic_walk_next(graph, "ATC", 1; seed=42)
+        short_path = Mycelia.Rhizomorph.probabilistic_walk_next(graph, "ATC", 1; seed=42)
         Test.@test length(short_path.steps) <= 2  # Start vertex + 1 step
         
         # Test with non-existent start vertex
-        Test.@test_throws ArgumentError Mycelia.probabilistic_walk_next(graph, "XYZ", 5)
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.probabilistic_walk_next(graph, "XYZ", 5)
         
         # Test reproducibility with same seed
-        path1 = Mycelia.probabilistic_walk_next(graph, "ATC", 5; seed=123)
-        path2 = Mycelia.probabilistic_walk_next(graph, "ATC", 5; seed=123)
-        Test.@test path1.sequence == path2.sequence
+        path1 = Mycelia.Rhizomorph.probabilistic_walk_next(graph, "ATC", 5; seed=123)
+        path2 = Mycelia.Rhizomorph.probabilistic_walk_next(graph, "ATC", 5; seed=123)
+        sequence1 = Mycelia.Rhizomorph.path_to_sequence(path1, graph)
+        sequence2 = Mycelia.Rhizomorph.path_to_sequence(path2, graph)
+        Test.@test sequence1 == sequence2
     end
     
     Test.@testset "Maximum Weight Walk" begin
         graph = create_test_graph()
         
         # Test maximum weight walk (should prefer high-weight edges)
-        path = Mycelia.maximum_weight_walk_next(graph, "ATC", 10)
-        Test.@test path isa Mycelia.GraphPath
+        path = Mycelia.Rhizomorph.maximum_weight_walk_next(graph, "ATC", 10)
+        Test.@test path isa Mycelia.Rhizomorph.GraphPath
         Test.@test !isempty(path.steps)
         Test.@test first(path.steps).vertex_label == "ATC"
         
@@ -129,39 +120,39 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         end
         
         # Test custom weight function
-        custom_weight_path = Mycelia.maximum_weight_walk_next(
+        custom_weight_path = Mycelia.Rhizomorph.maximum_weight_walk_next(
             graph, "ATC", 10;
-            weight_function = edge_data -> 1.0 / edge_data.weight  # Inverse weight
+            weight_function = inverse_edge_data_weight
         )
-        Test.@test custom_weight_path isa Mycelia.GraphPath
+        Test.@test custom_weight_path isa Mycelia.Rhizomorph.GraphPath
         
         # Test with non-existent start vertex
-        Test.@test_throws ArgumentError Mycelia.maximum_weight_walk_next(graph, "XYZ", 5)
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.maximum_weight_walk_next(graph, "XYZ", 5)
     end
     
     Test.@testset "Shortest Probability Path" begin
         graph = create_test_graph()
         
         # Test finding path between existing vertices
-        path = Mycelia.shortest_probability_path_next(graph, "ATC", "CGA")
-        Test.@test path isa Mycelia.GraphPath
+        path = Mycelia.Rhizomorph.shortest_probability_path_next(graph, "ATC", "CGA")
+        Test.@test path isa Mycelia.Rhizomorph.GraphPath
         Test.@test !isempty(path.steps)
         Test.@test first(path.steps).vertex_label == "ATC"
         Test.@test last(path.steps).vertex_label == "CGA"
         
         # Test path to same vertex
-        same_path = Mycelia.shortest_probability_path_next(graph, "ATC", "ATC")
-        Test.@test same_path isa Mycelia.GraphPath
+        same_path = Mycelia.Rhizomorph.shortest_probability_path_next(graph, "ATC", "ATC")
+        Test.@test same_path isa Mycelia.Rhizomorph.GraphPath
         Test.@test length(same_path.steps) == 1
         Test.@test same_path.steps[1].vertex_label == "ATC"
         
         # Test path to unreachable vertex (reverse direction)
-        no_path = Mycelia.shortest_probability_path_next(graph, "CGA", "ATC")
+        no_path = Mycelia.Rhizomorph.shortest_probability_path_next(graph, "CGA", "ATC")
         Test.@test no_path === nothing
         
         # Test with non-existent vertices
-        Test.@test Mycelia.shortest_probability_path_next(graph, "XYZ", "ATC") === nothing
-        Test.@test Mycelia.shortest_probability_path_next(graph, "ATC", "XYZ") === nothing
+        Test.@test Mycelia.Rhizomorph.shortest_probability_path_next(graph, "XYZ", "ATC") === nothing
+        Test.@test Mycelia.Rhizomorph.shortest_probability_path_next(graph, "ATC", "XYZ") === nothing
     end
     
     Test.@testset "Integration with Real Graph" begin
@@ -171,21 +162,23 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         observations = [seq1, seq2]
         
         kmer_type = Kmers.DNAKmer{3}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, observations)
+        base_graph = Mycelia.Rhizomorph.build_kmer_graph(observations, 3; dataset_id="test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(base_graph)
         
         if !isempty(MetaGraphsNext.labels(graph))
             start_vertex = first(MetaGraphsNext.labels(graph))
             
             # Test probabilistic walk on real graph
-            prob_path = Mycelia.probabilistic_walk_next(graph, start_vertex, 5; seed=42)
-            Test.@test prob_path isa Mycelia.GraphPath
+            prob_path = Mycelia.Rhizomorph.probabilistic_walk_next(graph, start_vertex, 5; seed=42)
+            Test.@test prob_path isa Mycelia.Rhizomorph.GraphPath
             Test.@test !isempty(prob_path.steps)
             Test.@test prob_path.total_probability > 0
-            Test.@test !isempty(prob_path.sequence)
+            sequence = Mycelia.Rhizomorph.path_to_sequence(prob_path, graph)
+            Test.@test !isempty(sequence)
             
             # Test maximum weight walk
-            max_path = Mycelia.maximum_weight_walk_next(graph, start_vertex, 5)
-            Test.@test max_path isa Mycelia.GraphPath
+            max_path = Mycelia.Rhizomorph.maximum_weight_walk_next(graph, start_vertex, 5)
+            Test.@test max_path isa Mycelia.Rhizomorph.GraphPath
             Test.@test !isempty(max_path.steps)
             
             # Test shortest path (if there are multiple vertices)
@@ -193,10 +186,10 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
             if length(labels) >= 2
                 source = labels[1]
                 target = labels[2]
-                short_path = Mycelia.shortest_probability_path_next(graph, source, target)
+                short_path = Mycelia.Rhizomorph.shortest_probability_path_next(graph, source, target)
                 # May be nothing if no path exists, which is valid
                 if short_path !== nothing
-                    Test.@test short_path isa Mycelia.GraphPath
+                    Test.@test short_path isa Mycelia.Rhizomorph.GraphPath
                     Test.@test first(short_path.steps).vertex_label == source
                     Test.@test last(short_path.steps).vertex_label == target
                 end
@@ -209,33 +202,26 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData,
-            weight_function=edge_data -> edge_data.weight,
-            default_weight=0.0
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function=Mycelia.edge_data_weight,
+            default_weight=0.0,
         )
         
-        graph["ATC"] = Mycelia.KmerVertexData("ATC")
-        graph["GAT"] = Mycelia.KmerVertexData("GAT")  # Reverse complement of ATC
+        graph["ATC"] = nothing
+        graph["GAT"] = nothing
         
         # Add edge requiring strand compatibility
-        strand_coverage = [
-            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Reverse)),
-            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Reverse))
-        ]
-        graph["ATC", "GAT"] = Mycelia.KmerEdgeData(
-            strand_coverage,
-            Mycelia.Forward, Mycelia.Reverse  # Forward ATC -> Reverse GAT
-        )
+        graph["ATC", "GAT"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
         
         # Test that algorithms respect strand constraints
-        path = Mycelia.probabilistic_walk_next(graph, "ATC", 5; seed=42)
-        Test.@test path isa Mycelia.GraphPath
-        Test.@test first(path.steps).strand == Mycelia.Forward
+        path = Mycelia.Rhizomorph.probabilistic_walk_next(graph, "ATC", 5; seed=42)
+        Test.@test path isa Mycelia.Rhizomorph.GraphPath
+        Test.@test first(path.steps).strand == Mycelia.Rhizomorph.Forward
         
         # If path continues to second vertex, check strand consistency
         if length(path.steps) >= 2
-            Test.@test path.steps[2].strand == Mycelia.Reverse
+            Test.@test path.steps[2].strand == Mycelia.Rhizomorph.Reverse
         end
     end
     
@@ -244,31 +230,31 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         empty_graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
         )
         
         # Should handle empty graphs gracefully
-        Test.@test_throws ArgumentError Mycelia.probabilistic_walk_next(empty_graph, "ATC", 5)
-        Test.@test_throws ArgumentError Mycelia.maximum_weight_walk_next(empty_graph, "ATC", 5)
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.probabilistic_walk_next(empty_graph, "ATC", 5)
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.maximum_weight_walk_next(empty_graph, "ATC", 5)
         
         # Single vertex graph
         single_graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph(),
             label_type=String,
-            vertex_data_type=Mycelia.KmerVertexData,
-            edge_data_type=Mycelia.KmerEdgeData
+            vertex_data_type=Any,
+            edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
         )
-        single_graph["ATC"] = Mycelia.KmerVertexData("ATC")
+        single_graph["ATC"] = nothing
         
         # Should work with single vertex
-        single_path = Mycelia.probabilistic_walk_next(single_graph, "ATC", 5; seed=42)
+        single_path = Mycelia.Rhizomorph.probabilistic_walk_next(single_graph, "ATC", 5; seed=42)
         Test.@test length(single_path.steps) == 1
         Test.@test single_path.steps[1].vertex_label == "ATC"
         
         # Shortest path in single vertex graph
-        self_path = Mycelia.shortest_probability_path_next(single_graph, "ATC", "ATC")
-        Test.@test self_path isa Mycelia.GraphPath
+        self_path = Mycelia.Rhizomorph.shortest_probability_path_next(single_graph, "ATC", "ATC")
+        Test.@test self_path isa Mycelia.Rhizomorph.GraphPath
         Test.@test length(self_path.steps) == 1
     end
 end

@@ -30,8 +30,12 @@ edges are added only when observed.
 """
 module Rhizomorph
 
+# Access parent module bindings for shared helpers/types.
+import ..Mycelia
+
 # Import necessary packages for Rhizomorph functionality
 import BioSequences
+import DataStructures
 import FASTX
 import Graphs
 import Kmers
@@ -47,11 +51,14 @@ include("core/evidence-functions.jl")
 include("core/quality-functions.jl")
 include("core/graph-query.jl")
 include("core/graph-construction.jl")
+include("core/graph-type-conversions.jl")
 
 # Load algorithm modules
 include("algorithms/path-finding.jl")
 include("algorithms/io.jl")
 include("algorithms/simplification.jl")
+include("algorithms/repeats.jl")
+include("algorithms/contigs.jl")
 
 # Load graph builders
 include("fixed-length/kmer-graphs.jl")
@@ -61,5 +68,6 @@ include("variable-length/string-graphs.jl")
 include("variable-length/fasta-graphs.jl")
 include("variable-length/fastq-graphs.jl")
 include("variable-length/strand-conversions.jl")
+include("assembly.jl")
 
 end  # module Rhizomorph

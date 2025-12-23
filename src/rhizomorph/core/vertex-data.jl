@@ -131,6 +131,7 @@ Vertex data for variable-length quality-aware BioSequence graphs (FASTQ graphs).
 
 # Fields
 - `sequence::T`: The sequence AS OBSERVED
+- `quality_scores::Vector{UInt8}`: Per-base quality scores (Phred+33 encoded)
 - `evidence::Dict{String, Dict{String, Set{QualityEvidenceEntry}}}`: Quality evidence
 
 # Examples
@@ -144,11 +145,15 @@ add_evidence!(vertex, "dataset_01", "read_001",
 """
 struct QualityBioSequenceVertexData{T}
     sequence::T
+    quality_scores::Vector{UInt8}
     evidence::Dict{String, Dict{String, Set{QualityEvidenceEntry}}}
 
-    function QualityBioSequenceVertexData(sequence::T) where {T}
+    function QualityBioSequenceVertexData(sequence::T, quality_scores::Vector{UInt8}=Vector{UInt8}()) where {T}
+        if !isempty(quality_scores) && length(sequence) != length(quality_scores)
+            error("Sequence and quality lengths must match")
+        end
         evidence = Dict{String, Dict{String, Set{QualityEvidenceEntry}}}()
-        new{T}(sequence, evidence)
+        new{T}(sequence, quality_scores, evidence)
     end
 end
 
@@ -204,3 +209,11 @@ struct QualityStringVertexData
         new(string_value, evidence)
     end
 end
+
+# Convenience constructors for parameterized vertex types to support explicit instantiation.
+KmerVertexData{T}(kmer::T) where {T} = KmerVertexData(kmer)
+QualmerVertexData{T}(kmer::T) where {T} = QualmerVertexData(kmer)
+BioSequenceVertexData{T}(sequence::T) where {T} = BioSequenceVertexData(sequence)
+QualityBioSequenceVertexData{T}(sequence::T) where {T} = QualityBioSequenceVertexData(sequence)
+QualityBioSequenceVertexData{T}(sequence::T, quality_scores::Vector{UInt8}) where {T} =
+    QualityBioSequenceVertexData(sequence, quality_scores)

@@ -15,13 +15,6 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
-import Test
-import Mycelia
-import CSV
-import CodecZlib
-import DataFrames
-
-
 import Pkg
 if isinteractive()
     Pkg.activate("..")
@@ -30,9 +23,8 @@ import Test
 import Mycelia
 import FASTX
 import BioSequences
-import DataFrames
 import CSV
-import uCSV
+import DataFrames
 
 # T4 phage
 # result = Mycelia.download_genome_by_accession(accession="NC_000866")
@@ -42,15 +34,17 @@ Test.@testset "Annotation & feature extraction" begin
     Test.@testset "generate_transterm_coordinates_from_fasta" begin
         mktempdir() do dir
             fasta_file = joinpath(dir, "sample.fna")
-            record = FASTX.FASTA.Record("seq1", BioSequences.DNASequence("ATGCGT"))
+            record = FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT"))
             Mycelia.write_fasta(outfile=fasta_file, records=[record])
             coords_file = Mycelia.generate_transterm_coordinates_from_fasta(fasta_file)
             Test.@test isfile(coords_file)
-            coords_df = uCSV.read(coords_file, DataFrames.DataFrame; delim="  ")
-            Test.@test size(coords_df, 1) == 2
-            Test.@test coords_df.gene_id == ["seq1_start", "seq1_stop"]
-            Test.@test coords_df.start == [1, length("ATGCGT")-1]
-            Test.@test coords_df.stop == [2, length("ATGCGT")]
+            rows = [split(strip(line)) for line in readlines(coords_file) if !isempty(strip(line))]
+            Test.@test length(rows) == 2
+            rows_by_gene = Dict(row[1] => row for row in rows)
+            Test.@test haskey(rows_by_gene, "seq1_start")
+            Test.@test haskey(rows_by_gene, "seq1_stop")
+            Test.@test rows_by_gene["seq1_start"][2:4] == ["1", "2", "seq1"]
+            Test.@test rows_by_gene["seq1_stop"][2:4] == [string(length("ATGCGT") - 1), string(length("ATGCGT")), "seq1"]
         end
     end
 
@@ -62,12 +56,11 @@ Test.@testset "Annotation & feature extraction" begin
             end
             coords_file = Mycelia.generate_transterm_coordinates_from_gff(gff_file)
             Test.@test isfile(coords_file)
-            df = uCSV.read(coords_file, DataFrames.DataFrame; delim="  ")
-            Test.@test size(df, 1) == 1
-            Test.@test df.gene_id[1] == "gene1"
-            Test.@test df.start[1] == 0
-            Test.@test df.stop[1] == 5
-            Test.@test df."#seqid"[1] == "seq1"
+            rows = [split(strip(line)) for line in readlines(coords_file) if !isempty(strip(line))]
+            Test.@test length(rows) == 1
+            row = rows[1]
+            Test.@test row[1] == "gene1"
+            Test.@test row[2:4] == ["0", "5", "seq1"]
         end
     end
 

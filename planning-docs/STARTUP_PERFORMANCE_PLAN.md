@@ -15,9 +15,9 @@ Goal: cut time-to-first-analysis for Mycelia by enabling precompilation, avoidin
 5) Add docs for temp-env workflows (shared depot, toggles, and how to skip optional stacks).
 
 ## Execution Checklist
-- [X] Enable `__precompile__()` in `src/Mycelia.jl` (with note about disabling if specific tests require).  
-- [X] Audit and prune unused deps (or guard them) to shrink precompile surface.  
-- [ ] Add `PrecompileTools` to `[deps]` and create `src/precompile_workload.jl` with small fixtures-driven workload; include from `Mycelia.jl`.  
+- [X] Enable `__precompile__()` in `src/Mycelia.jl` (with note about disabling if specific tests require).
+- [X] Audit and prune unused deps (or guard them) to shrink precompile surface.
+- [X] Add `PrecompileTools` to `[deps]` and create `src/precompile_workload.jl` with small fixtures-driven workload; include from `Mycelia.jl`.  
 - [ ] Convert plotting/RL/Conda-heavy code to optional extensions; move imports inside functions or extension modules.  
 - [ ] Add `bin/warm_cache.jl` (instantiate + precompile) and document usage; wire optional CI artifact publishing.  
 - [ ] Update README/docs with startup tips (shared depot, env toggles, how to disable optional stacks).  

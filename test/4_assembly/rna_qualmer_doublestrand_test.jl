@@ -1,7 +1,7 @@
-# RNA Qualmer Doublestrand (Canonical) Graph Test
+# RNA Qualmer Doublestrand Graph Test
 #
-# Tests for canonical RNA qualmer graph construction where forward and reverse
-# complement k-mers with quality scores are merged into canonical representation.
+# Tests for doublestrand RNA qualmer graph construction where forward and reverse
+# complement k-mers with quality scores are preserved as separate vertices.
 #
 # Run with: julia --project=. test/4_assembly/rna_qualmer_doublestrand_test.jl
 
@@ -13,7 +13,7 @@ import Kmers
 
 Test.@testset "RNA Qualmer Doublestrand Graph" begin
 
-    Test.@testset "Canonical Qualmer Merging - Basic" begin
+    Test.@testset "Doublestrand Qualmer - Basic" begin
         # RNA sequence with quality scores
         seq = "AUGCAU"
         qual = [30, 35, 32, 28, 31, 29]
@@ -23,8 +23,8 @@ Test.@testset "RNA Qualmer Doublestrand Graph" begin
         graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3; dataset_id="test")
 
         # In "AUGCAU": AUG, UGC, GCA, CAU
-        # Canonical: AUG (for AUG and CAU), GCA (for UGC and GCA)
-        Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2
+        # Doublestrand preserves forward + RC vertices (no canonical merge here)
+        Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 4
     end
 
     Test.@testset "Quality Scores Preserved in Canonical Form" begin

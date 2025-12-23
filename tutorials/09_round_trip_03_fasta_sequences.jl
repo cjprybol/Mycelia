@@ -168,11 +168,15 @@ for group in sequence_groups
         println("  Input records: $(length(group.records))")
         
         try
-            ## Build BioSequence graph
-            bio_graph = Mycelia.build_biosequence_graph(group.records)
+            ## Build BioSequence graph (Rhizomorph FASTA graph)
+            bio_graph = Mycelia.Rhizomorph.build_fasta_graph(
+                group.records;
+                dataset_id="$(group.name)_round_trip",
+                min_overlap=5
+            )
             
             ## Extract graph properties
-            vertices = collect(values(bio_graph.vertex_labels))
+            vertices = collect(Mycelia.MetaGraphsNext.labels(bio_graph))
             num_vertices = length(vertices)
             
             ## Analyze sequence properties
@@ -334,7 +338,7 @@ println("-"^50)
 function reconstruct_from_biosequence_graph(graph, original_records, seq_type_name)
     """Attempt to reconstruct sequences from BioSequence graph."""
     
-    vertices = collect(values(graph.vertex_labels))
+    vertices = collect(Mycelia.MetaGraphsNext.labels(graph))
     
     if isempty(vertices)
         return (
@@ -556,11 +560,11 @@ function analyze_biosequence_performance()
         ## Measure construction time
         start_time = time()
         try
-            graph = Mycelia.build_biosequence_graph([test_record])
+            graph = Mycelia.Rhizomorph.build_fasta_graph([test_record]; dataset_id="perf_test", min_overlap=3)
             construction_time = time() - start_time
             
             ## Graph properties
-            num_vertices = length(graph.vertex_labels)
+            num_vertices = length(Mycelia.MetaGraphsNext.labels(graph))
             
             println("  Length $length: $(round(construction_time*1000, digits=2))ms, $num_vertices vertices")
             
@@ -620,8 +624,8 @@ end
 # Assemble using BioSequence graph
 println("\\nAssembling reads using BioSequence graph:")
 try
-    assembly_graph = Mycelia.build_biosequence_graph(simulated_reads)
-    assembly_vertices = collect(values(assembly_graph.vertex_labels))
+    assembly_graph = Mycelia.Rhizomorph.build_fasta_graph(simulated_reads; dataset_id="assembly_reads", min_overlap=10)
+    assembly_vertices = collect(Mycelia.MetaGraphsNext.labels(assembly_graph))
     
     println("  Assembly graph:")
     println("    Vertices: $(length(assembly_vertices))")

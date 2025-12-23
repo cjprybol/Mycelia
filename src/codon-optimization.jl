@@ -130,7 +130,7 @@ Creates a mapping from amino acids to representative DNA codons using the standa
 - Dictionary mapping each amino acid (including stop codon `AA_Term`) to a valid DNA codon that encodes it
 """
 function amino_acids_to_codons()
-    amino_acid_to_codon_map = Dict(a => Kmers.DNACodon for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
+    amino_acid_to_codon_map = Dict{BioSymbols.AminoAcid, Kmers.DNACodon}()
     for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
         amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
         amino_acid_to_codon_map[amino_acid] = codon
@@ -148,8 +148,10 @@ Returns a dictionary where:
 - Values are the corresponding amino acids from BioSequences.jl
 """
 function codons_to_amino_acids()
-    codons = Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
-    codon_to_amino_acid_map = Dict(codon => BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+    codon_to_amino_acid_map = Dict{Kmers.DNACodon, BioSequences.LongAA}()
+    for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
+        codon_to_amino_acid_map[codon] = BioSequences.translate(BioSequences.LongDNA{2}(codon))
+    end
     return codon_to_amino_acid_map
 end
 
@@ -264,6 +266,9 @@ Convert raw k‑mer counts into normalized frequencies.
 """
 function normalize_kmer_counts(kmer_counts)
     total_kmer_counts = sum(values(kmer_counts))
+    if total_kmer_counts == 0
+        return DataStructures.OrderedDict(k => 0.0 for (k, _) in kmer_counts)
+    end
     normalized_kmer_frequencies = DataStructures.OrderedDict(k => v/total_kmer_counts for (k,v) in kmer_counts)
     return normalized_kmer_frequencies
 end

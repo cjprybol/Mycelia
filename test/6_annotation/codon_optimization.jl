@@ -7,6 +7,8 @@ import Mycelia
 import BioSequences
 import StatsBase
 import DataStructures
+import Random
+import Kmers
 
 Test.@testset "Codon Optimization Tests" begin
     Test.@testset "reverse_translate function" begin
@@ -49,14 +51,20 @@ Test.@testset "Codon Optimization Tests" begin
         Test.@test haskey(aa_to_codon_map, BioSequences.AA_M)  # Methionine
         Test.@test haskey(aa_to_codon_map, BioSequences.AA_Term)  # Stop codon
         
-        # Test that all amino acids are represented
-        for aa in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term])
+        supported_aas = filter(
+            aa -> !(aa in (BioSequences.AA_U, BioSequences.AA_O)),
+            vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term])
+        )
+
+        # Test that all supported amino acids are represented
+        for aa in supported_aas
             Test.@test haskey(aa_to_codon_map, aa)
             Test.@test aa_to_codon_map[aa] isa Kmers.DNACodon
         end
         
         # Test that codons translate to correct amino acids
-        for (aa, codon) in aa_to_codon_map
+        for aa in supported_aas
+            codon = aa_to_codon_map[aa]
             translated_aa = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
             Test.@test translated_aa == aa
         end

@@ -92,11 +92,8 @@ println("Generated $(length(temp_files)) test sequences")
 
 println("\n--- Dense K-mer Counting ---")
 
-# TODO: Implement comprehensive dense k-mer analysis
-# - Count all possible k-mers
-# - Analyze frequency distributions
-# - Memory usage profiling
-# - Comparison across different k values
+dense_results = Dict{Int, NamedTuple}()
+dense_summaries = Dict{Int, NamedTuple}()
 
 for k in [3, 5, 7, 9]
     println("Computing dense k-mer counts for k=$k...")
@@ -113,6 +110,28 @@ for k in [3, 5, 7, 9]
         )
         println("  ✓ Dense counting completed")
         println("  Matrix size: $(size(dense_counts.counts))")
+        dense_results[k] = dense_counts
+
+        kmer_totals = vec(sum(dense_counts.counts; dims=2))
+        kmer_hist = Mycelia.kmer_frequency_histogram(kmer_totals)
+        zero_kmers = get(kmer_hist, 0, 0)
+        peak = Mycelia.coverage_peak_from_hist(kmer_hist; min_coverage=2)
+        dense_bytes = Mycelia.estimate_dense_matrix_memory(
+            eltype(dense_counts.counts),
+            size(dense_counts.counts, 1),
+            size(dense_counts.counts, 2)
+        )
+        dense_summaries[k] = (
+            total_kmers=sum(kmer_totals),
+            observed_kmers=length(kmer_totals) - zero_kmers,
+            zero_fraction=zero_kmers / max(1, length(kmer_totals)),
+            peak_coverage=peak.coverage,
+            dense_bytes=dense_bytes
+        )
+        println("  Observed k-mers: $(dense_summaries[k].observed_kmers)")
+        println("  Zero fraction: $(round(dense_summaries[k].zero_fraction, digits=3))")
+        println("  Peak coverage (>=2): $(dense_summaries[k].peak_coverage)")
+        println("  Estimated dense bytes: $(Mycelia.bytes_human_readable(dense_summaries[k].dense_bytes))")
     else
         println("  ⚠ Skipping due to high memory usage")
     end
@@ -125,11 +144,9 @@ end
 
 println("\n--- Sparse K-mer Counting ---")
 
-# TODO: Implement comprehensive sparse k-mer analysis
-# - Count only observed k-mers
-# - Analyze sparsity patterns
-# - Memory efficiency comparison
-# - Scalability testing
+sparse_example = nothing
+sparse_example_k = 15
+sparse_summaries = Dict{Int, NamedTuple}()
 
 for k in [11, 13, 15, 17, 19, 21]
     println("Computing sparse k-mer counts for k=$k...")
@@ -137,10 +154,33 @@ for k in [11, 13, 15, 17, 19, 21]
     sparse_counts = Mycelia.fasta_list_to_sparse_kmer_counts(
         fasta_list=temp_files,
         alphabet=:DNA,
-        k=k
+        k=k,
+        skip_rarefaction_plot=true,
+        show_rarefaction_plot=false
     )
     println("  ✓ Sparse counting completed")
-    println("  Unique k-mers: $(length(sparse_counts))")
+    nnz = Mycelia.SparseArrays.nnz(sparse_counts.counts)
+    total_entries = prod(size(sparse_counts.counts))
+    density = total_entries == 0 ? 0.0 : nnz / total_entries
+    sparse_bytes = Mycelia.estimate_sparse_matrix_memory(
+        eltype(sparse_counts.counts),
+        size(sparse_counts.counts, 1),
+        size(sparse_counts.counts, 2);
+        nnz=nnz
+    )
+    sparse_summaries[k] = (
+        unique_kmers=length(sparse_counts.kmers),
+        nnz=nnz,
+        density=density,
+        sparse_bytes=sparse_bytes
+    )
+    println("  Unique k-mers: $(sparse_summaries[k].unique_kmers)")
+    println("  Matrix density: $(round(sparse_summaries[k].density, digits=5))")
+    println("  Estimated sparse bytes: $(Mycelia.bytes_human_readable(sparse_summaries[k].sparse_bytes))")
+
+    if k == sparse_example_k
+        sparse_example = sparse_counts
+    end
 end
 
 # ## Part 3: K-mer Frequency Spectra
@@ -149,11 +189,34 @@ end
 
 println("\n=== K-mer Frequency Spectra ===")
 
-# TODO: Implement k-mer spectrum analysis
-# - Generate frequency histograms
-# - Identify characteristic peaks
-# - Estimate genome size and coverage
-# - Detect contamination and repeats
+spectrum_k = 7
+canonical_kmer_counts = Mycelia.count_canonical_kmers(
+    Mycelia.Kmers.DNAKmer{spectrum_k},
+    temp_files
+)
+kmer_counts_vector = collect(values(canonical_kmer_counts))
+kmer_hist = Mycelia.kmer_frequency_histogram(kmer_counts_vector)
+coverage_peak = Mycelia.coverage_peak_from_hist(kmer_hist; min_coverage=2)
+
+println("Spectrum histogram bins: $(length(kmer_hist))")
+println("Coverage peak (>=2): $(coverage_peak.coverage) with $(coverage_peak.kmers) k-mers")
+
+repeat_threshold = coverage_peak.coverage === missing ? 5 : max(coverage_peak.coverage * 3, 5)
+repeat_like = count(c -> c >= repeat_threshold, kmer_counts_vector)
+println("Repeat-like k-mers (>= $repeat_threshold): $repeat_like")
+
+spectrum_dir = joinpath(@__DIR__, "..", "results", "tutorial_03_kmer_spectra")
+Base.Filesystem.mkpath(spectrum_dir)
+spectrum_plot = Mycelia.plot_kmer_frequency_spectra(
+    kmer_counts_vector;
+    log_scale=log2,
+    title="K-mer spectrum (k=$(spectrum_k))"
+)
+Mycelia.StatsPlots.savefig(
+    spectrum_plot,
+    joinpath(spectrum_dir, "kmer_spectrum_k$(spectrum_k).png")
+)
+println("Saved spectrum plot to $(joinpath(spectrum_dir, "kmer_spectrum_k$(spectrum_k).png"))")
 
 # ## Part 4: Applications in Genome Analysis
 #
@@ -168,11 +231,19 @@ println("\n=== Genome Analysis Applications ===")
 
 println("--- Genome Size Estimation ---")
 
-# TODO: Implement genome size estimation
-# - Find coverage peak in frequency spectrum
-# - Calculate total k-mers
-# - Estimate genome size
-# - Validate against known genome size
+total_kmers = sum(kmer_counts_vector)
+estimated_size = coverage_peak.coverage === missing ? missing : Int(round(total_kmers / coverage_peak.coverage))
+known_size = sum(length(FASTX.sequence(record)) for record in test_sequences)
+basic_estimate = Mycelia.estimate_genome_size_from_kmers(test_sequences, spectrum_k)
+
+println("Total k-mers: $total_kmers")
+println("Estimated genome size (coverage peak): $estimated_size")
+println("Known total sequence length: $known_size")
+if estimated_size !== missing
+    size_error = abs(estimated_size - known_size) / max(1, known_size)
+    println("Relative error: $(round(size_error * 100, digits=2))%")
+end
+println("Basic k-mer estimate: $(basic_estimate["estimated_genome_size"]) (k=$(spectrum_k))")
 
 # ### Error Detection and Correction
 #
@@ -180,10 +251,28 @@ println("--- Genome Size Estimation ---")
 
 println("--- Error Detection ---")
 
-# TODO: Implement error detection
-# - Identify low-frequency k-mers
-# - Classify as errors vs rare variants
-# - Implement error correction algorithms
+canonical_counts_dict = Dict(canonical_kmer_counts)
+filtered_kmers, clustering_stats, removed_kmers = Mycelia.automatic_error_filtering(canonical_counts_dict)
+singleton_kmers = count(c -> c == 1, kmer_counts_vector)
+rare_kmers = count(c -> c > 1 && c <= (coverage_peak.coverage === missing ? 3 : max(2, coverage_peak.coverage ÷ 2)), kmer_counts_vector)
+
+println("Singleton k-mers: $singleton_kmers")
+println("Rare k-mers: $rare_kmers")
+println("Clustering separation quality: $(round(clustering_stats.separation_quality, digits=3))")
+println("Suggested coverage threshold: $(clustering_stats.optimal_threshold)")
+println("Clustered low-coverage k-mers removed: $(length(removed_kmers))")
+println("Clustered high-confidence k-mers retained: $(length(filtered_kmers))")
+
+error_graph = Mycelia.Rhizomorph.build_kmer_graph(
+    test_sequences,
+    spectrum_k;
+    dataset_id="tutorial_error",
+    mode=:doublestrand
+)
+low_coverage_vertices = Mycelia.Rhizomorph.find_low_coverage_kmers(error_graph, 1)
+high_coverage_vertices = Mycelia.Rhizomorph.find_high_coverage_kmers(error_graph, 2)
+println("Graph low-coverage vertices (<=1): $(length(low_coverage_vertices))")
+println("Graph high-coverage vertices (>=2): $(length(high_coverage_vertices))")
 
 # ### Contamination Detection
 #
@@ -191,10 +280,34 @@ println("--- Error Detection ---")
 
 println("--- Contamination Detection ---")
 
-# TODO: Implement contamination detection
-# - Compare k-mer profiles
-# - Identify foreign k-mers
-# - Quantify contamination levels
+contaminant_sequences = [
+    Mycelia.random_fasta_record(moltype=:DNA, seed=200 + i, L=1000)
+    for i in 1:3
+]
+primary_counts = Mycelia.count_canonical_kmers(
+    Mycelia.Kmers.DNAKmer{spectrum_k},
+    test_sequences
+)
+contaminant_counts = Mycelia.count_canonical_kmers(
+    Mycelia.Kmers.DNAKmer{spectrum_k},
+    contaminant_sequences
+)
+
+all_kmers = sort(collect(union(keys(primary_counts), keys(contaminant_counts))))
+primary_vec = [get(primary_counts, kmer, 0) for kmer in all_kmers]
+contam_vec = [get(contaminant_counts, kmer, 0) for kmer in all_kmers]
+cosine_dist = Mycelia.Distances.cosine_dist(primary_vec, contam_vec)
+js_div = Mycelia.Distances.js_divergence(
+    primary_vec ./ max(1, sum(primary_vec)),
+    contam_vec ./ max(1, sum(contam_vec))
+)
+
+foreign_kmers = setdiff(keys(contaminant_counts), keys(primary_counts))
+foreign_fraction = length(foreign_kmers) / max(1, length(keys(contaminant_counts)))
+
+println("Cosine distance (primary vs contaminant): $(round(cosine_dist, digits=3))")
+println("JS divergence (primary vs contaminant): $(round(js_div, digits=3))")
+println("Foreign k-mer fraction: $(round(foreign_fraction * 100, digits=2))%")
 
 # ## Part 5: Performance Optimization
 #
@@ -208,11 +321,42 @@ println("\n=== Performance Optimization ===")
 
 println("--- Memory Management ---")
 
-# TODO: Implement memory optimization
-# - Streaming k-mer processing
-# - Disk-based storage
-# - Memory-mapped files
-# - Compression techniques
+dense_estimated_bytes = Mycelia.estimate_dense_matrix_memory(UInt32, 4^11, length(temp_files))
+memory_check = Mycelia.check_matrix_fits_in_memory(dense_estimated_bytes; severity=:warn)
+println("Dense k=11 estimate: $(Mycelia.bytes_human_readable(dense_estimated_bytes))")
+println("Memory available: $(Mycelia.bytes_human_readable(memory_check.free_memory))")
+
+cache_dir = Base.Filesystem.mktempdir()
+cache_file = joinpath(cache_dir, "sparse_counts_k$(sparse_example_k).jld2")
+if sparse_example !== nothing
+    Mycelia.save_kmer_results(
+        filename=cache_file,
+        kmers=sparse_example.kmers,
+        counts=sparse_example.counts,
+        fasta_list=temp_files,
+        k=sparse_example_k,
+        alphabet=:DNA
+    )
+    cached = Mycelia.load_kmer_results(cache_file)
+    if cached !== nothing
+        println("Loaded cached counts: $(size(cached.counts)) from $cache_file")
+    end
+end
+
+hist_df = Mycelia.DataFrames.DataFrame(
+    coverage=collect(keys(kmer_hist)),
+    kmers=collect(values(kmer_hist))
+)
+histogram_path = joinpath(cache_dir, "kmer_histogram.tsv.gz")
+Mycelia.write_tsvgz(df=hist_df, filename=histogram_path, force=true)
+println("Compressed histogram saved to $histogram_path")
+
+mmap_path = joinpath(cache_dir, "kmer_counts.bin")
+open(mmap_path, "w") do io
+    write(io, kmer_counts_vector)
+end
+mapped_counts = Mycelia.Mmap.mmap(mmap_path, Vector{eltype(kmer_counts_vector)}, (length(kmer_counts_vector),))
+println("Memory-mapped counts length: $(length(mapped_counts))")
 
 # ### Parallel Processing
 #
@@ -220,10 +364,23 @@ println("--- Memory Management ---")
 
 println("--- Parallel Processing ---")
 
-# TODO: Implement parallel k-mer counting
-# - Multi-threaded counting
-# - Distributed processing
-# - Load balancing strategies
+println("Threads available: $(Threads.nthreads())")
+threaded_sparse = Mycelia.fasta_list_to_sparse_kmer_counts(
+    fasta_list=temp_files,
+    alphabet=:DNA,
+    k=spectrum_k,
+    force_threading=true,
+    skip_rarefaction_plot=true,
+    show_rarefaction_plot=false
+)
+println("Threaded sparse counts: $(size(threaded_sparse.counts))")
+
+chunk_a = temp_files[1:5]
+chunk_b = temp_files[6:10]
+counts_a = Mycelia.count_canonical_kmers(Mycelia.Kmers.DNAKmer{spectrum_k}, chunk_a)
+counts_b = Mycelia.count_canonical_kmers(Mycelia.Kmers.DNAKmer{spectrum_k}, chunk_b)
+merged_counts = merge!(+, counts_a, counts_b)
+println("Merged counts size (map-reduce style): $(length(merged_counts))")
 
 # ## Part 6: Visualization and Interpretation
 #
@@ -231,11 +388,57 @@ println("--- Parallel Processing ---")
 
 println("\n=== K-mer Visualization ===")
 
-# TODO: Implement k-mer visualization
-# - Frequency spectrum plots
-# - K-mer composition heatmaps
-# - Coverage distribution plots
-# - Comparative k-mer analysis
+if haskey(dense_results, 3)
+    heatmap_plot = Mycelia.StatsPlots.heatmap(
+        dense_results[3].counts;
+        xlabel="Sequence",
+        ylabel="3-mer index",
+        title="3-mer composition heatmap"
+    )
+    Mycelia.StatsPlots.savefig(
+        heatmap_plot,
+        joinpath(spectrum_dir, "kmer_heatmap_k3.png")
+    )
+    println("Saved 3-mer heatmap to $(joinpath(spectrum_dir, "kmer_heatmap_k3.png"))")
+end
+
+coverage_plot = Mycelia.StatsPlots.histogram(
+    kmer_counts_vector;
+    bins=:auto,
+    xlabel="k-mer count",
+    ylabel="Number of k-mers",
+    title="Coverage distribution (k=$(spectrum_k))"
+)
+Mycelia.StatsPlots.savefig(
+    coverage_plot,
+    joinpath(spectrum_dir, "coverage_distribution_k$(spectrum_k).png")
+)
+
+comparative_k = 7
+sequence_kmer_counts = [
+    Mycelia.count_canonical_kmers(Mycelia.Kmers.DNAKmer{comparative_k}, [record])
+    for record in test_sequences
+]
+similarity_matrix = zeros(length(sequence_kmer_counts), length(sequence_kmer_counts))
+for i in eachindex(sequence_kmer_counts)
+    for j in eachindex(sequence_kmer_counts)
+        all_k = union(keys(sequence_kmer_counts[i]), keys(sequence_kmer_counts[j]))
+        a = [get(sequence_kmer_counts[i], kmer, 0) for kmer in all_k]
+        b = [get(sequence_kmer_counts[j], kmer, 0) for kmer in all_k]
+        similarity_matrix[i, j] = 1 - Mycelia.Distances.cosine_dist(a, b)
+    end
+end
+similarity_plot = Mycelia.StatsPlots.heatmap(
+    similarity_matrix;
+    xlabel="Sequence index",
+    ylabel="Sequence index",
+    title="K-mer cosine similarity (k=$(comparative_k))"
+)
+Mycelia.StatsPlots.savefig(
+    similarity_plot,
+    joinpath(spectrum_dir, "kmer_similarity_k$(comparative_k).png")
+)
+println("Saved visualization plots to $spectrum_dir")
 
 # ## Part 7: Advanced K-mer Techniques
 #
@@ -249,10 +452,21 @@ println("\n=== Advanced Techniques ===")
 
 println("--- Minimizers ---")
 
-# TODO: Implement minimizer techniques
-# - Canonical minimizers
-# - Syncmers
-# - Strobemers
+minimizer_k = 9
+minimizer_window = 10
+syncmer_s = 3
+syncmer_t = 2
+strobe_w_min = 1
+strobe_w_max = 5
+
+example_sequence = FASTX.sequence(Mycelia.BioSequences.LongDNA{4}, test_sequences[1])
+minimizers = Mycelia.canonical_minimizers(example_sequence, minimizer_k, minimizer_window)
+syncmers = Mycelia.open_syncmers(example_sequence, minimizer_k, syncmer_s, syncmer_t; canonical=true)
+strobes = Mycelia.strobemers(example_sequence, minimizer_k, strobe_w_min, strobe_w_max; canonical=true)
+
+println("Canonical minimizers: $(length(minimizers))")
+println("Open syncmers: $(length(syncmers))")
+println("Strobemers: $(length(strobes))")
 
 # ### Graph Construction
 #
@@ -260,10 +474,17 @@ println("--- Minimizers ---")
 
 println("--- Graph Construction ---")
 
-# TODO: Implement k-mer graph construction
-# - de Bruijn graphs
-# - String graphs
-# - Overlap graphs
+graph_k = 5
+kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+    test_sequences,
+    graph_k;
+    dataset_id="tutorial",
+    mode=:doublestrand
+)
+println("K-mer graph vertices: $(Mycelia.Graphs.nv(kmer_graph))")
+println("K-mer graph edges: $(Mycelia.Graphs.ne(kmer_graph))")
+high_coverage_kmers = Mycelia.Rhizomorph.find_high_coverage_kmers(kmer_graph, 2)
+println("High-coverage k-mers (>=2): $(length(high_coverage_kmers))")
 
 # ## Summary and Best Practices
 println("\n=== K-mer Analysis Summary ===")

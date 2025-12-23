@@ -19,36 +19,32 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
-import Kmers
 import MetaGraphsNext
 
 # Simple test to verify DoubleStrand mode fix
-Test.@testset "DNA DoubleStrand Mode Fix Test" begin
-    # Create a simple DNA sequence
+Test.@testset "DNA DoubleStrand Mode Fix Test (Rhizomorph)" begin
     reference_seq = BioSequences.dna"ATCGATCGATCG"
     reads = [FASTX.FASTA.Record("read1", reference_seq)]
 
-    # Build k-mer graph in DoubleStrand mode
-    kmer_type = Kmers.DNAKmer{5}
-    graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.DoubleStrand)
+    graph = Mycelia.Rhizomorph.build_kmer_graph(
+        reads,
+        5;
+        dataset_id="ds_fix",
+        mode=:doublestrand,
+    )
 
     Test.@test graph isa MetaGraphsNext.MetaGraph
     Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-    # Check if coverage is now populated (this was the failing test)
-    has_coverage = false
+    has_forward_and_reverse = false
     for label in MetaGraphsNext.labels(graph)
         vertex_data = graph[label]
-        Test.@test vertex_data isa Mycelia.KmerVertexData
-        Test.@test vertex_data.canonical_kmer == label
-
-        # Extract strand orientations from coverage
-        strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-        if !isempty(strand_orientations)
-            has_coverage = true
-            println("Found coverage: ", strand_orientations)
+        Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
+        strands = Set(obs.strand for obs in Iterators.flatten(values(vertex_data.evidence["ds_fix"])))
+        if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
+            has_forward_and_reverse = true
         end
     end
 
-    Test.@test has_coverage
+    Test.@test has_forward_and_reverse
 end

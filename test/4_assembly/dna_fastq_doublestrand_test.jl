@@ -17,7 +17,8 @@ Test.@testset "DNA BioSequence DoubleStrand Quality Graph" begin
     reads = [fastq_record]
 
     # Build graph with quality awareness
-    graph = Mycelia.build_biosequence_quality_graph(reads; graph_mode=Mycelia.DoubleStrand)
+    singlestrand = Mycelia.Rhizomorph.build_fastq_graph(reads; dataset_id="test", min_overlap=3)
+    graph = Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(singlestrand)
 
     # Structure validation
     vertices = collect(MetaGraphsNext.labels(graph))
@@ -27,37 +28,21 @@ Test.@testset "DNA BioSequence DoubleStrand Quality Graph" begin
     # Quality-aware coverage validation
     for vertex_label in vertices
         vertex_data = graph[vertex_label]
-        if hasfield(typeof(vertex_data), :coverage)
-            Test.@test !isempty(vertex_data.coverage)
-
-            for cov_entry in vertex_data.coverage
-                if length(cov_entry) == 4  # Quality-aware coverage
-                    obs_id, pos, strand, quality = cov_entry
-                    Test.@test obs_id isa Int
-                    Test.@test pos isa Int
-                    Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
-                    Test.@test quality isa Vector{Int}
-                    Test.@test all(q -> 0 <= q <= 60, quality)
+        Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+        Test.@test !isempty(vertex_data.evidence)
+        for evidence_map in values(vertex_data.evidence)
+            for entries in values(evidence_map)
+                for entry in entries
+                    Test.@test entry isa Mycelia.Rhizomorph.QualityEvidenceEntry
+                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test all(q -> 0 <= q - UInt8(33) <= 60, entry.quality_scores)
                 end
-            end
-        end
-
-        # Check quality-related fields
-        if hasfield(typeof(vertex_data), :average_quality)
-            Test.@test vertex_data.average_quality >= 0.0
-        end
-
-        if hasfield(typeof(vertex_data), :quality_scores)
-            Test.@test !isempty(vertex_data.quality_scores)
-            for qual_vec in vertex_data.quality_scores
-                Test.@test isa(qual_vec, Vector{Int})
-                Test.@test all(q -> 0 <= q <= 60, qual_vec)
             end
         end
     end
 
     # Path reconstruction
-    paths = Mycelia.find_eulerian_paths_next(graph)
+    paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
     Test.@test !isempty(paths)
 
     reconstruction_success = false
@@ -65,15 +50,15 @@ Test.@testset "DNA BioSequence DoubleStrand Quality Graph" begin
         if !isempty(path_vector)
             try
                 vertex_type = typeof(first(path_vector))
-                walk_steps = Mycelia.WalkStep{vertex_type}[]
+                walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
 
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
 
-                graph_path = Mycelia.GraphPath(walk_steps)
-                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
+                graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
 
                 if reconstructed !== nothing
                     reconstruction_success = true

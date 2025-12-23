@@ -428,7 +428,7 @@ Test.@testset "Qualmer Analysis" begin
                 label_type=Kmers.DNAKmer{3},
                 vertex_data_type=Mycelia.QualmerVertexData,
                 edge_data_type=Mycelia.QualmerEdgeData,
-                weight_function=edge_data -> edge_data.weight,
+                weight_function=Mycelia.edge_data_weight,
                 default_weight=0.0
             )
             

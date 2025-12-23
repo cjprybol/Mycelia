@@ -170,17 +170,15 @@ for config in kmer_configs
             println("\n  k-mer size: $k")
             
             try
-                ## Build k-mer graph using appropriate sequence type
-                if config.type == "DNA"
-                    kmer_graph = Mycelia.build_kmer_graph(config.records, k=k, sequence_type=BioSequences.LongDNA{4})
-                elseif config.type == "RNA"
-                    kmer_graph = Mycelia.build_kmer_graph(config.records, k=k, sequence_type=BioSequences.LongRNA{4})
-                else ## PROTEIN
-                    kmer_graph = Mycelia.build_kmer_graph(config.records, k=k, sequence_type=BioSequences.LongAA)
-                end
+                ## Build k-mer graph (Rhizomorph auto-detects sequence type)
+                kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    config.records,
+                    k;
+                    dataset_id="$(lowercase(config.type))_k$(k)"
+                )
                 
                 ## Extract graph statistics
-                vertices = collect(values(kmer_graph.vertex_labels))
+                vertices = collect(Mycelia.MetaGraphsNext.labels(kmer_graph))
                 num_vertices = length(vertices)
                 
                 if num_vertices > 0
@@ -253,6 +251,8 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
     
     println("  $description:")
     
+    total_symbols = 0
+
     ## Sequence composition analysis based on type
     if sequence_type == "DNA"
         ## DNA-specific k-mer analysis
@@ -267,6 +267,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
         end
         
         total_bases = sum(values(base_counts))
+        total_symbols = total_bases
         if total_bases > 0
             gc_content = (base_counts['G'] + base_counts['C']) / total_bases
             at_content = (base_counts['A'] + base_counts['T']) / total_bases
@@ -301,6 +302,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
         end
         
         total_bases = sum(values(base_counts))
+        total_symbols = total_bases
         if total_bases > 0
             gc_content = (base_counts['G'] + base_counts['C']) / total_bases
             au_content = (base_counts['A'] + base_counts['U']) / total_bases
@@ -327,6 +329,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
         special_count = sum(1 for aa in all_amino_acids if aa in special)
         total_aas = length(all_amino_acids)
         
+        total_symbols = total_aas
         if total_aas > 0
             println("    Hydrophobic residues: $(round(hydrophobic_count/total_aas*100, digits=1))%")
             println("    Charged residues: $(round(charged_count/total_aas*100, digits=1))%")
@@ -338,7 +341,7 @@ function analyze_kmer_graph_biology(vertices, k, sequence_type, description)
     ## Graph connectivity properties
     println("    K-mer vertices: $num_vertices")
     println("    K-mer size: $k")
-    println("    Average k-mer frequency: $(round(num_vertices > 0 ? total_bases/num_vertices : 0, digits=1))")
+    println("    Average k-mer frequency: $(round(num_vertices > 0 ? total_symbols/num_vertices : 0, digits=1))")
     
     return (
         vertices = num_vertices,
@@ -372,11 +375,11 @@ function convert_kmer_to_sequence_graph(kmer_graph, k, sequence_type_name)
     """Convert k-mer graph to variable-length sequence graph."""
     
     try
-        ## Use existing sequence graph construction function
-        sequence_graph = Mycelia.build_biosequence_graph_from_kmers(kmer_graph, k=k)
+        ## Convert fixed-length k-mer graph to variable-length sequence graph
+        sequence_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(kmer_graph)
         
         ## Extract sequence vertices
-        sequence_vertices = collect(values(sequence_graph.vertex_labels))
+        sequence_vertices = collect(Mycelia.MetaGraphsNext.labels(sequence_graph))
         num_sequences = length(sequence_vertices)
         
         if num_sequences > 0
@@ -477,7 +480,17 @@ function perform_kmer_to_sequence_roundtrip(original_records, kmer_result, seque
     ## Method 1: Direct k-mer assembly
     println("  K-mer graph reconstruction:")
     try
-        kmer_assemblies = Mycelia.assemble_sequences_from_kmers(kmer_result.graph, k=kmer_result.k)
+        kmer_assemblies = []
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(kmer_result.graph)
+        for path in paths
+            if length(path) > 1
+                push!(kmer_assemblies, Mycelia.Rhizomorph.path_to_sequence(path, kmer_result.graph))
+            end
+        end
+        if isempty(kmer_assemblies)
+            contigs = Mycelia.Rhizomorph.find_contigs_next(kmer_result.graph; min_contig_length=1)
+            kmer_assemblies = [contig.sequence for contig in contigs]
+        end
         kmer_success = !isempty(kmer_assemblies)
         
         if kmer_success
@@ -531,7 +544,11 @@ function perform_kmer_to_sequence_roundtrip(original_records, kmer_result, seque
     if sequence_result.success
         try
             ## Direct sequence assembly from sequence graph
-            sequence_assemblies = [string(seq) for seq in sequence_result.vertices]
+            sequence_contigs = Mycelia.Rhizomorph.find_contigs_next(sequence_result.graph; min_contig_length=1)
+            sequence_assemblies = [string(contig.sequence) for contig in sequence_contigs]
+            if isempty(sequence_assemblies)
+                sequence_assemblies = [string(seq) for seq in sequence_result.vertices]
+            end
             
             ## Find best sequence reconstruction
             best_seq_score = 0.0
@@ -775,10 +792,10 @@ function analyze_kmer_sequence_performance()
                 ## Measure k-mer graph construction time
                 start_time = time()
                 try
-                    kmer_graph = Mycelia.build_kmer_graph([test_record], k=k, sequence_type=BioSequences.LongDNA{4})
+                    kmer_graph = Mycelia.Rhizomorph.build_kmer_graph([test_record], k; dataset_id="perf_k$(k)")
                     kmer_time = time() - start_time
                     
-                    kmer_vertices = length(kmer_graph.vertex_labels)
+                    kmer_vertices = length(Mycelia.MetaGraphsNext.labels(kmer_graph))
                     
                     ## Measure sequence graph conversion time
                     start_time = time()
@@ -889,8 +906,8 @@ println("\nHierarchical assembly workflow:")
 println("  Step 1: K-mer graph construction")
 optimal_k = 15  ## Choose k for good overlap resolution
 try
-    assembly_kmer_graph = Mycelia.build_kmer_graph(simulated_reads, k=optimal_k, sequence_type=BioSequences.LongDNA{4})
-    kmer_vertices = length(assembly_kmer_graph.vertex_labels)
+    assembly_kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(simulated_reads, optimal_k; dataset_id="assembly_k$(optimal_k)")
+    kmer_vertices = length(Mycelia.MetaGraphsNext.labels(assembly_kmer_graph))
     
     println("    K-mer graph: $kmer_vertices unique $(optimal_k)-mers")
     

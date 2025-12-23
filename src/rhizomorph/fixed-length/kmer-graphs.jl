@@ -339,3 +339,40 @@ function find_high_coverage_kmers(
 
     return result
 end
+
+"""
+    find_low_coverage_kmers(graph, max_coverage::Int; dataset_id=nothing)
+
+Find k-mers with coverage <= max_coverage.
+
+# Arguments
+- `graph`: K-mer graph
+- `max_coverage::Int`: Maximum number of observations
+- `dataset_id::Union{String,Nothing}=nothing`: Specific dataset or all datasets if nothing
+
+# Returns
+- `Vector`: K-mers meeting coverage threshold
+"""
+function find_low_coverage_kmers(
+    graph::MetaGraphsNext.MetaGraph,
+    max_coverage::Int;
+    dataset_id::Union{String,Nothing}=nothing
+)
+    result = []
+
+    for kmer in MetaGraphsNext.labels(graph)
+        vertex_data = graph[kmer]
+
+        coverage = if isnothing(dataset_id)
+            count_total_observations(vertex_data)
+        else
+            count_dataset_observations(vertex_data, dataset_id)
+        end
+
+        if coverage <= max_coverage
+            push!(result, kmer)
+        end
+    end
+
+    return result
+end

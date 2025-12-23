@@ -30,20 +30,20 @@ Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
         reads = [FASTX.FASTA.Record("read1", reference_seq)]
 
         kmer_type = Kmers.DNAKmer{5}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.DoubleStrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
 
         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-        # Check that coverage exists (the original failing test)
-        has_coverage = false
+        # Check that evidence exists (the original failing test)
+        has_evidence = false
         for label in MetaGraphsNext.labels(graph)
             vertex_data = graph[label]
-            strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-            if !isempty(strand_orientations)
-                has_coverage = true
+            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+            if !isempty(evidence_entries)
+                has_evidence = true
             end
         end
-        Test.@test has_coverage
+        Test.@test has_evidence
     end
 
     Test.@testset "SingleStrand RNA Mode Fix" begin
@@ -51,22 +51,22 @@ Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
         reads = [FASTX.FASTA.Record("read1", reference_seq)]
 
         kmer_type = Kmers.RNAKmer{5}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.SingleStrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
 
         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
-        # Check that coverage exists (was failing due to k-mer mismatch)
-        has_coverage = false
+        # Check that evidence exists (was failing due to k-mer mismatch)
+        has_evidence = false
         for label in MetaGraphsNext.labels(graph)
             vertex_data = graph[label]
-            strand_orientations = [strand for (obs_id, pos, strand) in vertex_data.coverage]
-            if !isempty(strand_orientations)
-                has_coverage = true
+            evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
+            if !isempty(evidence_entries)
+                has_evidence = true
                 # In SingleStrand mode, all should be Forward
-                Test.@test all(s == Mycelia.Forward for s in strand_orientations)
+                Test.@test all(entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
             end
         end
-        Test.@test has_coverage
+        Test.@test has_evidence
     end
 
     Test.@testset "Amino Acid FASTQ Fix" begin
@@ -87,7 +87,7 @@ Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
         # Can build k-mer graph with amino acids
         kmer_type = Kmers.AAKmer{3}
         reads = [FASTX.FASTA.Record("read1", reference_seq)]
-        graph = Mycelia.build_kmer_graph_next(kmer_type, reads; graph_mode=Mycelia.SingleStrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
         Test.@test !isempty(MetaGraphsNext.labels(graph))
     end
 end

@@ -787,6 +787,44 @@ function run_pgap(;
 end
 
 """
+    run_egapx(;
+        fasta,
+        organism,
+        egapx_dir,
+        outdir,
+        as_string,
+        force,
+        threads,
+        prefix,
+        no_internet,
+    )
+
+Run the EGAPx (Eukaryotic Genome Annotation Pipeline) tool on a FASTA file.
+
+TODO: Wrapper not implemented yet. Placeholder for planned integration and API shape.
+
+Readme notes protein datasets suitable for most vertebrates, arthropods (insecta/arachnida),
+echinoderms, cnidaria, monocots (Liliopsida), and eudicots (Asterids/Rosids/Fabids/Caryophyllales).
+EGAPx is out-of-scope for fungi, protists, and nematodes.
+
+Returns:
+- `Nothing`: Always throws until implemented.
+"""
+function run_egapx(;
+    fasta::AbstractString,
+    organism::AbstractString,
+    egapx_dir = joinpath(homedir(), "workspace", "egapx"),
+    outdir = replace(fasta, Mycelia.FASTA_REGEX => "_egapx"),
+    as_string::Bool = false,
+    force::Bool = false,
+    threads::Int = get_default_threads(),
+    prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
+    no_internet::Bool = false,
+)
+    error("EGAPx wrapper not implemented yet; see planning-docs/TODO.md for scope notes.")
+end
+
+"""
     run_pgap_taxonomy_check(;
         fasta,
         organism,
@@ -3385,12 +3423,160 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Run Augustus for eukaryotic gene prediction.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing genomic sequences
+- `species::String="human"`: Augustus species model to use
+- `out_dir::String=dirname(fasta_file)`: Directory for output files
+- `strands::String="both"`: Strand prediction mode (`both`, `forward`, or `backward`)
+- `config_path::Union{Nothing,String}=nothing`: Optional path to Augustus config directory
+
+# Returns
+Named tuple containing paths to all output files:
+- `fasta_file`: Input FASTA file path
+- `out_dir`: Output directory path
+- `gff`: Path to GFF3 format gene predictions
+- `out`: Path to Augustus output report
+- `std_err`: Path to captured stderr output
+"""
+function run_augustus(;fasta_file, species="human", out_dir=dirname(fasta_file), strands="both", config_path=nothing)
+    Mycelia.add_bioconda_env("augustus")
+    mkpath(out_dir)
+
+    gff = "$(out_dir)/$(basename(fasta_file)).augustus.gff"
+    out = "$(out_dir)/$(basename(fasta_file)).augustus.out"
+    std_err = "$(out_dir)/$(basename(fasta_file)).augustus.err"
+
+    if !isfile(gff)
+        resolved_config_path = config_path
+        if resolved_config_path === nothing || isempty(resolved_config_path)
+            resolved_config_path = get(ENV, "AUGUSTUS_CONFIG_PATH", "")
+            if isempty(resolved_config_path)
+                resolved_config_path = readchomp(`$(Mycelia.CONDA_RUNNER) run -n augustus printenv AUGUSTUS_CONFIG_PATH`)
+            end
+        end
+
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "augustus", "augustus",
+            "--species=$(species)", "--strand=$(strands)", "--gff3=on", "--outfile=$(out)", fasta_file
+        ]
+        cmd = Cmd(cmd_parts)
+        pipeline_cmd = if isempty(resolved_config_path)
+            pipeline(cmd, stdout=gff, stderr=std_err)
+        else
+            pipeline(setenv(cmd, Dict("AUGUSTUS_CONFIG_PATH" => resolved_config_path)), stdout=gff, stderr=std_err)
+        end
+        run(pipeline_cmd)
+    end
+
+    return (;fasta_file, out_dir, gff, out, std_err)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run MetaEuk for eukaryotic gene prediction against a reference database.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing genomic sequences
+- `db_file::String`: Path to the MetaEuk/MMseqs2 reference database
+- `out_dir::String=dirname(fasta_file)`: Directory for output files
+- `threads::Int=Threads.nthreads()`: Number of threads to use
+- `tmp_dir::Union{Nothing,String}=nothing`: Optional temporary directory path
+
+# Returns
+Named tuple containing paths to all output files:
+- `fasta_file`: Input FASTA file path
+- `out_dir`: Output directory path
+- `out_prefix`: MetaEuk output prefix used for all generated files
+- `gff`: Path to GFF3 format gene predictions
+- `faa`: Path to predicted protein sequences
+- `codon_faa`: Path to codon-aligned protein sequences
+- `tmp_dir`: Temporary directory path used for the run
+"""
+function run_metaeuk(;fasta_file, db_file, out_dir=dirname(fasta_file), threads=Threads.nthreads(), tmp_dir=nothing)
+    Mycelia.add_bioconda_env("metaeuk")
+    mkpath(out_dir)
+
+    out_prefix = joinpath(out_dir, "$(basename(fasta_file)).metaeuk")
+    resolved_tmp_dir = tmp_dir === nothing ? "$(out_prefix)_tmp" : tmp_dir
+    mkpath(resolved_tmp_dir)
+
+    gff = "$(out_prefix)_preds.gff"
+    faa = "$(out_prefix)_preds.faa"
+    codon_faa = "$(out_prefix)_preds.codon.faa"
+
+    if !isfile(gff)
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "metaeuk", "metaeuk", "easy-predict",
+            fasta_file, db_file, out_prefix, resolved_tmp_dir,
+            "--threads", string(threads)
+        ]
+        cmd = Cmd(cmd_parts)
+        run(cmd)
+    end
+
+    return (;fasta_file, out_dir, out_prefix, gff, faa, codon_faa, tmp_dir=resolved_tmp_dir)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run Prodigal-gv for gene prediction in viral genomes or metaviromes.
+
+# Arguments
+- `fasta_file::String`: Path to input FASTA file containing genomic sequences
+- `out_dir::String=dirname(fasta_file)`: Directory for output files
+- `translation_table::Union{Nothing,Int,Missing}=nothing`: Optional NCBI translation table ID
+
+# Returns
+Named tuple containing paths to all output files:
+- `fasta_file`: Input FASTA file path
+- `out_dir`: Output directory path
+- `gff`: Path to GFF format gene predictions
+- `faa`: Path to protein translations of predicted genes
+- `fna`: Path to nucleotide sequences of predicted genes
+- `std_out`: Path to captured stdout
+- `std_err`: Path to captured stderr
+"""
+function run_prodigal_gv(;fasta_file, out_dir=dirname(fasta_file), translation_table=nothing)
+    mkpath(out_dir)
+
+    gff = "$(out_dir)/$(basename(fasta_file)).prodigal-gv.gff"
+    faa = "$(out_dir)/$(basename(fasta_file)).prodigal-gv.faa"
+    fna = "$(out_dir)/$(basename(fasta_file)).prodigal-gv.fna"
+    std_out = "$(out_dir)/$(basename(fasta_file)).prodigal-gv.out"
+    std_err = "$(out_dir)/$(basename(fasta_file)).prodigal-gv.err"
+
+    if (!isfile(gff) && !isfile(faa))
+        Mycelia.add_bioconda_env("prodigal-gv")
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "prodigal-gv", "prodigal-gv",
+            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i", fasta_file, "-a", faa, "-d", fna
+        ]
+        if translation_table !== nothing && translation_table !== missing
+            push!(cmd_parts, "-g")
+            push!(cmd_parts, string(translation_table))
+        end
+        cmd = Cmd(cmd_parts)
+        p = pipeline(cmd, stdout=std_out, stderr=std_err)
+        run(p)
+    end
+
+    return (;fasta_file, out_dir, gff, faa, fna, std_out, std_err)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Run Prodigal gene prediction software on input FASTA file to identify protein-coding genes
 in metagenomes or single genomes.
 
 # Arguments
 - `fasta_file::String`: Path to input FASTA file containing genomic sequences
 - `out_dir::String=dirname(fasta_file)`: Directory for output files. Defaults to input file's directory
+- `translation_table::Union{Nothing,Int,Missing}=nothing`: Optional NCBI translation table ID
 
 # Returns
 Named tuple containing paths to all output files:
@@ -3403,7 +3589,7 @@ Named tuple containing paths to all output files:
 - `std_out`: Path to captured stdout
 - `std_err`: Path to captured stderr
 """
-function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
+function run_prodigal(;fasta_file, out_dir=dirname(fasta_file), translation_table=nothing)
     
     # if isempty(out_dir)
     #     prodigal_dir = mkpath("$(fasta_file)_prodigal")
@@ -3448,17 +3634,15 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file))
     # I usually delete the rest, so don't reprocess if outputs of interest are present
     if (!isfile(gff) && !isfile(faa))
         add_bioconda_env("prodigal")
-        cmd = 
-        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n prodigal prodigal
-        -f gff
-        -m
-        -p meta
-        -o $(gff)
-        -i $(fasta_file)
-        -a $(faa)
-        -d $(fna)
-        -s $(gene_scores)
-        `
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "prodigal", "prodigal",
+            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i", fasta_file, "-a", faa, "-d", fna, "-s", gene_scores
+        ]
+        if translation_table !== nothing && translation_table !== missing
+            push!(cmd_parts, "-g")
+            push!(cmd_parts, string(translation_table))
+        end
+        cmd = Cmd(cmd_parts)
         p = pipeline(cmd, stdout=std_out, stderr=std_err)
         run(p)
     end
@@ -3475,6 +3659,7 @@ Pyrodigal is a reimplementation of the Prodigal gene finder, which identifies pr
 # Arguments
 - `fasta_file::String`: Path to input FASTA file containing genomic sequences
 - `out_dir::String`: Output directory path (default: input filename + "_pyrodigal")
+- `translation_table::Union{Nothing,Int,Missing}=nothing`: Optional NCBI translation table ID
 
 # Returns
 Named tuple containing:
@@ -3492,7 +3677,7 @@ Named tuple containing:
 - Requires Pyrodigal to be available in a Conda environment
 - Skips processing if output files already exist
 """
-function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
+function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal", translation_table=nothing)
     # https://pyrodigal.readthedocs.io/en/stable/guide/cli.html#command-line-interface
 
     # -a trans_file         Write protein translations to the selected file.
@@ -3548,19 +3733,16 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal")
     # `max_overlap` must be lower than `min_gene`
     if (!isfile(gff) || !isfile(faa))
         Mycelia.add_bioconda_env("pyrodigal")
-        cmd = 
-        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n pyrodigal pyrodigal
-        -f gff
-        -m
-        -p meta
-        -o $(gff)
-        -i $(fasta_file)
-        -a $(faa)
-        -d $(fna)
-        -s $(gene_scores)
-        --min-gene 33
-        --max-overlap 31
-        `
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "pyrodigal", "pyrodigal",
+            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i", fasta_file, "-a", faa, "-d", fna, "-s", gene_scores,
+            "--min-gene", "33", "--max-overlap", "31"
+        ]
+        if translation_table !== nothing && translation_table !== missing
+            push!(cmd_parts, "-g")
+            push!(cmd_parts, string(translation_table))
+        end
+        cmd = Cmd(cmd_parts)
         p = pipeline(cmd, stdout=std_out, stderr=std_err)
         run(p)
         if fasta_file != "$(out_dir)/$(basename(fasta_file))"

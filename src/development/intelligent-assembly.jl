@@ -309,10 +309,10 @@ end
 Check if memory usage is within acceptable limits.
 """
 function check_memory_limits(graph, memory_limit::Int)::Bool
-    num_kmers = length(graph.vertex_labels)
+    num_kmers = length(MetaGraphsNext.labels(graph))
     # Estimate k from first k-mer (assuming all same size)
-    if !isempty(graph.vertex_labels)
-        first_kmer = first(values(graph.vertex_labels))
+    if !isempty(MetaGraphsNext.labels(graph))
+        first_kmer = first(MetaGraphsNext.labels(graph))
         k = length(string(first_kmer))  # Rough estimate
         estimated_usage = estimate_memory_usage(num_kmers, k)
         return estimated_usage <= memory_limit
@@ -335,10 +335,10 @@ function correct_errors_at_k(graph, k::Int; max_iterations::Int = 10)::Int
         corrections_this_round = 0
         
         # Get all k-mers sorted by coverage (lowest first, likely errors)
-        kmers_by_coverage = sort(collect(pairs(graph.vertex_labels)), 
-                                by = x -> length(graph[x[2]].coverage))
+        kmers_by_coverage = sort(collect(MetaGraphsNext.labels(graph)),
+                                by = kmer -> length(graph[kmer].coverage))
         
-        for (vertex_id, kmer) in kmers_by_coverage
+        for kmer in kmers_by_coverage
             vertex_data = graph[kmer]
             
             # Skip if already high confidence
@@ -394,7 +394,7 @@ Calculate assembly accuracy metrics for reward function.
 Returns a comprehensive score based on multiple quality indicators.
 """
 function calculate_accuracy_metrics(graph, k::Int)::Dict{Symbol, Float64}
-    num_kmers = length(graph.vertex_labels)
+    num_kmers = length(MetaGraphsNext.labels(graph))
     
     if num_kmers == 0
         return Dict(
@@ -410,7 +410,7 @@ function calculate_accuracy_metrics(graph, k::Int)::Dict{Symbol, Float64}
     coverage_values = Float64[]
     probability_values = Float64[]
     
-    for kmer in values(graph.vertex_labels)
+    for kmer in MetaGraphsNext.labels(graph)
         vertex_data = graph[kmer]
         push!(coverage_values, Float64(vertex_data.coverage))
         push!(probability_values, vertex_data.joint_probability)
@@ -471,7 +471,7 @@ function calculate_assembly_reward(graph, corrections_made::Int, k::Int,
     base_reward = current_metrics[:overall_accuracy]
     
     # Correction efficiency bonus
-    num_kmers = length(graph.vertex_labels)
+    num_kmers = length(MetaGraphsNext.labels(graph))
     correction_rate = corrections_made / max(1, num_kmers)
     correction_bonus = min(0.2, correction_rate * 10)  # Cap at 0.2, scale by 10
     
@@ -505,7 +505,7 @@ function should_continue_k(graph, corrections_made::Int, k::Int;
     current_reward = calculate_assembly_reward(graph, corrections_made, k)
     
     # Check if we're making corrections
-    num_kmers = length(graph.vertex_labels)
+    num_kmers = length(MetaGraphsNext.labels(graph))
     correction_rate = corrections_made / max(1, num_kmers)
     
     # Continue ONLY if we're making significant corrections
@@ -608,7 +608,7 @@ function mycelia_assemble(reads::Vector{<:FASTX.FASTQ.Record};
             break
         end
         
-        num_kmers = length(graph.vertex_labels)
+        num_kmers = length(MetaGraphsNext.labels(graph))
         if verbose
             println("Graph built: $num_kmers unique k-mers")
         end
@@ -714,7 +714,7 @@ function finalize_assembly(assembly_graphs::Dict{Int, Any}, k_progression::Vecto
     # This will be expanded to create a consensus assembly
     all_kmers = String[]
     for (k, graph) in assembly_graphs
-        for kmer in values(graph.vertex_labels)
+        for kmer in MetaGraphsNext.labels(graph)
             push!(all_kmers, string(kmer))
         end
     end
@@ -727,7 +727,7 @@ function finalize_assembly(assembly_graphs::Dict{Int, Any}, k_progression::Vecto
     end
     
     # Calculate memory usage estimate
-    total_kmers = sum(length(graph.vertex_labels) for graph in values(assembly_graphs))
+    total_kmers = sum(length(MetaGraphsNext.labels(graph)) for graph in values(assembly_graphs))
     memory_usage = total_kmers * 100  # Rough estimate
     
     # Phase 5.1b: Calculate reward statistics
@@ -775,7 +775,7 @@ function assembly_summary(assembly_graphs::Dict{Int, Any})::String
     
     for k in sort(collect(keys(assembly_graphs)))
         graph = assembly_graphs[k]
-        num_kmers = length(graph.vertex_labels)
+        num_kmers = length(MetaGraphsNext.labels(graph))
         is_prime = Primes.isprime(k)
         report *= "k=$k (prime: $is_prime): $num_kmers unique k-mers\n"
     end

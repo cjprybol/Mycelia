@@ -1,38 +1,10 @@
-# --- Helper function to generate ellipse points ---
-function get_ellipse_points(x_coords, y_coords; scale=3.5)
-    if length(x_coords) < 3
-        return CairoMakie.Point2f[], Dict()
-    end
-    
-    cov_matrix = Statistics.cov(hcat(x_coords, y_coords))
-    mean_vec = [Statistics.mean(x_coords), Statistics.mean(y_coords)]
-    
-    eigen = LinearAlgebra.eigen(cov_matrix)
-    vals, vecs = eigen.values, eigen.vectors
-    
-    angle = atan(vecs[2, 2], vecs[1, 2])
-    major_axis = scale * sqrt(vals[2])
-    minor_axis = scale * sqrt(vals[1])
-    
-    t = range(0, 2π, length=100)
-    ellipse_x = major_axis * cos.(t)
-    ellipse_y = minor_axis * sin.(t)
-    
-    rotated_x = ellipse_x * cos(angle) - ellipse_y * sin(angle) .+ mean_vec[1]
-    rotated_y = ellipse_x * sin(angle) + ellipse_y * cos(angle) .+ mean_vec[2]
-    
-    points = [CairoMakie.Point2f(x, y) for (x, y) in zip(rotated_x, rotated_y)]
-    
-    anchors = Dict(
-        :top => points[argmax(rotated_y)],
-        :bottom => points[argmin(rotated_y)],
-        :left => points[argmin(rotated_x)],
-        :right => points[argmax(rotated_x)]
-    )
-    
-    return points, anchors
+function strip_gz_extension(name::AbstractString)
+    return replace(name, r"\.gz$" => "")
 end
 
+function nonempty_file(path::AbstractString)
+    return isfile(path) && filesize(path) > 0
+end
 
 """
 Collapse duplicate rows in a DataFrame by consolidating non-missing values.
@@ -2288,6 +2260,149 @@ function jsonl_to_dataframe(filepath::String)::DataFrames.DataFrame
     return DataFrames.DataFrame(rows)
 end
 
+const _MIB_TO_BYTES = 1024^2
+
+function _parse_positive_env_int(var::AbstractString)
+    val = get(ENV, var, nothing)
+    if val === nothing
+        return nothing
+    end
+    str = String(val)
+    m = match(r"^\s*(\d+)", str)
+    parsed = m === nothing ? tryparse(Int, str) : tryparse(Int, m.captures[1])
+    return parsed !== nothing && parsed > 0 ? parsed : nothing
+end
+
+function _detect_slurm_cpu_allocation()
+    slurm_job = _parse_positive_env_int("SLURM_JOB_CPUS_PER_NODE")
+    slurm_cpt = _parse_positive_env_int("SLURM_CPUS_PER_TASK")
+    slurm_tpn = _parse_positive_env_int("SLURM_TASKS_PER_NODE")
+    slurm_derived = slurm_cpt !== nothing && slurm_tpn !== nothing ? slurm_cpt * slurm_tpn : nothing
+    slurm_on_node = _parse_positive_env_int("SLURM_CPUS_ON_NODE")
+
+    return slurm_job !== nothing ? slurm_job :
+           slurm_derived !== nothing ? slurm_derived :
+           slurm_on_node
+end
+
+function _parse_gpu_list(val)::Union{Int,Nothing}
+    val === nothing && return nothing
+    str = strip(String(val))
+    isempty(str) && return nothing
+
+    simple = tryparse(Int, str)
+    if simple !== nothing && simple >= 0
+        return simple
+    end
+
+    total = 0
+    for part in split(str, ",")
+        token = strip(part)
+        isempty(token) && continue
+        range_match = match(r"^(\d+)-(\d+)$", token)
+        if range_match !== nothing
+            lo = parse(Int, range_match.captures[1])
+            hi = parse(Int, range_match.captures[2])
+            total += hi >= lo ? (hi - lo + 1) : 0
+            continue
+        end
+        number_match = match(r"^\d+$", token)
+        if number_match !== nothing
+            total += parse(Int, number_match.match)
+        end
+    end
+
+    return total > 0 ? total : nothing
+end
+
+function _parse_gres_gpus(val)::Union{Int,Nothing}
+    val === nothing && return nothing
+    matches = collect(eachmatch(r"gpu(?::[A-Za-z0-9_-]+)?:(\d+)", String(val)))
+    if isempty(matches)
+        return nothing
+    end
+    total = sum(parse(Int, m.captures[1]) for m in matches)
+    return total > 0 ? total : nothing
+end
+
+function _detect_slurm_gpu_allocation()
+    gpu_on_node = _parse_positive_env_int("SLURM_GPUS_ON_NODE")
+    gpu_on_node !== nothing && return gpu_on_node
+
+    gpu_simple = _parse_positive_env_int("SLURM_GPUS")
+    gpu_simple !== nothing && return gpu_simple
+
+    gpu_per_task = _parse_positive_env_int("SLURM_GPUS_PER_TASK")
+    tasks_per_node = _parse_positive_env_int("SLURM_TASKS_PER_NODE")
+    gpu_task_total = gpu_per_task !== nothing && tasks_per_node !== nothing ? gpu_per_task * tasks_per_node : nothing
+    gpu_task_total !== nothing && return gpu_task_total
+    gpu_per_task !== nothing && return gpu_per_task
+
+    job_gpu_list = _parse_gpu_list(get(ENV, "SLURM_JOB_GPUS", nothing))
+    job_gpu_list !== nothing && return job_gpu_list
+
+    step_gpu_list = _parse_gpu_list(get(ENV, "SLURM_STEP_GPUS", nothing))
+    step_gpu_list !== nothing && return step_gpu_list
+
+    gres_gpus = _parse_gres_gpus(get(ENV, "SLURM_JOB_GRES", nothing))
+    gres_gpus !== nothing && return gres_gpus
+
+    return nothing
+end
+
+function _in_slurm_environment()
+    any(haskey(ENV, var) for var in ("SLURM_JOB_ID", "SLURM_CLUSTER_NAME", "SLURM_JOB_NAME", "SLURM_STEP_ID"))
+end
+
+function _detect_visible_gpus(slurm_gpu_allocation::Union{Int,Nothing})
+    cuda_devices = get(ENV, "CUDA_VISIBLE_DEVICES", nothing)
+    if cuda_devices !== nothing
+        devs = [strip(d) for d in split(String(cuda_devices), ",") if !isempty(strip(d)) && strip(d) != "NoDevFiles"]
+        if !isempty(devs)
+            return length(devs)
+        elseif strip(String(cuda_devices)) == "NoDevFiles"
+            return 0
+        end
+    end
+
+    rocm_devices = get(ENV, "ROCR_VISIBLE_DEVICES", nothing)
+    if rocm_devices !== nothing
+        devs = [strip(d) for d in split(String(rocm_devices), ",") if !isempty(strip(d))]
+        if !isempty(devs)
+            return length(devs)
+        end
+    end
+
+    return slurm_gpu_allocation
+end
+
+function _detect_slurm_memory_bytes(; cpu_allocation::Union{Int,Nothing}, gpu_allocation::Union{Int,Nothing}, total_memory::Int, available_memory::Int)
+    mem_per_node = _parse_positive_env_int("SLURM_MEM_PER_NODE")
+    mem_per_cpu = _parse_positive_env_int("SLURM_MEM_PER_CPU")
+    mem_per_gpu = _parse_positive_env_int("SLURM_MEM_PER_GPU")
+
+    if mem_per_node !== nothing
+        return mem_per_node * _MIB_TO_BYTES, :per_node
+    elseif mem_per_cpu !== nothing && cpu_allocation !== nothing
+        return mem_per_cpu * cpu_allocation * _MIB_TO_BYTES, :per_cpu
+    elseif mem_per_gpu !== nothing && gpu_allocation !== nothing
+        return mem_per_gpu * gpu_allocation * _MIB_TO_BYTES, :per_gpu
+    end
+
+    if mem_per_cpu !== nothing
+        return mem_per_cpu * _MIB_TO_BYTES, :per_cpu
+    elseif mem_per_gpu !== nothing
+        return mem_per_gpu * _MIB_TO_BYTES, :per_gpu
+    end
+
+    if _in_slurm_environment()
+        inferred = Int(floor(min(available_memory, total_memory) * 0.90))
+        return inferred, :inferred
+    end
+
+    return nothing, nothing
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2309,43 +2424,22 @@ threads = get_default_threads()  # Returns allocated threads or 4
 ```
 """
 function get_default_threads()::Int
-    parse_env_int(var) = begin
-        val = get(ENV, var, nothing)
-        if val === nothing
-            return nothing
-        end
-        str = String(val)
-        # SLURM values can include decorations like "24(x2)"; grab the leading integer.
-        m = match(r"^\s*(\d+)", str)
-        parsed = m === nothing ? tryparse(Int, str) : tryparse(Int, m.captures[1])
-        parsed !== nothing && parsed > 0 ? parsed : nothing
-    end
-
     cpu_threads = Sys.CPU_THREADS > 0 ? Sys.CPU_THREADS : nothing
 
     # Respect explicit Julia threading request.
-    julia_hint = parse_env_int("JULIA_NUM_THREADS")
+    julia_hint = _parse_positive_env_int("JULIA_NUM_THREADS")
     if julia_hint !== nothing
         return cpu_threads === nothing ? max(1, julia_hint) : clamp(julia_hint, 1, cpu_threads)
     end
 
     # SLURM hints: prefer job-level declaration, otherwise derive from per-task × tasks-per-node.
-    slurm_job = parse_env_int("SLURM_JOB_CPUS_PER_NODE")
-    slurm_cpt = parse_env_int("SLURM_CPUS_PER_TASK")
-    slurm_tpn = parse_env_int("SLURM_TASKS_PER_NODE")
-    slurm_derived = slurm_cpt !== nothing && slurm_tpn !== nothing ? slurm_cpt * slurm_tpn : nothing
-    slurm_on_node = parse_env_int("SLURM_CPUS_ON_NODE")
-    slurm_hint =
-        slurm_job !== nothing ? slurm_job :
-        slurm_derived !== nothing ? slurm_derived :
-        slurm_on_node
-
+    slurm_hint = _detect_slurm_cpu_allocation()
     if slurm_hint !== nothing
         return cpu_threads === nothing ? slurm_hint : min(slurm_hint, cpu_threads)
     end
 
     # PBS/Torque hint as a fallback for other schedulers.
-    pbs_hint = parse_env_int("PBS_NCPUS")
+    pbs_hint = _parse_positive_env_int("PBS_NCPUS")
     if pbs_hint !== nothing
         return cpu_threads === nothing ? pbs_hint : min(pbs_hint, cpu_threads)
     end
@@ -2364,11 +2458,16 @@ struct SystemOverview
     system_threads::Int
     julia_threads::Int
     default_threads::Int
+    slurm_threads::Union{Int,Nothing}
+    system_gpus::Union{Int,Nothing}
+    slurm_gpus::Union{Int,Nothing}
     total_memory::Int
     available_memory::Int
     occupied_memory::Int
     memory_occupied_percent::Float64
     memory_running_low::Bool
+    slurm_memory::Union{Int,Nothing}
+    slurm_memory_source::Union{Symbol,Nothing}
     total_storage::Int
     available_storage::Int
     occupied_storage::Int
@@ -2385,6 +2484,7 @@ Collect system resource information (raw values) with human-readable display.
 Notes:
 - `julia_threads` reflects the threads the current session actually started with (`Threads.nthreads()`).
 - `default_threads` reflects the configured default based on environment hints (`get_default_threads`; e.g., `SLURM_CPUS_PER_TASK`, `PBS_NCPUS`, `OMP_NUM_THREADS`, `JULIA_NUM_THREADS`, or the conservative fallback) and may differ if the session was launched with different settings.
+- When running under SLURM, `slurm_threads`, `slurm_memory`, and `slurm_gpus` capture the scheduler allocations alongside system-wide availability. Memory falls back to 90% of currently available memory if no SLURM memory variables are exposed (treated as an exclusive node).
 """
 function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_threshold=0.90)
     if !(0.0 <= memory_low_threshold <= 1.0)
@@ -2394,20 +2494,29 @@ function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_th
         error("storage_low_threshold must be between 0.0 and 1.0 (got $storage_low_threshold)")
     end
 
-    total_memory = Sys.total_memory()
-    available_memory = Sys.free_memory()
+    total_memory = Int(Sys.total_memory())
+    available_memory = Int(Sys.free_memory())
     occupied_memory = total_memory - available_memory
     memory_occupied_percent = total_memory == 0 ? 0.0 : occupied_memory / total_memory
 
     disk_stats = Base.diskstat(path)
-    total_storage = disk_stats.total
-    available_storage = disk_stats.available
-    occupied_storage = disk_stats.used
+    total_storage = Int(disk_stats.total)
+    available_storage = Int(disk_stats.available)
+    occupied_storage = Int(disk_stats.used)
     storage_occupied_percent = total_storage == 0 ? 0.0 : occupied_storage / total_storage
 
     system_threads = Sys.CPU_THREADS
     julia_threads = Threads.nthreads()
     default_threads = get_default_threads()
+    slurm_threads = _detect_slurm_cpu_allocation()
+    slurm_gpus = _detect_slurm_gpu_allocation()
+    system_gpus = _detect_visible_gpus(slurm_gpus)
+    slurm_memory, slurm_memory_source = _detect_slurm_memory_bytes(
+        cpu_allocation=slurm_threads,
+        gpu_allocation=slurm_gpus,
+        total_memory=total_memory,
+        available_memory=available_memory,
+    )
 
     if julia_threads > system_threads
         @error "The Julia kernel has $julia_threads allocated but only $system_threads are available on the system"
@@ -2440,11 +2549,16 @@ function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_th
         system_threads,
         julia_threads,
         default_threads,
+        slurm_threads,
+        system_gpus,
+        slurm_gpus,
         total_memory,
         available_memory,
         occupied_memory,
         memory_occupied_percent,
         memory_running_low,
+        slurm_memory,
+        slurm_memory_source,
         total_storage,
         available_storage,
         occupied_storage,
@@ -2462,8 +2576,25 @@ function Base.show(io::IO, ::MIME"text/plain", overview::SystemOverview)
     storage_flag = overview.storage_running_low ? " (LOW)" : ""
 
     println(io, "SystemOverview:")
-    println(io, "  Threads: julia=$(overview.julia_threads), system=$(overview.system_threads), default=$(overview.default_threads)")
-    println(io, "  Memory: total=$(bytes_human_readable(overview.total_memory)), available=$(bytes_human_readable(overview.available_memory)), occupied=$(bytes_human_readable(overview.occupied_memory)) ($memory_pct% used)$memory_flag")
+    threads_line = "  Threads: julia=$(overview.julia_threads), system=$(overview.system_threads), default=$(overview.default_threads)"
+    if overview.slurm_threads !== nothing
+        threads_line *= ", slurm=$(overview.slurm_threads)"
+    end
+    println(io, threads_line)
+
+    gpu_system = overview.system_gpus === nothing ? "unknown" : string(overview.system_gpus)
+    gpu_line = "  GPUs: system=$(gpu_system)"
+    if overview.slurm_gpus !== nothing
+        gpu_line *= ", slurm=$(overview.slurm_gpus)"
+    end
+    println(io, gpu_line)
+
+    memory_line = "  Memory: total=$(bytes_human_readable(overview.total_memory)), available=$(bytes_human_readable(overview.available_memory)), occupied=$(bytes_human_readable(overview.occupied_memory)) ($memory_pct% used)$memory_flag"
+    if overview.slurm_memory !== nothing
+        source = overview.slurm_memory_source === nothing ? "" : " ($(overview.slurm_memory_source))"
+        memory_line *= ", slurm_limit=$(bytes_human_readable(overview.slurm_memory))$source"
+    end
+    println(io, memory_line)
     println(io, "  Storage: total=$(bytes_human_readable(overview.total_storage)), available=$(bytes_human_readable(overview.available_storage)), occupied=$(bytes_human_readable(overview.occupied_storage)) ($storage_pct% used)$storage_flag")
     println(io, "  Path: $(overview.path)")
 end
@@ -3126,6 +3257,23 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Convert a sequence string into a typed BioSequence using a known alphabet.
+
+# Arguments
+- `sequence::AbstractString`: Input sequence string
+- `alphabet::Symbol`: The alphabet symbol (`:DNA`, `:RNA`, or `:AA`)
+
+# Returns
+- `BioSequences.BioSequence`: Typed sequence
+"""
+function detect_and_extract_sequence(sequence::AbstractString, alphabet::Symbol)
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    return sequence_type(sequence)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Calculate GC content (percentage of G and C bases) from a BioSequence.
 
 This function calculates the percentage of guanine (G) and cytosine (C) bases
@@ -3508,4 +3656,36 @@ function fibonacci_numbers_less_than(n::Int)
         end
         return fib
     end
+end
+
+"""
+    dir_size(path::AbstractString) -> Int
+
+Return the total size in bytes of all files under `path`.
+"""
+function dir_size(path::AbstractString)
+    total = 0
+    if !isdir(path)
+        return total
+    end
+    for (root, _, files) in walkdir(path)
+        for file in files
+            total += filesize(joinpath(root, file))
+        end
+    end
+    return total
+end
+
+"""
+    select_first_existing(paths) -> Union{String,Nothing}
+
+Return the first path that exists on disk, or `nothing` if none are found.
+"""
+function select_first_existing(paths)
+    for path in paths
+        if path !== nothing && isfile(path)
+            return path
+        end
+    end
+    return nothing
 end

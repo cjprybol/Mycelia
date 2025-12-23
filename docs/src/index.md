@@ -25,24 +25,21 @@ New to Mycelia? Start with our [Getting Started Guide](getting-started.md) to in
 - **Qualmer Analysis**: Quality-aware k-mer assembly and probabilistic path selection
 - **Reinforcement Learning Assembly**: ML-guided assembly optimization (proof-of-concept)
 - **Pangenome Analysis**: K-mer based comparative genomics
-
-### Planned Features
-- **Annotation**: Gene prediction and functional annotation
 - **Phylogenetics**: Tree construction from pangenome data
-- **Visualization**: Interactive plots for genomic data
 
 ## Documentation Contents
 
 ```@contents
 Pages = [
     "getting-started.md",
+    "installation.md",
     "concepts.md",
     "workflow-map.md",
+    "metagenomic-workflow.md",
     "tutorials.md",
-    "api.md",
-    "api/function-coverage.md",
-    "visualization-gallery.md",
-    "faq.md",
+    "api/all-functions.md",
+    "benchmarks.md",
+    "related-projects.md",
     "contributing.md"
 ]
 Depth = 2
@@ -51,7 +48,6 @@ Depth = 2
 ## Navigating the Docs
 
 - **Workflow & Tool Map**: See [`workflow-map.md`](workflow-map.md) for the end-to-end data-flow map with links to tutorials and third-party tool wrappers.
-- **Function Coverage Audit**: Review [`api/function-coverage.md`](api/function-coverage.md) to confirm every implemented function has an associated doc entry or tutorial reference.
 - **Tutorials**: Start with [`tutorials.md`](tutorials.md) for guided walkthroughs of each workflow stage.
 
 ## Installation
@@ -72,4 +68,4 @@ For detailed installation instructions including HPC setup, see the [Getting Sta
 
 ## Function Docstrings
 
-For complete API documentation, see the [API Reference](api-reference.md) section.
+For complete API documentation, see the [Complete API Surface](api/all-functions.md) section.

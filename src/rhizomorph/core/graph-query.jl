@@ -174,6 +174,29 @@ function is_sink_vertex(graph, kmer)
     return get_outgoing_degree(graph, kmer) == 0
 end
 
+# ============================================================================
+# Path Validation
+# ============================================================================
+
+"""
+    is_valid_path(graph, path)
+
+Check that each consecutive pair of labels in `path` is connected by an edge.
+"""
+function is_valid_path(graph::MetaGraphsNext.MetaGraph, path)
+    if length(path) < 2
+        return true
+    end
+
+    for i in 1:(length(path) - 1)
+        if !haskey(graph, path[i], path[i + 1])
+            return false
+        end
+    end
+
+    return true
+end
+
 """
     get_all_sources(graph)
 

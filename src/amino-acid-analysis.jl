@@ -86,6 +86,10 @@ function reduce_amino_acid_alphabet(sequence::BioSequences.LongAA, scheme::Symbo
     return String(reduced_chars)
 end
 
+function reduce_amino_acid_alphabet(sequence::AbstractString, scheme::Symbol)::String
+    return reduce_amino_acid_alphabet(BioSequences.LongAA(String(sequence)), scheme)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

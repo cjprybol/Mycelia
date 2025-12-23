@@ -97,11 +97,11 @@ for n in [3, 4, 5]
     for (i, dataset) in enumerate(test_datasets)
         if length(dataset.text) >= n
             try
-                ## Build N-gram graph
-                graph = Mycelia.string_to_ngram_graph(s=dataset.text, n=n)
+                ## Build N-gram graph (Rhizomorph)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([dataset.text], n; dataset_id="$(replace(dataset.name, " " => "_"))_n$(n)")
                 
                 ## Extract statistics
-                vertices = collect(values(graph.vertex_labels))
+                vertices = collect(Mycelia.MetaGraphsNext.labels(graph))
                 num_vertices = length(vertices)
                 expected_ngrams = length(dataset.text) - n + 1
                 
@@ -147,7 +147,7 @@ println("-"^50)
 function analyze_ngram_graph_structure(graph, description)
     """Analyze structural properties of an N-gram graph."""
     
-    vertices = collect(values(graph.vertex_labels))
+    vertices = collect(Mycelia.MetaGraphsNext.labels(graph))
     num_vertices = length(vertices)
     
     if num_vertices == 0
@@ -206,75 +206,58 @@ for n in [3, 4]
     end
 end
 
-# ## Phase 3: String Graph Conversion (Theoretical)
+# ## Phase 3: String Graph Conversion (Rhizomorph)
 #
-# Demonstrate the concept of converting N-gram graphs to String graphs.
-# Note: Full implementation may require additional graph traversal algorithms.
+# Convert N-gram graphs to variable-length String graphs using Rhizomorph contigs.
 
 println("\n4. PHASE 3: STRING GRAPH CONVERSION (CONCEPTUAL)")
 println("-"^50)
 
-function simulate_string_graph_conversion(ngram_result)
-    """Simulate the conversion from N-gram graph to String graph."""
-    
-    vertices = ngram_result.vertices
-    n = ngram_result.n
-    original_text = ngram_result.dataset.text
-    
-    ## Simplified simulation of path collapse
-    ## In a full implementation, this would involve:
-    ## 1. Finding linear paths through the graph
-    ## 2. Collapsing unbranching paths into single vertices
-    ## 3. Preserving branching structure
-    
-    ## For simulation, we'll estimate the result
-    estimated_strings = []
-    
-    if ngram_result.compression_ratio < 0.5  ## High compression suggests repetition
-        ## High repetition might collapse to fewer, longer strings
-        estimated_count = max(1, ngram_result.num_vertices ÷ 3)
-        estimated_avg_length = length(original_text) ÷ estimated_count
-        
-        for i in 1:estimated_count
-            ## Create simulated string
-            start_pos = ((i-1) * estimated_avg_length) + 1
-            end_pos = min(start_pos + estimated_avg_length - 1, length(original_text))
-            if start_pos <= length(original_text)
-                simulated_string = original_text[start_pos:end_pos]
-                push!(estimated_strings, simulated_string)
-            end
-        end
-    else
-        ## Low compression might result in strings similar to original n-grams
-        ## but with some linear paths collapsed
-        for vertex in vertices[1:min(5, length(vertices))]  ## Limit for simulation
-            push!(estimated_strings, vertex)
-        end
+function convert_ngram_to_string_graph(ngram_result)
+    """Convert N-gram graph to variable-length String graph using Rhizomorph contigs."""
+    contigs = Mycelia.Rhizomorph.find_contigs_next(ngram_result.graph; min_contig_length=1)
+    contig_strings = [string(contig.sequence) for contig in contigs]
+    if isempty(contig_strings)
+        contig_strings = [string(label) for label in ngram_result.vertices]
     end
-    
-    return estimated_strings
+    dataset_label = replace(ngram_result.dataset.name, " " => "_")
+    min_overlap = max(1, ngram_result.n - 1)
+    string_graph = Mycelia.Rhizomorph.build_string_graph(
+        contig_strings;
+        dataset_id="$(dataset_label)_n$(ngram_result.n)",
+        min_overlap=min_overlap
+    )
+    string_vertices = collect(Mycelia.MetaGraphsNext.labels(string_graph))
+    return (
+        graph = string_graph,
+        vertices = string_vertices,
+        contig_strings = contig_strings,
+        min_overlap = min_overlap
+    )
 end
 
 string_conversion_results = Dict()
 
-println("Simulating N-gram to String graph conversions:")
+println("Converting N-gram graphs to String graphs:")
 for (key, result) in ngram_results
-    estimated_strings = simulate_string_graph_conversion(result)
+    conversion = convert_ngram_to_string_graph(result)
     
     string_conversion_results[key] = (
         original_ngram_result = result,
-        estimated_strings = estimated_strings,
-        conversion_ratio = length(estimated_strings) / result.num_vertices
+        string_graph = conversion.graph,
+        string_vertices = conversion.vertices,
+        contig_strings = conversion.contig_strings,
+        conversion_ratio = length(conversion.vertices) / max(1, result.num_vertices)
     )
     
     println("  $(key):")
     println("    N-gram vertices: $(result.num_vertices)")
-    println("    Estimated string vertices: $(length(estimated_strings))")
-    println("    Conversion ratio: $(round(length(estimated_strings) / result.num_vertices, digits=3))")
+    println("    String vertices: $(length(conversion.vertices))")
+    println("    Conversion ratio: $(round(length(conversion.vertices) / max(1, result.num_vertices), digits=3))")
     
-    if !isempty(estimated_strings)
-        example_count = min(2, length(estimated_strings))
-        println("    Example strings: $(estimated_strings[1:example_count])")
+    if !isempty(conversion.vertices)
+        example_count = min(2, length(conversion.vertices))
+        println("    Example strings: $(conversion.vertices[1:example_count])")
     end
 end
 
@@ -285,12 +268,22 @@ end
 println("\n5. PHASE 4: RECONSTRUCTION AND ROUND-TRIP VALIDATION")
 println("-"^50)
 
-function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
+function validate_round_trip(original_text, ngram_graph, string_graph, n)
     """Validate the round-trip reconstruction quality."""
     
     ## Method 1: Direct N-gram assembly
     try
-        ngram_assembly = Mycelia.assemble_strings(ngram_graph)
+        ngram_assembly = String[]
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(ngram_graph)
+        for path in paths
+            if !isempty(path)
+                push!(ngram_assembly, string(Mycelia.Rhizomorph.path_to_sequence(path, ngram_graph)))
+            end
+        end
+        if isempty(ngram_assembly)
+            contigs = Mycelia.Rhizomorph.find_contigs_next(ngram_graph; min_contig_length=1)
+            ngram_assembly = [string(contig.sequence) for contig in contigs]
+        end
         ngram_success = !isempty(ngram_assembly)
         
         ## Find best N-gram reconstruction
@@ -313,16 +306,20 @@ function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
     end
     
     ## Method 2: String graph simulation
-    string_success = !isempty(estimated_strings)
-    
-    ## For string graphs, we'll simulate a simple concatenation approach
-    if string_success
-        ## Try different string combinations
-        string_reconstruction = join(estimated_strings, "")
-        string_similarity = calculate_similarity(original_text, string_reconstruction)
-    else
-        string_similarity = 0.0
-        string_reconstruction = ""
+    string_contigs = Mycelia.Rhizomorph.find_contigs_next(string_graph; min_contig_length=1)
+    string_reconstructions = [string(contig.sequence) for contig in string_contigs]
+    if isempty(string_reconstructions)
+        string_reconstructions = [string(label) for label in Mycelia.MetaGraphsNext.labels(string_graph)]
+    end
+    string_success = !isempty(string_reconstructions)
+    best_string_similarity = 0.0
+    best_string_reconstruction = ""
+    for reconstruction in string_reconstructions
+        similarity = calculate_similarity(original_text, reconstruction)
+        if similarity > best_string_similarity
+            best_string_similarity = similarity
+            best_string_reconstruction = reconstruction
+        end
     end
     
     return (
@@ -330,9 +327,9 @@ function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
         ngram_similarity = best_ngram_similarity,
         ngram_reconstruction = best_ngram_reconstruction,
         string_success = string_success,
-        string_similarity = string_similarity,
-        string_reconstruction = string_reconstruction,
-        comparison = best_ngram_similarity > string_similarity ? "N-gram better" : "String better"
+        string_similarity = best_string_similarity,
+        string_reconstruction = best_string_reconstruction,
+        comparison = best_ngram_similarity > best_string_similarity ? "N-gram better" : "String better"
     )
 end
 
@@ -360,12 +357,12 @@ validation_results = Dict()
 println("Validating round-trip reconstructions:")
 for (key, conversion_result) in string_conversion_results
     ngram_result = conversion_result.original_ngram_result
-    estimated_strings = conversion_result.estimated_strings
+    string_graph = conversion_result.string_graph
     
     validation = validate_round_trip(
         ngram_result.dataset.text,
         ngram_result.graph,
-        estimated_strings,
+        string_graph,
         ngram_result.n
     )
     
@@ -407,7 +404,7 @@ function analyze_graph_efficiency(ngram_results, string_results)
             string_result = string_results[key]
             
             total_ngram_vertices += ngram_result.num_vertices
-            total_string_vertices += length(string_result.estimated_strings)
+            total_string_vertices += length(string_result.string_vertices)
             total_original_length += length(ngram_result.dataset.text)
         end
     end
@@ -458,8 +455,8 @@ scales = [
 println("\\nBuilding multi-scale representations:")
 for scale in scales
     if length(complex_text) >= scale.n
-        ngram_graph = Mycelia.string_to_ngram_graph(s=complex_text, n=scale.n)
-        ngram_vertices = length(ngram_graph.vertex_labels)
+        ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([complex_text], scale.n; dataset_id="multiscale_n$(scale.n)")
+        ngram_vertices = length(Mycelia.MetaGraphsNext.labels(ngram_graph))
         compression = ngram_vertices / (length(complex_text) - scale.n + 1)
         
         println("  $(scale.description) (n=$(scale.n)):")

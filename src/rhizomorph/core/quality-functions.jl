@@ -53,6 +53,48 @@ function combine_phred_scores(scores::Vector{UInt8})
 end
 
 """
+    decode_quality_scores(scores::AbstractVector{UInt8})
+
+Decode Phred+33 encoded quality scores into raw Phred values.
+
+# Arguments
+- `scores`: Vector of Phred+33 encoded quality scores
+
+# Returns
+- `Vector{Float64}`: Raw Phred scores as floating-point values
+"""
+function decode_quality_scores(scores::AbstractVector{UInt8})
+    return Float64.(scores) .- 33.0
+end
+
+"""
+    mean_joint_quality(graph, vertex_label, dataset_id::String)
+
+Compute the mean joint quality score for a vertex in a qualmer graph.
+Returns 0.0 when no quality evidence is available.
+"""
+function mean_joint_quality(graph::MetaGraphsNext.MetaGraph, vertex_label, dataset_id::String)
+    joint = get_vertex_joint_quality(graph[vertex_label], dataset_id)
+    return isnothing(joint) ? 0.0 : Statistics.mean(Float64.(joint))
+end
+
+"""
+    mean_path_quality(graph, path, dataset_id::String)
+
+Compute the mean joint quality score across a path of vertex labels.
+"""
+function mean_path_quality(graph::MetaGraphsNext.MetaGraph, path, dataset_id::String)
+    scores = Float64[]
+    for vertex_label in path
+        joint = get_vertex_joint_quality(graph[vertex_label], dataset_id)
+        if !isnothing(joint)
+            push!(scores, Statistics.mean(Float64.(joint)))
+        end
+    end
+    return isempty(scores) ? 0.0 : Statistics.mean(scores)
+end
+
+"""
     get_vertex_joint_quality(vertex_data, dataset_id::String)
 
 Compute joint quality scores for a k-mer vertex from all observations in a dataset.

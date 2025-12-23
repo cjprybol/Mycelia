@@ -38,7 +38,7 @@ based on suffix-prefix overlaps.
 # Arguments
 - `strings::Vector{String}`: Input strings (complete sequences)
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length string graph with overlap evidence
@@ -113,7 +113,7 @@ Each line is treated as a separate string.
 # Arguments
 - `filepath::String`: Path to text file
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename)
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length string graph
@@ -163,7 +163,7 @@ Each file is treated as a separate dataset, using the filename as dataset_id.
 
 # Arguments
 - `filepaths::Vector{String}`: List of text files
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length string graph with evidence from all files
@@ -231,16 +231,15 @@ function build_string_graph_olc_multi_dataset(
         error("Number of strings must match number of dataset IDs")
     end
 
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Create empty directed graph
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
         label_type=String,
         vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Add all strings as vertices with their dataset IDs

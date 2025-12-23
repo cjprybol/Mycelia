@@ -325,6 +325,49 @@ function precision_recall_f1(true_labels, pred_labels)
 end
 
 """
+    presence_precision_recall_f1(truth_ids, predicted_ids)
+
+Compute presence/absence precision, recall, and F1 for two sets of identifiers.
+"""
+function presence_precision_recall_f1(truth_ids::AbstractVector, predicted_ids::AbstractVector)
+    truth_set = Set(truth_ids)
+    pred_set = Set(predicted_ids)
+    tp = length(intersect(truth_set, pred_set))
+    fp = length(setdiff(pred_set, truth_set))
+    fn = length(setdiff(truth_set, pred_set))
+    precision = tp == 0 ? 0.0 : tp / (tp + fp)
+    recall = tp == 0 ? 0.0 : tp / (tp + fn)
+    f1 = (precision + recall) == 0 ? 0.0 : 2 * precision * recall / (precision + recall)
+    return (tp=tp, fp=fp, fn=fn, precision=precision, recall=recall, f1=f1)
+end
+
+"""
+    evaluate_taxonomy_presence_metrics(reference_table, truth_ids, predicted_ids; ranks=String[])
+
+Compute presence/absence precision/recall/F1 for taxonomy ranks derived from a reference table.
+Returns a DataFrame with one row per rank.
+"""
+function evaluate_taxonomy_presence_metrics(reference_table::DataFrames.DataFrame,
+        truth_ids::AbstractVector,
+        predicted_ids::AbstractVector;
+        ranks::Vector{String}=String[])
+    if isempty(ranks)
+        ranks = ["species", "genus", "family", "order", "class", "phylum", "kingdom", "realm", "domain"]
+    end
+    ranks = filter(col -> col in DataFrames.names(reference_table), ranks)
+    metrics = DataFrames.DataFrame(rank=String[], precision=Float64[], recall=Float64[], f1=Float64[], tp=Int[], fp=Int[], fn=Int[])
+    truth_set = Set(String.(truth_ids))
+    pred_set = Set(String.(predicted_ids))
+    for rank in ranks
+        truth_taxa = unique(skipmissing(reference_table[reference_table.sequence_id .∈ Ref(truth_set), rank]))
+        pred_taxa = unique(skipmissing(reference_table[reference_table.sequence_id .∈ Ref(pred_set), rank]))
+        scores = presence_precision_recall_f1(String.(truth_taxa), String.(pred_taxa))
+        DataFrames.push!(metrics, (rank=rank, precision=scores.precision, recall=scores.recall, f1=scores.f1, tp=scores.tp, fp=scores.fp, fn=scores.fn))
+    end
+    return metrics
+end
+
+"""
     accuracy(true_labels, pred_labels)
 
 Returns the overall accuracy.
@@ -461,6 +504,114 @@ function assess_assembly_quality(contigs_file)
 end
 
 """
+    compute_nl_stats(sorted_lengths, fraction) -> Tuple{Int,Int}
+
+Compute Nx/Lx statistics for a sorted list of contig lengths.
+"""
+function compute_nl_stats(sorted_lengths, fraction)
+    total = sum(sorted_lengths)
+    target = total * fraction
+    cumulative = 0
+    for (idx, length_val) in enumerate(sorted_lengths)
+        cumulative += length_val
+        if cumulative >= target
+            return length_val, idx
+        end
+    end
+    return 0, length(sorted_lengths)
+end
+
+"""
+    assembly_metrics(contigs_file) -> Union{NamedTuple,Nothing}
+
+Return standard assembly metrics including N50/N90 and GC content.
+"""
+function assembly_metrics(contigs_file)
+    if contigs_file === nothing || !isfile(contigs_file)
+        return nothing
+    end
+
+    n_contigs, total_length, n50, l50 = Mycelia.assess_assembly_quality(contigs_file)
+    records = open(FASTX.FASTA.Reader, contigs_file) do reader
+        collect(reader)
+    end
+    lengths = [length(FASTX.sequence(record)) for record in records]
+    sorted_lengths = sort(lengths, rev=true)
+    n90, l90 = compute_nl_stats(sorted_lengths, 0.9)
+
+    gc_count = 0
+    total_bases = 0
+    for record in records
+        seq = FASTX.sequence(record)
+        total_bases += length(seq)
+        for base in seq
+            if base == BioSequences.DNA_G || base == BioSequences.DNA_C
+                gc_count += 1
+            end
+        end
+    end
+    gc_content = total_bases == 0 ? 0.0 : (gc_count / total_bases)
+    largest_contig = isempty(sorted_lengths) ? 0 : first(sorted_lengths)
+
+    return (
+        n_contigs=n_contigs,
+        total_length=total_length,
+        n50=n50,
+        l50=l50,
+        n90=n90,
+        l90=l90,
+        largest_contig=largest_contig,
+        gc_content=gc_content
+    )
+end
+
+"""
+    contig_gc_outliers(contigs_file; min_length=500)
+
+Detect contigs with GC fraction more than two standard deviations from the mean.
+"""
+function contig_gc_outliers(contigs_file; min_length=500)
+    outliers = []
+    if contigs_file === nothing || !isfile(contigs_file)
+        return outliers
+    end
+
+    gc_values = Float64[]
+    records = open(FASTX.FASTA.Reader, contigs_file) do reader
+        collect(reader)
+    end
+    for record in records
+        seq = FASTX.sequence(record)
+        if length(seq) < min_length
+            continue
+        end
+        gc_count = count(base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
+        push!(gc_values, gc_count / length(seq))
+    end
+
+    if isempty(gc_values)
+        return outliers
+    end
+
+    mean_gc = Statistics.mean(gc_values)
+    std_gc = Statistics.std(gc_values)
+
+    for record in records
+        seq = FASTX.sequence(record)
+        if length(seq) < min_length
+            continue
+        end
+        gc_count = count(base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
+        gc = gc_count / length(seq)
+        if abs(gc - mean_gc) > 2 * std_gc
+            push!(outliers, (id=FASTX.identifier(record), length=length(seq), gc=gc))
+        end
+    end
+
+    return outliers
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Evaluate genome assembly quality by comparing k-mer distributions between assembled sequences and raw observations.
@@ -545,6 +696,24 @@ function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{
     return QV
 end
 
+"""
+    compute_merqury_qv(assembly_file, reads_file; k=21)
+
+Compute Merqury-style QV for an assembly using raw read data.
+"""
+function compute_merqury_qv(assembly_file, reads_file; k=21)
+    if assembly_file === nothing || reads_file === nothing
+        return missing
+    end
+    if !isfile(assembly_file) || !isfile(reads_file)
+        return missing
+    end
+
+    assembly_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly_file)
+    read_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, reads_file)
+    return Mycelia.kmer_counts_to_merqury_qv(raw_data_counts=read_counts, assembly_counts=assembly_counts)
+end
+
 # ---------- CheckM, CheckM2, CheckV Functions ----------
 
 """
@@ -614,9 +783,79 @@ function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".check
     add_bioconda_env("checkm2")
     if !isdir(db_dir)
         mkpath(db_dir)
-        run(`$(CONDA_RUNNER) run -n checkm2 checkm2 database --download --path $(db_dir)`)
+        try
+            run(`$(CONDA_RUNNER) run -n checkm2 checkm2 database --download --path $(db_dir)`)
+        catch e
+            @warn "CheckM2 database download failed; CheckM2 will not work until the database is installed." exception=e
+        end
     end
     return db_dir
+end
+
+"""
+    setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"), manifest_url::Union{String,Nothing}=nothing, download_db::Bool=false)
+
+Install NCBI FCS-GX via Bioconda and optionally download its GX database.
+
+The Bioconda package is `ncbi-fcs-gx`. The GX database is large (~470 GB) and may
+require a high-memory filesystem for optimal performance (/dev/shm on systems with
+>= 512 GiB RAM).
+
+# Arguments
+- `db_dir`: Directory to store the GX database (only used when `download_db=true`)
+- `manifest_url`: Manifest URL for `sync_files.py` (required when `download_db=true`)
+- `download_db`: If true, download the GX DB using `sync_files.py`
+"""
+function setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"), manifest_url::Union{String,Nothing}=nothing, download_db::Bool=false)
+    add_bioconda_env("ncbi-fcs-gx")
+    if isnothing(db_dir)
+        return db_dir
+    end
+
+    if download_db
+        if manifest_url === nothing
+            error("manifest_url is required when download_db=true")
+        end
+        mkpath(db_dir)
+        run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx sync_files.py get --mft $(manifest_url) --dir $(db_dir)`)
+    end
+    return db_dir
+end
+
+function resolve_ncbi_fcs_gx_db_path(gx_db::String)
+    if isfile(gx_db)
+        if endswith(gx_db, ".gxi")
+            return gx_db
+        end
+        error("GX database file must end with .gxi: $(gx_db)")
+    end
+
+    if isdir(gx_db)
+        gxi_files = filter(path -> endswith(path, ".gxi"), readdir(gx_db; join=true))
+        if isempty(gxi_files)
+            error("No .gxi file found in GX database directory: $(gx_db)")
+        elseif length(gxi_files) > 1
+            error("Multiple .gxi files found in GX database directory: $(gx_db)")
+        end
+        return gxi_files[1]
+    end
+
+    parent_dir = dirname(gx_db)
+    if isdir(parent_dir)
+        prefix = basename(gx_db)
+        gxi_files = filter(
+            path -> startswith(basename(path), prefix) && endswith(path, ".gxi"),
+            readdir(parent_dir; join=true)
+        )
+        if isempty(gxi_files)
+            error("GX database not found for prefix: $(gx_db)")
+        elseif length(gxi_files) > 1
+            error("Multiple GX database files match prefix: $(gx_db)")
+        end
+        return gxi_files[1]
+    end
+
+    error("GX database path does not exist: $(gx_db)")
 end
 
 """
@@ -680,6 +919,194 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
     Mycelia.cleanup_directory(tmp_dir, verbose=false, force=true)
     
     return (outdir=outdir, output_files...)
+end
+
+"""
+    run_ncbi_fcs(
+        fasta_file::String;
+        tax_id::Int,
+        outdir::String=fasta_file * "_fcs_gx",
+        out_basename::Union{String,Nothing}=nothing,
+        gx_db::Union{String,Nothing}=nothing,
+        manifest_url::Union{String,Nothing}=nothing,
+        download_db::Bool=false,
+        species::Union{String,Nothing}=nothing,
+        split_fasta::Bool=true,
+        div::Union{String,Nothing}=nothing,
+        mask_transposons::Union{Bool,Nothing}=nothing,
+        allow_same_species::Union{Bool,Nothing}=nothing,
+        ignore_same_kingdom::Bool=false,
+        action_report::Bool=true,
+        save_hits::Bool=false,
+        generate_logfile::Bool=false,
+        phone_home_label::Union{String,Nothing}=nothing,
+        debug::Bool=false,
+    )
+
+Run NCBI FCS-GX contamination screening on a single FASTA file.
+
+Notes:
+- Requires the GX database (`.gxi` + companion files). Pass `download_db=true`
+  with `manifest_url`, or prepare the DB separately (e.g., via s5cmd download).
+- The tool may query NCBI for taxonomy division information if `--div` is not set.
+"""
+function run_ncbi_fcs(
+    fasta_file::String;
+    tax_id::Int,
+    outdir::String=fasta_file * "_fcs_gx",
+    out_basename::Union{String,Nothing}=nothing,
+    gx_db::Union{String,Nothing}=nothing,
+    manifest_url::Union{String,Nothing}=nothing,
+    download_db::Bool=false,
+    species::Union{String,Nothing}=nothing,
+    split_fasta::Bool=true,
+    div::Union{String,Nothing}=nothing,
+    mask_transposons::Union{Bool,Nothing}=nothing,
+    allow_same_species::Union{Bool,Nothing}=nothing,
+    ignore_same_kingdom::Bool=false,
+    action_report::Bool=true,
+    save_hits::Bool=false,
+    generate_logfile::Bool=false,
+    phone_home_label::Union{String,Nothing}=nothing,
+    debug::Bool=false,
+)
+    if !isfile(fasta_file)
+        error("Input file does not exist: $(fasta_file)")
+    end
+
+    if !occursin(FASTA_REGEX, fasta_file)
+        error("Input file does not match FASTA format: $(fasta_file)")
+    end
+
+    default_db_dir = joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb")
+    gx_db_path = isnothing(gx_db) ? default_db_dir : gx_db
+    download_dir = isdir(gx_db_path) ? gx_db_path : dirname(gx_db_path)
+
+    setup_ncbi_fcs_gx(
+        db_dir=download_db ? download_dir : nothing,
+        manifest_url=manifest_url,
+        download_db=download_db
+    )
+
+    resolved_gx_db = resolve_ncbi_fcs_gx_db_path(gx_db_path)
+
+    mkpath(outdir)
+
+    cmd_parts = [
+        "run_gx.py",
+        "--fasta", fasta_file,
+        "--tax-id", string(tax_id),
+        "--out-dir", outdir,
+        "--gx-db", resolved_gx_db,
+        "--split-fasta", string(split_fasta),
+        "--action-report", string(action_report),
+        "--save-hits", string(save_hits),
+        "--generate-logfile", string(generate_logfile),
+    ]
+
+    if !isnothing(out_basename)
+        push!(cmd_parts, "--out-basename", out_basename)
+    end
+
+    if !isnothing(species)
+        push!(cmd_parts, "--species", species)
+    end
+
+    if !isnothing(div)
+        push!(cmd_parts, "--div", div)
+    end
+
+    if !isnothing(mask_transposons)
+        push!(cmd_parts, "--mask-transposons", string(mask_transposons))
+    end
+
+    if !isnothing(allow_same_species)
+        push!(cmd_parts, "--allow-same-species", string(allow_same_species))
+    end
+
+    if ignore_same_kingdom
+        push!(cmd_parts, "--ignore-same-kingdom")
+    end
+
+    if !isnothing(phone_home_label)
+        push!(cmd_parts, "--phone-home-label", phone_home_label)
+    end
+
+    if debug
+        push!(cmd_parts, "--debug")
+    end
+
+    run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx $cmd_parts`)
+
+    base = out_basename === nothing ? splitext(basename(fasta_file))[1] * "." * string(tax_id) : out_basename
+    out_prefix = joinpath(outdir, base)
+    taxonomy_report = out_prefix * ".taxonomy.rpt"
+    report = action_report ? out_prefix * ".fcs_gx_report.txt" : nothing
+    summary = generate_logfile ? out_prefix * ".summary.txt" : nothing
+    hits = save_hits ? out_prefix * ".hits.tsv.gz" : nothing
+
+    if !isfile(taxonomy_report)
+        error("FCS-GX taxonomy report missing: $(taxonomy_report)")
+    end
+
+    if action_report && !isfile(report)
+        error("FCS-GX action report missing: $(report)")
+    end
+
+    return (outdir=outdir, out_basename=base, taxonomy_report=taxonomy_report, report=report, summary=summary, hits=hits)
+end
+
+"""
+    run_ncbi_fcs_clean_genome(
+        fasta_file::String;
+        action_report::String,
+        outdir::String=fasta_file * "_fcs_gx_clean",
+        output_fasta::Union{String,Nothing}=nothing,
+        contam_fasta::Union{String,Nothing}=nothing,
+        min_seq_len::Int=200,
+    )
+
+Apply an FCS-GX action report to produce a cleaned FASTA and optional contamination FASTA.
+"""
+function run_ncbi_fcs_clean_genome(
+    fasta_file::String;
+    action_report::String,
+    outdir::String=fasta_file * "_fcs_gx_clean",
+    output_fasta::Union{String,Nothing}=nothing,
+    contam_fasta::Union{String,Nothing}=nothing,
+    min_seq_len::Int=200,
+)
+    if !isfile(fasta_file)
+        error("Input file does not exist: $(fasta_file)")
+    end
+
+    if !isfile(action_report)
+        error("Action report does not exist: $(action_report)")
+    end
+
+    setup_ncbi_fcs_gx(db_dir=nothing)
+    mkpath(outdir)
+
+    output_fasta = output_fasta === nothing ? joinpath(outdir, "clean.fasta") : output_fasta
+    contam_fasta = contam_fasta === nothing ? joinpath(outdir, "contam.fasta") : contam_fasta
+
+    cmd_parts = [
+        "gx",
+        "clean-genome",
+        "--input", fasta_file,
+        "--action-report", action_report,
+        "--output", output_fasta,
+        "--contam-fasta-out", contam_fasta,
+        "--min-seq-len", string(min_seq_len),
+    ]
+
+    run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx $cmd_parts`)
+
+    if !isfile(output_fasta)
+        error("Cleaned FASTA not generated: $(output_fasta)")
+    end
+
+    return (outdir=outdir, cleaned_fasta=output_fasta, contamination_fasta=contam_fasta)
 end
 
 """
@@ -1182,7 +1609,7 @@ busco_dir = Mycelia.run_busco(assemblies,
 - Results provide Complete, Fragmented, and Missing BUSCO counts
 """
 function run_busco(assembly_files::Vector{String};
-                   outdir::String="busco_results",
+                   outdir::Union{String,Nothing}=nothing,
                    lineage::Union{String,Nothing}=nothing,
                    mode::String="genome",
                    threads::Int=get_default_threads(),
@@ -1219,6 +1646,13 @@ function run_busco(assembly_files::Vector{String};
         auto_lineage = true
     end
     
+    # Derive default outdir from first assembly if not provided
+    if outdir === nothing
+        first_asm = assembly_files[1]
+        base = replace(basename(first_asm), Mycelia.FASTA_REGEX => "")
+        outdir = joinpath(dirname(first_asm), base * "_busco")
+    end
+
     # Create output directory
     mkpath(outdir)
     
@@ -1232,8 +1666,8 @@ function run_busco(assembly_files::Vector{String};
         # Build BUSCO command
         cmd_parts = [
             "busco",
-            "--input", assembly_file,
-            "--output", assembly_name,
+            "--in", assembly_file,
+            "--out", assembly_name,
             "--out_path", outdir,
             "--mode", mode,
             "--cpu", string(threads)
@@ -1265,8 +1699,20 @@ function run_busco(assembly_files::Vector{String};
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n busco $cmd_parts`)
             
             # Verify output files were created
-            summary_files = Glob.glob(joinpath(assembly_outdir, "short_summary*.txt"))
-            
+            summary_files = String[]
+            if isdir(assembly_outdir)
+                summary_files = filter(name -> occursin(r"^short_summary.*\.txt$", name), readdir(assembly_outdir))
+                if isempty(summary_files)
+                    for (root, _, files) in walkdir(assembly_outdir)
+                        for name in files
+                            if occursin(r"^short_summary.*\.txt$", name)
+                                push!(summary_files, joinpath(root, name))
+                            end
+                        end
+                    end
+                end
+            end
+
             if isempty(summary_files)
                 error("BUSCO failed to generate summary file for $(assembly_file)")
             end
@@ -1421,6 +1867,38 @@ function run_mummer(reference::String, query::String;
     catch e
         error("MUMmer execution failed: $(e)")
     end
+end
+
+"""
+    parse_mummer_coords(coords_file) -> Vector{NamedTuple}
+
+Parse a MUMmer `show-coords` output file into alignment records.
+"""
+function parse_mummer_coords(coords_file)
+    alignments = NamedTuple[]
+    if !isfile(coords_file)
+        return alignments
+    end
+
+    open(coords_file) do io
+        for raw_line in eachline(io)
+            line = strip(raw_line)
+            isempty(line) && continue
+            fields = split(line)
+            first_val = tryparse(Int, fields[1])
+            if first_val === nothing || length(fields) < 7
+                continue
+            end
+            start_ref = parse(Int, fields[1])
+            end_ref = parse(Int, fields[2])
+            start_query = parse(Int, fields[3])
+            end_query = parse(Int, fields[4])
+            len_ref = parse(Int, fields[5])
+            identity = parse(Float64, fields[7])
+            push!(alignments, (;start_ref, end_ref, start_query, end_query, len_ref, identity))
+        end
+    end
+    return alignments
 end
 
 """

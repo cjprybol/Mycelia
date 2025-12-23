@@ -26,6 +26,9 @@ ngrams("abcd", 2)   # Returns ["ab", "bc", "cd"]
 function ngrams(s::AbstractString, n::Int)
     # Convert to character array to handle Unicode properly
     chars = collect(s)
+    if n <= 0 || isempty(chars)
+        throw(BoundsError(s, n))
+    end
     len = length(chars)
     count = max(len - n + 1, 0)
     result = Vector{String}(undef, count)
@@ -80,7 +83,7 @@ function build_string_graph_next(
         label_type = String,
         vertex_data_type = StringVertexData,
         edge_data_type = StringEdgeData,
-        weight_function = edge_data -> edge_data.weight,
+        weight_function = edge_data_weight,
         default_weight = 0.0,
     )
 
@@ -799,7 +802,7 @@ function build_string_biosequence_graph_next(fasta_records::Vector{FASTX.FASTA.R
         label_type=String,
         vertex_data_type=StringVertexData,
         edge_data_type=StringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 

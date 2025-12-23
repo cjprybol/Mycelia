@@ -251,28 +251,6 @@ kmer_frequency_spectrum(kmer_counts)
 - **Structural Accuracy**: Correct arrangement of sequences
 - **Validation**: Comparison with reference genome
 
-### When to Use Different Assemblers
-
-| Data Type | Assembler | Algorithm | Strengths |
-|-----------|-----------|-----------|-----------|
-| HiFi | hifiasm | String graph | High accuracy, haplotype-aware |
-| Nanopore | Flye | Repeat graph | Long reads, repetitive genomes |
-| Illumina | SPAdes | de Bruijn | Short reads, microbial genomes |
-| Hybrid | MaSuRCA | Hybrid | Combines short and long reads |
-
-### Mycelia Functions
-
-```julia
-# Run assembly
-Mycelia.assemble_genome("reads.fastq", output_dir="assembly")
-
-# Evaluate assembly quality
-evaluate_assembly(assembly_fasta)
-
-# Assembly statistics
-calculate_assembly_stats(contigs)
-```
-
 ## Gene Annotation
 
 ### Concept: Identifying Functional Elements
@@ -299,13 +277,13 @@ calculate_assembly_stats(contigs)
 - **Approach**: Use sequence signals (start codons, splice sites)
 - **Advantages**: No external data required
 - **Limitations**: Lower accuracy, misses non-canonical genes
-- **Tools**: Prodigal, Augustus, GeneMark
+- **Tools**: Prodigal, Pyrodigal, Augustus, GeneMark
 
 #### Homology-Based Prediction
 - **Approach**: Compare to known genes in databases
 - **Advantages**: Higher accuracy for conserved genes
 - **Limitations**: Misses novel genes, depends on database quality
-- **Tools**: BLAST, DIAMOND, MMseqs2
+- **Tools**: BLAST, DIAMOND, MMseqs2, MetaEuk
 
 #### RNA-seq Guided Prediction
 - **Approach**: Use transcriptome data to guide prediction
@@ -341,23 +319,11 @@ calculate_assembly_stats(contigs)
 
 | Genome Type | Method | Tools | Considerations |
 |-------------|---------|-------|---------------|
-| Bacterial | Ab initio | Prodigal | Simple gene structure |
-| Viral | Homology | BLAST | Small genomes, database dependent |
+| Bacterial | Ab initio | Prodigal / Pyrodigal | Simple gene structure |
+| Viral | Specialized | Prodigal-gv | Viral coding patterns |
 | Fungal | Hybrid | Augustus + BLAST | Moderate complexity |
+| Eukaryotic metagenome | Homology-guided | MetaEuk | Fragmented contigs |
 | Plant/Animal | RNA-seq guided | BRAKER | High complexity, alternative splicing |
-
-### Mycelia Functions
-
-```julia
-# Predict genes
-predict_genes(genome_fasta, genetic_code="standard")
-
-# Functional annotation
-annotate_functions(proteins, database="uniprot")
-
-# Annotation evaluation
-evaluate_annotation(gff_file, reference_gff)
-```
 
 ## Comparative Genomics
 
@@ -402,40 +368,6 @@ evaluate_annotation(gff_file, reference_gff)
 - **Positive Selection**: Genes under selective pressure
 - **Purifying Selection**: Genes with functional constraints
 - **Neutral Evolution**: Genes evolving without selection
-
-### Applications
-
-#### Medical Genomics
-- **Drug Resistance**: Compare sensitive vs resistant strains
-- **Virulence Factors**: Identify pathogenicity genes
-- **Vaccine Targets**: Find conserved antigens
-
-#### Agricultural Genomics
-- **Crop Improvement**: Identify beneficial alleles
-- **Disease Resistance**: Find resistance genes
-- **Stress Tolerance**: Identify adaptation mechanisms
-
-### When to Use Comparative Genomics
-
-| Research Question | Approach | Scale | Tools |
-|------------------|----------|--------|-------|
-| Species evolution | Phylogenomics | Many species | Core genome alignment |
-| Population variation | Pangenomics | Many individuals | Graph-based methods |
-| Functional elements | Synteny | Few genomes | Whole genome alignment |
-| Adaptation | Selection analysis | Population data | Evolutionary models |
-
-### Mycelia Functions
-
-```julia
-# Build pangenome
-build_pangenome(genome_list, clustering_threshold=0.95)
-
-# Phylogenetic analysis
-construct_phylogeny(core_genes, method="ml")
-
-# Comparative analysis
-compare_genomes(genome1, genome2, method="synteny")
-```
 
 ## Phylogenetics
 
@@ -490,30 +422,6 @@ compare_genomes(genome1, genome2, method="synteny")
 - **Outbreak Tracking**: Trace disease transmission
 - **Vaccine Design**: Understand pathogen evolution
 - **Drug Resistance**: Track resistance evolution
-
-### When to Use Phylogenetics
-
-| Data Type | Method | Use Case | Considerations |
-|-----------|---------|----------|---------------|
-| Single gene | NJ/ML | Quick analysis | May not reflect species tree |
-| Multiple genes | Concatenation | Species phylogeny | Assumes same tree topology |
-| Genome-wide | Coalescent | Population genetics | Accounts for incomplete lineage sorting |
-| Time-calibrated | Molecular clock | Divergence dating | Requires calibration points |
-
-### Mycelia Functions
-
-```julia
-# Construct phylogeny
-build_phylogenetic_tree(alignment, method="ml")
-
-# Molecular clock analysis
-estimate_divergence_times(tree, calibration_points)
-
-# Tree visualization
-plot_phylogenetic_tree(tree, layout="circular")
-```
-
-## Tool Selection Guide
 
 ### Choosing the Right Analysis
 
@@ -588,7 +496,3 @@ plot_phylogenetic_tree(tree, layout="circular")
 2. **Parameter Recording**: Document all settings
 3. **Environment Management**: Use containers/environments
 4. **Data Provenance**: Track data sources
-
----
-
-This conceptual guide provides the foundation for understanding Mycelia's tools and making informed decisions about your bioinformatics analyses. Each tutorial and benchmark builds on these concepts with practical implementations.

@@ -1,0 +1,556 @@
+[settings]
+append_unmapped = true
+include_subdirs = true
+exclude_files = []
+
+[[modules]]
+file = "Mycelia.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "alignments-and-mapping.jl"
+primary_doc_label = "Tool Integration"
+primary_doc_path = "docs/src/generated/tutorials/08_tool_integration.md"
+coverage_notes = "Alignment wrappers (BLAST/DIAMOND/MMSeqs2/minimap2) are referenced from the capability matrix."
+
+[[modules]]
+file = "alphabets.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "amino-acid-analysis.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "annotation.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "assembly.jl"
+primary_doc_label = "Genome Assembly"
+primary_doc_path = "docs/src/generated/tutorials/04_genome_assembly.md"
+coverage_notes = "Wrapper coverage for MEGAHIT/metaSPAdes/Flye/hifiasm documented; link polishing and long-read retries into tutorials."
+
+[[modules]]
+file = "binning.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "bioconda.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "busco-datasets.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "classification.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "clustering.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "codon-optimization.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "constants.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "coverage-clustering.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/annealing-error-correction.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/circular-genome-reconstruction.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/cross-validation.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/genomic-graph-algorithms.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/intelligent-assembly.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/neo4jl.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/pangenome-core-genome.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/performance-benchmarks.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/protein-clustering-pangenome.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/reinforcement-learning-comparison.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/reinforcement-learning-mcts.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/reinforcement-learning-pomdp.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/reinforcement-learning-rl-jl.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/reinforcement-learning.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/strain-resolved-types.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "development/therapeutic-optimization.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "dimensionality-reduction.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "distance-metrics.jl"
+primary_doc_label = "K-mer Analysis"
+primary_doc_path = "docs/src/generated/tutorials/03_kmer_analysis.md"
+coverage_notes = "Mash/Jaccard/JS divergence functions are linked from tutorials."
+
+[[modules]]
+file = "fasta-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "fastq-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "fastx.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "FASTA/FASTQ normalization utilities used by tutorials; add quick-start snippet to API reference."
+
+[[modules]]
+file = "genome-features.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "graph-cleanup.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "graph-core.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "iterative-assembly.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "kmer-analysis.jl"
+primary_doc_label = "K-mer Analysis"
+primary_doc_path = "docs/src/generated/tutorials/03_kmer_analysis.md"
+coverage_notes = "K-mer spectrum utilities are referenced; add examples for saved-result loaders."
+
+[[modules]]
+file = "kmer-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "kmer-saturation-analysis.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "metagenomic-classification.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "ncbi-datasets-cli.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "pangenome-analysis.jl"
+primary_doc_label = "Comparative Genomics"
+primary_doc_path = "docs/src/generated/tutorials/07_comparative_genomics.md"
+coverage_notes = "PGGB/cactus wrappers present; tutorials pending."
+
+[[modules]]
+file = "pantools.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "plotting-and-visualization.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "Embedding/taxa plots linked; add dedicated visualization examples as refs stabilize."
+
+[[modules]]
+file = "precompile_workload.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "quality-control-and-benchmarking.jl"
+primary_doc_label = "Quality Control"
+primary_doc_path = "docs/src/generated/tutorials/02_quality_control.md"
+coverage_notes = "External filtering and QUAST/BUSCO/MUMmer paths are covered; native metrics (robust_cv, filter_genome_outliers) referenced in docs/src/workflow-map.md."
+
+[[modules]]
+file = "qualmer-analysis.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "qualmer-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rclone.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "read-quality-control.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "reference-databases.jl"
+primary_doc_label = "Data Acquisition"
+primary_doc_path = "docs/src/generated/tutorials/01_data_acquisition.md"
+coverage_notes = "NCBI/SRA helpers documented; ensure coverage of metadata loaders."
+
+[[modules]]
+file = "rhizomorph/algorithms/contigs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/algorithms/io.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/algorithms/path-finding.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/algorithms/repeats.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/algorithms/simplification.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/assembly.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/edge-data.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/enums.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/evidence-functions.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/evidence-structures.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/graph-construction.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/graph-query.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/graph-type-conversions.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/quality-functions.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/core/vertex-data.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/fixed-length/kmer-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/fixed-length/ngram-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/fixed-length/qualmer-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/rhizomorph.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/variable-length/fasta-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/variable-length/fastq-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/variable-length/strand-conversions.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "rhizomorph/variable-length/string-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "sentencepiece.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "sequence-comparison.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "sequence-graphs-next.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "sequence-graphs.jl.deprecated"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "simulation.jl"
+primary_doc_label = "Data Acquisition"
+primary_doc_path = "docs/src/generated/tutorials/01_data_acquisition.md"
+coverage_notes = "Read simulators surfaced in tutorials and workflow map."
+
+[[modules]]
+file = "slurm-sbatch.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "string-graphs.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "taxonomy-and-trees.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "Classification + plotting functions surfaced in the workflow map; needs dedicated taxonomy tutorial."
+
+[[modules]]
+file = "tda.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "testing-utilities.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "utility-functions.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "Shared helpers; document only when promoted to user-facing APIs."
+
+[[modules]]
+file = "variant-analysis.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "Functions exist but lack tutorial/API detail; planned variant calling tutorial will fill the gap."
+
+[[modules]]
+file = "viterbi-next.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "viterbi-polishing-and-error-correction.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "xam.jl"
+primary_doc_label = "Tool Integration"
+primary_doc_path = "docs/src/generated/tutorials/08_tool_integration.md"
+coverage_notes = "Mapping stats and coverage plotting referenced; align with BAM/CRAM primer."

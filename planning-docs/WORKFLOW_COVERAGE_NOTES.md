@@ -1,5 +1,7 @@
 # Workflow coverage and documentation gaps
 
+See `planning-docs/FUNCTION_COVERAGE_AUDIT.md` for per-module coverage counts and doc link audits.
+
 ## Auto-included surface area (from `src/Mycelia.jl`)
 
 - **Core graph + IO**: `utility-functions`, `alphabets`, `constants`, `fastx`, `graph-core`, `sequence-graphs-next`, `string-graphs`, `qualmer-analysis/graphs`, `fasta-graphs`, `fastq-graphs`.
@@ -29,6 +31,7 @@
   - Iterative likelihood-improvement handoff after external assembly.
   - Variant calling example (VCF normalization + evaluation).
   - Metagenomic binning + profiling paths.
+  - Sketch-guided pangenome context selection (sourmash/sylph/mash prefilter -> subset reference paths -> minimap2 mapping).
 
 ## Proposed actions
 

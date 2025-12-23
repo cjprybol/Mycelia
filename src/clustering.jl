@@ -841,3 +841,259 @@ end
 #     ks_assessed = ks_to_try[1:length(silhouette_scores)]
 #     return (;optimal_number_of_clusters, ks_assessed, silhouette_scores, hclust_result)
 # end
+
+"""
+    find_group_medoid(distance_matrix, indices, metric_type=:distance)
+
+Find the medoid (most central point) within a group of indices.
+For :distance, minimizes sum of distances. For :similarity, maximizes sum of similarities.
+"""
+function find_group_medoid(distance_matrix, indices; metric_type=:distance)
+    if length(indices) == 1
+        return indices[1]
+    end
+    
+    best_score = metric_type == :distance ? Inf : -Inf
+    best_idx = indices[1]
+    
+    for candidate in indices
+        # Compute sum of pairwise metrics to all other members
+        current_score = sum(distance_matrix[candidate, i] for i in indices if i != candidate)
+        
+        if metric_type == :distance
+            if current_score < best_score
+                best_score = current_score
+                best_idx = candidate
+            end
+        else # :similarity
+            if current_score > best_score
+                best_score = current_score
+                best_idx = candidate
+            end
+        end
+    end
+    
+    return best_idx
+end
+
+"""
+    find_second_most_diverse(distance_matrix, indices, medoid_idx, metric_type=:distance)
+
+Find the point in the group that is most distant (or least similar) from the medoid.
+"""
+function find_second_most_diverse(distance_matrix, indices, medoid_idx; metric_type=:distance)
+    if length(indices) <= 1
+        return nothing
+    end
+    
+    # We want to maximize distance or minimize similarity
+    best_score = metric_type == :distance ? -Inf : Inf
+    best_idx = nothing
+    
+    for candidate in indices
+        if candidate == medoid_idx
+            continue
+        end
+        
+        val = distance_matrix[candidate, medoid_idx]
+        
+        if metric_type == :distance
+            if val > best_score
+                best_score = val
+                best_idx = candidate
+            end
+        else # :similarity
+            if val < best_score
+                best_score = val
+                best_idx = candidate
+            end
+        end
+    end
+    
+    return best_idx
+end
+
+"""
+    greedy_maxmin_diversity(distance_matrix, initial_selected, candidate_pool, 
+                            n_to_select, weights, group_ids, max_per_group; 
+                            metric_type=:distance)
+
+Greedily select samples to maximize minimum pairwise distance (or minimize max similarity) to the selected set.
+Uses `weights` (e.g. abundance) as a tie-breaker.
+"""
+function greedy_maxmin_diversity(
+    distance_matrix, 
+    initial_selected, 
+    candidate_pool, 
+    n_to_select,
+    weights,
+    group_ids,
+    max_per_group;
+    metric_type=:distance
+)
+    selected = copy(initial_selected)
+    remaining = setdiff(candidate_pool, selected)
+    
+    # Track selection counts per group
+    group_counts = Dict{Any, Int}()
+    for idx in selected
+        g = group_ids[idx]
+        group_counts[g] = get(group_counts, g, 0) + 1
+    end
+    
+    for _ in 1:n_to_select
+        best_candidate = nothing
+        
+        # Tracking the "Min Distance" (we want to MAXIMIZE this)
+        # Or "Max Similarity" (we want to MINIMIZE this)
+        best_worst_pair_metric = metric_type == :distance ? -Inf : Inf
+        
+        best_weight = -Inf
+        
+        for candidate in remaining
+            # Check constraints
+            g = group_ids[candidate]
+            # Handle max_per_group as Int or Dict
+            limit = isa(max_per_group, Dict) ? get(max_per_group, g, typemax(Int)) : max_per_group
+            
+            if get(group_counts, g, 0) >= limit
+                continue
+            end
+            
+            # Calculate metric to nearest neighbor in selected set
+            if metric_type == :distance
+                # Find the CLOSEST selected point (min distance)
+                # We want the candidate where this value is LARGEST (MaxMin)
+                worst_pair_metric = minimum(distance_matrix[candidate, s] for s in selected)
+            else
+                # Find the MOST SIMILAR selected point (max similarity)
+                # We want the candidate where this value is SMALLEST (MinMax)
+                worst_pair_metric = maximum(distance_matrix[candidate, s] for s in selected)
+            end
+            
+            # Tie-breaking logic
+            current_weight = isnothing(weights) ? 0.0 : weights[candidate]
+            is_better = false
+            
+            if metric_type == :distance
+                if worst_pair_metric > best_worst_pair_metric * 1.0001 # slightly better distance
+                    is_better = true
+                elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol=1e-4) && current_weight > best_weight
+                    is_better = true
+                end
+            else # similarity
+                if worst_pair_metric < best_worst_pair_metric * 0.9999 # slightly lower max similarity (better)
+                    is_better = true
+                elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol=1e-4) && current_weight > best_weight
+                    is_better = true
+                end
+            end
+            
+            if is_better
+                best_worst_pair_metric = worst_pair_metric
+                best_candidate = candidate
+                best_weight = current_weight
+            end
+        end
+        
+        if isnothing(best_candidate)
+            break
+        end
+        
+        push!(selected, best_candidate)
+        remaining = setdiff(remaining, [best_candidate])
+        group_counts[group_ids[best_candidate]] = get(group_counts, group_ids[best_candidate], 0) + 1
+    end
+    
+    return selected
+end
+
+"""
+    select_diverse_representatives(distance_matrix, group_ids; 
+                                   weights=nothing, 
+                                   n_total=100, 
+                                   max_per_group=2, 
+                                   metric_type=:distance)
+
+Select maximally diverse representatives using a multi-stage approach:
+1. Select one medoid from each group (guarantees representation).
+2. Select a second diverse sample from larger groups (if max_per_group >= 2).
+3. Fill remaining slots using greedy MaxMin selection (or MinMax similarity).
+
+# Arguments
+- `distance_matrix`: Square matrix of pairwise metrics.
+- `group_ids`: Vector of group identifiers (Strings, Ints, or Tuples) matching rows of the matrix.
+- `weights`: Optional vector of importance weights (e.g., abundance) for tie-breaking.
+- `n_total`: Target total number of samples.
+- `max_per_group`: Integer limit or Dictionary mapping group_id => limit.
+- `metric_type`: `:distance` (default, 0=identical) or `:similarity` (100% or 1.0=identical).
+"""
+function select_diverse_representatives(
+    distance_matrix::AbstractMatrix,
+    group_ids::AbstractVector;
+    weights::Union{AbstractVector, Nothing}=nothing,
+    n_total::Int=100,
+    max_per_group::Union{Int, Dict}=2,
+    metric_type::Symbol=:distance
+)
+    if size(distance_matrix, 1) != length(group_ids)
+        error("Distance matrix dimension $(size(distance_matrix, 1)) does not match group_ids length $(length(group_ids))")
+    end
+    if !isnothing(weights) && length(weights) != length(group_ids)
+        error("Weights vector length must match group_ids length")
+    end
+
+    # Group indices
+    groups = Dict{Any, Vector{Int}}()
+    for (i, g) in enumerate(group_ids)
+        if !haskey(groups, g)
+            groups[g] = Int[]
+        end
+        push!(groups[g], i)
+    end
+    
+    selected_medoids = Int[]
+    
+    # Stage 1: Medoids & Second Diverse
+    for (g, indices) in groups
+        # 1. Medoid
+        medoid_idx = find_group_medoid(distance_matrix, indices; metric_type=metric_type)
+        push!(selected_medoids, medoid_idx)
+        
+        # 2. Second Diverse (if allowed)
+        limit = isa(max_per_group, Dict) ? get(max_per_group, g, typemax(Int)) : max_per_group
+        if limit >= 2 && length(indices) > 1
+            second_idx = find_second_most_diverse(distance_matrix, indices, medoid_idx; metric_type=metric_type)
+            if !isnothing(second_idx)
+                push!(selected_medoids, second_idx)
+            end
+        end
+    end
+    
+    # Stage 2: Fill remaining
+    remaining_slots = n_total - length(selected_medoids)
+    
+    if remaining_slots > 0
+        all_candidates = collect(1:size(distance_matrix, 1))
+        final_selected = greedy_maxmin_diversity(
+            distance_matrix,
+            selected_medoids,
+            all_candidates,
+            remaining_slots,
+            weights,
+            group_ids,
+            max_per_group;
+            metric_type=metric_type
+        )
+        return final_selected
+    else
+        # If Stage 1 selected too many, we truncate based on simple logic or return all
+        # Ideally, you might want to prioritize medoids of larger groups, but simply returning
+        # the list truncated to n_total is a safe fallback to strictly enforce n_total.
+        if length(selected_medoids) > n_total
+            @warn "Stage 1 selected $(length(selected_medoids)) samples, which exceeds target $n_total. Returning truncated list."
+            return selected_medoids[1:n_total]
+        end
+        return selected_medoids
+    end
+end

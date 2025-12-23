@@ -71,7 +71,7 @@ Test.@testset "Viroid Assembly Workflow Tests" begin
         observations = [(read, i) for (i, read) in enumerate(test_reads)]
         
         # Configure assembly
-        config = Mycelia.AssemblyConfig(
+        config = Mycelia.Rhizomorph.AssemblyConfig(
             k=10, 
             use_quality_scores=true,
             bubble_resolution=true,
@@ -118,7 +118,7 @@ Test.@testset "Viroid Assembly Workflow Tests" begin
             dna_sequence, "dna_test"; coverage=5, read_length=15, error_rate=0.01, sequence_type="DNA"
         )
         dna_obs = [(read, i) for (i, read) in enumerate(dna_reads)]
-        dna_config = Mycelia.AssemblyConfig(k=8, use_quality_scores=true)
+        dna_config = Mycelia.Rhizomorph.AssemblyConfig(k=8, use_quality_scores=true)
         dna_result = Mycelia._assemble_qualmer_graph(dna_obs, dna_config)
         
         # Test RNA assembly
@@ -127,7 +127,7 @@ Test.@testset "Viroid Assembly Workflow Tests" begin
             rna_sequence, "rna_test"; coverage=5, read_length=12, error_rate=0.01, sequence_type="RNA"
         )
         rna_obs = [(read, i) for (i, read) in enumerate(rna_reads)]
-        rna_config = Mycelia.AssemblyConfig(k=6, use_quality_scores=true)
+        rna_config = Mycelia.Rhizomorph.AssemblyConfig(k=6, use_quality_scores=true)
         rna_result = Mycelia._assemble_qualmer_graph(rna_obs, rna_config)
         
         # Test protein assembly
@@ -136,7 +136,7 @@ Test.@testset "Viroid Assembly Workflow Tests" begin
             protein_sequence, "protein_test"; coverage=4, read_length=8, error_rate=0.02, sequence_type="AA"
         )
         protein_obs = [(read, i) for (i, read) in enumerate(protein_reads)]
-        protein_config = Mycelia.AssemblyConfig(k=4, use_quality_scores=true)
+        protein_config = Mycelia.Rhizomorph.AssemblyConfig(k=4, use_quality_scores=true)
         protein_result = Mycelia._assemble_qualmer_graph(protein_obs, protein_config)
         
         # Verify all assemblies worked
@@ -166,7 +166,7 @@ Test.@testset "Viroid Assembly Workflow Tests" begin
         )
         
         complex_obs = [(read, i) for (i, read) in enumerate(complex_reads)]
-        complex_config = Mycelia.AssemblyConfig(
+        complex_config = Mycelia.Rhizomorph.AssemblyConfig(
             k=12, 
             use_quality_scores=true,
             bubble_resolution=true,
@@ -192,7 +192,7 @@ Test.@testset "Viroid Assembly Workflow Tests" begin
     Test.@testset "Error Handling" begin
         # Test empty observations - this will produce an empty result but shouldn't crash
         empty_obs = Tuple{Mycelia.FASTX.FASTQ.Record, Int}[]
-        config = Mycelia.AssemblyConfig(k=10, use_quality_scores=true)
+        config = Mycelia.Rhizomorph.AssemblyConfig(k=10, use_quality_scores=true)
         
         # This should handle gracefully without crashing
         try

@@ -1,3 +1,20 @@
+# From the Mycelia base directory, run the tests with:
+# 
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/rhizomorph_kmer_mode_support_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/rhizomorph_kmer_mode_support_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
 import Test
 import Mycelia
 import BioSequences
@@ -32,8 +49,8 @@ Test.@testset "Rhizomorph k-mer graph modes" begin
 
         # Canonical graph should be undirected
         Test.@test !Graphs.is_directed(graph.graph)
-        Test.@test Graphs.has_edge(graph.graph, Kmers.DNAKmer{3}("ATG"), Kmers.DNAKmer{3}("GCA"))
-        Test.@test Graphs.has_edge(graph.graph, Kmers.DNAKmer{3}("GCA"), Kmers.DNAKmer{3}("ATG"))  # symmetric in undirected graph
+        Test.@test Mycelia.Rhizomorph.has_edge(graph, Kmers.DNAKmer{3}("ATG"), Kmers.DNAKmer{3}("GCA"))
+        Test.@test Mycelia.Rhizomorph.has_edge(graph, Kmers.DNAKmer{3}("GCA"), Kmers.DNAKmer{3}("ATG"))  # symmetric in undirected graph
     end
 
     mktempdir() do dir
@@ -60,9 +77,9 @@ Test.@testset "Rhizomorph k-mer graph modes" begin
         Test.@test haskey(graph, atg)
         Test.@test haskey(graph, rc_atg)
         # Forward edge present
-        Test.@test MetaGraphsNext.has_edge(graph, atg, tgc)
+        Test.@test Mycelia.Rhizomorph.has_edge(graph, atg, tgc)
         # Reverse-complement edge should be reversed in direction
-        Test.@test MetaGraphsNext.has_edge(graph, rc_tgc, rc_atg)
+        Test.@test Mycelia.Rhizomorph.has_edge(graph, rc_tgc, rc_atg)
     end
 
     Test.@testset "Singlestrand graphs are directed" begin

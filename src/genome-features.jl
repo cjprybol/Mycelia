@@ -85,25 +85,34 @@ function update_gff_with_mmseqs(
     gff_file::String,
     mmseqs_results::DataFrames.DataFrame,
     id_map::Union{Dict{String, String}, Nothing}=nothing,
-    no_hit_label::String="No Hit"
+    no_hit_label::String="No Hit",
+    extract_cluster_name::Bool=false
 )
+
+    function normalize_header_label(theader::String)
+        return replace(theader, ' ' => "__")
+    end
 
     # This inner function extracts the cluster name and normalizes it for the 'label'
     function get_normalized_label(theader::String)
+        if !extract_cluster_name
+            return normalize_header_label(theader)
+        end
+
         # Extract the part of the header before the sequence count (e.g., "n=5")
         match_result = Base.match(r"^(\S+\s+.*?)\s+n=\d+", theader)
         label_base = match_result !== nothing ? Base.String(match_result[1]) : theader
-        
+
         # Split the base, take all words from the second onward, and join with an underscore
         parts = Base.split(label_base, ' ')
         # This check handles cases where there might be fewer than two words
-        return Base.length(parts) > 1 ? Base.join(parts[2:end], "_") : ""
+        return Base.length(parts) > 1 ? normalize_header_label(Base.join(parts[2:end], "_")) : ""
     end
 
     # Create a dictionary mapping each query to its full 'theader' (for product)
     # and the generated normalized label
     query_to_info = Dict{String, Tuple{String, String}}(
-        row.query => (row.theader, get_normalized_label(row.theader)) for row in DataFrames.eachrow(mmseqs_results)
+        row.query => (normalize_header_label(row.theader), get_normalized_label(row.theader)) for row in DataFrames.eachrow(mmseqs_results)
     )
 
     gff_table = Mycelia.read_gff(gff_file)
@@ -128,8 +137,8 @@ function update_gff_with_mmseqs(
         if info !== nothing
             product, normalized_label = info
         else
-            product = no_hit_label
-            normalized_label = no_hit_label
+            product = normalize_header_label(no_hit_label)
+            normalized_label = product
         end
         # Prepend the new label and product attributes to the existing attributes
         gff_table[i, "attributes"] = "label=\"$(normalized_label)\";product=\"$(product)\";" * row.attributes
@@ -162,8 +171,8 @@ function update_gff_with_mmseqs(
     mmseqs_results = Mycelia.read_mmseqs_easy_search(mmseqs_file)
     # Pass keywords through to the next call
     return update_gff_with_mmseqs(
-        gff_file,
-        mmseqs_results;
+        gff_file=gff_file,
+        mmseqs_results=mmseqs_results,
         id_map=id_map,
         extract_cluster_name=extract_cluster_name
     )

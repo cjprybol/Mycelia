@@ -215,8 +215,12 @@ Test.@testset "Mosdepth Coverage QC" begin
         rm(multi_contig_fasta, force=true)
         rm(simulated_reads.forward_reads, force=true)
         rm(simulated_reads.reverse_reads, force=true)
-        rm(simulated_reads.sam, force=true)
-        rm(simulated_reads.error_free_sam, force=true)
+        if simulated_reads.sam !== nothing
+            rm(simulated_reads.sam, force=true)
+        end
+        if simulated_reads.error_free_sam !== nothing
+            rm(simulated_reads.error_free_sam, force=true)
+        end
         rm(unsorted_bam, force=true)
         rm(sorted_bam, force=true)
         rm(bai_path, force=true)

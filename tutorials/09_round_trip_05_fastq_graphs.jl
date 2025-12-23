@@ -77,22 +77,23 @@ println("\n" * "="^60)
 println("Building quality-aware BioSequence graph directly from FASTQ...")
 
 ## Use the direct build function
-fastq_graph = Mycelia.build_quality_biosequence_graph(fastq_reads)
+fastq_graph = Mycelia.Rhizomorph.build_fastq_graph(fastq_reads; dataset_id="fastq_direct", min_overlap=5)
+fastq_labels = collect(Mycelia.MetaGraphsNext.labels(fastq_graph))
 
 println("\nDirect FASTQ graph statistics:")
-println("  Number of vertices: ", Graphs.nv(fastq_graph))
-println("  Number of edges: ", Graphs.ne(fastq_graph))
+println("  Number of vertices: ", length(fastq_labels))
+println("  Number of edges: ", Mycelia.MetaGraphsNext.ne(fastq_graph))
 
 ## Examine the vertices (these should be variable-length sequences)
 println("\nExamining quality-aware sequence vertices:")
-for v in Iterators.take(Graphs.vertices(fastq_graph), min(5, Graphs.nv(fastq_graph)))
-    vertex_data = fastq_graph[v]
-    mean_qual = round(Statistics.mean(vertex_data.quality_scores), digits=1)
-    println("\nVertex $v:")
-    println("  Sequence: ", vertex_data.sequence)
+for label in Iterators.take(fastq_labels, min(5, length(fastq_labels)))
+    vertex_data = fastq_graph[label]
+    mean_qual = round(Statistics.mean(Mycelia.Rhizomorph.decode_quality_scores(vertex_data.quality_scores)), digits=1)
+    println("\nVertex: ", label)
+    println("  Sequence: ", string(vertex_data.sequence))
     println("  Length: ", length(vertex_data.sequence))
     println("  Mean quality: ", mean_qual)
-    println("  Quality range: ", minimum(vertex_data.quality_scores), "-", maximum(vertex_data.quality_scores))
+    println("  Quality range: ", minimum(Mycelia.Rhizomorph.decode_quality_scores(vertex_data.quality_scores)), "-", maximum(Mycelia.Rhizomorph.decode_quality_scores(vertex_data.quality_scores)))
 end
 
 # ## Part 3: Comparison with Qualmer-Mediated Approach
@@ -104,19 +105,19 @@ println("Comparing direct vs qualmer-mediated approaches...")
 
 ## Build qualmer graph first, then convert to sequence graph
 k = 15  ## Use larger k for better comparison
-qualmer_graph = Mycelia.build_qualmer_graph(fastq_reads; k=k, graph_mode=Mycelia.SingleStrand)
-qualmer_to_fastq = Mycelia.qualmer_graph_to_quality_biosequence_graph(qualmer_graph, k)
+qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_reads, k; dataset_id="qualmer_direct", mode=:singlestrand)
+qualmer_to_fastq = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
 
 println("\nApproach comparison:")
 println("  Direct FASTQ graph:")
-println("    Vertices: ", Graphs.nv(fastq_graph))
-println("    Edges: ", Graphs.ne(fastq_graph))
+println("    Vertices: ", length(fastq_labels))
+println("    Edges: ", Mycelia.MetaGraphsNext.ne(fastq_graph))
 
 println("  Qualmer-mediated graph (k=$k):")
-println("    Qualmer vertices: ", Graphs.nv(qualmer_graph))
-println("    Qualmer edges: ", Graphs.ne(qualmer_graph))
-println("    Final FASTQ vertices: ", Graphs.nv(qualmer_to_fastq))
-println("    Final FASTQ edges: ", Graphs.ne(qualmer_to_fastq))
+println("    Qualmer vertices: ", length(Mycelia.MetaGraphsNext.labels(qualmer_graph)))
+println("    Qualmer edges: ", Mycelia.MetaGraphsNext.ne(qualmer_graph))
+println("    Final FASTQ vertices: ", length(Mycelia.MetaGraphsNext.labels(qualmer_to_fastq)))
+println("    Final FASTQ edges: ", Mycelia.MetaGraphsNext.ne(qualmer_to_fastq))
 
 # ## Part 4: Quality-Aware Assembly Analysis
 #
@@ -126,12 +127,12 @@ println("\n" * "="^60)
 println("Analyzing assembly quality for both approaches...")
 
 ## For direct approach - analyze sequence lengths and qualities
-direct_sequences = [fastq_graph[v].sequence for v in Graphs.vertices(fastq_graph)]
-direct_qualities = [fastq_graph[v].quality_scores for v in Graphs.vertices(fastq_graph)]
+direct_sequences = [fastq_graph[label].sequence for label in fastq_labels]
+direct_qualities = [fastq_graph[label].quality_scores for label in fastq_labels]
 
 if !isempty(direct_sequences)
     direct_lengths = [length(seq) for seq in direct_sequences]
-    direct_mean_quals = [Statistics.mean(quals) for quals in direct_qualities]
+    direct_mean_quals = [Statistics.mean(Mycelia.Rhizomorph.decode_quality_scores(quals)) for quals in direct_qualities]
     
     println("\nDirect approach analysis:")
     println("  Sequence count: ", length(direct_sequences))
@@ -141,14 +142,14 @@ if !isempty(direct_sequences)
 end
 
 ## For qualmer approach - use the package quality metrics
-if Graphs.nv(qualmer_graph) > 0
-    qualmer_metrics = Mycelia.calculate_assembly_quality_metrics(qualmer_graph)
+if !isempty(Mycelia.MetaGraphsNext.labels(qualmer_graph))
+    qualmer_metrics = Mycelia.Rhizomorph.get_qualmer_statistics(qualmer_graph; dataset_id="qualmer_direct")
     
     println("\nQualmer approach analysis:")
-    println("  K-mer count: ", qualmer_metrics.total_kmers)
-    println("  Mean k-mer coverage: ", round(qualmer_metrics.mean_coverage, digits=1))
-    println("  Mean k-mer quality: ", round(qualmer_metrics.mean_quality, digits=1))
-    println("  Mean k-mer confidence: ", round(qualmer_metrics.mean_confidence, digits=4))
+    println("  K-mer count: ", qualmer_metrics[:num_vertices])
+    println("  Mean joint quality: ", round(qualmer_metrics[:mean_joint_quality], digits=1))
+    println("  Min joint quality: ", qualmer_metrics[:min_joint_quality])
+    println("  Max joint quality: ", qualmer_metrics[:max_joint_quality])
 end
 
 # ## Part 5: Contig Assembly and Reconstruction
@@ -166,9 +167,9 @@ if !isempty(direct_sequences)
     
     println("\nTop contigs from direct approach:")
     for (rank, (vertex_idx, length)) in enumerate(seq_length_pairs[1:min(3, length(seq_length_pairs))])
-        actual_vertex = collect(Graphs.vertices(fastq_graph))[vertex_idx]
-        vertex_data = fastq_graph[actual_vertex]
-        mean_qual = round(Statistics.mean(vertex_data.quality_scores), digits=1)
+        label = fastq_labels[vertex_idx]
+        vertex_data = fastq_graph[label]
+        mean_qual = round(Statistics.mean(Mycelia.Rhizomorph.decode_quality_scores(vertex_data.quality_scores)), digits=1)
         
         println("  Contig $rank:")
         println("    Length: $length bp")
@@ -176,7 +177,7 @@ if !isempty(direct_sequences)
         println("    Sequence: ", vertex_data.sequence)
         
         ## Check if this contig matches part of the reference
-        contig_seq = String(vertex_data.sequence)
+        contig_seq = string(vertex_data.sequence)
         if occursin(contig_seq, reference_seq)
             println("    ✓ Perfect match in reference")
         elseif occursin(reference_seq, contig_seq)
@@ -207,7 +208,7 @@ println("\n" * "="^60)
 println("Performing round-trip validation...")
 
 ## Convert graph back to FASTQ records
-reconstructed_fastq = Mycelia.quality_biosequence_graph_to_fastq(fastq_graph, "reconstructed")
+reconstructed_fastq = Mycelia.Rhizomorph.fastq_graph_to_records(fastq_graph, "reconstructed")
 
 println("\nRound-trip validation:")
 println("  Original reads: ", length(fastq_reads))
@@ -259,12 +260,13 @@ println("Quality-based error detection and assessment...")
 ## Analyze quality distribution across contigs
 if !isempty(direct_qualities)
     all_quals = vcat(direct_qualities...)
+    decoded_quals = Mycelia.Rhizomorph.decode_quality_scores(all_quals)
     quality_stats = (
-        mean = Statistics.mean(all_quals),
-        median = Statistics.median(all_quals),
-        std = Statistics.std(all_quals),
-        min = minimum(all_quals),
-        max = maximum(all_quals)
+        mean = Statistics.mean(decoded_quals),
+        median = Statistics.median(decoded_quals),
+        std = Statistics.std(decoded_quals),
+        min = minimum(decoded_quals),
+        max = maximum(decoded_quals)
     )
     
     println("\nQuality distribution analysis:")
@@ -275,8 +277,8 @@ if !isempty(direct_qualities)
     
     ## Identify low-quality regions
     low_quality_threshold = 20.0
-    low_qual_count = count(q -> q < low_quality_threshold, all_quals)
-    low_qual_fraction = low_qual_count / length(all_quals)
+    low_qual_count = count(q -> q < low_quality_threshold, decoded_quals)
+    low_qual_fraction = low_qual_count / length(decoded_quals)
     
     println("\nLow-quality region analysis:")
     println("  Positions below Q$low_quality_threshold: ", low_qual_count)
@@ -364,19 +366,20 @@ println("  Number of reads: ", length(realistic_reads))
 println("  Expected coverage: ~10x")
 
 ## Build graph and assemble
-realistic_graph = Mycelia.build_quality_biosequence_graph(realistic_reads)
-println("  Graph vertices: ", Graphs.nv(realistic_graph))
-println("  Graph edges: ", Graphs.ne(realistic_graph))
+realistic_graph = Mycelia.Rhizomorph.build_fastq_graph(realistic_reads; dataset_id="realistic_reads", min_overlap=5)
+realistic_labels = collect(Mycelia.MetaGraphsNext.labels(realistic_graph))
+println("  Graph vertices: ", length(realistic_labels))
+println("  Graph edges: ", Mycelia.MetaGraphsNext.ne(realistic_graph))
 
 ## Find best assembly
-if Graphs.nv(realistic_graph) > 0
-    sequences = [realistic_graph[v].sequence for v in Graphs.vertices(realistic_graph)]
-    qualities = [realistic_graph[v].quality_scores for v in Graphs.vertices(realistic_graph)]
+if !isempty(realistic_labels)
+    sequences = [realistic_graph[label].sequence for label in realistic_labels]
+    qualities = [realistic_graph[label].quality_scores for label in realistic_labels]
     
     ## Find longest sequence
     longest_idx = argmax(length.(sequences))
-    best_assembly = String(sequences[longest_idx])
-    best_quality = Statistics.mean(qualities[longest_idx])
+    best_assembly = string(sequences[longest_idx])
+    best_quality = Statistics.mean(Mycelia.Rhizomorph.decode_quality_scores(qualities[longest_idx]))
     
     println("\nBest assembly result:")
     println("  Assembled length: ", length(best_assembly))

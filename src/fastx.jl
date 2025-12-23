@@ -754,6 +754,158 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Concatenate FASTQ files into a single output FASTQ (optionally gzipped).
+
+# Arguments
+- `fastq_files::Vector{String}`: Input FASTQ files (gzipped or plain).
+- `output_fastq::String`: Output FASTQ path (gzip inferred from extension if `gzip` is nothing).
+- `gzip::Union{Nothing,Bool}=nothing`: Override gzip behavior.
+- `force::Bool=false`: Overwrite output if it already exists.
+
+# Returns
+- `String`: Path to the concatenated FASTQ.
+"""
+function concatenate_fastq_files(;
+    fastq_files::Vector{String},
+    output_fastq::String,
+    gzip::Union{Nothing,Bool}=nothing,
+    force::Bool=false
+)
+    @assert !isempty(fastq_files) "fastq_files must not be empty"
+    for fastq_file in fastq_files
+        @assert isfile(fastq_file) "FASTQ file not found: $(fastq_file)"
+    end
+    gzip_mode = isnothing(gzip) ? endswith(output_fastq, ".gz") : gzip
+    if isfile(output_fastq) && filesize(output_fastq) > 0 && !force
+        return output_fastq
+    end
+    mkpath(dirname(output_fastq))
+    out_io = gzip_mode ? CodecZlib.GzipCompressorStream(open(output_fastq, "w")) : open(output_fastq, "w")
+    buffer = Vector{UInt8}(undef, 1 << 20)
+    for fastq_file in fastq_files
+        in_io = endswith(fastq_file, ".gz") ? CodecZlib.GzipDecompressorStream(open(fastq_file, "r")) : open(fastq_file, "r")
+        while true
+            n = readbytes!(in_io, buffer)
+            n == 0 && break
+            write(out_io, view(buffer, 1:n))
+        end
+        close(in_io)
+    end
+    close(out_io)
+    return output_fastq
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a FASTA/FASTQ identifier for filesystem-friendly use.
+"""
+function sanitize_fastx_identifier(identifier::AbstractString)
+    return replace(String(identifier), r"[^\w\.\-]+" => "_")
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Split a FASTA into one file per record, returning a mapping of sanitized id to original id.
+
+# Arguments
+- `fasta_in::String`: Input FASTA (optionally gzipped).
+- `outdir::String`: Output directory for per-record FASTA files.
+- `gzip::Bool=false`: Write gzipped outputs if true.
+- `force::Bool=false`: Overwrite outputs if they already exist.
+
+# Returns
+- `Dict{String,String}` mapping sanitized identifier to original identifier.
+"""
+function split_fasta_by_record(;
+    fasta_in::String,
+    outdir::String,
+    gzip::Bool=false,
+    force::Bool=false
+)
+    @assert isfile(fasta_in) "Input FASTA not found: $(fasta_in)"
+    mkpath(outdir)
+    id_map = Dict{String,String}()
+    for record in Mycelia.open_fastx(fasta_in)
+        record_id = String(FASTX.identifier(record))
+        safe_id = sanitize_fastx_identifier(record_id)
+        outfile = joinpath(outdir, safe_id * ".fna" * (gzip ? ".gz" : ""))
+        if !isfile(outfile) || force
+            Mycelia.write_fasta(outfile=outfile, records=[record], gzip=gzip)
+        end
+        id_map[safe_id] = record_id
+    end
+    return id_map
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a reference label to its original identifier using a sanitized-id map.
+"""
+function normalize_reference_label(label::AbstractString, id_map::AbstractDict{<:AbstractString,<:AbstractString})
+    base = replace(basename(label), r"\.msh$" => "")
+    base = replace(base, Mycelia.FASTA_REGEX => "")
+    return get(id_map, base, base)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Write a FASTA file containing only records whose identifiers are in `ids`.
+
+# Arguments
+- `fasta_in::String`: Input FASTA (optionally gzipped).
+- `ids::AbstractVector{<:AbstractString}`: Identifiers to retain.
+- `fasta_out::String`: Output FASTA path.
+- `gzip::Union{Nothing,Bool}=nothing`: Override gzip behavior for the output.
+- `force::Bool=false`: Overwrite output if it already exists.
+- `require_all::Bool=true`: Error if any requested ids are missing.
+
+# Returns
+- `String`: Path to the output FASTA.
+"""
+function subset_fasta_by_ids(;
+    fasta_in::String,
+    ids::AbstractVector{<:AbstractString},
+    fasta_out::String,
+    gzip::Union{Nothing,Bool}=nothing,
+    force::Bool=false,
+    require_all::Bool=true
+)
+    @assert isfile(fasta_in) "Input FASTA not found: $(fasta_in)"
+    ids_set = Set(String.(ids))
+    gzip_mode = isnothing(gzip) ? endswith(fasta_out, ".gz") : gzip
+    if isfile(fasta_out) && filesize(fasta_out) > 0 && !force
+        return fasta_out
+    end
+    mkpath(dirname(fasta_out))
+    out_io = gzip_mode ? CodecZlib.GzipCompressorStream(open(fasta_out, "w")) : open(fasta_out, "w")
+    writer = FASTX.FASTA.Writer(out_io)
+    found = Set{String}()
+    for record in Mycelia.open_fastx(fasta_in)
+        record_id = String(FASTX.identifier(record))
+        if record_id in ids_set
+            FASTX.write(writer, record)
+            push!(found, record_id)
+        end
+    end
+    FASTX.close(writer)
+    close(out_io)
+    if require_all
+        missing = setdiff(ids_set, found)
+        if !isempty(missing)
+            missing_preview = collect(missing)[1:min(length(missing), 5)]
+            error("Missing $(length(missing)) FASTA ids (example: $(missing_preview)).")
+        end
+    end
+    return fasta_out
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Prefix FASTQ read identifiers with a sample-specific tag to guarantee uniqueness.
 
 Streaming-friendly: reads are rewritten on the fly; optional mapping output can be
@@ -980,13 +1132,208 @@ function prefix_fastq_reads(
     return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
 end
 
+function uuid_fastq_reads(
+    fastq_file::AbstractString;
+    out_fastq::AbstractString,
+    mapping_out::Union{Nothing,String}=nothing,
+    mapping_format::Symbol=:arrow,
+    source_fastq::Union{Nothing,String}=nothing,
+    force::Bool=false,
+    compress_threads::Integer=get_default_threads()
+)
+    @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
+    @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
+    source_fastq = isnothing(source_fastq) ? fastq_file : source_fastq
+    mkpath(dirname(out_fastq))
+
+    if mapping_out !== nothing
+        mkpath(dirname(mapping_out))
+    end
+
+    nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
+    input_bytes = filesize(fastq_file)
+
+    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") : out_fastq
+    tmp_fastq_plain = out_fastq_plain * ".tmp"
+
+    map_plain = nothing
+    tmp_map_plain = nothing
+    if mapping_out !== nothing
+        if mapping_format == :arrow
+            endswith(mapping_out, ".gz") && error("Arrow mapping_out should not be gzipped: $mapping_out")
+        else
+            map_plain = endswith(mapping_out, ".gz") ? replace(mapping_out, r"\.gz$" => "") : mapping_out
+            tmp_map_plain = map_plain * ".tmp"
+        end
+    end
+
+    if !force && nonempty_file(out_fastq) && (mapping_out === nothing || nonempty_file(mapping_out))
+        return (out_fastq=out_fastq, mapping_out=mapping_out)
+    end
+
+    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) && nonempty_file(out_fastq_plain)
+        mapping_ready = if mapping_out === nothing
+            true
+        elseif mapping_format == :arrow
+            nonempty_file(mapping_out)
+        elseif endswith(mapping_out, ".gz")
+            nonempty_file(map_plain) || nonempty_file(mapping_out)
+        else
+            nonempty_file(mapping_out)
+        end
+
+        if mapping_ready
+            if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) && nonempty_file(map_plain)
+                Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            end
+            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+            return (out_fastq=out_fastq, mapping_out=mapping_out)
+        end
+    end
+
+    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+    if tmp_map_plain !== nothing
+        isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+    end
+
+    if input_bytes == 0
+        open(tmp_fastq_plain, "w") do _
+        end
+        if mapping_out !== nothing
+            if mapping_format == :tsv
+                open(tmp_map_plain, "w") do io
+                    write(io, "source_fastq\toriginal_read_id\tuuid\n")
+                end
+            else
+                tmp_arrow = mapping_out * ".tmp"
+                isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+                Arrow.write(tmp_arrow, DataFrames.DataFrame(source_fastq=String[], original_read_id=String[], uuid=String[]))
+                mv(tmp_arrow, mapping_out; force=true)
+            end
+        end
+
+        mv(tmp_fastq_plain, out_fastq_plain; force=true)
+        if mapping_out !== nothing && mapping_format == :tsv
+            mv(tmp_map_plain, map_plain; force=true)
+        end
+        if endswith(out_fastq, ".gz")
+            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+        end
+        if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
+            Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+        end
+        return (out_fastq=out_fastq, mapping_out=mapping_out)
+    end
+
+    tsv_io = nothing
+    mapping_rows = mapping_out === nothing ? nothing : Vector{NamedTuple}()
+    if mapping_out !== nothing
+        if mapping_format == :tsv
+            tsv_io = open(tmp_map_plain, "w")
+            write(tsv_io, "source_fastq\toriginal_read_id\tuuid\n")
+        else
+            mapping_rows = Vector{NamedTuple}()
+        end
+    end
+
+    out_io = open(tmp_fastq_plain, "w")
+    writer = FASTX.FASTQ.Writer(out_io)
+    reader = nothing
+    try
+        reader = Mycelia.open_fastx(fastq_file)
+        for record in reader
+            original_id = String(FASTX.identifier(record))
+            new_id = string(UUIDs.uuid4())
+            new_record = FASTX.FASTQ.Record(new_id, FASTX.sequence(record), FASTX.quality(record))
+            FASTX.write(writer, new_record)
+            if mapping_out !== nothing
+                if mapping_format == :tsv
+                    write(tsv_io, string(source_fastq, '\t', original_id, '\t', new_id, '\n'))
+                else
+                    push!(mapping_rows, (source_fastq=source_fastq, original_read_id=original_id, uuid=new_id))
+                end
+            end
+        end
+    catch err
+        msg = sprint(showerror, err)
+        try
+            reader !== nothing && close(reader)
+        catch
+        end
+        try
+            FASTX.close(writer)
+        catch
+        end
+        try
+            close(out_io)
+        catch
+        end
+        if mapping_out !== nothing && mapping_format == :tsv
+            try
+                close(tsv_io)
+            catch
+            end
+        end
+        if occursin("compressed stream may be truncated", msg) || occursin("ZlibError", msg)
+            error(
+                "Failed to read gzipped FASTQ (gzip stream appears truncated): $(fastq_file)\n" *
+                "This usually indicates an incomplete/corrupt `.gz` (e.g., partially copied, still being written, or 0-byte placeholder).\n" *
+                "Original error: $(msg)"
+            )
+        end
+        rethrow()
+    finally
+        try
+            reader !== nothing && close(reader)
+        catch
+        end
+        try
+            FASTX.close(writer)
+        catch
+        end
+        try
+            close(out_io)
+        catch
+        end
+        if mapping_out !== nothing && mapping_format == :tsv
+            try
+                close(tsv_io)
+            catch
+            end
+        end
+    end
+
+    mv(tmp_fastq_plain, out_fastq_plain; force=true)
+    if mapping_out !== nothing
+        if mapping_format == :tsv
+            mv(tmp_map_plain, map_plain; force=true)
+        else
+            tmp_arrow = mapping_out * ".tmp"
+            isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+            Arrow.write(tmp_arrow, DataFrames.DataFrame(mapping_rows))
+            mv(tmp_arrow, mapping_out; force=true)
+        end
+    end
+
+    if endswith(out_fastq, ".gz")
+        Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+    end
+    if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
+        Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+    end
+
+    return (out_fastq=out_fastq, mapping_out=mapping_out)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Concatenate FASTQ/FASTA files (gz or plain) into a single gzipped output file.
+Concatenate FASTQ/FASTA files (gz or plain) into a single output file.
 Maintains input order and works for both single-end and paired-end files (one stream).
+Uses system `cat`/`zcat` (or `gzip -cd`) and optional `pigz`/`gzip` compression when
+the output path ends with `.gz`.
 """
-function concatenate_fastx(inputs::Vector{String}; output_path::String)
+function concatenate_fastx(inputs::AbstractVector{<:AbstractString}; output_path::AbstractString, threads=get_default_threads(), force=false)
     if isempty(inputs)
         error("No input files provided for concatenation")
     end
@@ -996,17 +1343,46 @@ function concatenate_fastx(inputs::Vector{String}; output_path::String)
         end
     end
     mkpath(dirname(output_path))
-    out_io = CodecZlib.GzipCompressorStream(open(output_path, "w"))
-    for f in inputs
-        if endswith(f, ".gz")
-            in_io = CodecZlib.GzipDecompressorStream(open(f, "r"))
-            write(out_io, read(in_io))
-            close(in_io)
-        else
-            write(out_io, read(f))
+    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") : output_path
+    tmp_out = out_plain * ".tmp"
+    cat_cmd = Sys.which("cat")
+    zcat_cmd = Sys.which("zcat")
+    gzip_cmd = Sys.which("gzip")
+    has_gz_inputs = any(endswith.(inputs, ".gz"))
+    use_system = cat_cmd !== nothing && (!has_gz_inputs || zcat_cmd !== nothing || gzip_cmd !== nothing)
+    if use_system
+        open(tmp_out, "w") do out_io
+            for f in inputs
+                cmd = if endswith(f, ".gz")
+                    if zcat_cmd !== nothing
+                        Cmd([zcat_cmd, f])
+                    else
+                        Cmd([gzip_cmd, "-cd", f])
+                    end
+                else
+                    Cmd([cat_cmd, f])
+                end
+                run(pipeline(cmd, stdout=out_io))
+            end
+        end
+    else
+        open(tmp_out, "w") do out_io
+            buffer = Vector{UInt8}(undef, 1 << 20)
+            for f in inputs
+                in_io = endswith(f, ".gz") ? CodecZlib.GzipDecompressorStream(open(f, "r")) : open(f, "r")
+                while true
+                    n = readbytes!(in_io, buffer)
+                    n == 0 && break
+                    write(out_io, view(buffer, 1:n))
+                end
+                close(in_io)
+            end
         end
     end
-    close(out_io)
+    mv(tmp_out, out_plain; force=true)
+    if endswith(output_path, ".gz")
+        Mycelia.gzip_file(out_plain; outfile=output_path, threads=threads, force=force, keep_input=false)
+    end
     return output_path
 end
 
@@ -1629,7 +2005,7 @@ function fastx_stats(fastx)
 end
 
 """
-    write_fastq(;records, filename, gzip=false)
+    write_fastq(; records, filename=nothing, outfile=nothing, gzip=false)
 
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1637,21 +2013,30 @@ Write FASTQ records to file using FASTX.jl.
 Validates extension: .fastq, .fq, .fastq.gz, or .fq.gz.
 If `gzip` is true or filename endswith .gz, output is gzipped.
 `records` must be an iterable of FASTX.FASTQ.Record.
+Accepts `outfile` as an alias for `filename` for consistency with write_fasta.
 """
-function write_fastq(;records, filename, gzip=false)
+function write_fastq(;records, filename=nothing, outfile=nothing, gzip=false)
+    output_path = isnothing(filename) ? outfile : filename
+    if isnothing(output_path)
+        error("Provide either filename or outfile")
+    end
+    if !isnothing(filename) && !isnothing(outfile) && filename != outfile
+        error("Provide only one of filename or outfile (got $filename and $outfile)")
+    end
+
     function is_valid_fastq_ext(fname)
         any(endswith.(fname, [".fastq", ".fq", ".fastq.gz", ".fq.gz"]))
     end
 
-    if !is_valid_fastq_ext(filename)
+    if !is_valid_fastq_ext(output_path)
         error("File extension must be .fastq, .fq, .fastq.gz, or .fq.gz")
     end
 
-    gzip_out = gzip || endswith(filename, ".gz")
+    gzip_out = gzip || endswith(output_path, ".gz")
     if gzip_out
-        io = CodecZlib.GzipCompressorStream(open(filename, "w"))
+        io = CodecZlib.GzipCompressorStream(open(output_path, "w"))
     else
-        io = open(filename, "w")
+        io = open(output_path, "w")
     end
 
     try
@@ -1663,7 +2048,7 @@ function write_fastq(;records, filename, gzip=false)
     finally
         close(io)
     end
-    return filename
+    return output_path
 end
 
 """

@@ -264,9 +264,9 @@ function calculate_assembly_mapping_metrics(assembly, validation_reads::Vector{<
                                           assembly_type::String; verbose::Bool = false)
     
     # Handle different assembly formats
-    assembly_sequences = if isa(assembly, Dict) && haskey(assembly, :vertex_labels)
+    assembly_sequences = if applicable(MetaGraphsNext.labels, assembly)
         # Graph-based assembly - extract k-mers
-        [string(kmer) for kmer in values(assembly.vertex_labels)]
+        [string(kmer) for kmer in MetaGraphsNext.labels(assembly)]
     elseif isa(assembly, Vector{String})
         # Sequence-based assembly
         assembly

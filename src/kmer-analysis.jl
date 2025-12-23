@@ -449,6 +449,224 @@ function analyze_kmer_spectra(;out_directory, forward_reads="", reverse_reads=""
 end
 
 """
+    kmer_frequency_histogram(kmer_counts)
+
+Build a histogram of k-mer coverage counts.
+
+# Arguments
+- `kmer_counts::AbstractDict`: Dictionary mapping k-mers to counts
+- `kmer_counts::AbstractVector{<:Integer}`: Vector of k-mer counts
+
+# Returns
+- `Dict{Int,Int}`: Mapping from coverage -> number of k-mers with that coverage
+"""
+function kmer_frequency_histogram(kmer_counts::AbstractDict)
+    return StatsBase.countmap(values(kmer_counts))
+end
+
+function kmer_frequency_histogram(kmer_counts::AbstractVector{<:Integer})
+    return StatsBase.countmap(kmer_counts)
+end
+
+"""
+    coverage_peak_from_hist(kmer_hist; min_coverage=2)
+
+Find the coverage peak in a k-mer frequency histogram.
+
+# Arguments
+- `kmer_hist`: Histogram mapping coverage to number of k-mers
+- `min_coverage::Int=2`: Minimum coverage to consider for the peak
+
+# Returns
+- `NamedTuple`: `(coverage, kmers)` where `coverage` may be `missing` if no peak is found
+"""
+function coverage_peak_from_hist(kmer_hist; min_coverage::Int=2)
+    peak_coverage = missing
+    peak_kmers = 0
+
+    for (coverage, kmer_count) in kmer_hist
+        if coverage >= min_coverage && kmer_count > peak_kmers
+            peak_coverage = coverage
+            peak_kmers = kmer_count
+        end
+    end
+
+    return (coverage=peak_coverage, kmers=peak_kmers)
+end
+
+"""
+    analyze_kmer_frequency_spectrum(kmer_counts; min_coverage=2)
+
+Analyze a k-mer frequency spectrum and return histogram + peak info.
+
+# Arguments
+- `kmer_counts`: Dictionary or vector of k-mer counts
+- `min_coverage::Int=2`: Minimum coverage to consider for the peak
+
+# Returns
+- `NamedTuple`: `(histogram, peak, total_kmers, unique_kmers)`
+"""
+function analyze_kmer_frequency_spectrum(kmer_counts; min_coverage::Int=2)
+    histogram = kmer_frequency_histogram(kmer_counts)
+    peak = coverage_peak_from_hist(histogram; min_coverage=min_coverage)
+    total_kmers = if kmer_counts isa AbstractDict
+        sum(values(kmer_counts))
+    else
+        sum(kmer_counts)
+    end
+    unique_kmers = if kmer_counts isa AbstractDict
+        length(kmer_counts)
+    else
+        length(kmer_counts)
+    end
+
+    return (;histogram, peak, total_kmers, unique_kmers)
+end
+
+function _sequence_kmer_iterator(sequence, k::Int)
+    if sequence isa BioSequences.LongDNA || sequence isa Kmers.DNAKmer
+        return Kmers.FwDNAMers{k}(sequence)
+    elseif sequence isa BioSequences.LongRNA || sequence isa Kmers.RNAKmer
+        return Kmers.FwRNAMers{k}(sequence)
+    elseif sequence isa BioSequences.LongAA || sequence isa Kmers.AAKmer
+        return Kmers.FwAAMers{k}(sequence)
+    else
+        error("Unsupported sequence type for k-mer iterator: $(typeof(sequence))")
+    end
+end
+
+function _collect_kmers(sequence, k::Int)
+    return collect(_sequence_kmer_iterator(sequence, k))
+end
+
+function _is_nucleotide_sequence(sequence)
+    return sequence isa BioSequences.LongDNA ||
+           sequence isa BioSequences.LongRNA ||
+           sequence isa Kmers.DNAKmer ||
+           sequence isa Kmers.RNAKmer
+end
+
+"""
+    canonical_minimizers(sequence, k::Int, window::Int)
+
+Compute canonical minimizers across a sliding window.
+
+# Arguments
+- `sequence`: DNA/RNA/AA sequence or k-mer
+- `k::Int`: K-mer size
+- `window::Int`: Window size in k-mers
+
+# Returns
+- `Vector`: Minimizer k-mers
+"""
+function canonical_minimizers(sequence, k::Int, window::Int)
+    if k < 1
+        error("k must be positive, got k=$k")
+    end
+    if window < 1
+        error("window must be positive, got window=$window")
+    end
+
+    kmers = _collect_kmers(sequence, k)
+    if length(kmers) < window
+        return Vector{eltype(kmers)}()
+    end
+
+    minimizers = Vector{eltype(kmers)}()
+    for i in 1:(length(kmers) - window + 1)
+        window_kmers = kmers[i:i + window - 1]
+        if _is_nucleotide_sequence(sequence)
+            window_kmers = BioSequences.canonical.(window_kmers)
+        end
+        push!(minimizers, minimum(window_kmers))
+    end
+
+    return minimizers
+end
+
+"""
+    open_syncmers(sequence, k::Int, s::Int, t::Int; canonical::Bool=false)
+
+Compute open syncmers using the minimum s-mer position rule.
+
+# Arguments
+- `sequence`: DNA/RNA/AA sequence
+- `k::Int`: K-mer size
+- `s::Int`: S-mer size within each k-mer
+- `t::Int`: 1-based position of the minimum s-mer to select
+- `canonical::Bool=false`: Canonicalize s-mers for nucleotide sequences before comparison
+
+# Returns
+- `Vector`: Syncmer k-mers
+"""
+function open_syncmers(sequence, k::Int, s::Int, t::Int; canonical::Bool=false)
+    if s < 1 || s > k
+        error("s must be between 1 and k (k=$k, s=$s)")
+    end
+    max_position = k - s + 1
+    if t < 1 || t > max_position
+        error("t must be between 1 and $(max_position) (t=$t)")
+    end
+
+    kmers = _collect_kmers(sequence, k)
+    syncmers = Vector{eltype(kmers)}()
+
+    for kmer in kmers
+        smers = _collect_kmers(kmer, s)
+        if canonical && _is_nucleotide_sequence(kmer)
+            smers = BioSequences.canonical.(smers)
+        end
+        min_smer = minimum(smers)
+        min_pos = findfirst(==(min_smer), smers)
+        if min_pos == t
+            push!(syncmers, kmer)
+        end
+    end
+
+    return syncmers
+end
+
+"""
+    strobemers(sequence, k::Int, w_min::Int, w_max::Int; canonical::Bool=false)
+
+Compute strobemers using a minstrobe selection strategy.
+
+# Arguments
+- `sequence`: DNA/RNA/AA sequence
+- `k::Int`: K-mer size
+- `w_min::Int`: Minimum window offset for the second strobe
+- `w_max::Int`: Maximum window offset for the second strobe
+- `canonical::Bool=false`: Canonicalize nucleotide k-mers before selection
+
+# Returns
+- `Vector{Tuple}`: Pairs of k-mers representing strobemers
+"""
+function strobemers(sequence, k::Int, w_min::Int, w_max::Int; canonical::Bool=false)
+    if w_min < 1 || w_max < w_min
+        error("w_min must be >= 1 and w_max >= w_min (w_min=$w_min, w_max=$w_max)")
+    end
+
+    kmers = _collect_kmers(sequence, k)
+    strobes = Vector{Tuple{eltype(kmers), eltype(kmers)}}()
+
+    for i in 1:length(kmers)
+        j_start = i + w_min
+        j_end = min(i + w_max, length(kmers))
+        if j_start <= j_end
+            candidates = kmers[j_start:j_end]
+            if canonical && _is_nucleotide_sequence(sequence)
+                candidates = BioSequences.canonical.(candidates)
+            end
+            second = minimum(candidates)
+            first = canonical && _is_nucleotide_sequence(sequence) ? BioSequences.canonical(kmers[i]) : kmers[i]
+            push!(strobes, (first, second))
+        end
+    end
+
+    return strobes
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Assess k-mer saturation in DNA sequences from FASTX files.

@@ -24,4 +24,4 @@ Private = false
 
 - **Implemented, documented functions** will appear above. Add docstrings in the source files to include new symbols automatically.
 - **Experimental or deprecated functions** are included for transparency; mark them in their docstrings accordingly.
-- **Planned functions** should be captured in the [Function Index](quick-reference/function-index.md) and the [Workflow & Tool Map](../workflow-map.md) until they are implemented and documented.
+- **Planned functions** should be captured in the [Workflow & Tool Map](../workflow-map.md) until they are implemented and documented.

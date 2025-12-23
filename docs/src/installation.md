@@ -25,12 +25,6 @@ Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 
 ## System Requirements
 
-### Minimum Requirements
-- **Julia**: Version 1.10 or higher
-- **RAM**: 8 GB (for small datasets)
-- **Storage**: 2 GB free space
-- **OS**: Linux
-
 ### Recommended Requirements
 - **Julia**: Latest stable version
 - **RAM**: 32 GB or more (for genomic datasets)
@@ -39,7 +33,7 @@ Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 
 ### For Large-Scale Assembly
 - **RAM**: 64-256 GB depending on genome size
-- **Storage**: SSD with 500 GB+ free space
+- **Storage**: 500 GB+ free space
 - **CPU**: 16+ cores recommended
 
 ## Prerequisites
@@ -59,7 +53,6 @@ Some features require additional software:
 
 - **Bioconda tools** (for external tool integration)
 - **Git** (for development installation)
-- **C compiler** (for some dependencies)
 
 ## Installation Methods
 
@@ -94,7 +87,7 @@ Pkg.test("Mycelia")
 
 ### Quick Assembly Test
 ```julia
-using Mycelia
+import Mycelia
 
 # Download test data
 ref_file = Mycelia.download_genome_by_accession(accession="NC_001422.1")
@@ -104,36 +97,9 @@ reads_file = Mycelia.simulate_pacbio_reads(
     fasta=ref_file,
     quantity="10x"
 )
-
-# Run assembly
-results = Mycelia.mycelia_assemble(reads_file, max_k=31)
-```
-
-## Common Issues
-
-### Issue: Package Installation Fails
-
-**Symptom**: Error during `Pkg.add()`
-
-**Solutions**:
-1. Update Julia: `juliaup update` (if using juliaup)
-2. Clear package cache: `rm -rf ~/.julia/compiled`
-3. Update registry: `Pkg.Registry.update()`
-
-### Issue: Missing Dependencies
-
-**Symptom**: Package load errors
-
-**Solutions**:
-```julia
-using Pkg
-Pkg.resolve()
-Pkg.instantiate()
 ```
 
 ## Next Steps
 
 - Read the [Getting Started](getting-started.md) guide
-- Try the [5-minute assembly tutorial](generated/tutorials/00_assembly_in_5_minutes.md)
-- Explore the [API Reference](api.md)
-- Review [Performance Guide](performance.md) for optimization tips
+- Explore the [Complete API Surface](api/all-functions.md)
