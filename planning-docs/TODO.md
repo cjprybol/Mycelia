@@ -784,6 +784,10 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
   - [ ] Benchmarks: add a pangenome benchmark under `benchmarking/`.
 
 ### Planned Tool Integrations
+- **Graph/Topology**:
+   - [ ] [`prokrustean` (de Bruijn graph topology)](https://github.com/KoslickiLab/prokrustean) — wrap or re-implement to explore k-length graph structure across target k values.
+- **Classification/Profiling**:
+   - [ ] [`mOTUs` (short/long-read profiling)](https://github.com/motu-tool/mOTUs) — supports long reads via `motus prep_long -i input_long_reads.fastq -o output_converted.fastq`.
 - **Assembly**: 
    - [ ] [`shasta` (eukaryotic nanopore)](https://github.com/paoloshasta/shasta)
    - [ ] [`verkko` (T2T/diploid)](https://github.com/marbl/verkko)

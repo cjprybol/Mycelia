@@ -476,7 +476,7 @@ function simulate_metagenome_community(;
     selected_df = DataFrames.leftjoin(
         DataFrames.DataFrame(sequence_id = selected_ids, selection_order = collect(1:n_organisms)),
         valid_rows,
-        on = :sequence_id => id_col_sym,
+        on = [:sequence_id => id_col_sym],
         makeunique=true
     )
     DataFrames.sort!(selected_df, :selection_order)

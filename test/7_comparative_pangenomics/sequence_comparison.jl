@@ -327,8 +327,10 @@ Test.@testset "Sequence Comparison Tests" begin
             threads=2,
             k=31,
             min_ani=90.0,
-            quiet=true,
-            outdir=workdir)
+            quiet=true)
+
+        Test.@test isfile(result.syldb)
+        Test.@test isfile(result.output_tsv)
 
         df = result.table
         lower_cols = Dict(lowercase(string(c)) => c for c in names(df))
@@ -356,23 +358,22 @@ Test.@testset "Sequence Comparison Tests" begin
         ]
         if isempty(rows)
             @info "Sylph profiling returned no rows; skipping abundance/ANI assertions (check inputs or Sylph version)"
-            return
-        end
-
-        sorted_rows = sort(rows; by = r -> r.abundance, rev = true)
-        if length(sorted_rows) == 1
+        elseif length(rows) == 1
             @info "Sylph profiling returned a single row; skipping ratio check but asserting ANI"
-            top = sorted_rows[1]
+            top = rows[1]
             Test.@test top.ani ≥ 0.85
-            return
+        else
+            sorted_rows = sort(rows; by = r -> r.abundance, rev = true)
+            top, second = sorted_rows[1], sorted_rows[2]
+            Test.@test top.abundance > second.abundance
+            Test.@test top.ani ≥ 0.9
+            Test.@test second.ani ≥ 0.8
         end
 
-        top, second = sorted_rows[1], sorted_rows[2]
-
-        Test.@test top.abundance > second.abundance
-        Test.@test top.ani ≥ 0.9
-        Test.@test second.ani ≥ 0.8
-
+        sylph_dir = dirname(result.syldb)
+        if sylph_dir != workdir
+            rm(sylph_dir; recursive=true, force=true)
+        end
         rm(workdir; recursive=true, force=true)
     end
 

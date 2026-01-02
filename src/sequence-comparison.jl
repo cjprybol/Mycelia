@@ -10,7 +10,7 @@ end
                       sample_reads::Vector{String}=String[],
                       first_pairs::Vector{String}=String[],
                       second_pairs::Vector{String}=String[],
-                      threads::Int=3,
+                      threads::Int=get_default_threads(),
                       subsampling::Int=200,
                       k::Int=31,
                       min_spacing::Int=30,
@@ -49,7 +49,7 @@ function run_sylph_profile(reference_fastas::Vector{String};
         sample_reads::Vector{String}=String[],
         first_pairs::Vector{String}=String[],
         second_pairs::Vector{String}=String[],
-        threads::Int=3,
+        threads::Int=get_default_threads(),
         subsampling::Int=200,
         k::Int=31,
         min_spacing::Int=30,
@@ -65,7 +65,12 @@ function run_sylph_profile(reference_fastas::Vector{String};
     if length(first_pairs) != length(second_pairs)
         error("first_pairs and second_pairs must have the same length")
     end
-    for file in vcat(reference_fastas, sample_reads, first_pairs, second_pairs)
+    reference_fastas_abs = abspath.(reference_fastas)
+    sample_reads_abs = abspath.(sample_reads)
+    first_pairs_abs = abspath.(first_pairs)
+    second_pairs_abs = abspath.(second_pairs)
+
+    for file in vcat(reference_fastas_abs, sample_reads_abs, first_pairs_abs, second_pairs_abs)
         if !isfile(file)
             error("File not found: $(file)")
         end
@@ -73,28 +78,33 @@ function run_sylph_profile(reference_fastas::Vector{String};
 
     Mycelia.add_bioconda_env("sylph")
 
-    workdir = isnothing(outdir) ? mktempdir() : mkpath(outdir)
+    workdir_is_temp = isnothing(outdir)
+    workdir = workdir_is_temp ? mktempdir() : mkpath(outdir)
+    workdir = abspath(workdir)
     db_prefix = joinpath(workdir, output_prefix)
     syldb_path = db_prefix * ".syldb"
     sample_dir = workdir
 
     sketch_args = ["sketch", "-t", string(threads), "-c", string(subsampling), "-k", string(k),
                    "--min-spacing", string(min_spacing), "-o", db_prefix, "-d", sample_dir]
-    for fasta in reference_fastas
+    for fasta in reference_fastas_abs
         push!(sketch_args, "-g")
         push!(sketch_args, fasta)
     end
-    if !isempty(first_pairs)
+    if !isempty(first_pairs_abs)
         push!(sketch_args, "-1")
-        append!(sketch_args, first_pairs)
+        append!(sketch_args, first_pairs_abs)
     end
-    if !isempty(second_pairs)
+    if !isempty(second_pairs_abs)
         push!(sketch_args, "-2")
-        append!(sketch_args, second_pairs)
+        append!(sketch_args, second_pairs_abs)
     end
-    append!(sketch_args, sample_reads)
+    append!(sketch_args, sample_reads_abs)
 
     sketch_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sylph sylph $sketch_args`
+    if workdir_is_temp
+        sketch_cmd = Cmd(sketch_cmd; dir=workdir)
+    end
     if quiet
         run(pipeline(sketch_cmd, stdout=devnull, stderr=devnull))
     else
@@ -109,7 +119,7 @@ function run_sylph_profile(reference_fastas::Vector{String};
         error("Sylph database not found at $(syldb_path)")
     end
 
-    profile_out = isnothing(output_tsv) ? joinpath(workdir, "sylph_profile.tsv") : output_tsv
+    profile_out = isnothing(output_tsv) ? joinpath(workdir, "sylph_profile.tsv") : abspath(output_tsv)
     profile_args = ["profile", "-t", string(threads), "-o", profile_out, "-m", string(min_ani), "-M", string(min_kmers)]
     if estimate_unknown
         push!(profile_args, "-u")
@@ -118,6 +128,9 @@ function run_sylph_profile(reference_fastas::Vector{String};
     append!(profile_args, vcat(syldb_path, sample_sketches))
 
     profile_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sylph sylph $profile_args`
+    if workdir_is_temp
+        profile_cmd = Cmd(profile_cmd; dir=workdir)
+    end
     if quiet
         run(pipeline(profile_cmd, stdout=devnull, stderr=devnull))
     else

@@ -151,9 +151,18 @@ Test.@testset "Binning Tools Integration" begin
             genomes = inputs.genomes
             bins_dirs = inputs.bins_dirs
 
+            comebin_inputs = nothing
+            try
+                include(joinpath(@__DIR__, "..", "metadata", "download_comebin_data.jl"))
+                comebin_root = joinpath(dirname(@__DIR__), "metadata", "comebin_test_data")
+                comebin_inputs = download_and_prep_comebin_data(comebin_root)
+            catch e
+                @info "COMEBin download/prep failed." exception=e
+            end
+
             if isfile(contigs_fasta) && isfile(depth_file)
                 Test.@testset "VAMB" begin
-                    outdir = mktempdir()
+                    outdir = joinpath(mktempdir(), "vamb_out")
                     try
                         result = Mycelia.run_vamb(
                             contigs_fasta=contigs_fasta,
@@ -161,13 +170,11 @@ Test.@testset "Binning Tools Integration" begin
                             outdir=outdir
                         )
                         Test.@test isdir(result.outdir)
-                        if isfile(result.clusters_tsv)
-                            Test.@test true
-                        else
-                            Test.@test_skip "VAMB did not produce clusters.tsv; check inputs/output."
-                        end
+                        clusters_ok = result.clusters_tsv !== nothing && isfile(result.clusters_tsv)
+                        bins_dir = joinpath(result.outdir, "bins")
+                        Test.@test clusters_ok || isdir(bins_dir)
                     finally
-                        rm(outdir; recursive=true, force=true)
+                        rm(dirname(outdir); recursive=true, force=true)
                     end
                 end
 
@@ -197,7 +204,7 @@ Test.@testset "Binning Tools Integration" begin
 
             if isfile(contigs_fasta) && isfile(depth_file) && isfile(taxonomy_file)
                 Test.@testset "Taxometer" begin
-                    outdir = mktempdir()
+                    outdir = joinpath(mktempdir(), "taxometer_out")
                     try
                         result = Mycelia.run_taxometer(
                             contigs_fasta=contigs_fasta,
@@ -212,12 +219,12 @@ Test.@testset "Binning Tools Integration" begin
                             Test.@test true
                         end
                     finally
-                        rm(outdir; recursive=true, force=true)
+                        rm(dirname(outdir); recursive=true, force=true)
                     end
                 end
 
                 Test.@testset "TaxVAMB" begin
-                    outdir = mktempdir()
+                    outdir = joinpath(mktempdir(), "taxvamb_out")
                     try
                         result = Mycelia.run_taxvamb(
                             contigs_fasta=contigs_fasta,
@@ -226,41 +233,69 @@ Test.@testset "Binning Tools Integration" begin
                             outdir=outdir
                         )
                         Test.@test isdir(result.outdir)
-                        if isfile(result.clusters_tsv)
-                            Test.@test true
-                        else
-                            Test.@test_skip "TaxVAMB did not produce clusters.tsv; check inputs/output."
-                        end
+                        clusters_ok = result.clusters_tsv !== nothing && isfile(result.clusters_tsv)
+                        bins_dir = joinpath(result.outdir, "bins")
+                        Test.@test clusters_ok || isdir(bins_dir)
                     finally
-                        rm(outdir; recursive=true, force=true)
+                        rm(dirname(outdir); recursive=true, force=true)
                     end
                 end
             else
                 @info "Skipping Taxometer/TaxVAMB; missing contigs/depth/taxonomy inputs."
             end
 
-            if isfile(contigs_fasta) && isfile(assembly_graph) && isfile(mapping_file)
+            if comebin_inputs === nothing
+                Test.@test false
+            elseif isfile(comebin_inputs.contigs) &&
+                    (isfile(comebin_inputs.bam_path) || isdir(comebin_inputs.bam_path))
                 Test.@testset "MetaCoAG" begin
-                    outdir = mktempdir()
+                    outdir = joinpath(mktempdir(), "metacoag_out")
                     try
+                        work_dir = dirname(outdir)
+                        assembly_graph = joinpath(work_dir, "assembly_graph.gfa")
+                        if !isfile(assembly_graph)
+                            Mycelia._write_simple_gfa_from_fasta(comebin_inputs.contigs, assembly_graph)
+                        end
+                        coverage_table = joinpath(work_dir, "coverm_contig.tsv")
+                        if !isfile(coverage_table) || filesize(coverage_table) == 0
+                            Mycelia.run_coverm_contig(
+                                bam_files=comebin_inputs.bam_files,
+                                output_tsv=coverage_table,
+                                threads=Mycelia.get_default_threads(),
+                                quiet=true
+                            )
+                        end
+                        metacoag_abundance = joinpath(work_dir, "metacoag_abundance.tsv")
+                        if !isfile(metacoag_abundance) || filesize(metacoag_abundance) == 0
+                            open(coverage_table, "r") do io
+                                first_line = readline(io)
+                                first_fields = split(first_line, '\t')
+                                open(metacoag_abundance, "w") do out
+                                    if isempty(first_fields) || lowercase(first_fields[1]) ∉ ("contig", "contigname")
+                                        write(out, first_line, '\n')
+                                    end
+                                    for line in eachline(io)
+                                        write(out, line, '\n')
+                                    end
+                                end
+                            end
+                        end
                         result = Mycelia.run_metacoag(
-                            contigs_fasta=contigs_fasta,
+                            contigs_fasta=comebin_inputs.contigs,
                             assembly_graph=assembly_graph,
-                            mapping_file=mapping_file,
+                            mapping_file=metacoag_abundance,
                             outdir=outdir
                         )
                         Test.@test isdir(result.outdir)
-                        if isfile(result.bins_tsv)
-                            Test.@test true
-                        else
-                            Test.@test_skip "MetaCoAG did not produce bins.tsv; check inputs/output."
-                        end
+                        bins_ok = isdir(result.bins_dir) ||
+                                  (result.bins_tsv !== nothing && isfile(result.bins_tsv))
+                        Test.@test bins_ok
                     finally
                         rm(outdir; recursive=true, force=true)
                     end
                 end
             else
-                @info "Skipping MetaCoAG; missing contigs/graph/mapping inputs."
+                Test.@test false
             end
 
             if isfile(contigs_fasta) && isfile(coverage_table)
@@ -287,15 +322,6 @@ Test.@testset "Binning Tools Integration" begin
                 @info "Skipping GenomeFace; missing contigs/coverage inputs."
             end
 
-            comebin_inputs = nothing
-            try
-                include(joinpath(@__DIR__, "..", "metadata", "download_comebin_data.jl"))
-                comebin_root = joinpath(dirname(@__DIR__), "metadata", "comebin_test_data")
-                comebin_inputs = download_and_prep_comebin_data(comebin_root)
-            catch e
-                @info "Skipping COMEBin; download/prep failed." exception=e
-            end
-
             if comebin_inputs !== nothing &&
                     isfile(comebin_inputs.contigs) &&
                     (isfile(comebin_inputs.bam_path) || isdir(comebin_inputs.bam_path))
@@ -305,14 +331,17 @@ Test.@testset "Binning Tools Integration" begin
                         result = Mycelia.run_comebin(
                             contigs_fasta=comebin_inputs.contigs,
                             bam_path=comebin_inputs.bam_path,
-                            outdir=outdir
+                            outdir=outdir,
+                            views=2,
+                            embedding_size=512,
+                            coverage_embedding_size=512,
+                            batch_size=256,
+                            threads=min(4, Mycelia.get_default_threads())
                         )
                         Test.@test isdir(result.outdir)
-                        if isfile(result.bins_tsv)
-                            Test.@test true
-                        else
-                            Test.@test_skip "COMEBin did not produce bins.tsv; check inputs/output."
-                        end
+                        bins_ok = (result.bins_dir !== nothing && isdir(result.bins_dir)) ||
+                                  (result.bins_tsv !== nothing && isfile(result.bins_tsv))
+                        Test.@test bins_ok
                     finally
                         rm(outdir; recursive=true, force=true)
                     end
@@ -327,14 +356,11 @@ Test.@testset "Binning Tools Integration" begin
                     try
                         result = Mycelia.run_drep_dereplicate(
                             genomes=genomes,
-                            outdir=outdir
+                            outdir=outdir,
+                            extra_args=["--ignoreGenomeQuality", "-l", "1000"]
                         )
                         Test.@test isdir(result.outdir)
-                        if isfile(result.winning_genomes)
-                            Test.@test true
-                        else
-                            Test.@test_skip "dRep did not produce dereplicated_genomes.csv; check inputs/output."
-                        end
+                        Test.@test result.winning_genomes !== nothing && isfile(result.winning_genomes)
                     finally
                         rm(outdir; recursive=true, force=true)
                     end
@@ -349,7 +375,8 @@ Test.@testset "Binning Tools Integration" begin
                     try
                         result = Mycelia.run_magmax_merge(
                             bins_dirs=bins_dirs,
-                            outdir=outdir
+                            outdir=outdir,
+                            extra_args=["--no-reassembly"]
                         )
                         Test.@test isdir(result.outdir)
                         if isempty(readdir(result.outdir))

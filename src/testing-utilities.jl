@@ -396,6 +396,7 @@ function prepare_binning_test_inputs(;
     taxonomy_file = joinpath(inputs_dir, "taxonomy.tsv")
     if !isfile(taxonomy_file)
         open(taxonomy_file, "w") do io
+            println(io, "contigs\tpredictions")
             for (idx, contig_id) in enumerate(contig_ids)
                 println(io, "$(contig_id)\tk__Bacteria;p__Simulated;g__Sim$(idx)")
             end
@@ -464,6 +465,22 @@ function prepare_binning_test_inputs(;
         )
     end
 
+    metacoag_abundance = joinpath(inputs_dir, "metacoag_abundance.tsv")
+    if !isfile(metacoag_abundance) || filesize(metacoag_abundance) == 0
+        open(coverage_table, "r") do io
+            first_line = readline(io)
+            first_fields = split(first_line, '\t')
+            open(metacoag_abundance, "w") do out
+                if isempty(first_fields) || lowercase(first_fields[1]) ∉ ("contig", "contigname")
+                    write(out, first_line, '\n')
+                end
+                for line in eachline(io)
+                    write(out, line, '\n')
+                end
+            end
+        end
+    end
+
     assembly_graph = joinpath(inputs_dir, "assembly_graph.gfa")
     if !isfile(assembly_graph)
         _write_simple_gfa_from_fasta(contigs_fasta, assembly_graph)
@@ -489,7 +506,7 @@ function prepare_binning_test_inputs(;
         marker_file=nothing,
         taxonomy_file=taxonomy_file,
         assembly_graph=assembly_graph,
-        mapping_file=coverage_table,
+        mapping_file=metacoag_abundance,
         genomes=genomes,
         bins_dirs=[bins_a, bins_b]
     )

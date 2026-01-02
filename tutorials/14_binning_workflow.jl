@@ -77,14 +77,14 @@ if RUN_EXTERNAL
 
     if isfile(contigs_fasta) && isfile(depth_file)
         println("Running VAMB and MetaBAT2...")
-        outdir_vamb = mktempdir()
-        outdir_metabat = mktempdir()
+        tmp_root = mktempdir()
+        outdir_vamb = joinpath(tmp_root, "vamb_out")
+        outdir_metabat = joinpath(tmp_root, "metabat_out")
         try
             Mycelia.run_vamb(contigs_fasta=contigs_fasta, depth_file=depth_file, outdir=outdir_vamb)
             Mycelia.run_metabat2(contigs_fasta=contigs_fasta, depth_file=depth_file, outdir=outdir_metabat)
         finally
-            rm(outdir_vamb; recursive=true, force=true)
-            rm(outdir_metabat; recursive=true, force=true)
+            rm(tmp_root; recursive=true, force=true)
         end
     else
         println("Skipping VAMB/MetaBAT2 (missing contigs/depth inputs).")
@@ -92,8 +92,9 @@ if RUN_EXTERNAL
 
     if isfile(contigs_fasta) && isfile(depth_file) && isfile(taxonomy_file)
         println("Running TaxVAMB and Taxometer...")
-        outdir_taxvamb = mktempdir()
-        outdir_taxometer = mktempdir()
+        tmp_root = mktempdir()
+        outdir_taxvamb = joinpath(tmp_root, "taxvamb_out")
+        outdir_taxometer = joinpath(tmp_root, "taxometer_out")
         try
             Mycelia.run_taxvamb(
                 contigs_fasta=contigs_fasta,
@@ -108,8 +109,7 @@ if RUN_EXTERNAL
                 outdir=outdir_taxometer
             )
         finally
-            rm(outdir_taxvamb; recursive=true, force=true)
-            rm(outdir_taxometer; recursive=true, force=true)
+            rm(tmp_root; recursive=true, force=true)
         end
     else
         println("Skipping TaxVAMB/Taxometer (missing contigs/depth/taxonomy inputs).")

@@ -1,6 +1,8 @@
 import Mycelia
 
 const COMEBIN_TEST_FILE_ID = "1xWpN2z8JTaAzWW4TcOl0Lr4Y_x--Fs5s"
+const COMEBIN_SAMPLE_FRACTION = 0.01
+const COMEBIN_SAMPLE_SEED = 42
 
 function _ensure_gdown(utils_env::String)
     if !isfile(Mycelia.CONDA_RUNNER)
@@ -15,6 +17,11 @@ function _ensure_gdown(utils_env::String)
         run(`$(Mycelia.CONDA_RUNNER) run -n $(utils_env) pip install gdown`)
     end
     return utils_env
+end
+
+function _ensure_samtools()
+    Mycelia.add_bioconda_env("samtools")
+    return "samtools"
 end
 
 function _find_files_by_extension(root::String, extensions::Vector{String})
@@ -36,6 +43,30 @@ function _choose_contigs_file(candidates::Vector{String})
     return isempty(preferred) ? first(candidates) : first(preferred)
 end
 
+function _select_primary_bam(bam_files::Vector{String})
+    isempty(bam_files) && error("No BAM files available for selection")
+    sizes = map(filesize, bam_files)
+    _, idx = findmax(sizes)
+    return bam_files[idx]
+end
+
+function _downsample_bam(bam::String, output_bam::String; fraction::Float64=COMEBIN_SAMPLE_FRACTION, seed::Int=COMEBIN_SAMPLE_SEED, threads::Int=Mycelia.get_default_threads())
+    if isfile(output_bam) && filesize(output_bam) > 0 && isfile(output_bam * ".bai")
+        return output_bam
+    end
+    _ensure_samtools()
+    mkpath(dirname(output_bam))
+    fraction_str = replace(string(fraction), "0." => "")
+    sample_arg = string(seed, ".", fraction_str)
+    @info "Downsampling COMEBin BAM for tests" bam=bam output_bam=output_bam sample=sample_arg
+
+    view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -b -s $(sample_arg) $(bam)`
+    sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -o $(output_bam) -`
+    run(pipeline(view_cmd, sort_cmd))
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools index $(output_bam)`)
+    return output_bam
+end
+
 """
     download_and_prep_comebin_data(output_dir::String; force_download=false)
 
@@ -55,24 +86,27 @@ function download_and_prep_comebin_data(output_dir::String; force_download::Bool
         error("COMEBin test data download failed at $(zip_path)")
     end
 
-    if isempty(filter(x -> endswith(lowercase(x), ".bam"), _find_files_by_extension(output_dir, [".bam"])))
+    if isempty(_find_files_by_extension(output_dir, [".bam"])) ||
+            isempty(_find_files_by_extension(output_dir, [".fasta", ".fa", ".fna"]))
         @info "Extracting COMEBin test data..."
         run(`unzip -o $(zip_path) -d $(output_dir)`)
     end
 
     bam_files = _find_files_by_extension(output_dir, [".bam"])
     isempty(bam_files) && error("No BAM files found after extraction")
+    primary_bam = _select_primary_bam(bam_files)
+    small_bam_dir = joinpath(dirname(primary_bam), "small_bams")
+    downsampled_bam = joinpath(small_bam_dir, "comebin_test_data_small.bam")
+    downsampled_bam = _downsample_bam(primary_bam, downsampled_bam)
 
     fasta_candidates = _find_files_by_extension(output_dir, [".fasta", ".fa", ".fna"])
     contigs = _choose_contigs_file(fasta_candidates)
 
-    bam_dirs = unique(dirname.(bam_files))
-    length(bam_dirs) == 1 || error("Expected BAM files in a single directory, found: $(bam_dirs)")
-    bam_path = bam_dirs[1]
+    bam_path = small_bam_dir
     return (
         contigs = contigs,
         bam_path = bam_path,
-        bam_files = bam_files,
+        bam_files = [downsampled_bam],
         root = output_dir
     )
 end
