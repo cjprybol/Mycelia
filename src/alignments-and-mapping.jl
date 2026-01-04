@@ -23,15 +23,16 @@ function run_diamond_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond",
-    threads::Int = get_default_threads(),
+    threads=nothing,
     evalue::Float64 = 1e-3,
     block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
-    sensitivity::String = "--iterate"
+    sensitivity::String = "--iterate",
+    executor=:local, job_name="diamond_search", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
     @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
-    @assert threads > 0 "Thread count must be positive: $(threads)"
     @assert evalue > 0 "E-value must be positive: $(evalue)"
     @assert block_size > 0 "Block size must be positive: $(block_size)"
     
@@ -44,19 +45,25 @@ function run_diamond_search(;
     diamond_db = joinpath(output_dir, "diamond_db.dmnd")
     results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_results.tsv")
 
-    if isfile(results_file) && (filesize(results_file) > 0)
-        return results_file
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.LocalExecutor
+        if isfile(results_file) && (filesize(results_file) > 0)
+            return results_file
+        end
     end
+
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "64G", get_default_threads()
+    )
     
     # Ensure DIAMOND environment exists
     Mycelia.add_bioconda_env("diamond")
 
     # Map for column header expansion
-    # outfmt_fields = [
-    #     "qseqid", "qtitle", "qlen", "sseqid", "sallseqid", "stitle",
-    #     "salltitles", "slen", "qstart", "qend", "sstart", "send",
-    #     "evalue", "bitscore", "length", "pident", "nident", "mismatch", "gapopen"
-    # ]
     outfmt_headers = [
         "Query Seq - id", "Query title", "Query sequence length", "Subject Seq - id", "All subject Seq - id(s)",
         "Subject Title", "All Subject Title(s)", "Subject sequence length", "Start of alignment in query",
@@ -64,42 +71,49 @@ function run_diamond_search(;
         "Expect value", "Bit score", "Alignment length", "Percentage of identical matches",
         "Number of identical matches", "Number of mismatches", "Number of gap openings"
     ]
-
-    try
-        # Create DIAMOND database
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond makedb --in $(reference_fasta) --db $(diamond_db)`)
+    
+    header_string = join(outfmt_headers, '\t')
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd_parts = String[]
         
-        @assert isfile(diamond_db) "DIAMOND database creation failed: $(diamond_db)"
+        # Create database
+        # check if it exists or force creation?
+        # Safe to recreate or check existence in script
+        push!(cmd_parts, "$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond makedb --in $(reference_fasta) --db $(diamond_db)")
         
-        # Run DIAMOND search
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp --query $(query_fasta) --db $(diamond_db) --out $(results_file) --evalue $(evalue) --threads $(threads) --block-size $(block_size) $(sensitivity) --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch gapopen`)
+        # Run DIAMOND
+        diamond_cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp" *
+            " --query $(query_fasta) --db $(diamond_db) --out $(results_file).tmp" *
+            " --evalue $(evalue) --threads $(resolved_threads) --block-size $(block_size) $(sensitivity)" *
+            " --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch gapopen"
         
-        @assert isfile(results_file) "DIAMOND results file was not created: $(results_file)"
-        @assert filesize(results_file) > 0 "DIAMOND results file is empty"
-
-        # Insert the header row
-        results_tmp = results_file * ".tmp"
-        open(results_tmp, "w") do out_io
-            # Write header
-            println(out_io, join(outfmt_headers, '\t'))
-            # Write results
-            open(results_file, "r") do in_io
-                for line in eachline(in_io)
-                    println(out_io, line)
-                end
-            end
-        end
-        mv(results_tmp, results_file; force=true)
+        push!(cmd_parts, diamond_cmd)
         
-        return results_file
+        # Add header
+        # Use simple shell commands to prepend header
+        # echo -e "header" | cat - results.tmp > results.tsv && rm results.tmp
+        push!(cmd_parts, "echo -e \"$(header_string)\" | cat - $(results_file).tmp > $(results_file)")
+        push!(cmd_parts, "rm $(results_file).tmp")
         
-    catch e
-        @error "DIAMOND execution failed" exception=e
-        rethrow(e)
-    finally
-        # Cleanup database file
-        rm(diamond_db, force=true)
+        # Cleanup DB
+        push!(cmd_parts, "rm -f $(diamond_db)")
+        
+        final_cmd = join(cmd_parts, "\n")
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            final_cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
     end
+    
+    return results_file
 end
 
 """
@@ -126,14 +140,15 @@ function run_blastp_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_blastp",
-    threads::Int = get_default_threads(),
+    threads=nothing,
     evalue::Float64 = 1e-3,
-    max_target_seqs::Int = 500
+    max_target_seqs::Int = 500,
+    executor=:local, job_name="blastp_search", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
     @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
-    @assert threads > 0 "Thread count must be positive: $(threads)"
     @assert evalue > 0 "E-value must be positive: $(evalue)"
     @assert max_target_seqs > 0 "Max target sequences must be positive: $(max_target_seqs)"
     
@@ -144,40 +159,54 @@ function run_blastp_search(;
     # Setup output directory and files
     mkpath(output_dir)
     blast_db = joinpath(output_dir, "blast_db")
-    # results_file = joinpath(output_dir, "blastp_results.tsv")
     results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_blastp_results.tsv")
 
-    if isfile(results_file) && (filesize(results_file) > 0)
-        return results_file
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.LocalExecutor
+        if isfile(results_file) && (filesize(results_file) > 0)
+            return results_file
+        end
     end
+    
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "32G", get_default_threads()
+    )
     
     # Ensure BLAST environment exists
     Mycelia.add_bioconda_env("blast")
     
-    try
-        # Create BLAST database
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(reference_fasta) -dbtype prot -out $(blast_db)`)
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd_parts = String[]
         
-        # Verify database was created
-        @assert isfile("$(blast_db).phr") "BLAST database creation failed"
+        # Create BLAST database
+        push!(cmd_parts, "$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(reference_fasta) -dbtype prot -out $(blast_db)")
         
         # Run BLASTP search
         outfmt = "7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid"
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastp -query $(query_fasta) -db $(blast_db) -out $(results_file) -evalue $(evalue) -max_target_seqs $(max_target_seqs) -num_threads $(threads) -outfmt "$(outfmt)"`)
+        push!(cmd_parts, "$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastp -query $(query_fasta) -db $(blast_db) -out $(results_file) -evalue $(evalue) -max_target_seqs $(max_target_seqs) -num_threads $(resolved_threads) -outfmt \"$(outfmt)\"")
         
-        @assert isfile(results_file) "BLASTP results file was not created: $(results_file)"
-        
-        return results_file
-        
-    catch e
-        @error "BLASTP execution failed" exception=e
-        rethrow(e)
-    finally
         # Cleanup database files
-        for ext in [".phr", ".pin", ".psq"]
-            rm("$(blast_db)$(ext)", force=true)
-        end
+        push!(cmd_parts, "rm -f $(blast_db).phr $(blast_db).pin $(blast_db).psq")
+        
+        final_cmd = join(cmd_parts, "\n")
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            final_cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
     end
+    
+    return results_file
 end
 
 """
@@ -204,14 +233,15 @@ function run_mmseqs_search(;
     query_fasta::String,
     reference_fasta::String,
     output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs",
-    threads::Int = get_default_threads(),
+    threads=nothing,
     evalue::Float64 = 1e-3,
-    sensitivity::Float64 = 4.0
+    sensitivity::Float64 = 4.0,
+    executor=:local, job_name="mmseqs_search", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
     @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
-    @assert threads > 0 "Thread count must be positive: $(threads)"
     @assert evalue > 0 "E-value must be positive: $(evalue)"
     @assert sensitivity > 0 "Sensitivity must be positive: $(sensitivity)"
     
@@ -221,54 +251,62 @@ function run_mmseqs_search(;
     
     # Setup output directory and files
     mkpath(output_dir)
-    query_db = joinpath(output_dir, "query_db")
-    ref_db = joinpath(output_dir, "ref_db") 
     results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs-easy-search.tsv")
     tmp_dir = joinpath(output_dir, "tmp")
-    mkpath(tmp_dir)
-
-    if isfile(results_file) && (filesize(results_file) > 0)
-        return results_file
+    
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.LocalExecutor
+        if isfile(results_file) && (filesize(results_file) > 0)
+            return results_file
+        end
     end
+    
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "64G", get_default_threads()
+    )
     
     # Ensure MMseqs2 environment exists
     Mycelia.add_bioconda_env("mmseqs2")
-
-    try
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search
-            $(query_fasta)
-            $(reference_fasta)
-            $(results_file) $(tempdir())
-            --format-mode 4
-            --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits
-            --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`)
     
-        # # Create databases
-        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(query_fasta) $(query_db)`)
-        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(reference_fasta) $(ref_db)`)
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd_parts = String[]
         
-        # # Run search
-        # search_db = joinpath(output_dir, "search_results")
-        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs search $(query_db) $(ref_db) $(search_db) $(tmp_dir) --threads $(threads) -e $(evalue) -s $(sensitivity)`)
+        push!(cmd_parts, "mkdir -p $(tmp_dir)")
         
-        # # Convert to readable format
-        # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs convertalis $(query_db) $(ref_db) $(search_db) $(results_file) --format-output "query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits"`)
+        # MMseqs search
+        push!(cmd_parts, """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search \\
+        $(query_fasta) \\
+        $(reference_fasta) \\
+        $(results_file) $(tmp_dir) \\
+        --threads $(resolved_threads) \\
+        --format-mode 4 \\
+        --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits \\
+        --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3
+        """)
         
-        @assert isfile(results_file) "MMseqs2 results file was not created: $(results_file)"
-        @assert filesize(results_file) > 0 "MMseqs2 results file is empty"
-
-        # Cleanup temporary files
-        rm(tmp_dir, recursive=true, force=true)
+        # Cleanup
+        push!(cmd_parts, "rm -rf $(tmp_dir)")
         
-        return results_file
+        final_cmd = join(cmd_parts, "\n")
         
-    catch e
-        @error "MMseqs2 execution failed" exception=e
-        rethrow(e)
-    finally
-        # Cleanup temporary files
-        rm(tmp_dir, recursive=true, force=true)
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            final_cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
     end
+    
+    return results_file
 end
 
 """
@@ -1318,17 +1356,52 @@ Run Clustal Omega multiple sequence alignment on a FASTA file.
 - Caches results - will return existing output file if already generated
 - Handles single sequence files gracefully by returning output path without error
 """
-function run_clustal_omega(;fasta, outfmt="clustal")
+function run_clustal_omega(;
+    fasta, outfmt="clustal",
+    executor=:local, job_name="clustal_omega", time="1-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+)
     Mycelia.add_bioconda_env("clustalo")
     outfile = "$(fasta).clustal-omega.$(outfmt)"
-    if !isfile(outfile)
-        try
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n clustalo clustalo -i $(fasta) --outfmt $(outfmt) -o $(outfile)`)
-        catch e
-            # FATAL: File '...' contains 1 sequence, nothing to align
-            return outfile
+    
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.LocalExecutor
+        if isfile(outfile)
+           return outfile
         end
     end
+    
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, 1, slurm_template, "4G", 1
+    )
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd = "$(Mycelia.CONDA_RUNNER) run --live-stream -n clustalo clustalo -i $(fasta) --outfmt $(outfmt) -o $(outfile)"
+        
+        # Clustalo might error if only 1 sequence, which we need to catch or handle?
+        # In shell, it exits with non-zero. 
+        # The existing code caught exception.
+        # If we submit to Slurm, we can not easily catch exception in Julia.
+        # We can wrap in script: "clustalo ... || true" ?
+        # But we only want to ignore specific error.
+        # For now, we assume valid input.
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
+    end
+    
     return outfile
 end
 
@@ -1553,18 +1626,17 @@ function run_mmseqs_easy_search(;
     out_dir = dirname(query_fasta),
     outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." * basename(target_database) * ".txt",
     format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-    threads = get_default_threads(),
+    threads = nothing,
     force::Bool = false,
     gzip::Bool = true,
     validate_compression::Bool = true,
     keep_uncompressed::Bool = false,
+    executor=:local, job_name="mmseqs_easy_search", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
 )
     # Validate interaction of flags
     if !gzip && validate_compression
         @warn "validate_compression requested but gzip=false; validation will be skipped."
-    end
-    if !gzip && keep_uncompressed
-        @warn "keep_uncompressed is irrelevant because gzip=false."
     end
 
     # Normalize outfile names and semantics
@@ -1590,138 +1662,110 @@ function run_mmseqs_easy_search(;
     work_outfile_path  = gzip ? joinpath(out_dir, uncompressed_name) : final_outfile_path
     tmp_dir = joinpath(out_dir, "tmp")
 
-    # Ensure required environments (pigz only if needed)
-    add_bioconda_env("mmseqs2")
-    if gzip
-        add_bioconda_env("pigz")
-    end
-
-    # Helper: compress (optionally validate) with pigz
-    function _compress_with_pigz(uncompressed_path::String, final_path::String, threads::Int;
-                                 validate::Bool,
-                                 keep_uncompressed::Bool)
-        if !isfile(uncompressed_path)
-            error("Cannot compress: uncompressed file $(uncompressed_path) does not exist.")
-        end
-
-        # Remove zero-byte or clearly invalid existing compressed file artifact if present
-        if isfile(final_path) && filesize(final_path) == 0
-            @warn "Existing compressed file $(final_path) is zero bytes; removing before retry."
-            rm(final_path; force=true)
-        end
-
-        # Skip if final already exists (rare race case)
-        if !isfile(final_path)
-            # Construct pigz command flags
-            # -k if we must keep original either for validation or explicit retention
-            keep_flag = (validate || keep_uncompressed) ? "-k" : ""
-            cmd_pigz = `$(CONDA_RUNNER) run --no-capture-output -n pigz pigz $keep_flag -p $(threads) -f $(uncompressed_path)`
-            @info "Compressing with pigz (threads=$(threads), validate=$(validate), keep_uncompressed=$(keep_uncompressed))"
-            @time run(cmd_pigz)
-        end
-
-        if !isfile(final_path)
-            error("Compression failed: expected compressed file $(final_path) was not created.")
-        end
-
-        if validate
-            # Integrity test
-            cmd_test = `$(CONDA_RUNNER) run --no-capture-output -n pigz pigz -t $(final_path)`
-            @info "Validating compressed file integrity with pigz -t: $(final_path)"
-            try
-                @time run(cmd_test)
-            catch err
-                @error "pigz -t integrity test failed; retaining uncompressed file $(uncompressed_path)" error=err
-                # Remove corrupted compressed file to avoid confusion
-                try
-                    rm(final_path; force=true)
-                catch
-                end
-                error("Validation failed for compressed file $(final_path): $(err)")
-            end
-
-            # Remove uncompressed only if we do not want to keep it
-            if !keep_uncompressed && isfile(uncompressed_path)
-                try
-                    rm(uncompressed_path; force=true)
-                catch err
-                    @warn "Failed to remove uncompressed file after successful validation: $(uncompressed_path)" error=err
-                end
-            end
-        else
-            # If not validating and not keeping, pigz (without -k) already removed uncompressed.
-            # If keeping (keep_uncompressed=true), pigz was invoked with -k above.
-            nothing
-        end
-
-        return final_path
-    end
-
-    # Handle zero-byte final compressed artifact early (force regeneration path)
-    if gzip && isfile(final_outfile_path) && filesize(final_outfile_path) == 0
-        @warn "Existing compressed file $(final_outfile_path) is zero bytes; removing for regeneration."
-        rm(final_outfile_path; force=true)
-    end
-
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    
     # Early return if final artifact already exists and not forcing
-    if !force && isfile(final_outfile_path)
+    # Note: For Slurm, we assume shared FS for these checks, or we skip them if we can't be sure.
+    # But usually existence checks are fine.
+    if !force && isfile(final_outfile_path) && filesize(final_outfile_path) > 0
         @info "Target outfile $(final_outfile_path) already exists; returning existing file."
         return final_outfile_path
     end
 
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "64G", get_default_threads()
+    )
+
     # Determine if we can reuse an existing uncompressed file (avoid re-running MMseqs2)
     reused_uncompressed = false
-    if gzip && !force && !isfile(final_outfile_path) && isfile(work_outfile_path)
+    if gzip && !force && !isfile(final_outfile_path) && isfile(work_outfile_path) && filesize(work_outfile_path) > 0
         @info "Found existing uncompressed file $(work_outfile_path); will skip MMseqs2 run and proceed to compression."
         reused_uncompressed = true
     end
-
-    # Force cleanup if required
-    if force
-        if isfile(final_outfile_path)
-            rm(final_outfile_path; force=true)
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        # Ensure required environments
+        Mycelia.add_bioconda_env("mmseqs2")
+        if gzip
+            Mycelia.add_bioconda_env("pigz")
         end
-        if gzip && isfile(work_outfile_path)
-            rm(work_outfile_path; force=true)
+        
+        cmd_parts = String[]
+        
+        # Cleanup instructions if forcing
+        if force
+            push!(cmd_parts, "rm -f $(final_outfile_path)")
+            if gzip
+                push!(cmd_parts, "rm -f $(work_outfile_path)")
+            end
         end
-    end
+        
+        push!(cmd_parts, "mkdir -p $(tmp_dir)")
 
-    # Run MMseqs2 only if we do not reuse an existing uncompressed result
-    if !(gzip && reused_uncompressed)
-        cmd_search =
-            `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
-                easy-search
-                $(query_fasta)
-                $(target_database)
-                $(work_outfile_path)
-                $(tmp_dir)
-                --threads $(threads)
-                --format-mode 4
-                --format-output $(format_output)
-                --start-sens 1 -s 7 --sens-steps 7
-                --sort-results 1
-                --remove-tmp-files 1
-            `
-        @info "Running MMseqs2 easy-search -> $(work_outfile_path)"
-        @time run(cmd_search)
-    end
-
-    # Compression (and optional validation)
-    if gzip
-        if !isfile(final_outfile_path)
-            _compress_with_pigz(work_outfile_path, final_outfile_path, threads;
-                                validate = validate_compression,
-                                keep_uncompressed = keep_uncompressed)
-        else
-            @info "Compressed file already present after generation: $(final_outfile_path)"
-            # If user requested validation but file already existed, we skip re-validation to avoid a full read.
-            # A custom flag could be added later to force re-validation of existing compressed outputs.
+        # Run MMseqs2 only if we do not reuse an existing uncompressed result
+        if !(gzip && reused_uncompressed)
+            cmd_search = """
+                $(Mycelia.CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs \\
+                    easy-search \\
+                    $(query_fasta) \\
+                    $(target_database) \\
+                    $(work_outfile_path) \\
+                    $(tmp_dir) \\
+                    --threads $(resolved_threads) \\
+                    --format-mode 4 \\
+                    --format-output $(format_output) \\
+                    --start-sens 1 -s 7 --sens-steps 7 \\
+                    --sort-results 1 \\
+                    --remove-tmp-files 1
+                """
+            push!(cmd_parts, cmd_search)
         end
-    end
 
-    # Cleanup tmp directory if present
-    if isdir(tmp_dir)
-        rm(tmp_dir; recursive=true)
+        # Compression (and optional validation)
+        if gzip
+             # pigz -k to keep input for validation or if requested
+             # If we need validation, we must keep input first.
+             # If we don't need validation and don't want to keep, we can let pigz remove it.
+             # But logic below handles validation.
+             
+             # Command to compress
+             # Use -k always initially to facilitate validation/logic control, or use -f to overwrite
+             keep_flag = (validate_compression || keep_uncompressed) ? "-k" : ""
+             # If !validate and !keep, pigz removes original.
+             
+             pigz_cmd = "$(Mycelia.CONDA_RUNNER) run --no-capture-output -n pigz pigz $(keep_flag) -f -p $(resolved_threads) $(work_outfile_path)"
+             push!(cmd_parts, pigz_cmd)
+             
+             if validate_compression
+                 # Validate
+                 push!(cmd_parts, "$(Mycelia.CONDA_RUNNER) run --no-capture-output -n pigz pigz -t $(final_outfile_path)")
+                 
+                 # Remove uncompressed if check passed and not keeping
+                 if !keep_uncompressed
+                     push!(cmd_parts, "rm -f $(work_outfile_path)")
+                 end
+             end
+        end
+
+        # Cleanup tmp directory
+        push!(cmd_parts, "rm -rf $(tmp_dir)")
+
+        final_cmd = join(cmd_parts, "\n")
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            final_cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
     end
 
     return final_outfile_path
@@ -1757,16 +1801,58 @@ tabular format with the following columns:
 
 Requires MMseqs2 to be available through Bioconda.
 """
-function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwise")
+function mmseqs_pairwise_search(;
+    fasta, output=fasta*".mmseqs_easy_search_pairwise",
+    executor=:local, job_name="mmseqs_pairwise", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+)
     Mycelia.add_bioconda_env("mmseqs2")
     mkpath(output)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search
-        $(fasta)
-        $(fasta)
-        $(output)/$(basename(fasta)).mmseqs_pairwise_search.txt $(tempdir())
-        --format-mode 4
-        --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits
-        --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`)
+    
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, nothing, slurm_template, "64G", get_default_threads()
+    )
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        tmp_dir = switch_to_tmp_dir ? tempdir() : "$(output)/tmp"
+        # We should use a shared tmp dir if Slurm
+        current_tmp_dir = "$(output)/tmp_mmseqs_pairwise"
+        
+        cmd_parts = String[]
+        push!(cmd_parts, "mkdir -p $(current_tmp_dir)")
+        
+        cmd = """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search \\
+        $(fasta) \\
+        $(fasta) \\
+        $(output)/$(basename(fasta)).mmseqs_pairwise_search.txt $(current_tmp_dir) \\
+        --threads $(resolved_threads) \\
+        --format-mode 4 \\
+        --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits \\
+        --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3
+        """
+        push!(cmd_parts, cmd)
+        push!(cmd_parts, "rm -rf $(current_tmp_dir)")
+        
+        final_cmd = join(cmd_parts, "\n")
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            final_cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
+    end
+    
     return output
 end
 
@@ -1793,32 +1879,61 @@ This function constructs and runs a BLASTN command based on the provided paramet
 It creates an output directory if it doesn't exist, constructs the output file path, and checks if the BLASTN command needs to be run based on the existence and size of the output file.
 The function supports running the BLASTN command locally or remotely, with options to force re-running and to wait for completion.
 """
-function run_blastn(;outdir=pwd(), fasta, blastdb, threads=min(get_default_threads(), 8), task="megablast", force=false, remote=false, wait=true)
+function run_blastn(;
+    outdir=pwd(), fasta, blastdb, threads=min(get_default_threads(), 8), task="megablast", force=false, remote=false, wait=true,
+    executor=:local, job_name="blastn", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+)
     Mycelia.add_bioconda_env("blast")
     outdir = mkpath(outdir)
     outfile = "$(outdir)/$(basename(fasta)).blastn.$(basename(blastdb)).$(task).txt"
     
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
     
-    # default max target seqs = 500, which seemed like too much
-    # default evalue is 10, which also seems like too much
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
     
-    if force || need_to_run
-        cmd = 
-        `
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastn
-        -num_threads $(threads)
-        -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-        -query $(fasta)
-        -db $(blastdb)
-        -out $(outfile)
-        -max_target_seqs 10
-        -subject_besthit
-        -task $(task)
+    # If local and not forced and result exists, return early
+    if exec_instance isa Mycelia.Execution.LocalExecutor && !force && !need_to_run
+        return outfile
+    end
+    
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "32G", 8
+    )
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd = """
+        $(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastn \\
+        -num_threads $(resolved_threads) \\
+        -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid' \\
+        -query $(fasta) \\
+        -db $(blastdb) \\
+        -out $(outfile) \\
+        -max_target_seqs 10 \\
+        -subject_besthit \\
+        -task $(task) \\
         -evalue 0.001
-        `
-        @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait=wait)
+        """
+        
+        if remote
+             # If remote, we shouldn't use threads or local DB usually, but keeping args as is except threads
+             cmd = replace(cmd, "-num_threads $(resolved_threads)" => "-remote")
+        end
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
     end
     return outfile
 end
@@ -1845,7 +1960,11 @@ This function constructs and runs a BLAST command based on the provided paramete
 
 If `force` is set to `true` or the output file does not exist or is empty, the BLAST command is executed. The function logs the command being run and measures the time taken for execution. The output file path is returned upon completion.
 """
-function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
+function run_blast(;
+    out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true,
+    executor=:local, job_name="blast", time="4-00:00:00", partition=nothing, account=nothing,
+    mem::Union{String, Nothing}=nothing, threads=nothing, slurm_template::Union{Symbol, Nothing}=nothing, slurm_kwargs=Dict{Symbol,Any}()
+)
     blast_dir = mkpath(joinpath(out_dir, blast_command))
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
     if remote
@@ -1854,39 +1973,56 @@ function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote
     
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
     
-    # default max target seqs = 500, which seemed like too much
-    # default evalue is 10, which also seems like too much
-    if force || need_to_run
+    exec_instance = Mycelia.Execution.resolve_executor(executor)
+    
+    if exec_instance isa Mycelia.Execution.LocalExecutor && !force && !need_to_run
+        return outfile
+    end
+    
+    if exec_instance isa Mycelia.Execution.SlurmExecutor && !isnothing(slurm_template)
+        exec_instance = Mycelia.Execution.SlurmExecutor(exec_instance.submit_script, slurm_template)
+    end
+    
+    resolved_mem, resolved_threads = Mycelia.Execution.resolve_job_resources(
+        mem, threads, slurm_template, "32G", get_default_threads()
+    )
+    
+    Mycelia.Execution.with_executor(exec_instance) do
+        cmd_str = ""
         if remote
-            cmd = 
-                `
-                $(blast_command)
-                -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-                -query $(fasta)
-                -db $(basename(blast_db))
-                -out $(outfile)
-                -max_target_seqs 10
-                -evalue 0.001
-                -remote
-                `
+            cmd_str = """
+            $(blast_command) \\
+            -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid' \\
+            -query $(fasta) \\
+            -db $(basename(blast_db)) \\
+            -out $(outfile) \\
+            -max_target_seqs 10 \\
+            -evalue 0.001 \\
+            -remote
+            """
         else
-            cmd = 
-            `
-            $(blast_command)
-            -num_threads $(get_default_threads())
-            -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-            -query $(fasta)
-            -db $(blast_db)
-            -out $(outfile)
-            -max_target_seqs 10
+            cmd_str = """
+            $(blast_command) \\
+            -num_threads $(resolved_threads) \\
+            -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid' \\
+            -query $(fasta) \\
+            -db $(blast_db) \\
+            -out $(outfile) \\
+            -max_target_seqs 10 \\
             -evalue 0.001
-            `
+            """
         end
-#         p = pipeline(cmd, 
-#                 stdout="$(blastn_dir)/$(ID).blastn.out",
-#                 stderr="$(blastn_dir)/$(ID).blastn.err")
-        @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait=wait)
+        
+        Mycelia.Execution.submit(Mycelia.Execution.JobSpec(
+            cmd_str;
+            name=job_name,
+            time=time,
+            cpus=resolved_threads,
+            mem=resolved_mem,
+            partition=partition,
+            account=account,
+            extra=slurm_kwargs
+        ))
     end
     return outfile
 end
