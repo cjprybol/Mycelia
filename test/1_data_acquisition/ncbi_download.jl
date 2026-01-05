@@ -28,7 +28,7 @@ end
 Test.@testset "datasets genome summary (E. coli)" begin
     summary = Mycelia.datasets_genome_summary(taxon="562")
     Test.@test isa(summary, DataFrames.DataFrame)
-    Test.@test nrow(summary) > 0
+    Test.@test DataFrames.nrow(summary) > 0
 end
 
 Test.@testset "datasets dehydrated download + rehydrate" begin

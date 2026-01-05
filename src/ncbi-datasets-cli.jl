@@ -175,7 +175,7 @@ end
     datasets_dataformat(input_file::String;
         schema::String="genome",
         format::String="tsv",
-        fields::Vector{String}=["all"],
+        fields::Vector{String}=String[],
         template::String=""
     )
 
@@ -184,7 +184,7 @@ Run `dataformat` on a JSONL file and return a DataFrame for TSV output or a raw 
 function datasets_dataformat(input_file::String;
     schema::String="genome",
     format::String="tsv",
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=String[],
     template::String=""
 )
     add_bioconda_env(NCBI_DATASETS_ENV)
@@ -204,11 +204,11 @@ end
 function _datasets_summary_dataframe(summary_subcmd::String, args::Vector{String};
     schema::String,
     flags::Dict{String,Any}=Dict{String,Any}(),
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=String[],
     template::String="",
     api_key::String="",
     debug::Bool=false,
-    no_progressbar::Bool=true,
+    no_progressbar::Bool=false,
     max_attempts::Int=1,
     initial_retry_delay::Float64=5.0
 )
@@ -232,11 +232,11 @@ function _datasets_summary(summary_subcmd::String, args::Vector{String};
     as_dataframe::Bool=true,
     as_json_lines::Bool=true,
     flags::Dict{String,Any}=Dict{String,Any}(),
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=String[],
     template::String="",
     api_key::String="",
     debug::Bool=false,
-    no_progressbar::Bool=true,
+    no_progressbar::Bool=false,
     max_attempts::Int=1,
     initial_retry_delay::Float64=5.0
 )
@@ -269,29 +269,31 @@ function _datasets_summary(summary_subcmd::String, args::Vector{String};
 end
 
 """
-    datasets_genome_summary(taxon::Union{String,Nothing}=nothing;
+    datasets_genome_summary(;
+        taxon::Union{String,Nothing}=nothing,
         accession::Union{String,Nothing}=nothing,
         assembly_source::String="all",
         as_json_lines::Bool=true,
         as_dataframe::Bool=true,
-        fields::Vector{String}=["all"],
+        fields::Vector{String}=["accession"],
         api_key::String="",
         debug::Bool=false,
-        no_progressbar::Bool=true
+        no_progressbar::Bool=false
     )
 
 Fetch genome summary metadata via the datasets CLI.
 Returns a DataFrame by default when `as_dataframe=true`.
 """
-function datasets_genome_summary(taxon::Union{String,Nothing}=nothing;
+function datasets_genome_summary(;
+    taxon::Union{String,Nothing}=nothing,
     accession::Union{String,Nothing}=nothing,
     assembly_source::String="all",
     as_json_lines::Bool=true,
     as_dataframe::Bool=true,
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=["accession"],
     api_key::String="",
     debug::Bool=false,
-    no_progressbar::Bool=true
+    no_progressbar::Bool=false
 )
     if (taxon === nothing && accession === nothing) || (taxon !== nothing && accession !== nothing)
         error("Provide exactly one of taxon or accession")
@@ -312,6 +314,10 @@ function datasets_genome_summary(taxon::Union{String,Nothing}=nothing;
         debug=debug,
         no_progressbar=no_progressbar
     )
+end
+
+function datasets_genome_summary(taxon::Union{String,Nothing}; kwargs...)
+    return datasets_genome_summary(; taxon=taxon, kwargs...)
 end
 
 """
@@ -382,10 +388,10 @@ end
         taxon::String="human",
         as_json_lines::Bool=true,
         as_dataframe::Bool=true,
-        fields::Vector{String}=["all"],
+        fields::Vector{String}=["gene-id"],
         api_key::String="",
         debug::Bool=false,
-        no_progressbar::Bool=true
+        no_progressbar::Bool=false
     )
 
 Fetch gene summary metadata via the datasets CLI.
@@ -395,10 +401,10 @@ function datasets_gene_summary(input::String;
     taxon::String="human",
     as_json_lines::Bool=true,
     as_dataframe::Bool=true,
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=["gene-id"],
     api_key::String="",
     debug::Bool=false,
-    no_progressbar::Bool=true
+    no_progressbar::Bool=false
 )
     _datasets_validate_choice(input_type, ["gene-id", "symbol", "accession"], "input_type")
     flags = Dict{String,Any}()
@@ -544,8 +550,8 @@ end
 
 """
     datasets_virus_summary(; taxon::String="", lineage::String="", host::String="",
-        as_json_lines::Bool=true, as_dataframe::Bool=true, fields::Vector{String}=["all"],
-        api_key::String="", debug::Bool=false, no_progressbar::Bool=true)
+        as_json_lines::Bool=true, as_dataframe::Bool=true, fields::Vector{String}=["accession"],
+        api_key::String="", debug::Bool=false, no_progressbar::Bool=false)
 
 Fetch virus summary metadata via the datasets CLI.
 """
@@ -555,10 +561,10 @@ function datasets_virus_summary(;
     host::String="",
     as_json_lines::Bool=true,
     as_dataframe::Bool=true,
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=["accession"],
     api_key::String="",
     debug::Bool=false,
-    no_progressbar::Bool=true
+    no_progressbar::Bool=false
 )
     flags = Dict{String,Any}()
     !isempty(taxon) && (flags["taxon"] = taxon)
@@ -647,11 +653,11 @@ end
     datasets_taxonomy_summary(taxon::String;
         as_json_lines::Bool=true,
         as_dataframe::Bool=true,
-        fields::Vector{String}=["all"],
+        fields::Vector{String}=String[],
         template::String="tax-summary",
         api_key::String="",
         debug::Bool=false,
-        no_progressbar::Bool=true
+        no_progressbar::Bool=false
     )
 
 Fetch taxonomy summaries via the datasets CLI.
@@ -659,11 +665,11 @@ Fetch taxonomy summaries via the datasets CLI.
 function datasets_taxonomy_summary(taxon::String;
     as_json_lines::Bool=true,
     as_dataframe::Bool=true,
-    fields::Vector{String}=["all"],
+    fields::Vector{String}=String[],
     template::String="tax-summary",
     api_key::String="",
     debug::Bool=false,
-    no_progressbar::Bool=true
+    no_progressbar::Bool=false
 )
     return _datasets_summary("taxonomy", ["taxon", taxon];
         schema="taxonomy",
@@ -678,12 +684,12 @@ function datasets_taxonomy_summary(taxon::String;
 end
 
 """
-    datasets_taxonomy_tree(taxon::String; api_key::String="", debug::Bool=false, no_progressbar::Bool=true)
+    datasets_taxonomy_tree(taxon::String; api_key::String="", debug::Bool=false, no_progressbar::Bool=false)
 
 Return taxonomy tree information for a taxon using the datasets CLI.
 Falls back to the summary output if tree support is unavailable.
 """
-function datasets_taxonomy_tree(taxon::String; api_key::String="", debug::Bool=false, no_progressbar::Bool=true)
+function datasets_taxonomy_tree(taxon::String; api_key::String="", debug::Bool=false, no_progressbar::Bool=false)
     flags = Dict{String,Any}("children" => true, "as-json-lines" => true)
     try
         output = run_datasets_cli("summary", "taxonomy", ["taxon", taxon];
