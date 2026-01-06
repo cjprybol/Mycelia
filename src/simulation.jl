@@ -317,13 +317,13 @@ function simulate_illumina_reads(;fasta::String,
         # For single-end, only outbase1.fq is produced.
     
         @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
-        run(`gzip $(forward_fq)`)
+        run(`gzip -f $(forward_fq)`)
         @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
     
         # Only process reverse reads if paired-end
         if paired
             @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
-            run(`gzip $(reverse_fq)`)
+            run(`gzip -f $(reverse_fq)`)
             @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
         end
     
@@ -331,14 +331,14 @@ function simulate_illumina_reads(;fasta::String,
     
         @assert isfile(samfile)
         if !isfile(samfile_gz)
-            run(`gzip $(samfile)`)
+            run(`gzip -f $(samfile)`)
             @assert isfile(samfile_gz)
         end
         
         if errfree
             @assert isfile(error_free_samfile)
             if !isfile(error_free_samfile_gz)
-                run(`gzip $(error_free_samfile)`)
+                run(`gzip -f $(error_free_samfile)`)
                 @assert isfile(error_free_samfile_gz)
             end
         end

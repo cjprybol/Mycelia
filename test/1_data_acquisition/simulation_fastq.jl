@@ -37,7 +37,7 @@ Test.@testset "FASTQ simulation" begin
     
     Test.@testset "Illumina" begin
         # Test default system (HS25) - uses shared test_fasta
-        read_simulation_result = Mycelia.simulate_illumina_reads(fasta = test_fasta, coverage=10, quiet=true)
+        read_simulation_result = Mycelia.simulate_illumina_reads(fasta = test_fasta, coverage=10, quiet=true, errfree=true)
         Test.@test isfile(read_simulation_result.forward_reads)
         Test.@test isfile(read_simulation_result.reverse_reads)
         Test.@test isfile(read_simulation_result.sam)
@@ -66,7 +66,7 @@ Test.@testset "FASTQ simulation" begin
             for (func_name, expected_system, expected_length) in profile_functions
                 Test.@testset "$func_name" begin
                     func = getfield(Mycelia, func_name)
-                    result = func(fasta = test_fasta, coverage = 3)
+                    result = func(fasta = test_fasta, coverage = 3, errfree=true)
                     
                     Test.@test isfile(result.forward_reads)
                     Test.@test isfile(result.sam)
@@ -99,7 +99,10 @@ Test.@testset "FASTQ simulation" begin
                     end
                     
                     # Clean up files
-                    cleanup_files = [result.forward_reads, result.sam, result.error_free_sam]
+                    cleanup_files = [result.forward_reads, result.sam]
+                    if result.error_free_sam !== nothing
+                        push!(cleanup_files, result.error_free_sam)
+                    end
                     if result.reverse_reads !== nothing
                         push!(cleanup_files, result.reverse_reads)
                     end
@@ -131,6 +134,7 @@ Test.@testset "FASTQ simulation" begin
             
             for (seqSys, max_length, excessive_length) in validation_tests
                 Test.@testset "Validation for $seqSys" begin
+                    paired = seqSys != "MinS"
                     # Test that max length works
                     try
                         result_max = Mycelia.simulate_illumina_reads(
@@ -138,11 +142,15 @@ Test.@testset "FASTQ simulation" begin
                             coverage = 1,
                             seqSys = seqSys,
                             read_length = max_length,
+                            paired = paired,
                             quiet = true
                         )
                         Test.@test isfile(result_max.forward_reads)
                         # Clean up successful run
-                        cleanup_files = [result_max.forward_reads, result_max.sam, result_max.error_free_sam]
+                        cleanup_files = [result_max.forward_reads, result_max.sam]
+                        if result_max.error_free_sam !== nothing
+                            push!(cleanup_files, result_max.error_free_sam)
+                        end
                         if result_max.reverse_reads !== nothing
                             push!(cleanup_files, result_max.reverse_reads)
                         end
@@ -162,6 +170,7 @@ Test.@testset "FASTQ simulation" begin
                         coverage = 1,
                         seqSys = seqSys,
                         read_length = excessive_length,
+                        paired = paired,
                         quiet = true
                     )
                 end

@@ -189,7 +189,9 @@ function datasets_dataformat(input_file::String;
 )
     add_bioconda_env(NCBI_DATASETS_ENV)
     cmd_parts = _dataformat_cmd_parts(schema; format=format, fields=fields, template=template)
-    cmd = pipeline(_datasets_cmd(cmd_parts; live_stream=false); stdin=input_file)
+    push!(cmd_parts, "--inputfile")
+    push!(cmd_parts, input_file)
+    cmd = _datasets_cmd(cmd_parts; live_stream=false)
     io = open(cmd)
     try
         if lowercase(format) == "tsv"
@@ -215,10 +217,13 @@ function _datasets_summary_dataframe(summary_subcmd::String, args::Vector{String
     add_bioconda_env(NCBI_DATASETS_ENV)
     merged_flags = _datasets_merge_flags(flags; api_key=api_key, debug=debug, no_progressbar=no_progressbar)
     cmd_parts = _datasets_cmd_parts("summary", summary_subcmd, args, merged_flags)
-    datasets_cmd = _datasets_cmd(cmd_parts; live_stream=false)
-    dataformat_cmd = _datasets_cmd(_dataformat_cmd_parts(schema; format="tsv", fields=fields, template=template); live_stream=false)
     return with_retry(max_attempts=max_attempts, initial_delay=initial_retry_delay) do
-        io = open(pipeline(datasets_cmd, dataformat_cmd))
+        datasets_cmd = join(Base.shell_escape.(cmd_parts), " ")
+        dataformat_parts = _dataformat_cmd_parts(schema; format="tsv", fields=fields, template=template)
+        dataformat_cmd = join(Base.shell_escape.(dataformat_parts), " ")
+        full_cmd = "$(datasets_cmd) | $(dataformat_cmd)"
+        cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "-n", NCBI_DATASETS_ENV, "bash", "-lc", full_cmd])
+        io = open(cmd)
         try
             CSV.read(io, DataFrames.DataFrame, delim='\t', header=1)
         finally
@@ -273,6 +278,7 @@ end
         taxon::Union{String,Nothing}=nothing,
         accession::Union{String,Nothing}=nothing,
         assembly_source::String="all",
+        limit::Union{String,Int}="all",
         as_json_lines::Bool=true,
         as_dataframe::Bool=true,
         fields::Vector{String}=["accession"],
@@ -288,6 +294,7 @@ function datasets_genome_summary(;
     taxon::Union{String,Nothing}=nothing,
     accession::Union{String,Nothing}=nothing,
     assembly_source::String="all",
+    limit::Union{String,Int}="all",
     as_json_lines::Bool=true,
     as_dataframe::Bool=true,
     fields::Vector{String}=["accession"],
@@ -303,6 +310,9 @@ function datasets_genome_summary(;
     flags = Dict{String,Any}()
     if !isempty(assembly_source)
         flags["assembly-source"] = assembly_source
+    end
+    if !(limit === nothing)
+        flags["limit"] = string(limit)
     end
     return _datasets_summary("genome", [input_type, input_value];
         schema="genome",

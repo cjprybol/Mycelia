@@ -26,7 +26,7 @@ Test.@testset "datasets CLI version" begin
 end
 
 Test.@testset "datasets genome summary (E. coli)" begin
-    summary = Mycelia.datasets_genome_summary(taxon="562")
+    summary = Mycelia.datasets_genome_summary(taxon="562", limit=1)
     Test.@test isa(summary, DataFrames.DataFrame)
     Test.@test DataFrames.nrow(summary) > 0
 end

@@ -961,7 +961,9 @@ function greedy_maxmin_diversity(
             end
             
             # Calculate metric to nearest neighbor in selected set
-            if metric_type == :distance
+            if isempty(selected)
+                worst_pair_metric = metric_type == :distance ? Inf : -Inf
+            elseif metric_type == :distance
                 # Find the CLOSEST selected point (min distance)
                 # We want the candidate where this value is LARGEST (MaxMin)
                 worst_pair_metric = minimum(distance_matrix[candidate, s] for s in selected)
@@ -975,7 +977,11 @@ function greedy_maxmin_diversity(
             current_weight = isnothing(weights) ? 0.0 : weights[candidate]
             is_better = false
             
-            if metric_type == :distance
+            if isempty(selected)
+                if current_weight > best_weight
+                    is_better = true
+                end
+            elseif metric_type == :distance
                 if worst_pair_metric > best_worst_pair_metric * 1.0001 # slightly better distance
                     is_better = true
                 elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol=1e-4) && current_weight > best_weight
