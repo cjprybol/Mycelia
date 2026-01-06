@@ -2227,16 +2227,13 @@ Downloads and constructs a MetaDiGraph representation of the NCBI taxonomy datab
 - `path_to_taxdump`: Directory path where taxonomy files will be downloaded and extracted
 
 # Returns
-- `MetaDiGraph`: A directed graph where:
-  - Vertices represent taxa with properties:
-    - `:tax_id`: NCBI taxonomy identifier
-    - `:scientific_name`, `:common_name`, etc.: Name properties
-    - `:rank`: Taxonomic rank
-    - `:division_id`, `:division_cde`, `:division_name`: Division information
+- `MetaGraphsNext.MetaGraph`: A directed graph where:
+  - Vertex labels are `tax_id` values
+  - Vertex metadata stores name, rank, division, and genetic code properties
   - Edges represent parent-child relationships in the taxonomy
 
 # Dependencies
-Requires internet connection for initial download. Uses DataFrames, MetaGraphs, and ProgressMeter.
+Requires internet connection for initial download. Uses DataFrames, MetaGraphsNext, and ProgressMeter.
 """
 function load_ncbi_taxonomy(;
         path_to_taxdump=joinpath(Mycelia.DEFAULT_BLASTDB_PATH, "taxdump")
@@ -2274,33 +2271,36 @@ function load_ncbi_taxonomy(;
             push!(names_dmp, row)
         end
     end
-    unique_tax_ids = sort(unique(names_dmp[!, "tax_id"]))
-
-    ncbi_taxonomy = MetaGraphs.MetaDiGraph(length(unique_tax_ids))
-    ProgressMeter.@showprogress for (index, group) in enumerate(collect(DataFrames.groupby(names_dmp, "tax_id")))
-        MetaGraphs.set_prop!(ncbi_taxonomy, index, :tax_id, group[1, "tax_id"])
+    ncbi_taxonomy = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph();
+        label_type=Int,
+        vertex_data_type=Dict{Symbol, Any},
+        edge_data_type=Nothing,
+        graph_data=Dict{Symbol, Any}(),
+    )
+    ProgressMeter.@showprogress for group in DataFrames.groupby(names_dmp, "tax_id")
+        tax_id = group[1, "tax_id"]
+        vertex_data = Dict{Symbol, Any}(:tax_id => tax_id)
         for row in DataFrames.eachrow(group)
             unique_name = isempty(row["unique_name"]) ? row["name_txt"] : row["unique_name"]
             # remove quotes since neo4j doesn't like them
             unique_name = replace(unique_name, '"' => "")
             # replace spaces and dashes with underscores
             name_class = Symbol(replace(replace(row["name_class"], r"\s+" => "-"), "-" => "_"))
-    #         name_class = Symbol(row["name_class"])
-            if haskey(MetaGraphs.props(ncbi_taxonomy, index), name_class)
-                current_value = MetaGraphs.get_prop(ncbi_taxonomy, index, name_class)
-                if (current_value isa Array) && !(unique_name in current_value)
-                    new_value = [current_value..., unique_name]
-                    MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, new_value)
-                elseif !(current_value isa Array) && (current_value != unique_name)
-                    new_value = [current_value, unique_name]
-                    MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, new_value)
+            if haskey(vertex_data, name_class)
+                current_value = vertex_data[name_class]
+                if (current_value isa Vector) && !(unique_name in current_value)
+                    vertex_data[name_class] = [current_value..., unique_name]
+                elseif !(current_value isa Vector) && (current_value != unique_name)
+                    vertex_data[name_class] = [current_value, unique_name]
                 else
                     continue
                 end
             else
-                MetaGraphs.set_prop!(ncbi_taxonomy, index, name_class, unique_name)
+                vertex_data[name_class] = unique_name
             end
         end
+        ncbi_taxonomy[tax_id] = vertex_data
     end
     divisions = Dict()
     for line in split(read(open("$(taxdump_out)/division.dmp"), String), "\t|\n")
@@ -2312,37 +2312,116 @@ function load_ncbi_taxonomy(;
     end
     divisions
 
-    node_2_taxid_map = map(index -> ncbi_taxonomy.vprops[index][:tax_id], Graphs.vertices(ncbi_taxonomy))
     ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/nodes.dmp"), String), "\t|\n")
         if isempty(line)
             continue
         else
-            (tax_id_string, parent_tax_id_string, rank, embl_code, division_id_string) = split(line, "\t|\t")
+            fields = split(line, "\t|\t")
+            @assert length(fields) >= 9
+            tax_id_string = fields[1]
+            parent_tax_id_string = fields[2]
+            rank = fields[3]
+            embl_code = fields[4]
+            division_id_string = fields[5]
+            genetic_code_id_string = fields[7]
+            mitochondrial_genetic_code_id_string = fields[9]
 
             division_id = parse(Int, division_id_string)
+            genetic_code_id = parse(Int, genetic_code_id_string)
+            mitochondrial_genetic_code_id = parse(Int, mitochondrial_genetic_code_id_string)
 
             tax_id = parse(Int, tax_id_string)
-            lightgraphs_tax_ids = searchsorted(node_2_taxid_map, tax_id)
-            @assert length(lightgraphs_tax_ids) == 1
-            lightgraphs_tax_id = first(lightgraphs_tax_ids)
-
             parent_tax_id = parse(Int, parent_tax_id_string)
-            lightgraphs_parent_tax_ids = searchsorted(node_2_taxid_map, parent_tax_id)
-            @assert length(lightgraphs_parent_tax_ids) == 1
-            lightgraphs_parent_tax_id = first(lightgraphs_parent_tax_ids)
+            if !haskey(ncbi_taxonomy, tax_id)
+                ncbi_taxonomy[tax_id] = Dict{Symbol, Any}(:tax_id => tax_id)
+            end
+            if !haskey(ncbi_taxonomy, parent_tax_id)
+                ncbi_taxonomy[parent_tax_id] = Dict{Symbol, Any}(:tax_id => parent_tax_id)
+            end
 
-            Graphs.add_edge!(ncbi_taxonomy, lightgraphs_tax_id, lightgraphs_parent_tax_id)
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :rank, rank)
+            Graphs.add_edge!(ncbi_taxonomy, tax_id, parent_tax_id)
+            vertex_data = ncbi_taxonomy[tax_id]
+            vertex_data[:rank] = rank
             # these should probably be broken out as independent nodes!
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_id, division_id)
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_cde, divisions[division_id][:division_cde])
-            MetaGraphs.set_prop!(ncbi_taxonomy, lightgraphs_tax_id, :division_name, divisions[division_id][:division_name])
+            vertex_data[:division_id] = division_id
+            vertex_data[:division_cde] = divisions[division_id][:division_cde]
+            vertex_data[:division_name] = divisions[division_id][:division_name]
+            vertex_data[:genetic_code_id] = genetic_code_id
+            vertex_data[:mitochondrial_genetic_code_id] = mitochondrial_genetic_code_id
         end
     end
     # JLD2 graph killed a colab instance after 200Gb of size!
     # JLD2.save("$(homedir())/workspace/blastdb/taxdump/ncbi_taxonomy.jld2", "ncbi_taxonomy", ncbi_taxonomy)
     # return (;ncbi_taxonomy, path_to_prebuilt_graph)
     return ncbi_taxonomy
+end
+
+function _get_ncbi_tax_id_map(ncbi_taxonomy)
+    graph_data = ncbi_taxonomy[]
+    if (graph_data isa AbstractDict) && haskey(graph_data, :node_2_taxid_map)
+        return graph_data[:node_2_taxid_map]
+    end
+    node_2_taxid_map = sort!(collect(MetaGraphsNext.labels(ncbi_taxonomy)))
+    if graph_data isa AbstractDict
+        graph_data[:node_2_taxid_map] = node_2_taxid_map
+    end
+    return node_2_taxid_map
+end
+
+function _ncbi_tax_id_to_vertex(ncbi_taxonomy, tax_id::Int)
+    if haskey(ncbi_taxonomy, tax_id)
+        return tax_id
+    end
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return the NCBI translation table ID for a taxonomy node.
+
+# Arguments
+- `ncbi_taxonomy`: Output from `load_ncbi_taxonomy`
+- `tax_id`: NCBI taxonomy identifier
+
+# Keywords
+- `type::Symbol=:genomic`: `:genomic` or `:mitochondrial`
+- `inherit::Bool=true`: Walk up the parent lineage if the code is missing/zero
+
+# Returns
+`Int` translation table ID, or `missing` if not found.
+"""
+function get_ncbi_genetic_code(ncbi_taxonomy, tax_id::Int; type::Symbol=:genomic, inherit::Bool=true)
+    prop = if type === :genomic
+        :genetic_code_id
+    elseif type === :mitochondrial
+        :mitochondrial_genetic_code_id
+    else
+        throw(ArgumentError("type must be :genomic or :mitochondrial"))
+    end
+
+    vertex = _ncbi_tax_id_to_vertex(ncbi_taxonomy, tax_id)
+    if vertex === nothing
+        return missing
+    end
+
+    vertex_data = ncbi_taxonomy[vertex]
+    code = get(vertex_data, prop, missing)
+    if !inherit
+        return code
+    end
+
+    while code === missing || code == 0
+        parents = collect(MetaGraphsNext.outneighbor_labels(ncbi_taxonomy, vertex))
+        if isempty(parents)
+            return code
+        end
+        vertex = first(parents)
+        vertex_data = ncbi_taxonomy[vertex]
+        code = get(vertex_data, prop, missing)
+    end
+
+    return code
 end
 
 """
@@ -2830,6 +2909,71 @@ function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
     # data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
     # header = ["sequence_id", "taxid"]
     # DataFrames.DataFrame(data, header)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a reference table from a BLAST database with taxonomy lineage and sequence lengths.
+
+# Arguments
+- `blastdb::String`: BLAST database name or path prefix.
+- `blastdbs_dir::String=Mycelia.DEFAULT_BLASTDB_PATH`: Directory where BLAST databases are stored.
+- `download_if_missing::Bool=false`: Download the BLAST database if not found locally.
+- `reference_fasta::String=""`: Optional path for exported FASTA (defaults to `<blastdb>.fna.gz` in `blastdbs_dir`).
+- `taxonomy_map_out::String=""`: Optional path for seqid→taxid mapping output.
+- `table_out::String=""`: Optional CSV output path for the reference table.
+- `arrow_out::String=""`: Optional Arrow output path for the reference table.
+- `force::Bool=false`: Regenerate outputs even if present.
+
+# Returns
+- `DataFrames.DataFrame` with sequence_id, taxid, lineage columns, and length.
+"""
+function prepare_blast_reference_table(;
+    blastdb::String,
+    blastdbs_dir::String=Mycelia.DEFAULT_BLASTDB_PATH,
+    download_if_missing::Bool=false,
+    reference_fasta::String="",
+    taxonomy_map_out::String="",
+    table_out::String="",
+    arrow_out::String="",
+    force::Bool=false
+)
+    db_path = if download_if_missing
+        Mycelia.download_blast_db(db=blastdb, dbdir=blastdbs_dir)
+    elseif occursin('/', blastdb) || occursin('\\', blastdb)
+        blastdb
+    else
+        joinpath(blastdbs_dir, blastdb)
+    end
+
+    if isempty(reference_fasta)
+        reference_fasta = joinpath(blastdbs_dir, "$(basename(db_path)).fna.gz")
+    end
+    Mycelia.blastdb_to_fasta(blastdb=db_path, outfile=reference_fasta, force=force)
+
+    if isempty(taxonomy_map_out)
+        taxonomy_map_out = db_path * ".seqid2taxid.txt.gz"
+    end
+    Mycelia.export_blast_db_taxonomy_table(path_to_db=db_path, outfile=taxonomy_map_out)
+    accession_table = Mycelia.load_blast_db_taxonomy_table(taxonomy_map_out)
+    lineage = Mycelia.taxids2taxonkit_summarized_lineage_table(unique(accession_table.taxid))
+    reference_table = DataFrames.leftjoin(accession_table, lineage, on=:taxid)
+
+    lengths = Dict{String,Int}()
+    for record in Mycelia.open_fastx(reference_fasta)
+        lengths[String(FASTX.identifier(record))] = length(FASTX.sequence(record))
+    end
+    reference_table[!, :length] = [get(lengths, id, missing) for id in reference_table.sequence_id]
+
+    if !isempty(table_out)
+        CSV.write(table_out, reference_table)
+    end
+    if !isempty(arrow_out)
+        Arrow.write(arrow_out, reference_table)
+    end
+
+    return reference_table
 end
 
 # """

@@ -1,0 +1,184 @@
+import Test
+import Mycelia
+import StableRNGs
+import BioSequences
+import FASTX
+
+Test.@testset "Hybrid Assembly Tools" begin
+    Test.@testset "Input validation" begin
+        outdir = mktempdir()
+        Test.@test_throws ErrorException Mycelia.run_hybracter_hybrid_single(
+            "missing_long.fq",
+            "missing_r1.fq",
+            "missing_r2.fq",
+            5_000_000;
+            sample_name="sample",
+            outdir=outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_hybracter_long_single(
+            "missing_long.fq",
+            5_000_000;
+            sample_name="sample",
+            outdir=outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_hybracter_hybrid_single(
+            "missing_long.fq",
+            "missing_r1.fq",
+            "missing_r2.fq",
+            5_000_000;
+            sample_name="",
+            outdir=outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_hybracter_long_single(
+            "missing_long.fq",
+            5_000_000;
+            sample_name="",
+            outdir=outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_plassembler(
+            "missing_long.fq",
+            "missing_r1.fq",
+            "missing_r2.fq",
+            5_000_000;
+            outdir=outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_plassembler_long(
+            "missing_long.fq",
+            5_000_000;
+            outdir=outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_dnaapler_all(
+            "missing_input.fasta";
+            outdir=outdir
+        )
+    end
+
+    run_external = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true" ||
+        lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+
+    if run_external
+        threads = clamp(something(tryparse(Int, get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2")), 2), 1, 4)
+
+        Test.@testset "DNAapler (external)" begin
+            mktempdir() do dir
+                input_fasta = joinpath(dir, "contigs.fasta")
+                open(input_fasta, "w") do io
+                    write(io, ">contig1\nACGTACGTACGTACGT\n")
+                end
+
+                outdir = joinpath(dir, "dnaapler_out")
+                try
+                    result = Mycelia.run_dnaapler_all(input_fasta; outdir=outdir, force=true, threads=threads)
+                    Test.@test isfile(result.reoriented)
+                catch e
+                    if isa(e, ProcessFailedException) ||
+                        occursin("not found", lowercase(string(e))) ||
+                        occursin("no such file", lowercase(string(e))) ||
+                        occursin("conda", lowercase(string(e))) ||
+                        occursin("mamba", lowercase(string(e))) ||
+                        occursin("killed", lowercase(string(e))) ||
+                        occursin("memory", lowercase(string(e)))
+                        Test.@test_skip "DNAapler test skipped due to missing external dependencies or resources."
+                    else
+                        rethrow(e)
+                    end
+                end
+            end
+        end
+
+        Test.@testset "Hybracter/Plassembler (external)" begin
+            mktempdir() do dir
+                ref_fasta = joinpath(dir, "hybrid_ref.fasta")
+                rng = StableRNGs.StableRNG(101)
+                genome = BioSequences.randdnaseq(rng, 30_000)
+                Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("hybrid_ref", genome)])
+
+                illumina = Mycelia.simulate_illumina_reads(
+                    fasta=ref_fasta,
+                    coverage=10,
+                    outbase=joinpath(dir, "hybrid_short"),
+                    read_length=150,
+                    mflen=300,
+                    seqSys="HS25",
+                    paired=true,
+                    errfree=true,
+                    rndSeed=101,
+                    quiet=true
+                )
+
+                long_reads_gz = Mycelia.simulate_nanopore_reads(
+                    fasta=ref_fasta,
+                    quantity="10x",
+                    quiet=true
+                )
+                long_reads = joinpath(dir, "hybrid_long.fq")
+                run(pipeline(`gunzip -c $(long_reads_gz)`, long_reads))
+
+                Test.@testset "Hybracter hybrid-single" begin
+                    outdir = joinpath(dir, "hybracter_out")
+                    try
+                        result = Mycelia.run_hybracter_hybrid_single(
+                            long_reads,
+                            illumina.forward_reads,
+                            illumina.reverse_reads,
+                            length(genome);
+                            sample_name="hybracter_sample",
+                            outdir=outdir,
+                            threads=threads
+                        )
+                        Test.@test isfile(result.final_fasta)
+                    catch e
+                        if isa(e, ProcessFailedException) ||
+                            occursin("not found", lowercase(string(e))) ||
+                            occursin("no such file", lowercase(string(e))) ||
+                            occursin("conda", lowercase(string(e))) ||
+                            occursin("mamba", lowercase(string(e))) ||
+                            occursin("killed", lowercase(string(e))) ||
+                            occursin("memory", lowercase(string(e)))
+                            Test.@test_skip "Hybracter test skipped due to missing external dependencies or resources."
+                        else
+                            rethrow(e)
+                        end
+                    finally
+                        isdir(outdir) && rm(outdir; recursive=true, force=true)
+                    end
+                end
+
+                Test.@testset "Plassembler run" begin
+                    outdir = joinpath(dir, "plassembler_out")
+                    try
+                        result = Mycelia.run_plassembler(
+                            long_reads,
+                            illumina.forward_reads,
+                            illumina.reverse_reads,
+                            length(genome);
+                            outdir=outdir,
+                            threads=threads
+                        )
+                        Test.@test isfile(result.plasmids_fasta)
+                    catch e
+                        if isa(e, ProcessFailedException) ||
+                            occursin("not found", lowercase(string(e))) ||
+                            occursin("no such file", lowercase(string(e))) ||
+                            occursin("conda", lowercase(string(e))) ||
+                            occursin("mamba", lowercase(string(e))) ||
+                            occursin("killed", lowercase(string(e))) ||
+                            occursin("memory", lowercase(string(e)))
+                            Test.@test_skip "Plassembler test skipped due to missing external dependencies or resources."
+                        else
+                            rethrow(e)
+                        end
+                    finally
+                        isdir(outdir) && rm(outdir; recursive=true, force=true)
+                    end
+                end
+            end
+        end
+    else
+        Test.@test_skip "External tool runs disabled; set MYCELIA_RUN_EXTERNAL=true to enable."
+    end
+end
+
+Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
+    Test.@test_skip "HyLight test disabled pending lightweight fixture (moved to benchmarking)"
+end

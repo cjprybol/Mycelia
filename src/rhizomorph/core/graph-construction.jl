@@ -109,18 +109,23 @@ function _build_kmer_graph_core(
         error("Unsupported k-mer type: $KmerType")
     end
 
-    # Get actual kmer type from iterator (includes all type parameters)
-    # Need to extract from first sequence to get the concrete type
-    test_seq = FASTX.sequence(SeqType, records[1])
-
-    # DNA/RNA iterators return (kmer, position), AA iterators return just kmer
+    # Get actual kmer type from the first record that yields a k-mer.
+    # Short/ambiguous inputs can yield no k-mers; fall back to the requested type.
     is_aa = KmerType <: Kmers.AAKmer
-    if is_aa
-        test_kmer = first(KmerIterator(test_seq))
-    else
-        test_kmer, _ = first(KmerIterator(test_seq))
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
     end
-    ActualKmerType = typeof(test_kmer)
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
 
     # Create empty directed graph with actual kmer type as vertex labels
     # ALWAYS use directed graphs - MetaGraph with DiGraph backend
@@ -128,7 +133,8 @@ function _build_kmer_graph_core(
         Graphs.DiGraph();
         label_type=ActualKmerType,
         vertex_data_type=KmerVertexData{ActualKmerType},
-        edge_data_type=KmerEdgeData
+        edge_data_type=KmerEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Process each record
@@ -326,7 +332,8 @@ function _build_qualmer_graph_core(
         Graphs.DiGraph();
         label_type=ActualKmerType,
         vertex_data_type=QualmerVertexData{ActualKmerType},
-        edge_data_type=QualmerEdgeData
+        edge_data_type=QualmerEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Process each record
@@ -733,7 +740,8 @@ function convert_to_doublestrand(singlestrand_graph)
         Graphs.DiGraph();
         label_type=KmerType,
         vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType
+        edge_data_type=EdgeDataType,
+        weight_function=compute_edge_weight
     )
 
     # Add all forward vertices
@@ -881,7 +889,8 @@ function convert_to_canonical(singlestrand_graph)
         Graphs.Graph();
         label_type=KmerType,
         vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType
+        edge_data_type=EdgeDataType,
+        weight_function=compute_edge_weight
     )
 
     # Track which k-mers we've already processed
@@ -1030,7 +1039,8 @@ function convert_to_singlestrand(doublestrand_graph)
         label_type=typeof(first_kmer),
         vertex_data_type=VertexDataType,
         edge_data_type=EdgeDataType,
-        graph_data="Singlestrand graph (unfolded from canonical)"
+        graph_data="Singlestrand graph (unfolded from canonical)",
+        weight_function=compute_edge_weight
     )
 
     # Process each canonical k-mer
@@ -1177,22 +1187,26 @@ function build_ngram_graph_singlestrand(
         Graphs.DiGraph();
         label_type=String,
         vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Process each string
     for (string_idx, input_string) in enumerate(strings)
         observation_id = "string_$(lpad(string_idx, 6, '0'))"
 
-        # Skip strings shorter than n
-        if length(input_string) < n
+        chars = collect(input_string)
+        char_count = length(chars)
+
+        # Skip strings shorter than n (by character count)
+        if char_count < n
             continue
         end
 
         # Extract n-grams with positions (1-indexed)
         ngrams_with_positions = [
-            (input_string[i:i+n-1], i)
-            for i in 1:(length(input_string) - n + 1)
+            (String(chars[i:i+n-1]), i)
+            for i in 1:(char_count - n + 1)
         ]
 
         # Add vertices and evidence
@@ -1316,6 +1330,15 @@ end
 # Variable-length String Graph Construction (OLC approach)
 # ============================================================================
 
+function _normalize_min_overlap(min_overlap::Int)
+    if min_overlap < 1
+        error("Minimum overlap must be positive, got: $min_overlap")
+    end
+
+    # Overlap detection only considers odd lengths.
+    return iseven(min_overlap) ? min_overlap + 1 : min_overlap
+end
+
 """
     build_string_graph_olc(strings; dataset_id="dataset_01", min_overlap=3)
 
@@ -1330,7 +1353,7 @@ unambiguous overlap resolution and prevents issues with even-length palindromes.
 # Arguments
 - `strings::Vector{String}`: Input strings (complete sequences)
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length string graph with overlap evidence
@@ -1363,20 +1386,15 @@ function build_string_graph_olc(
         error("Cannot build graph from empty string vector")
     end
 
-    if min_overlap < 1
-        error("Minimum overlap must be positive, got: $min_overlap")
-    end
-
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Create empty directed graph with String labels
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
         label_type=String,
         vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Add all strings as vertices
@@ -1488,7 +1506,7 @@ sequence type and allows proper use of BioSequences operations.
 # Arguments
 - `records::Vector{FASTX.FASTA.Record}`: Input FASTA records
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTA graph with BioSequence vertices
@@ -1523,13 +1541,7 @@ function build_fasta_graph_olc(
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    if min_overlap < 1
-        error("Minimum overlap must be positive, got: $min_overlap")
-    end
-
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Detect sequence type from first record
     first_seq_str = String(FASTX.sequence(records[1]))
@@ -1572,7 +1584,8 @@ function _build_fasta_graph_olc_core(
         Graphs.DiGraph();
         label_type=SeqType,
         vertex_data_type=BioSequenceVertexData{SeqType},
-        edge_data_type=BioSequenceEdgeData
+        edge_data_type=BioSequenceEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Convert all sequences to proper BioSequence type
@@ -1690,13 +1703,13 @@ This preserves the biological sequence type and per-base quality scores.
 # Arguments
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTQ graph with BioSequence vertices and quality data
 
 # Key Features
-- Vertices are complete BioSequences (LongDNA or LongRNA)
+- Vertices are complete BioSequences (LongDNA, LongRNA, or LongAA)
 - Quality scores preserved for each sequence
 - Edges represent suffix-prefix overlaps between sequences
 - Odd-length overlaps only
@@ -1726,21 +1739,15 @@ function build_fastq_graph_olc(
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    if min_overlap < 1
-        error("Minimum overlap must be positive, got: $min_overlap")
-    end
-
-    if iseven(min_overlap)
-        error("Minimum overlap must be odd, got: $min_overlap")
-    end
+    min_overlap = _normalize_min_overlap(min_overlap)
 
     # Detect sequence type from first record
     first_seq_str = String(FASTX.sequence(records[1]))
     biosequence = parentmodule(Rhizomorph).convert_sequence(first_seq_str)
 
-    # Only DNA and RNA support quality scores (not amino acids)
-    if !(biosequence isa Union{BioSequences.LongDNA, BioSequences.LongRNA})
-        error("FASTQ graphs only support DNA and RNA sequences, got: $(typeof(biosequence))")
+    # FASTQ graphs support DNA, RNA, and amino acid sequences
+    if !(biosequence isa Union{BioSequences.LongDNA, BioSequences.LongRNA, BioSequences.LongAA})
+        error("FASTQ graphs only support DNA, RNA, or AA sequences, got: $(typeof(biosequence))")
     end
 
     # Validate all records are same type
@@ -1757,6 +1764,8 @@ function build_fastq_graph_olc(
         return _build_fastq_graph_olc_core(records, BioSequences.LongDNA{4}, dataset_id, min_overlap)
     elseif biosequence isa BioSequences.LongRNA
         return _build_fastq_graph_olc_core(records, BioSequences.LongRNA{4}, dataset_id, min_overlap)
+    elseif biosequence isa BioSequences.LongAA
+        return _build_fastq_graph_olc_core(records, BioSequences.LongAA, dataset_id, min_overlap)
     else
         error("Unsupported sequence type for FASTQ graph: $(typeof(biosequence))")
     end
@@ -1778,7 +1787,8 @@ function _build_fastq_graph_olc_core(
         Graphs.DiGraph();
         label_type=SeqType,
         vertex_data_type=QualityBioSequenceVertexData{SeqType},
-        edge_data_type=QualityBioSequenceEdgeData
+        edge_data_type=QualityBioSequenceEdgeData,
+        weight_function=compute_edge_weight
     )
 
     # Convert all sequences to proper BioSequence type
@@ -1790,12 +1800,15 @@ function _build_fastq_graph_olc_core(
     for (seq_idx, (sequence, observation_id, quality)) in enumerate(zip(sequences, identifiers, qualities))
         # Create vertex if it doesn't exist
         if !haskey(graph, sequence)
-            vertex_data = QualityBioSequenceVertexData(sequence)
+            vertex_data = QualityBioSequenceVertexData(sequence, quality)
             graph[sequence] = vertex_data
         end
 
         # Add evidence (position=1 since the vertex IS the full sequence)
         vertex_data = graph[sequence]
+        if isempty(vertex_data.quality_scores)
+            append!(vertex_data.quality_scores, quality)
+        end
         add_evidence!(vertex_data, dataset_id, observation_id,
                      QualityEvidenceEntry(1, Forward, quality))
     end

@@ -18,7 +18,7 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
             label_type=String,
             vertex_data_type=Mycelia.KmerVertexData,
             edge_data_type=Mycelia.KmerEdgeData,
-            weight_function=edge_data -> edge_data.weight,
+            weight_function=Mycelia.edge_data_weight,
             default_weight=0.0
         )
         

@@ -115,6 +115,11 @@ Test.@testset "system overview returns raw values, flags, and display" begin
 
     Test.@test isa(overview, Mycelia.SystemOverview)
     Test.@test overview.default_threads == Mycelia.get_default_threads()
+    Test.@test overview.slurm_threads === nothing || isa(overview.slurm_threads, Integer)
+    Test.@test overview.system_gpus === nothing || isa(overview.system_gpus, Integer)
+    Test.@test overview.slurm_gpus === nothing || isa(overview.slurm_gpus, Integer)
+    Test.@test overview.slurm_memory === nothing || isa(overview.slurm_memory, Integer)
+    Test.@test overview.slurm_memory_source === nothing || isa(overview.slurm_memory_source, Symbol)
 
     Test.@test isa(overview.total_memory, Integer)
     Test.@test isa(overview.available_memory, Integer)
@@ -143,6 +148,44 @@ Test.@testset "system overview returns raw values, flags, and display" begin
     Test.@test occursin(Mycelia.bytes_human_readable(overview.total_storage), display_str)
     Test.@test occursin(Mycelia.bytes_human_readable(overview.available_storage), display_str)
     Test.@test occursin(Mycelia.bytes_human_readable(overview.occupied_storage), display_str)
+    Test.@test occursin("GPUs:", display_str)
+end
+
+Test.@testset "system overview reflects slurm allocations" begin
+    cpu_allocation = 3
+    gpu_allocation = 2
+    mem_per_cpu = 1000  # MiB
+
+    overview = Base.withenv(
+        "SLURM_JOB_ID" => "12345",
+        "SLURM_JOB_CPUS_PER_NODE" => nothing,
+        "SLURM_CPUS_ON_NODE" => string(cpu_allocation),
+        "SLURM_CPUS_PER_TASK" => nothing,
+        "SLURM_TASKS_PER_NODE" => nothing,
+        "SLURM_MEM_PER_CPU" => string(mem_per_cpu),
+        "SLURM_GPUS_ON_NODE" => string(gpu_allocation),
+        "SLURM_GPUS" => nothing,
+        "SLURM_GPUS_PER_TASK" => nothing,
+        "SLURM_TASKS_PER_NODE" => nothing,
+        "SLURM_JOB_GPUS" => nothing,
+        "SLURM_STEP_GPUS" => nothing,
+        "SLURM_JOB_GRES" => nothing,
+        "CUDA_VISIBLE_DEVICES" => nothing,
+        "ROCR_VISIBLE_DEVICES" => nothing,
+    ) do
+        Mycelia.system_overview(memory_low_threshold=1.0, storage_low_threshold=1.0)
+    end
+
+    Test.@test overview.slurm_threads == cpu_allocation
+    Test.@test overview.slurm_gpus == gpu_allocation
+    Test.@test overview.system_gpus == gpu_allocation
+    Test.@test overview.slurm_memory == mem_per_cpu * cpu_allocation * 1024^2
+    Test.@test overview.slurm_memory_source == :per_cpu
+
+    display_str = sprint(show, "text/plain", overview)
+    Test.@test occursin("slurm=$(cpu_allocation)", display_str)
+    Test.@test occursin("slurm=$(gpu_allocation)", display_str)
+    Test.@test occursin("slurm_limit", display_str)
 end
 
 Test.@testset "scientific notation" begin

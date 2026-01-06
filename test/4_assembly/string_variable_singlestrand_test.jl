@@ -10,8 +10,9 @@ import MetaGraphsNext
 Test.@testset "String Variable Length SingleStrand Graph" begin
     test_string = "ABCDEF"
     reads = [FASTX.FASTA.Record("test", test_string)]
+    strings = [String(FASTX.sequence(reads[1]))]
 
-    graph = Mycelia.build_string_graph(reads; graph_mode=Mycelia.SingleStrand)
+    graph = Mycelia.Rhizomorph.build_string_graph(strings; dataset_id="test", min_overlap=3)
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) >= 1  # At least one vertex for the string
@@ -19,20 +20,19 @@ Test.@testset "String Variable Length SingleStrand Graph" begin
 
     for vertex_label in vertices
         vertex_data = graph[vertex_label]
-        if hasfield(typeof(vertex_data), :coverage)
-            Test.@test !isempty(vertex_data.coverage)
-            for cov_entry in vertex_data.coverage
-                obs_id, pos, strand = cov_entry
-                Test.@test obs_id isa Int
-                Test.@test pos isa Int
-                Test.@test strand in [Mycelia.Forward, Mycelia.Reverse]
+        Test.@test vertex_data isa Mycelia.Rhizomorph.StringVertexData
+        Test.@test !isempty(vertex_data.evidence)
+        for evidence_map in values(vertex_data.evidence)
+            for entries in values(evidence_map)
+                for entry in entries
+                    Test.@test entry isa Mycelia.Rhizomorph.EvidenceEntry
+                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                end
             end
-        elseif vertex_data isa Integer
-            Test.@test vertex_data > 0
         end
     end
 
-    paths = Mycelia.find_eulerian_paths_next(graph)
+    paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
     Test.@test !isempty(paths)
 
     reconstruction_success = false
@@ -40,13 +40,13 @@ Test.@testset "String Variable Length SingleStrand Graph" begin
         if !isempty(path_vector)
             try
                 vertex_type = typeof(first(path_vector))
-                walk_steps = Mycelia.WalkStep{vertex_type}[]
+                walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.WalkStep(vertex_label, Mycelia.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
-                graph_path = Mycelia.GraphPath(walk_steps)
-                reconstructed = Mycelia.path_to_sequence(graph_path, graph)
+                graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
                 if reconstructed !== nothing
                     reconstruction_success = true
                     @info "Successfully reconstructed: $(typeof(reconstructed)) of length $(length(reconstructed))"

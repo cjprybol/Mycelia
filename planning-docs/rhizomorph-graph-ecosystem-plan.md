@@ -4,6 +4,13 @@
 
 A detailed plan for implementing a robust "rhizomorph" graph ecosystem that properly handles all graph types as **directed, strand-aware graphs** where vertices and edges are added only when observed. The design distinguishes between two orthogonal concepts:
 
+## ✅ Status Snapshot (current)
+- Implemented in `src/rhizomorph`: enums, evidence structs/functions, quality utilities, graph query helpers, strand-specific singlestrand builders for k-mer/qualmer/n-gram and variable-length string/FASTA/FASTQ graphs, DNA/RNA doublestrand + canonical conversions, Eulerian path + path_to_sequence fixes, GFA export/import, and tip removal.
+- Tests now on Rhizomorph: `basic_graph_tests`, `sequence_graphs_next`, `graph_algorithms_next` (bubble helpers, DFS fallback, tip thresholds), `end_to_end_graph_tests` (exact k-mer content/evidence positions, qualmer edge/vertex quality evidence, variable-length overlap evidence, doublestrand/canonical conversion checks, GFA vertex-count round-trip), canonicalization/singlestrand orientation suites, `gfa_io_next`, strand-specific/canonical traversal suites, and GFA parsing basics.
+- Missing/planned: repeat detection/contig finding/coverage profile utilities from legacy `sequence-graphs-next.jl`, graph-type conversions (`core/graph-type-conversions.jl`, `algorithms/strand-conversions.jl`), error-correction, and JLD2 round-trip coverage. Simplification still lacks bubble resolution/removal of internal edges.
+- Migration work needed: port remaining high-touch legacy suites (`end_to_end_assembly_tests.jl`, `six_graph_hierarchy_tests.jl`, `comprehensive_*`, `probabilistic_algorithms_next.jl`, older string/assembly end-to-end suites) to `Mycelia.Rhizomorph` APIs, then drop legacy includes (`graph-core.jl`, `kmer-graphs.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`).
+- Testing gaps: no JLD2 coverage for rhizomorph graphs; variable-length and n-gram traversal still light; simplification only has tip removal/bubble detection smoke tests.
+
 1. **Strand Specificity** (methodological): Whether evidence is preserved per strand orientation or merged across reverse-complement pairs
    - **Strand-specific**: Preserve strand orientation as observed (default construction mode)
    - **Non-strand-specific**: Merge evidence across reverse-complement pairs (post-processing transformation)
@@ -112,7 +119,7 @@ src/rhizomorph/
 │   ├── edge-data.jl               # Generic EdgeData{T} structures
 │   ├── evidence-functions.jl      # Evidence manipulation + basic strand operations
 │   ├── graph-construction.jl      # Shared graph building logic
-│   └── graph-type-conversions.jl  # Fixed↔Variable, Quality↔Non-quality
+│   └── graph-type-conversions.jl  # Fixed↔Variable, Quality↔Non-quality (planned)
 ├── fixed-length/
 │   ├── kmer-graphs.jl             # DNAKmer, RNAKmer, AAKmer graphs
 │   ├── qualmer-graphs.jl          # Quality-aware k-mer graphs
@@ -123,12 +130,18 @@ src/rhizomorph/
 │   └── string-graphs.jl           # Variable-length string graphs
 ├── algorithms/
 │   ├── path-finding.jl            # Eulerian paths, reconstruction
-│   ├── strand-conversions.jl      # Graph-level strand mode transformations
-│   ├── error-correction.jl        # Read-centric probabilistic correction
-│   ├── simplification.jl          # Bubble popping, tip clipping, variant calling
+│   ├── strand-conversions.jl      # Graph-level strand mode transformations (planned)
+│   ├── error-correction.jl        # Read-centric probabilistic correction (planned)
+│   ├── simplification.jl          # Bubble popping, tip clipping, variant calling (partial)
 │   └── io.jl                      # GFA export/import
 └── rhizomorph.jl                  # Main module file
 ```
+
+### Immediate Migration Plan
+1. Continue porting legacy graph suites directly to `Mycelia.Rhizomorph` (no shims): gfa IO, end-to-end assembly, six-graph hierarchy, comprehensive correctness/fixes/type-stable, canonicalization consistency, AA/RNA singlestrand, and probabilistic algorithm tests.
+2. Implement or replace legacy-only helpers in Rhizomorph where tests still rely on them (repeat detection, contig/coverage helpers, graph-type conversions) with real code + tests; otherwise re-scope tests to existing APIs.
+3. Once the remaining suites run on Rhizomorph, remove legacy includes from `src/Mycelia.jl` and delete the deprecated graph files.
+4. Add round-trip JLD2/GFA coverage for Rhizomorph graphs and expand traversal coverage for variable-length/n-gram modes alongside simplification edge-case tests.
 
 ---
 
@@ -3921,35 +3934,35 @@ After implementing this plan:
 ## Implementation Checklist
 
 ### Phase 1: Core Infrastructure
-- [ ] Create rhizomorph module structure
-- [ ] Move enums from graph-core.jl (StrandOrientation, GraphMode)
-- [ ] Consolidate vertex data structures with double-nested evidence dictionaries
-- [ ] Consolidate edge data structures with double-nested evidence dictionaries
-- [ ] Implement evidence manipulation helper functions (add, query, filter, merge, stats)
-- [ ] Implement strand specificity interconversion functions (strand-specific ↔ non-strand-specific)
-- [ ] Implement strand representation interconversion functions (single-stranded ↔ double-stranded)
+- [x] Create rhizomorph module structure
+- [x] Move enums from graph-core.jl (StrandOrientation, GraphMode)
+- [x] Consolidate vertex data structures with double-nested evidence dictionaries
+- [x] Consolidate edge data structures with double-nested evidence dictionaries
+- [x] Implement evidence manipulation helper functions (add, query, filter, merge, stats)
+- [ ] Implement strand specificity interconversion functions (strand-specific ↔ non-strand-specific) **(missing public API)**
+- [x] Implement strand representation interconversion functions (single-stranded ↔ double-stranded)
 - [ ] Implement graph type interconversion functions:
-  - [ ] Fixed-length → Variable-length (collapse unbranching paths)
-  - [ ] Variable-length → Fixed-length (fragment sequences)
-  - [ ] Quality-aware → Quality-unaware (remove quality scores)
-- [ ] Implement shared graph construction patterns
+  - [ ] Fixed-length → Variable-length (collapse unbranching paths) **(planned)**
+  - [ ] Variable-length → Fixed-length (fragment sequences) **(planned)**
+  - [ ] Quality-aware → Quality-unaware (remove quality scores) **(planned)**
+- [x] Implement shared graph construction patterns
 
 ### Phase 2: Fixed-Length Graphs
-- [ ] Migrate k-mer graphs with SingleStrand-first approach
-- [ ] Fix qualmer graphs with proper Phred handling
-- [ ] Create separate n-gram graphs module
-- [ ] Update all imports and exports
+- [x] Migrate k-mer graphs with SingleStrand-first approach (singlestrand/doublestrand/canonical)
+- [x] Fix qualmer graphs with proper Phred handling (singlestrand/doublestrand/canonical)
+- [x] Create separate n-gram graphs module (singlestrand only)
+- [ ] Update all imports and exports **(needs compatibility shims + legacy removal plan)**
 
 ### Phase 3: Variable-Length Graphs
-- [ ] Consolidate FASTA graph functionality
-- [ ] Fix FASTQ graphs with quality handling
-- [ ] Separate variable-length string graphs
-- [ ] Implement alignment-based edge detection
+- [x] Consolidate FASTA graph functionality (singlestrand with DNA/RNA double/canonical conversions)
+- [x] Fix FASTQ graphs with quality handling (singlestrand with DNA/RNA double/canonical conversions)
+- [x] Separate variable-length string graphs (singlestrand only)
+- [ ] Implement alignment-based edge detection **(planned)**
 
 ### Phase 4: Algorithms & Utilities
-- [ ] Move path finding algorithms
-- [ ] Implement canonicalization as post-processing
-- [ ] Consolidate I/O functionality
+- [x] Move path finding algorithms
+- [x] Implement canonicalization as post-processing
+- [x] Consolidate I/O functionality
 - [ ] Implement Read-Centric Probabilistic Correction Model (Primary Strategy):
   - [ ] Quality-aware mode: Joint probability from Phred scores
   - [ ] Coverage-only mode: Evidence depth-based likelihood
@@ -3963,14 +3976,14 @@ After implementing this plan:
   - [ ] Estimate rates from graph structure
   - [ ] Future: Pre-trained error models from gold-standard sequences
 - [ ] Implement Graph-Based Simplification (Supplementary Tools):
-  - [ ] Tip Removal (Clipping) with configurable thresholds
-  - [ ] Bubble Popping and Variant Calling (FreeBayes/GATK-style)
-  - [ ] Cycle/Repeat Resolution
+  - [ ] Tip Removal (Clipping) with configurable thresholds **(missing)**
+  - [ ] Bubble Popping and Variant Calling (FreeBayes/GATK-style) **(partial; detection exists, lacks tests)**
+  - [ ] Cycle/Repeat Resolution **(planned)**
 - [ ] Future: Reinforcement Learning framework (post-publication)
 
 ### Phase 5: Integration & Testing
-- [ ] Update main module integration
-- [ ] Update all 24 test files
+- [ ] Update main module integration **(needs legacy graph includes removed after shims/tests)**
+- [ ] Update all 24 test files **(legacy tests must migrate to rhizomorph APIs)**
 - [ ] Run comprehensive validation suite
 - [ ] Performance benchmarking
 - [ ] Documentation updates

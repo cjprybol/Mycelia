@@ -42,5 +42,11 @@ Manifest.toml
 scratch*
 build/*
 package-lock.json
+busco_downloads/*
+busco_results/*
+test/busco_downloads/*
+test/busco_results/*
 package.json
+*DS_Store*
+test/metadata/comebin_test_data*
 node_modules/*

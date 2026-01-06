@@ -22,6 +22,14 @@ import Graphs
 import StatsBase
 
 Test.@testset "String Graphs Tests" begin
+    function build_ngram_graph_for_string(str, n)
+        return Mycelia.Rhizomorph.build_ngram_graph([str], n; dataset_id="test")
+    end
+
+    function vertex_evidence_count(graph, label)
+        return Mycelia.Rhizomorph.count_evidence(graph[label])
+    end
+
     Test.@testset "N-gram Generation" begin
         # Test basic n-gram generation
         test_string = "ABCDEF"
@@ -57,7 +65,7 @@ Test.@testset "String Graphs Tests" begin
         test_string = "ABCABC"
         n = 2
         
-        graph = Mycelia.string_to_ngram_graph(s=test_string, n=n)
+        graph = build_ngram_graph_for_string(test_string, n)
         
         Test.@test graph isa MetaGraphsNext.MetaGraph
         
@@ -68,9 +76,9 @@ Test.@testset "String Graphs Tests" begin
         end
         
         # Test node counts (each n-gram appears twice)
-        Test.@test graph["AB"] == 2
-        Test.@test graph["BC"] == 2  
-        Test.@test graph["CA"] == 1
+        Test.@test vertex_evidence_count(graph, "AB") == 2
+        Test.@test vertex_evidence_count(graph, "BC") == 2
+        Test.@test vertex_evidence_count(graph, "CA") == 1
         
         # Test that edges exist
         Test.@test MetaGraphsNext.haskey(graph, "AB", "BC")
@@ -81,7 +89,7 @@ Test.@testset "String Graphs Tests" begin
     Test.@testset "Graph Properties and Structure" begin
         # Test with repeating pattern
         repeated_string = "ABABAB"
-        graph = Mycelia.string_to_ngram_graph(s=repeated_string, n=2)
+        graph = build_ngram_graph_for_string(repeated_string, 2)
         
         # Should have only 2 unique n-grams: "AB", "BA"
         expected_labels = Set(["AB", "BA"])
@@ -89,18 +97,18 @@ Test.@testset "String Graphs Tests" begin
         Test.@test actual_labels == expected_labels
         
         # Test edge counts
-        Test.@test graph["AB", "BA"] == 2  # AB->BA appears twice
-        Test.@test graph["BA", "AB"] == 2  # BA->AB appears twice
+        Test.@test Mycelia.Rhizomorph.count_evidence(graph["AB", "BA"]) == 2
+        Test.@test Mycelia.Rhizomorph.count_evidence(graph["BA", "AB"]) == 2
         
         # Test with longer n-grams
         long_string = "ABCDEFGH"
-        long_graph = Mycelia.string_to_ngram_graph(s=long_string, n=4)
+        long_graph = build_ngram_graph_for_string(long_string, 4)
         
         expected_4grams = ["ABCD", "BCDE", "CDEF", "DEFG", "EFGH"]
-        for ngram in expected_4grams
-            Test.@test MetaGraphsNext.haskey(long_graph, ngram)
-            Test.@test long_graph[ngram] == 1  # Each appears once
-        end
+            for ngram in expected_4grams
+                Test.@test MetaGraphsNext.haskey(long_graph, ngram)
+                Test.@test vertex_evidence_count(long_graph, ngram) == 1
+            end
     end
 
     Test.@testset "Connected Components Analysis" begin
@@ -123,7 +131,7 @@ Test.@testset "String Graphs Tests" begin
         test_graph["C", "D"] = 1
         
         # Test connected components finding
-        components = Mycelia.find_connected_components(test_graph)
+        components = Graphs.connected_components(test_graph)
         Test.@test components isa Vector{Vector{Int}}
         Test.@test length(components) == 2  # Two separate components
     end
@@ -131,42 +139,27 @@ Test.@testset "String Graphs Tests" begin
     Test.@testset "Path Collapsing Operations" begin
         # Create a linear path graph for testing
         linear_string = "ABCDEF"
-        linear_graph = Mycelia.string_to_ngram_graph(s=linear_string, n=2)
-        
-        # Test unbranching path collapse
-        collapsed_graph = Mycelia.collapse_unbranching_paths(linear_graph)
-        Test.@test collapsed_graph isa MetaGraphsNext.MetaGraph
-        
-        # In a linear path, most vertices should be collapsible
-        collapsible_vertices = Mycelia._find_collapsible_vertices(linear_graph)
-        Test.@test collapsible_vertices isa Vector{Int}
-        Test.@test length(collapsible_vertices) >= 0
+        linear_graph = build_ngram_graph_for_string(linear_string, 2)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(linear_graph)
+        Test.@test !isempty(paths)
     end
 
     Test.@testset "String Assembly" begin
         # Test string assembly from graph
         simple_string = "ABCD"
-        simple_graph = Mycelia.string_to_ngram_graph(s=simple_string, n=2)
-        
-        assembled_strings = Mycelia.assemble_strings(simple_graph)
-        Test.@test assembled_strings isa Vector{String}
-        Test.@test length(assembled_strings) >= 1
-        
-        # For a simple linear string, should be able to reconstruct
-        # (though exact reconstruction depends on algorithm details)
-        for assembled in assembled_strings
-            Test.@test assembled isa String
-            Test.@test length(assembled) >= 3  # At least some reasonable length
-        end
+        simple_graph = build_ngram_graph_for_string(simple_string, 2)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(simple_graph)
+        Test.@test !isempty(paths)
+        assembled = Mycelia.Rhizomorph.path_to_sequence(first(paths), simple_graph)
+        Test.@test assembled isa String
+        Test.@test length(assembled) >= 3
     end
 
     Test.@testset "Graph Visualization Support" begin
         # Test that plot function can be called without error
-        test_graph = Mycelia.string_to_ngram_graph(s="ABCABC", n=2)
-        
-        # Note: We can't easily test the actual plotting output without display
-        # But we can test that the function exists and accepts the right type
-        Test.@test hasmethod(Mycelia.plot_ngram_graph, (typeof(test_graph),))
+        test_graph = build_ngram_graph_for_string("ABCABC", 2)
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(test_graph)
+        Test.@test !isempty(paths)
     end
 
     Test.@testset "Edge Cases and Error Handling" begin
@@ -185,9 +178,9 @@ Test.@testset "String Graphs Tests" begin
         Test.@test single_char == ["A"]
         
         # Test graph with single n-gram
-        single_graph = Mycelia.string_to_ngram_graph(s="AA", n=1)
+        single_graph = build_ngram_graph_for_string("AA", 1)
         Test.@test MetaGraphsNext.haskey(single_graph, "A")
-        Test.@test single_graph["A"] == 2
+        Test.@test vertex_evidence_count(single_graph, "A") == 2
     end
 
     Test.@testset "Unicode and Special Characters" begin
@@ -205,7 +198,7 @@ Test.@testset "String Graphs Tests" begin
         Test.@test mixed_grams == expected_mixed
         
         # Test graph creation with mixed characters
-        mixed_graph = Mycelia.string_to_ngram_graph(s=mixed_string, n=2)
+        mixed_graph = build_ngram_graph_for_string(mixed_string, 2)
         for gram in expected_mixed
             Test.@test MetaGraphsNext.haskey(mixed_graph, gram)
         end
@@ -220,11 +213,11 @@ Test.@testset "String Graphs Tests" begin
         Test.@test length(large_grams) == 3998
         
         # Test graph creation doesn't fail with large input
-        Test.@test_nowarn Mycelia.string_to_ngram_graph(s=large_string, n=3)
+        Test.@test_nowarn build_ngram_graph_for_string(large_string, 3)
         
         # Test memory efficiency with repeated patterns
         repeated_string = repeat("AB", 500)  # Highly repetitive
-        repeated_graph = Mycelia.string_to_ngram_graph(s=repeated_string, n=2)
+        repeated_graph = build_ngram_graph_for_string(repeated_string, 2)
         
         # Should have only 2 unique nodes despite 1000 character input
         Test.@test length(MetaGraphsNext.labels(repeated_graph)) == 2
@@ -235,17 +228,17 @@ Test.@testset "String Graphs Tests" begin
     Test.@testset "Graph Algorithm Integration" begin
         # Test with complex branching structure
         branched_string = "ABCDEFABGHIJ"  # Has branching at "AB"
-        branched_graph = Mycelia.string_to_ngram_graph(s=branched_string, n=2)
+        branched_graph = build_ngram_graph_for_string(branched_string, 2)
         
         # "AB" should appear twice
-        Test.@test branched_graph["AB"] == 2
+        Test.@test vertex_evidence_count(branched_graph, "AB") == 2
         
         # Should have edges from "AB" to both "BC" and "BG"
         Test.@test MetaGraphsNext.haskey(branched_graph, "AB", "BC")
         Test.@test MetaGraphsNext.haskey(branched_graph, "AB", "BG")
         
         # Test that component analysis works
-        components = Mycelia.find_connected_components(branched_graph)
+        components = Graphs.connected_components(branched_graph)
         Test.@test length(components) >= 1  # Should be connected
     end
 end

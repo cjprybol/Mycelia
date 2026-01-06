@@ -1,6 +1,6 @@
 # Graph Conversion Test
 #
-# Tests for converting between singlestrand and doublestrand (canonical) graph modes.
+# Tests for converting between singlestrand and doublestrand graph modes.
 #
 # Run with: julia --project=. test/4_assembly/graph_conversion_test.jl
 
@@ -24,8 +24,8 @@ Test.@testset "Graph Conversion" begin
         doublestrand = Mycelia.Rhizomorph.convert_to_doublestrand(original)
         ds_vertex_count = Mycelia.Rhizomorph.vertex_count(doublestrand)
 
-        # Doublestrand should have fewer vertices (canonical merging)
-        Test.@test ds_vertex_count <= original_vertex_count
+        # Doublestrand includes reverse-complement vertices
+        Test.@test ds_vertex_count >= original_vertex_count
 
         # Convert back to singlestrand
         recovered = Mycelia.Rhizomorph.convert_to_singlestrand(doublestrand)
@@ -116,9 +116,8 @@ Test.@testset "Graph Conversion" begin
         doublestrand = Mycelia.Rhizomorph.convert_to_doublestrand(original)
         recovered = Mycelia.Rhizomorph.convert_to_singlestrand(doublestrand)
 
-        # For palindromes, singlestrand and doublestrand should be similar
-        # (palindromes don't have separate RC vertices)
-        Test.@test Mycelia.Rhizomorph.vertex_count(recovered) >= Mycelia.Rhizomorph.vertex_count(doublestrand)
+        # For palindromes, doublestrand does not add distinct RC vertices
+        Test.@test Mycelia.Rhizomorph.vertex_count(recovered) == Mycelia.Rhizomorph.vertex_count(doublestrand)
     end
 
     Test.@testset "Direct Doublestrand Construction Matches Conversion" begin
@@ -135,11 +134,16 @@ Test.@testset "Graph Conversion" begin
         # Should have same vertex count
         Test.@test Mycelia.Rhizomorph.vertex_count(direct_ds) == Mycelia.Rhizomorph.vertex_count(converted_ds)
 
-        # Should have same observations for canonical k-mers
-        canon_atg = BioSequences.canonical(Kmers.DNAKmer{3}("ATG"))
-        direct_count = Mycelia.Rhizomorph.get_vertex_observation_count(direct_ds, canon_atg)
-        converted_count = Mycelia.Rhizomorph.get_vertex_observation_count(converted_ds, canon_atg)
+        # Should have same observations for explicit k-mers
+        atg_kmer = Kmers.DNAKmer{3}("ATG")
+        rc_atg = BioSequences.reverse_complement(atg_kmer)
+        direct_count = Mycelia.Rhizomorph.get_vertex_observation_count(direct_ds, atg_kmer)
+        converted_count = Mycelia.Rhizomorph.get_vertex_observation_count(converted_ds, atg_kmer)
         Test.@test direct_count == converted_count
+
+        direct_rc_count = Mycelia.Rhizomorph.get_vertex_observation_count(direct_ds, rc_atg)
+        converted_rc_count = Mycelia.Rhizomorph.get_vertex_observation_count(converted_ds, rc_atg)
+        Test.@test direct_rc_count == converted_rc_count
     end
 end
 

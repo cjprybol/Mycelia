@@ -28,6 +28,7 @@ Transform Mycelia from a research-oriented assembly framework into an accessible
 *   **Novel 6-Graph Type Hierarchy**: A comprehensive, type-safe graph system that maintains biological correctness while enabling efficient computation.
 *   **Quality-Aware Assembly**: First assembly framework to preserve per-base quality scores throughout the entire assembly process, enabling higher accuracy.
 *   **Intelligent Self-Optimizing Assembly**: A learnable, self-optimizing assembler that uses reinforcement learning to eliminate manual parameter tuning while maximizing assembly accuracy.
+*   **Topology-Aware Assembly Optimization (TDA)**: Use Betti curves and (optionally) persistent homology across coverage/quality/confidence filtrations to guide graph cleaning and parameter selection (see `planning-docs/TDA_INTEGRATION_PLAN.md`).
 *   **Iterative Maximum Likelihood Assembly**: A complementary statistical path resampling approach for read-level error correction.
 *   **Zero String Conversions**: Complete elimination of string conversions in bioinformatics pipelines for type safety and efficiency.
 *   **Cross-validation Pipeline**: For robust assembly confidence and accuracy assessment.
@@ -40,6 +41,8 @@ Transform Mycelia from a research-oriented assembly framework into an accessible
 
 ### **Phase 1: Foundational Rhizomorph Ecosystem (CRITICAL PRIORITY)**
 *Goal: Implement the core type-safe, biologically accurate graph data structures.*
+
+*Status (current): Core rhizomorph module, fixed-/variable-length builders, strand conversions (DNA/RNA double/canonical), and path-finding/GFA I/O are implemented. Missing pieces: graph-type conversion layer (fixed↔variable, quality↔non-quality), strand-specific merge helpers, and simplification tip-removal/linear-chain collapse. Migration of legacy graph APIs/tests to rhizomorph is in progress with direct ports (no shims); latest ports restore coverage for `graph_algorithms_next`, `end_to_end_graph_tests` (evidence positions, qualmer edge/vertex quality, doublestrand/canonical conversion, GFA vertex counts), singlestrand k-mer suites, and `gfa_io_next`. Follow-on cleanup will remove legacy includes once coverage lands.*
 
 *   **1.1: Establish Module Architecture:**
     *   Create the `rhizomorph` module structure as defined in the ecosystem plan.
@@ -166,9 +169,9 @@ When a k-mer is observed multiple times with different quality scores:
 
 A high-level API for common assembly tasks.
 ```julia
-function assemble_genome(reads; method=:qualmer_graph, k=31, error_rate=0.01)
-function polish_assembly(assembly, reads; iterations=3)
-function validate_assembly(assembly, reference=nothing)
+function Mycelia.Rhizomorph.assemble_genome(reads; method=:qualmer_graph, k=31, error_rate=0.01)
+function Mycelia.Rhizomorph.polish_assembly(assembly, reads; iterations=3)
+function Mycelia.Rhizomorph.validate_assembly(assembly, reference=nothing)
 ```
 
 ### 4.3. Intelligent Self-Optimizing Assembly System 🔵

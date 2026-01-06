@@ -39,7 +39,7 @@ based on suffix-prefix overlaps.
 # Arguments
 - `records::Vector{FASTX.FASTA.Record}`: Input FASTA records
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTA graph with BioSequence vertices
@@ -113,7 +113,7 @@ Automatically handles compressed files (.gz, .bz2, .xz).
 # Arguments
 - `filepath::String`: Path to FASTA file
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename)
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTA graph
@@ -165,7 +165,7 @@ Each file is treated as a separate dataset, using the filename as dataset_id.
 
 # Arguments
 - `filepaths::Vector{String}`: List of FASTA files
-- `min_overlap::Int=3`: Minimum overlap length (must be odd)
+- `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length FASTA graph with evidence from all files

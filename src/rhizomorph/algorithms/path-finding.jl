@@ -45,6 +45,350 @@ function GraphPath(steps::Vector{WalkStep{T}}) where T
     return GraphPath{T}(steps)
 end
 
+"""
+Edge data for probabilistic path algorithms with strand awareness.
+"""
+struct StrandWeightedEdgeData
+    weight::Float64
+    src_strand::StrandOrientation
+    dst_strand::StrandOrientation
+end
+
+"""
+    edge_quality_weight(edge_data)
+
+Compute an edge weight from quality evidence when available.
+Falls back to evidence counts for non-quality edges.
+"""
+function edge_quality_weight(edge_data)
+    entries = collect_evidence_entries(edge_data.evidence)
+    if isempty(entries)
+        return 0.0
+    end
+
+    total = 0.0
+    quality_found = false
+
+    for entry in entries
+        if entry isa EdgeQualityEvidenceEntry
+            quality_found = true
+            combined = vcat(
+                decode_quality_scores(entry.from_quality),
+                decode_quality_scores(entry.to_quality)
+            )
+            if !isempty(combined)
+                total += Statistics.mean(combined)
+            end
+        end
+    end
+
+    if quality_found && total > 0
+        return total
+    end
+
+    return Float64(count_evidence(edge_data))
+end
+
+"""
+    weighted_graph_from_rhizomorph(source_graph; default_weight=1e-10, edge_weight=count_evidence)
+
+Convert a Rhizomorph evidence graph into a weighted graph suitable for
+probabilistic path algorithms. Edge weights are derived from evidence counts
+by default, and strand orientation is inferred from the first evidence entry
+when present. Undirected graphs are expanded into bidirectional edges.
+"""
+function weighted_graph_from_rhizomorph(
+    source_graph::MetaGraphsNext.MetaGraph;
+    default_weight::Float64=1e-10,
+    edge_weight::Function=count_evidence,
+)
+    labels = collect(MetaGraphsNext.labels(source_graph))
+    label_type = isempty(labels) ? String : typeof(first(labels))
+
+    weighted = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type=label_type,
+        vertex_data_type=Any,
+        edge_data_type=StrandWeightedEdgeData,
+        weight_function=Mycelia.edge_data_weight,
+        default_weight=0.0,
+    )
+
+    for label in labels
+        weighted[label] = nothing
+    end
+
+    is_directed = Graphs.is_directed(source_graph.graph)
+
+    for (src, dst) in MetaGraphsNext.edge_labels(source_graph)
+        edge_data = source_graph[src, dst]
+        weight_value = Float64(edge_weight(edge_data))
+        weight = weight_value > 0 ? weight_value : default_weight
+        strand = first_evidence_strand(edge_data.evidence; default=Forward)
+        weighted[src, dst] = StrandWeightedEdgeData(weight, strand, strand)
+        if !is_directed
+            weighted[dst, src] = StrandWeightedEdgeData(weight, strand, strand)
+        end
+    end
+
+    return weighted
+end
+
+function probabilistic_walk_next(
+    graph::MetaGraphsNext.MetaGraph,
+    start_vertex::T,
+    max_steps::Int;
+    seed::Union{Nothing, Int}=nothing,
+) where T
+    if seed !== nothing
+        Mycelia.Random.seed!(seed)
+    end
+
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+
+    steps = WalkStep{T}[]
+    current_vertex = start_vertex
+    current_strand = Forward
+    cumulative_prob = 1.0
+
+    push!(steps, WalkStep(current_vertex, current_strand, 1.0, cumulative_prob))
+
+    for _ in 1:max_steps
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+
+        if isempty(valid_transitions)
+            break
+        end
+
+        transition_probs = _calculate_transition_probabilities(valid_transitions)
+        next_transition = _sample_transition(valid_transitions, transition_probs)
+
+        step_prob = next_transition[:probability]
+        cumulative_prob *= step_prob
+
+        current_vertex = next_transition[:target_vertex]
+        current_strand = next_transition[:target_strand]
+
+        push!(steps, WalkStep(current_vertex, current_strand, step_prob, cumulative_prob))
+    end
+
+    return GraphPath(steps)
+end
+
+function maximum_weight_walk_next(
+    graph::MetaGraphsNext.MetaGraph,
+    start_vertex::T,
+    max_steps::Int;
+    weight_function::Function = Mycelia.edge_data_weight,
+) where T
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+
+    steps = WalkStep{T}[]
+    current_vertex = start_vertex
+    current_strand = Forward
+    cumulative_prob = 1.0
+
+    push!(steps, WalkStep(current_vertex, current_strand, 1.0, cumulative_prob))
+
+    for _ in 1:max_steps
+        valid_transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+
+        if isempty(valid_transitions)
+            break
+        end
+
+        best_transition = nothing
+        max_weight = -Inf
+
+        for transition in valid_transitions
+            weight = weight_function(transition[:edge_data])
+            if weight > max_weight
+                max_weight = weight
+                best_transition = transition
+            end
+        end
+
+        if best_transition === nothing
+            break
+        end
+
+        step_prob = best_transition[:probability]
+        cumulative_prob *= step_prob
+
+        current_vertex = best_transition[:target_vertex]
+        current_strand = best_transition[:target_strand]
+
+        push!(steps, WalkStep(current_vertex, current_strand, step_prob, cumulative_prob))
+    end
+
+    return GraphPath(steps)
+end
+
+function _normalize_strand(strand)
+    if strand == Forward || strand == Reverse
+        return strand
+    end
+    if isdefined(Mycelia, :Forward) && strand == Mycelia.Forward
+        return Forward
+    end
+    if isdefined(Mycelia, :Reverse) && strand == Mycelia.Reverse
+        return Reverse
+    end
+    return Forward
+end
+
+function _get_valid_transitions(graph, vertex_label, strand)
+    transitions = []
+
+    for edge_labels in MetaGraphsNext.edge_labels(graph)
+        if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+            target_vertex = edge_labels[2]
+            edge_data = graph[edge_labels...]
+
+            edge_src_strand = _normalize_strand(edge_data.src_strand)
+            if edge_src_strand == strand
+                probability = edge_data.weight > 0 ? edge_data.weight : 1e-10
+
+                push!(transitions, Dict(
+                    :target_vertex => target_vertex,
+                    :target_strand => _normalize_strand(edge_data.dst_strand),
+                    :probability => probability,
+                    :edge_data => edge_data,
+                ))
+            end
+        end
+    end
+
+    return transitions
+end
+
+function _calculate_transition_probabilities(transitions)
+    if isempty(transitions)
+        return Float64[]
+    end
+
+    weights = [t[:probability] for t in transitions]
+    total_weight = sum(weights)
+
+    if total_weight == 0
+        return fill(1.0 / length(transitions), length(transitions))
+    end
+
+    return weights ./ total_weight
+end
+
+function _sample_transition(transitions, probabilities)
+    if isempty(transitions)
+        return nothing
+    end
+
+    if length(transitions) == 1
+        return first(transitions)
+    end
+
+    r = Mycelia.Random.rand()
+    cumulative = 0.0
+
+    for (i, prob) in enumerate(probabilities)
+        cumulative += prob
+        if r <= cumulative
+            return transitions[i]
+        end
+    end
+
+    return last(transitions)
+end
+
+function shortest_probability_path_next(
+    graph::MetaGraphsNext.MetaGraph,
+    source::T,
+    target::T,
+) where T
+    if !(source in MetaGraphsNext.labels(graph)) || !(target in MetaGraphsNext.labels(graph))
+        return nothing
+    end
+
+    distances = Dict{Tuple{T, StrandOrientation}, Float64}()
+    predecessors = Dict{Tuple{T, StrandOrientation}, Union{Nothing, Tuple{T, StrandOrientation}}}()
+    visited = Set{Tuple{T, StrandOrientation}}()
+    pq = DataStructures.PriorityQueue{Tuple{T, StrandOrientation}, Float64}()
+
+    for strand in (Forward, Reverse)
+        start_state = (source, strand)
+        distances[start_state] = 0.0
+        predecessors[start_state] = nothing
+        DataStructures.enqueue!(pq, start_state, 0.0)
+    end
+
+    while !isempty(pq)
+        current_state = DataStructures.dequeue!(pq)
+        if current_state in visited
+            continue
+        end
+
+        push!(visited, current_state)
+        current_vertex, current_strand = current_state
+
+        if current_vertex == target
+            return _reconstruct_shortest_path(predecessors, distances, (source, Forward), current_state, graph)
+        end
+
+        transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+        for transition in transitions
+            next_vertex = transition[:target_vertex]
+            next_strand = transition[:target_strand]
+            next_state = (next_vertex, next_strand)
+
+            edge_prob = transition[:probability]
+            distance = -log(edge_prob)
+            new_distance = distances[current_state] + distance
+
+            if !haskey(distances, next_state) || new_distance < distances[next_state]
+                distances[next_state] = new_distance
+                predecessors[next_state] = current_state
+                DataStructures.enqueue!(pq, next_state, new_distance)
+            end
+        end
+    end
+
+    return nothing
+end
+
+function _reconstruct_shortest_path(predecessors, distances, start_state, end_state, graph)
+    path_states = []
+    current_state = end_state
+
+    while current_state !== nothing
+        pushfirst!(path_states, current_state)
+        current_state = predecessors[current_state]
+    end
+
+    if isempty(path_states)
+        return GraphPath(WalkStep{Any}[])
+    end
+    vertex_type = typeof(path_states[1][1])
+    steps = WalkStep{vertex_type}[]
+
+    for (i, (vertex, strand)) in enumerate(path_states)
+        step_prob = if i == 1
+            1.0
+        else
+            prev_state = path_states[i - 1]
+            step_distance = distances[(vertex, strand)] - distances[prev_state]
+            exp(-step_distance)
+        end
+
+        cumulative_prob = exp(-distances[(vertex, strand)])
+        push!(steps, WalkStep(vertex, strand, step_prob, cumulative_prob))
+    end
+
+    return GraphPath(steps)
+end
+
 # ============================================================================
 # Eulerian Path Finding
 # ============================================================================
@@ -69,41 +413,43 @@ exactly once. The algorithm checks that:
 - All other vertices have equal in-degree and out-degree
 """
 function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where T
-    underlying_graph = graph.graph  # Direct access to underlying Graphs.jl structure
-
-    if Graphs.nv(underlying_graph) == 0
+    labels = collect(MetaGraphsNext.labels(graph))
+    if isempty(labels)
         return Vector{Vector{T}}()
     end
 
-    # Work with vertex indices directly for efficiency
-    vertex_indices = Graphs.vertices(underlying_graph)
+    adj_list = Dict{T, Vector{T}}()
+    in_degrees = Dict{T, Int}()
+    out_degrees = Dict{T, Int}()
 
-    # Calculate in-degrees and out-degrees using Graphs.jl functions
-    in_degrees = Dict{Int, Int}()
-    out_degrees = Dict{Int, Int}()
+    for label in labels
+        adj_list[label] = T[]
+        in_degrees[label] = 0
+        out_degrees[label] = 0
+    end
 
-    for v in vertex_indices
-        in_degrees[v] = Graphs.indegree(underlying_graph, v)
-        out_degrees[v] = Graphs.outdegree(underlying_graph, v)
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        # Treat each edge once for Eulerian feasibility; evidence counts are coverage, not topology.
+        out_degrees[src] += 1
+        in_degrees[dst] += 1
+        push!(adj_list[src], dst)
     end
 
     # Check Eulerian path conditions
-    start_vertices = Int[]
-    end_vertices = Int[]
+    start_vertices = T[]
+    end_vertices = T[]
 
-    for v in vertex_indices
-        diff = out_degrees[v] - in_degrees[v]
+    for label in labels
+        diff = out_degrees[label] - in_degrees[label]
         if diff == 1
-            push!(start_vertices, v)
+            push!(start_vertices, label)
         elseif diff == -1
-            push!(end_vertices, v)
+            push!(end_vertices, label)
         elseif diff != 0
-            # Graph doesn't have Eulerian path
             return Vector{Vector{T}}()
         end
     end
 
-    # Validate Eulerian conditions
     if length(start_vertices) > 1 || length(end_vertices) > 1
         return Vector{Vector{T}}()
     end
@@ -111,29 +457,18 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:A
         return Vector{Vector{T}}()
     end
 
-    # Find starting vertex
     start_vertex = if !isempty(start_vertices)
         start_vertices[1]
     else
-        # Eulerian cycle - start from any vertex
-        first(vertex_indices)
+        first(labels)
     end
 
-    # Hierholzer's algorithm on underlying graph
-    path = _find_eulerian_path_hierholzer(underlying_graph, start_vertex)
-
+    path = _find_eulerian_path_hierholzer_labels(adj_list, start_vertex)
     if isempty(path)
         return Vector{Vector{T}}()
     end
 
-    # Convert vertex indices back to labels
-    # graph.vertex_labels is index -> label, so we can use it directly
-    index_to_label = graph.vertex_labels
-
-    # Convert path from indices to labels
-    label_path = [index_to_label[idx] for idx in path]
-
-    return [label_path]
+    return [path]
 end
 
 """
@@ -187,6 +522,31 @@ function _find_eulerian_path_hierholzer(graph::Graphs.AbstractGraph, start_verte
 
     if total_edges_used != Graphs.ne(graph)
         return Int[]  # Failed to find Eulerian path
+    end
+
+    return path
+end
+
+function _find_eulerian_path_hierholzer_labels(adj_list::Dict{T, Vector{T}}, start_vertex::T) where T
+    path = T[]
+    stack = T[start_vertex]
+
+    while !isempty(stack)
+        v = stack[end]
+        if !isempty(adj_list[v])
+            next_v = pop!(adj_list[v])
+            push!(stack, next_v)
+        else
+            push!(path, pop!(stack))
+        end
+    end
+
+    reverse!(path)
+
+    if any(values(adj_list)) do neighbors
+        !isempty(neighbors)
+    end
+        return T[]
     end
 
     return path

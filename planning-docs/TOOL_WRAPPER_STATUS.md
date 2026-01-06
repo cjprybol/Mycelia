@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-**Mycelia has extensive assembler coverage** with 13+ assemblers wrapped and tested, plus quality control tools. However, **binning and classification tools from the metagenomics workflow are missing**.
+**Mycelia has extensive assembler coverage** with 13+ assemblers wrapped and tested, plus quality control tools. Coverage gaps remain for tests/docs/tutorials/benchmarks in classification, binning, variant calling, and pangenome tooling.
 
 ### Status Overview (Updated 2025-12-10)
 
@@ -18,20 +18,16 @@
 | **Assemblers (Long)** | 6+/6 | 6/6 | 0 |
 | **Strain-Aware** | 3/3 | **3/3 opt-in** | 0 |
 | **Quality Control** | 2/2 | **2/2 opt-in** | 0 |
-| **Classification** | 5/5 | 1/5 | 0 |
-| **Binning** | 0/7 | 0/7 | 7 |
-| **Post-Binning** | 0/2 | 0/2 | 2 |
+| **Classification** | 5/5 | 5/5 (opt-in/validation) | 0 |
+| **Binning** | 7/7 | 7/7 (validation-only) | 0 |
+| **Post-Binning** | 2/2 | 2/2 (validation-only) | 0 |
 | **Sequence Encoding** | 1/1 | 1/1 | 0 |
 
-**2025-12-10 Update**:
-- Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
-- mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
-- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications
-
-**2025-12-10 Update**:
-- Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`
-- mosdepth confirmed in `src/xam.jl` with test in `test/5_validation/mosdepth_coverage_qc.jl`
-- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications
+**Coverage Audit Update**:
+- Classification tools (sourmash, metaphlan, metabuli) implemented in `src/classification.jl`; sylph in `src/sequence-comparison.jl`.
+- Binning/post-binning tools implemented in `src/binning.jl` with validation-only tests in `test/8_tool_integration/binning_tools.jl`.
+- mosdepth confirmed in `src/xam.jl` with opt-in tests in `test/5_validation/mosdepth_coverage_qc.jl`.
+- SentencePiece tokenization implemented in `src/sentencepiece.jl` with tests - supports DNA/RNA/AA/text encoding for ML applications.
 
 ---
 
@@ -94,7 +90,8 @@
 - ✅ metaspades: **FOUND** & **TESTED** in `src/assembly.jl:69`
   - Test: `test/4_assembly/third_party_assemblers.jl:291-328`
   - Function: `run_metaspades()`
-- ❌ PLASS/penguin: NOT FOUND
+- ✅ PLASS/penguin: **FOUND** in `src/assembly.jl` (`run_plass_assemble`, `run_penguin_nuclassemble`, `run_penguin_guided_nuclassemble`)
+  - Test: `test/4_assembly/third_party_assemblers_plass_penguin.jl`
 - ✅ SKESA: **FOUND** & **TESTED** in `src/assembly.jl:144`
   - Test: `test/4_assembly/third_party_assemblers.jl:83-117`
   - Function: `run_skesa()`
@@ -104,7 +101,7 @@
 - ✅ Velvet: `run_velvet()` (tested)
 - ⚠️ MetaVelvet: `run_metavelvet()` (implemented but commented out in tests)
 
-**Verdict**: ⚠️ **MOSTLY COMPLETE** - 3/4 from workflow, missing PLASS/penguin
+**Verdict**: ✅ **COMPLETE** - 4/4 from workflow implemented (PLASS/PenguiN tests are opt-in/resource-aware)
 
 #### 3b. Long Read Assemblers
 
@@ -331,29 +328,45 @@
 
 1. hifiasm-meta - `src/assembly.jl:443` (function exists but commented)
 
-### ❌ MISSING FROM WORKFLOW (15+ tools)
+### Implemented (coverage gaps remain)
 
 **Classification & Profiling**:
-1. sourmash (commented in bioconda.jl)
-2. metaphlan
-3. metabuli
-4. mosdepth
+- sourmash — Tests: `test/8_tool_integration/classification_tools.jl` (opt-in external). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: none. Benchmarks: none. TODO: add tutorial + benchmark + usage snippet.
+- metaphlan — Tests: `test/8_tool_integration/classification_tools.jl`, `test/8_tool_integration/metabuli_metaphlan_strainphlan.jl` (opt-in external). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: none. Benchmarks: none. TODO: stabilize opt-in runs; add tutorial + benchmark + output examples.
+- metabuli — Tests: `test/8_tool_integration/classification_tools.jl`, `test/8_tool_integration/metabuli_metaphlan_strainphlan.jl` (opt-in external). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: none. Benchmarks: none. TODO: stabilize opt-in runs; add tutorial + benchmark + output examples.
+- mosdepth — Tests: `test/5_validation/mosdepth_coverage_qc.jl` (opt-in external). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: `tutorials/05_assembly_validation.jl`. Benchmarks: none. TODO: add benchmark + ensure opt-in test wiring.
+- sylph — Tests: `test/7_comparative_pangenomics/sequence_comparison.jl` (opt-in external). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: none. Benchmarks: none. TODO: add tutorial + benchmark.
 
-**Assembly**:
-6. PLASS/penguin
+**Assembly (protein/nucleotide)**:
+- PLASS — Tests: `test/4_assembly/third_party_assemblers_plass_penguin.jl` (skips on resource constraints). Docs: none. Tutorials: none. Benchmarks: `benchmarking/phix174_assembler_comparison.jl`. TODO: add docs + tutorial; add lighter benchmark case.
+- PenguiN — Tests: `test/4_assembly/third_party_assemblers_plass_penguin.jl` (skips on resource constraints). Docs: `docs/src/metagenomic-workflow.md` (currently claims wrapper missing; fix wording). Tutorials: none. Benchmarks: `benchmarking/phix174_assembler_comparison.jl`. TODO: fix doc text; add tutorial.
 
-**Binning** (ALL MISSING):
-7. Taxometer
-8. TaxVAMB
-9. VAMB
-10. MetaBAT2
-11. MetaCoAG
-12. GenomeFace
-13. COMEBin
+**Binning**:
+- Taxometer — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
+- TaxVAMB — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
+- VAMB — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
+- MetaBAT2 — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
+- MetaCoAG — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
+- GenomeFace — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
+- COMEBin — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: none. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + docs/tutorial/benchmark.
 
-**Post-Binning** (ALL MISSING):
-14. dRep
-15. MAGmax
+**Post-Binning**:
+- dRep — Tests: `test/8_tool_integration/binning_tools.jl` (parser + validation). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + tutorial + benchmark.
+- MAGmax — Tests: `test/8_tool_integration/binning_tools.jl` (validation-only). Docs: `docs/src/metagenomic-workflow.md`. Tutorials: none. Benchmarks: none. TODO: add opt-in external test + tutorial + benchmark.
+
+**Variant Calling**:
+- GATK — Tests: none. Docs: `docs/src/workflow-map.md` (planned). Tutorials: none. Benchmarks: none. TODO: add tests + docs + tutorial + benchmark.
+- Freebayes — Tests: none. Docs: none. Tutorials: none. Benchmarks: none. TODO: add tests + docs + tutorial + benchmark.
+- Clair3 — Tests: none. Docs: none. Tutorials: none. Benchmarks: none. TODO: add tests + docs + tutorial + benchmark.
+- BCFtools — Tests: none. Docs: none. Tutorials: none. Benchmarks: none. TODO: add tests + docs + tutorial + benchmark.
+
+**Pangenome**:
+- PGGB — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (validation-only). Docs: `docs/src/workflow-map.md`, `planning-docs/FUNCTION_COVERAGE_AUDIT.md`. Tutorials: none. Benchmarks: none. TODO: add end-to-end test + tutorial + benchmark.
+- Cactus — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (validation-only). Docs: `docs/src/workflow-map.md`, `planning-docs/FUNCTION_COVERAGE_AUDIT.md`. Tutorials: none. Benchmarks: none. TODO: add end-to-end test + tutorial + benchmark.
+- vg toolkit — Tests: `test/7_comparative_pangenomics/pangenome_wrappers.jl` (vg deconstruct validation). Docs: `docs/src/related-projects.md`. Tutorials: none. Benchmarks: none. TODO: add docs in workflow map + tutorial + benchmark + broader tests.
+
+### Planned Integrations (not yet wrapped)
+- EGAPx (NCBI eukaryotic genome annotation pipeline): planned wrapper; readme datasets cover vertebrates, arthropods (insecta/arachnida), echinoderms, cnidaria, monocots (Liliopsida), eudicots (Asterids/Rosids/Fabids/Caryophyllales). Warning: fungi, protists, and nematodes are out-of-scope.
 
 ---
 
@@ -365,12 +378,8 @@
 - QUAST, BUSCO, strain-aware tools (HyLight, STRONG, Strainy) DO exist and now have opt-in smoke tests
 
 **What's Actually Missing**:
-- ❌ ALL binning tools (7 tools): VAMB, MetaBAT2, MetaCoAG, etc.
-- ❌ Post-binning tools (2 tools): dRep, MAGmax
-- ❌ Most classification tools (4 tools): sourmash, sylph, metaphlan, metabuli
-- ❌ PLASS/penguin assembler
-- ❌ Variant calling tools: GATK, Freebayes, Clair3, BCFtools
-- ❌ Pangenome tools: PGGB, Cactus, vg toolkit
+- No longer missing implementations for classification, binning, variant calling, or pangenome wrappers listed above.
+- Missing coverage remains in tests, docs, tutorials, and benchmarks for most tools; track these gaps in `planning-docs/TODO.md`.
 
 **What Exists But Needs Tests**:
 - ✅ QUAST, BUSCO: implemented, opt-in extended tests present (sim + phiX download)
@@ -382,45 +391,53 @@
 
 ### Immediate (This Session)
 
-1. **Update VERIFICATION_FINDINGS.md** with corrected tool status
-2. **Update TODO.md** to reflect actual gaps:
-   - Remove false claims about assemblers/QC tools
-   - Add binning tools as missing priority
-   - Add classification tools as missing priority
+1. **Update TODO.md** with coverage gaps (tests/docs/tutorials/benchmarks) for implemented wrappers.
+2. **Fix documentation mismatches** (e.g., PenguiN marked missing in `docs/src/metagenomic-workflow.md`).
 
 ### Short-Term
 
-3. **Enable & Test Existing Tools**:
-   - Uncomment hifiasm-meta and test
-   - Create tests for QUAST and BUSCO
-   - Uncomment/fix tests for HyLight, STRONG, Strainy
+3. **Expand tests beyond validation-only**:
+   - Add opt-in external runs for binning/post-binning tools.
+   - Add end-to-end runs for pggb/cactus/vg with small fixtures.
+   - Add basic test coverage for variant calling wrappers (gatk/freebayes/clair3/bcftools).
 
-4. **Implement Missing High-Priority Tools**:
-   - mosdepth (coverage analysis)
-   - metaphlan or metabuli (classification)
+4. **Document and teach**:
+   - Add tutorial coverage for classification, binning, variant calling, and pangenome workflows.
+   - Add benchmark harnesses (classification profiling, binning, pangenome, variant calling).
 
 ### Medium-Term
 
-5. **Implement Binning Pipeline**:
-   - Priority: VAMB (most popular)
-   - Secondary: MetaBAT2, COMEBin
-   - Post-binning: dRep (essential for MAG dereplication)
-
-6. **Implement Classification Tools**:
-   - sourmash (containment)
-   - sylph (relative coverage)
+5. **Raise coverage quality**:
+   - Convert validation-only tests into opt-in integration tests with real tool runs.
+   - Add doc/API references for all wrappers in the workflow map and API workflow pages.
 
 ---
 
 ## Files Referenced
 
 **Implementation**:
-- `src/assembly.jl` - 13 assemblers + strain-aware tools
-- `src/alignments-and-mapping.jl` - minimap, diamond, mmseqs
-- `src/quality-control-and-benchmarking.jl` - QUAST, BUSCO
-- `src/metagenomic-classification.jl` - (entirely commented out)
-- `src/bioconda.jl` - sourmash reference (commented)
+- `src/assembly.jl` - PLASS/PenguiN wrappers
+- `src/binning.jl` - binning + post-binning wrappers
+- `src/classification.jl` - sourmash/metaphlan/metabuli wrappers
+- `src/metagenomic-classification.jl` - additional metaphlan/metabuli helpers
+- `src/pangenome-analysis.jl` - pggb/cactus/vg wrappers
+- `src/sequence-comparison.jl` - sylph profiling wrapper
+- `src/variant-analysis.jl` - gatk/freebayes/clair3/bcftools wrappers
+- `src/xam.jl` - mosdepth wrapper
 
 **Tests**:
-- `test/4_assembly/third_party_assemblers.jl` - Comprehensive assembler tests (1299 lines)
-- Tests for binning/classification: NOT FOUND
+- `test/4_assembly/third_party_assemblers_plass_penguin.jl`
+- `test/5_validation/mosdepth_coverage_qc.jl`
+- `test/7_comparative_pangenomics/pangenome_wrappers.jl`
+- `test/7_comparative_pangenomics/sequence_comparison.jl`
+- `test/8_tool_integration/binning_tools.jl`
+- `test/8_tool_integration/classification_tools.jl`
+- `test/8_tool_integration/metabuli_metaphlan_strainphlan.jl`
+
+**Docs/Tutorials/Benchmarks**:
+- `docs/src/metagenomic-workflow.md`
+- `docs/src/workflow-map.md`
+- `planning-docs/FUNCTION_COVERAGE_AUDIT.md`
+- `docs/src/related-projects.md`
+- `tutorials/05_assembly_validation.jl`
+- `benchmarking/phix174_assembler_comparison.jl`

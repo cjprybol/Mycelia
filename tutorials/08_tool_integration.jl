@@ -36,7 +36,7 @@ println("=== Tool Integration Tutorial ===")
 
 println("Common Bioinformatics Tools:")
 println("- Assembly: hifiasm, Canu, Flye")
-println("- Annotation: Prodigal, Augustus, BRAKER")
+println("- Annotation: Prodigal, Pyrodigal, Prodigal-gv, Augustus, MetaEuk")
 println("- Alignment: BWA, minimap2, BLAST")
 println("- Phylogenetics: IQ-TREE, RAxML, MrBayes")
 println("- Visualization: Circos, IGV, Artemis")
@@ -68,6 +68,10 @@ environment_spec = Dict(
     "dependencies" => [
         "hifiasm",
         "prodigal",
+        "prodigal-gv",
+        "pyrodigal",
+        "augustus",
+        "metaeuk",
         "blast",
         "busco",
         "iqtree",
@@ -438,7 +442,7 @@ println("Bacterial Genome Pipeline:")
 println("1. Quality control (FastQC)")
 println("2. Assembly (hifiasm)")
 println("3. Assembly validation (QUAST, BUSCO)")
-println("4. Gene prediction (Prodigal)")
+println("4. Gene prediction (Prodigal, Pyrodigal)")
 println("5. Functional annotation (BLAST, eggNOG)")
 println("6. Comparative analysis (ANI, phylogeny)")
 println("7. Visualization (Circos, IGV)")
@@ -454,7 +458,7 @@ println("1. Host depletion")
 println("2. Viral read identification")
 println("3. Assembly (SPAdes, Canu)")
 println("4. Virus classification (BLAST, vContact)")
-println("5. Gene prediction (Prodigal, GeneMarkS)")
+println("5. Gene prediction (Prodigal-gv, GeneMarkS)")
 println("6. Functional annotation")
 println("7. Phylogenetic analysis")
 

@@ -16,3 +16,11 @@ Graph mode for handling strand information.
 """
 @enum GraphMode SingleStrand DoubleStrand
 
+"""
+    edge_data_weight(edge_data)
+
+Return the `weight` field from edge data types that store explicit weights.
+"""
+function edge_data_weight(edge_data)
+    return edge_data.weight
+end

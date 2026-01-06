@@ -1,12 +1,10 @@
 import Test
 import Mycelia
-import Glob
 
 """
 QUAST and BUSCO wrapper tests.
 Execution is opt-in for extended runs:
-- Enable QUAST with `MYCELIA_RUN_QUAST=true` or `MYCELIA_RUN_EXTENDED=true`.
-- Enable BUSCO with `MYCELIA_RUN_BUSCO=true` or `MYCELIA_RUN_EXTENDED=true` (uses auto-lineage by default).
+- Enable with `MYCELIA_RUN_EXTERNAL=true` (uses auto-lineage by default for BUSCO).
 Wrappers auto-install required Bioconda envs.
 """
 
@@ -15,10 +13,10 @@ Test.@testset "QUAST wrapper" begin
     Test.@test_throws ErrorException Mycelia.run_quast(["/nonexistent.fasta"])
     Test.@test_throws ErrorException Mycelia.run_quast([tempname() * ".fasta"], reference="/nonexistent_ref.fasta")
 
-    should_run = get(ENV, "MYCELIA_RUN_QUAST", "false") == "true" ||
-                 get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
-    if should_run
+    if run_external
         mktempdir() do _
             # Simulated genome smoke (portable)
             sim_info = Mycelia.get_test_genome_fasta(use_ncbi=false)
@@ -47,7 +45,7 @@ Test.@testset "QUAST wrapper" begin
             end
         end
     else
-        Test.@test_skip "QUAST run skipped (set MYCELIA_RUN_QUAST=true or MYCELIA_RUN_EXTENDED=true to enable)"
+        Test.@test_skip "QUAST run skipped (set MYCELIA_RUN_EXTERNAL=true to enable)"
     end
 end
 
@@ -63,28 +61,40 @@ Test.@testset "BUSCO wrapper" begin
     """
     Test.@test Mycelia._parse_busco_dataset_list(sample_list_output) == ["bacteria_odb10", "archaea_odb10"]
 
-    should_run = get(ENV, "MYCELIA_RUN_BUSCO", "false") == "true" ||
-                 get(ENV, "MYCELIA_RUN_EXTENDED", "false") == "true"
+    run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
-    if should_run
+    if run_external
         mktempdir() do _
-            genome_info = Mycelia.get_test_genome_fasta(use_ncbi=true)
+            genome_info = Mycelia.get_test_genome_fasta(use_ncbi=true, accession="GCF_000005845.2")
             asm = genome_info.fasta
             try
-                # Default: auto-lineage + auto CPU detection in wrapper
-                result_dir = Mycelia.run_busco([asm]; force=true)
-                expected_outdir = joinpath(dirname(asm), replace(basename(asm), Mycelia.FASTA_REGEX => "") * "_busco")
-                Test.@test result_dir == expected_outdir
-                # BUSCO writes summary inside outdir/assembly_name/
-                assembly_name = replace(basename(asm), Mycelia.FASTA_REGEX => "")
-                summary_dir = joinpath(expected_outdir, assembly_name)
-                has_summary = any(isfile, [
-                    joinpath(summary_dir, "short_summary.txt"),
-                    joinpath(summary_dir, "short_summary.specific.auto_lineage.txt"),
-                    joinpath(summary_dir, "short_summary.specific.auto_lineage_prok.txt"),
-                    joinpath(summary_dir, "short_summary.specific.auto_lineage_euk.txt")
-                ]) || !isempty(Glob.glob(joinpath(summary_dir, "short_summary.specific.*.txt")))
-                Test.@test has_summary
+                if genome_info.source != :ncbi
+                    Test.@test_skip "BUSCO run skipped (NCBI genome download failed)"
+                else
+                    result_dir = Mycelia.run_busco([asm]; force=true, lineage="bacteria_odb10", auto_lineage=false)
+                    expected_outdir = joinpath(dirname(asm), replace(basename(asm), Mycelia.FASTA_REGEX => "") * "_busco")
+                    Test.@test result_dir == expected_outdir
+                    # BUSCO writes summary inside outdir/assembly_name/
+                    assembly_name = replace(basename(asm), Mycelia.FASTA_REGEX => "")
+                    summary_dir = joinpath(expected_outdir, assembly_name)
+                    has_summary = any(isfile, [
+                        joinpath(summary_dir, "short_summary.txt"),
+                        joinpath(summary_dir, "short_summary.specific.auto_lineage.txt"),
+                        joinpath(summary_dir, "short_summary.specific.auto_lineage_prok.txt"),
+                        joinpath(summary_dir, "short_summary.specific.auto_lineage_euk.txt"),
+                        joinpath(summary_dir, "short_summary.specific.bacteria_odb10.txt")
+                    ])
+                    if !has_summary && isdir(summary_dir)
+                        for (_, _, files) in walkdir(summary_dir)
+                            if any(name -> occursin(r"^short_summary.*\.txt$", name), files)
+                                has_summary = true
+                                break
+                            end
+                        end
+                    end
+                    Test.@test has_summary
+                end
             finally
                 genome_info.cleanup()
             end
@@ -94,6 +104,6 @@ Test.@testset "BUSCO wrapper" begin
             Test.@test isa(list_info.datasets, Vector{String})
         end
     else
-        Test.@test_skip "BUSCO run skipped (set MYCELIA_RUN_BUSCO=true or MYCELIA_RUN_EXTENDED=true to enable)"
+        Test.@test_skip "BUSCO run skipped (set MYCELIA_RUN_EXTERNAL=true to enable)"
     end
 end

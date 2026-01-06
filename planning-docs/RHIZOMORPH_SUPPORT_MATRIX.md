@@ -2,7 +2,7 @@
 
 > For detailed implementation guidance, code examples, and architectural rationale, see [rhizomorph-graph-ecosystem-plan.md](rhizomorph-graph-ecosystem-plan.md).
 
-Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented)
+Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented). Testing gaps: variable-length and n-gram traversal coverage is still light; simplification only has bubble detection/tip pruning (no edge removal); repeat/contig utilities are still legacy-only; end-to-end suites now assert evidence positions/quality and doublestrand/canonical conversions while GFA round-trips are covered; JLD2 round-trips still missing.
 
 | Graph Type | Alphabet | Singlestrand | Doublestrand | Canonical | Notes |
 |------------|----------|--------------|--------------|-----------|-------|
@@ -19,4 +19,3 @@ Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented)
 | Variable-length OLC (FASTQ) | AA/String | 🚫 | 🚫 | 🚫 | not applicable |
 | Variable-length OLC (String) | Unicode | ✅ | 🚫 | 🚫 | non-RC; errors enforced |
 | Reduced AA alphabets | AA/String inputs | ✅ | 🚫 | 🚫 | covered in k-mer/ngram and OLC tests |
-

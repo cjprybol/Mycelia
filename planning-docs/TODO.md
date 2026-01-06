@@ -31,6 +31,12 @@ The following issues have been **FIXED** and all 302 assembly tests now pass:
 
 ---
 
+### Recent Rhizomorph migration progress
+- Ported legacy suites to Rhizomorph APIs: `basic_graph_tests`, `sequence_graphs_next`, `graph_algorithms_next` (bubble helpers, DFS fallback, tip thresholds), `end_to_end_graph_tests` (exact k-mer content/evidence positions, qualmer edge/vertex quality checks, variable-length overlap evidence, doublestrand/canonical conversion and GFA vertex-count round-trip), `gfa_io_next`, singlestrand canonicalization and orientation suites (`dna|rna|aa_kmer_singlestrand_test`, `doublestrand_canonicalization_test`, `canonicalization_consistency_test`) now build graphs via `Mycelia.Rhizomorph` (no shims).
+- `rna_kmer_singlestrand_test` now asserts strand-aware evidence positions and edge evidence using `Mycelia.Rhizomorph` helpers.
+- Remaining legacy-heavy suites still calling `build_kmer_graph_next`/legacy conversions: `end_to_end_assembly_tests.jl`, `six_graph_hierarchy_tests.jl`, `comprehensive_*`, `probabilistic_algorithms_next.jl`, and older string/assembly end-to-end suites.
+- Implementation gaps blocking full migration: repeat detection/contig/coverage helpers live only in legacy `sequence-graphs-next.jl`; simplification does not delete edges when resolving bubbles; no JLD2 round-trip coverage for Rhizomorph graphs; probabilistic walk utilities are still legacy-only.
+
 ## Executive Summary
 
 The Rhizomorph graph ecosystem has **substantial implementation (~7,000 lines) and excellent documentation (94% coverage)**, but has **critical testing gaps (~40% coverage)**. We cannot consider work "complete" without comprehensive tests. This document tracks the work needed to reach production-ready status.
@@ -75,19 +81,19 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 **Core Algorithms**
 - ✅ Path finding (find_eulerian_paths_next) - 43 tests passing (path_finding_test.jl)
 - ✅ Sequence reconstruction (path_to_sequence) - Tests passing (doublestrand/canonical traversal tests)
-- ❌ Simplification (detect_bubbles_next) - NO TESTS FOUND
-- ❌ I/O roundtrip (GFA export/import) - UNCLEAR STATUS
+- 🔸 Simplification (detect_bubbles_next) - Smoke coverage in `graph_algorithms_next`; edge removal still unimplemented
+- 🔸 I/O roundtrip (GFA export/import) - Covered in `gfa_io_next` and `end_to_end_graph_tests`; JLD2 still missing
 
 **Graph Construction Testing (Updated 2025-12-10)**
 - ✅ K-mer graphs (DNA/RNA/AA) - 232 tests passing across singlestrand/doublestrand/canonical
 - ✅ Qualmer graphs - Doublestrand and canonical traversal tests passing
 - ✅ Multi-read, multi-dataset scenarios - RC evidence handling test passing
-- ❌ Variable-length OLC graphs - Implementation exists, tests unknown
-- ❌ N-gram graphs - Implementation exists, tests unknown
+- 🔸 Variable-length OLC graphs - Covered in `sequence_graphs_next`/`end_to_end_graph_tests`; traversal coverage still light
+- 🔸 N-gram graphs - Covered in `sequence_graphs_next`/`end_to_end_graph_tests`; traversal coverage still light
 - ❌ Edge cases and error handling - Minimal coverage
 
 **Missing Algorithm Implementations**
-- ❌ remove_tips() - Not found
+- ✅ remove_tips! exists and is smoke-tested; full simplification still pending
 - ❌ collapse_linear_chains() - Not found
 - ✅ Strand conversion implemented for fixed-length and variable-length graphs (convert_* in core/graph-construction.jl and variable-length/strand-conversions.jl)
 - ❌ Error correction - Not found (algorithms/error-correction.jl planned)
@@ -133,10 +139,11 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 3. **Tool Wrapper Reality (verified in TOOL_WRAPPER_STATUS.md, 2025-01-25)**:
    - ✅ 13 wrappers implemented **and tested**: megahit, metaspades, skesa, spades, velvet, flye, metaflye, canu, hifiasm, metamdbg, minimap2, diamond, mmseqs
    - ✅ 9 wrappers implemented but **untested**: QUAST, BUSCO, HyLight, STRONG, Strainy, apollo, homopolish, unicycler, metavelvet
-   - ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
-   - ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
-   - ⚠️ hifiasm-meta wrapper exists but is commented out
-   - ❌ Still missing: classification (sourmash, metaphlan, metabuli, mosdepth), binning/post-binning (VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit)
+- ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
+- ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
+- ⚠️ hifiasm-meta wrapper exists but is commented out
+- ✅ NCBI FCS-GX contamination screening wrapper added (bioconda `ncbi-fcs-gx`); supports GX DB download via manifest URL and clean-genome output.
+- ⚠️ Implemented but coverage gaps remain: classification (sourmash, metaphlan, metabuli, mosdepth, sylph), binning/post-binning (Taxometer, TaxVAMB, VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit). Track tests/docs/tutorials/benchmarks below.
 
 ### 📊 Verification Summary
 - **Implementations**: Higher quality than expected (many are substantial, not placeholders)
@@ -161,6 +168,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - [x] Remove false tool integration claims from old planning docs (updated Sylph/Skani status)
    - [ ] Correct "89/89 tests passing" claim
    - [ ] Add warnings about commented-out code
+   - [ ] Keep function coverage audit current via `planning-docs/generate_function_coverage.jl` → `planning-docs/FUNCTION_COVERAGE_AUDIT.md`
 
 4. **Tool Wrapper Validation Updates (done)**:
    - QUAST/BUSCO wrappers covered by opt-in extended tests (simulated + phiX NCBI download) and default to outdirs derived from input FASTA stem.
@@ -172,11 +180,17 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - `src/iterative-assembly.jl` is included in `src/Mycelia.jl` but has no dedicated tests.
 - `src/development/cross-validation.jl` is commented out; the "89/89 tests passing" claim is false because no tests exist.
 - Four reinforcement learning implementations under `src/development/` are all commented out; associated tests live in `test/in_development/` and are not part of the main suite.
-- Tool wrapper status: 22 wrappers exist (13 tested, 9 untested, 1 commented out) but classification/binning/variant-calling/pangenome tools are still missing. Sylph and Skani are now implemented and tested.
+- Tool wrapper status: wrappers exist across classification/binning/variant calling/pangenome, but coverage gaps remain (tests/docs/tutorials/benchmarks). Sylph and Skani are now implemented and tested.
 
 **Conclusion**: Old planning docs overstated completion. Code quality is good, but accessibility and testing are the gaps.
 
 ---
+
+## New Rhizomorph Migration Actions (current)
+- Avoid shims; port remaining legacy graph tests directly to `Mycelia.Rhizomorph` and update GraphMode usage so old code paths can be retired cleanly.
+- Port legacy graph tests (comprehensive/end-to-end/probabilistic/assembly hierarchy) to Rhizomorph APIs and add missing Rhizomorph coverage for variable-length/n-gram traversal and GFA/JLD2 round-trips.
+- Remove legacy graph includes from `src/Mycelia.jl` once Rhizomorph tests pass; then delete deprecated graph files (`graph-core.jl`, `kmer-graphs.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`).
+- Implement the planned conversion layer (`core/graph-type-conversions.jl`, `algorithms/strand-conversions.jl`) plus simplification tip-removal/linear-chain collapse and expose non-strand-specific merge helpers as public APIs; add focused tests.
 
 ## Approach: Rigorous Test-First Validation
 
@@ -197,7 +211,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - Re-enable and validate all shipped wrappers: un-comment `run_hifiasm_meta` in `src/assembly.jl` and corresponding tests; make sure HyLight/STRONG/Strainy tests run instead of being commented out.
 - Wire wrappers into a repeatable QC pipeline: after each assembler run, auto-run `run_quast` and `run_busco` (where applicable) and capture runtime/memory so benchmarks report both accuracy and efficiency.
 - Stabilize the PhiX comparison harness (`benchmarking/phix174_assembler_comparison.jl`): fix macOS failures for SPAdes/SKESA/metaSPAdes, address metaMDBG errors on small genomes, and add a Linux CI-friendly smoke dataset.
-- Expand coverage: add PLASS/penguin (missing wrapper), and surface classification/binning gaps (metaphlan/metabuli, mosdepth, VAMB/MetaBAT2/etc.) so the workflow is complete from reads → assembly → QC → binning.
+- Expand coverage: PLASS/PenguiN wrappers exist; add docs/tutorial/benchmark coverage and surface classification/binning gaps (metaphlan/metabuli, mosdepth, Taxometer/TaxVAMB/VAMB/MetaBAT2/etc.) so the workflow is complete from reads → assembly → QC → binning.
 
 **Rhizomorph graph types (single, double, canonical across 6 graph variants)**
 - Verify Singlestrand/Doublestrand/Canonical construction for all BioSequence graph variants (k-mer, qualmer, FASTA, FASTQ) across DNA/RNA/AA; add tests that walk paths and canonicalize to catch strand bugs.
@@ -638,9 +652,142 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
   - Inspect `src/development/intelligent-assembly.jl` for the k=5 loop issue noted historically.
   - Verify any “probabilistic-assembly-hub” doc page if referenced elsewhere.
 - **Tool wrappers**:
-  - Authoritative inventory: `planning-docs/TOOL_WRAPPER_STATUS.md` (13 tested, 9 untested, 1 commented out). Missing categories: classification, binning/post-binning, variant calling, pangenome. Add tests for the 9 untested wrappers; decide on enabling hifiasm-meta.
+  - Authoritative inventory: `planning-docs/TOOL_WRAPPER_STATUS.md` (13 tested, 9 untested, 1 commented out). Coverage gaps remain in classification/binning/post-binning/variant calling/pangenome; add tests/docs/tutorials/benchmarks and decide on enabling hifiasm-meta.
+
+### Tool Wrapper Coverage TODOs (implemented)
+
+**Classification/Profiling**:
+- **sourmash**
+  - [ ] Tests: expand `test/8_tool_integration/classification_tools.jl` with opt-in end-to-end assertions (sketch/search/gather outputs).
+  - [ ] Docs: add usage snippet + output description in `docs/src/metagenomic-workflow.md`.
+  - [ ] Tutorials: add a small profiling example (tool integration or taxonomy tutorial).
+  - [ ] Benchmarks: add a small profiling benchmark under `benchmarking/`.
+- **metaphlan**
+  - [ ] Tests: stabilize opt-in runs in `test/8_tool_integration/classification_tools.jl` and `test/8_tool_integration/metabuli_metaphlan_strainphlan.jl` (document required DB env).
+  - [ ] Docs: add usage snippet + output example in `docs/src/metagenomic-workflow.md`.
+  - [ ] Tutorials: add a short profiling example (tool integration or taxonomy tutorial).
+  - [ ] Benchmarks: add profiling benchmark under `benchmarking/`.
+- **metabuli**
+  - [ ] Tests: stabilize opt-in runs in `test/8_tool_integration/classification_tools.jl` and `test/8_tool_integration/metabuli_metaphlan_strainphlan.jl` (document required DB env).
+  - [ ] Docs: add usage snippet + output example in `docs/src/metagenomic-workflow.md`.
+  - [ ] Tutorials: add a short profiling example (tool integration or taxonomy tutorial).
+  - [ ] Benchmarks: add profiling benchmark under `benchmarking/`.
+- **mosdepth**
+  - [ ] Tests: wire `test/5_validation/mosdepth_coverage_qc.jl` into opt-in external runs and add assertions for parsed metrics.
+  - [ ] Docs: add a coverage-QC usage snippet in `docs/src/metagenomic-workflow.md`.
+  - [ ] Tutorials: expand `tutorials/05_assembly_validation.jl` to explain mosdepth outputs.
+  - [ ] Benchmarks: add a coverage-QC benchmark under `benchmarking/`.
+- **sylph**
+  - [ ] Tests: add opt-in integration assertions in `test/7_comparative_pangenomics/sequence_comparison.jl`.
+  - [ ] Docs: add usage snippet in `docs/src/metagenomic-workflow.md`.
+  - [ ] Tutorials: add a small profiling example (tool integration or taxonomy tutorial).
+  - [ ] Benchmarks: add profiling benchmark under `benchmarking/`.
+
+**Assembly (protein/nucleotide)**:
+- **PLASS**
+  - [ ] Tests: add stronger output assertions in `test/4_assembly/third_party_assemblers_plass_penguin.jl` and a smaller fixture for CI.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md`.
+  - [ ] Tutorials: add a short PLASS example in tool integration or assembly tutorials.
+  - [ ] Benchmarks: keep `benchmarking/phix174_assembler_comparison.jl` and add a lighter benchmark path.
+- **PenguiN**
+  - [ ] Tests: add stronger output assertions in `test/4_assembly/third_party_assemblers_plass_penguin.jl` and a smaller fixture for CI.
+  - [ ] Docs: fix `docs/src/metagenomic-workflow.md` wording (wrapper exists) and add usage details.
+  - [ ] Tutorials: add a short PenguiN example in tool integration or assembly tutorials.
+  - [ ] Benchmarks: keep `benchmarking/phix174_assembler_comparison.jl` and add a lighter benchmark path.
+
+**Binning**:
+- **Taxometer**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering Taxometer.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+- **TaxVAMB**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering TaxVAMB.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+- **VAMB**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering VAMB.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+- **MetaBAT2**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering MetaBAT2.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+- **MetaCoAG**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering MetaCoAG.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+- **GenomeFace**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering GenomeFace.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+- **COMEBin**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: add wrapper details to `docs/src/metagenomic-workflow.md` and workflow map.
+  - [ ] Tutorials: add a binning tutorial covering COMEBin.
+  - [ ] Benchmarks: add a binning benchmark under `benchmarking/`.
+
+**Post-Binning**:
+- **dRep**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: expand `docs/src/metagenomic-workflow.md` with dereplication outputs.
+  - [ ] Tutorials: add a post-binning example covering dRep.
+  - [ ] Benchmarks: add a post-binning benchmark under `benchmarking/`.
+- **MAGmax**
+  - [ ] Tests: add opt-in external runs to `test/8_tool_integration/binning_tools.jl`.
+  - [ ] Docs: expand `docs/src/metagenomic-workflow.md` with MAGmax outputs.
+  - [ ] Tutorials: add a post-binning example covering MAGmax.
+  - [ ] Benchmarks: add a post-binning benchmark under `benchmarking/`.
+
+**Variant Calling**:
+- **GATK**
+  - [ ] Tests: add basic wrapper tests in `test/7_comparative_pangenomics/` or a new variant-calling suite.
+  - [ ] Docs: update `docs/src/workflow-map.md` to mark wrapper availability and add usage details.
+  - [ ] Tutorials: add a variant-calling tutorial (normalize VCF -> evaluate accuracy).
+  - [ ] Benchmarks: add a variant-calling benchmark under `benchmarking/`.
+- **Freebayes**
+  - [ ] Tests: add basic wrapper tests in a variant-calling suite.
+  - [ ] Docs: add usage details to workflow map or API workflows.
+  - [ ] Tutorials: include in variant-calling tutorial alongside GATK.
+  - [ ] Benchmarks: add a variant-calling benchmark under `benchmarking/`.
+- **Clair3**
+  - [ ] Tests: add basic wrapper tests in a variant-calling suite.
+  - [ ] Docs: add usage details to workflow map or API workflows.
+  - [ ] Tutorials: include in variant-calling tutorial alongside GATK.
+  - [ ] Benchmarks: add a variant-calling benchmark under `benchmarking/`.
+- **BCFtools**
+  - [ ] Tests: add basic wrapper tests in a variant-calling suite.
+  - [ ] Docs: add usage details to workflow map or API workflows.
+  - [ ] Tutorials: include in variant-calling tutorial (normalization + consensus).
+  - [ ] Benchmarks: add a variant-calling benchmark under `benchmarking/`.
+
+**Pangenome**:
+- **PGGB**
+  - [ ] Tests: add opt-in end-to-end runs in `test/7_comparative_pangenomics/pangenome_wrappers.jl`.
+  - [ ] Docs: add usage details to `docs/src/workflow-map.md` and API workflows.
+  - [ ] Tutorials: add a pangenome tutorial showcasing PGGB.
+  - [ ] Benchmarks: add a pangenome benchmark under `benchmarking/`.
+- **Cactus**
+  - [ ] Tests: add opt-in end-to-end runs in `test/7_comparative_pangenomics/pangenome_wrappers.jl`.
+  - [ ] Docs: add usage details to `docs/src/workflow-map.md` and API workflows.
+  - [ ] Tutorials: add a pangenome tutorial showcasing Cactus.
+  - [ ] Benchmarks: add a pangenome benchmark under `benchmarking/`.
+- **vg toolkit**
+  - [ ] Tests: add opt-in end-to-end runs in `test/7_comparative_pangenomics/pangenome_wrappers.jl` beyond vg deconstruct validation.
+  - [ ] Docs: add wrapper details to `docs/src/workflow-map.md` (beyond `docs/src/related-projects.md`).
+  - [ ] Tutorials: add a pangenome tutorial showcasing vg conversions and indexing.
+  - [ ] Benchmarks: add a pangenome benchmark under `benchmarking/`.
 
 ### Planned Tool Integrations
+- **Graph/Topology**:
+   - [ ] [`prokrustean` (de Bruijn graph topology)](https://github.com/KoslickiLab/prokrustean) — wrap or re-implement to explore k-length graph structure across target k values.
+- **Classification/Profiling**:
+   - [ ] [`mOTUs` (short/long-read profiling)](https://github.com/motu-tool/mOTUs) — supports long reads via `motus prep_long -i input_long_reads.fastq -o output_converted.fastq`.
 - **Assembly**: 
    - [ ] [`shasta` (eukaryotic nanopore)](https://github.com/paoloshasta/shasta)
    - [ ] [`verkko` (T2T/diploid)](https://github.com/marbl/verkko)
@@ -654,7 +801,18 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - **Genomics/Binning**:
    - [ ] [`galah` (genome selection)](https://github.com/wwood/galah)
    - [ ] [`dashing2` (sketching)](https://github.com/dnbaker/dashing2)
-- **NCBI**: [`ncbi-genome-download` (robust fetch)](https://github.com/kblin/ncbi-genome-download)
+- **NCBI**:
+   - [ ] [`ncbi-genome-download` (robust fetch)](https://github.com/kblin/ncbi-genome-download)
+   - [ ] [`egapx` (eukaryotic genome annotation pipeline)](https://github.com/ncbi/egapx)
+     - Protein datasets suitable for most vertebrates, arthropods, echinoderms, cnidaria, and some plants:
+       - Chordata - Mammalia, Sauropsida, Actinopterygii (ray-finned fishes), other Vertebrates
+       - Insecta - Hymenoptera, Diptera, Lepidoptera, Coleoptera, Hemiptera
+       - Arthropoda - Arachnida, other Arthropoda
+       - Echinodermata
+       - Cnidaria
+       - Monocots - Liliopsida
+       - Eudicots - Asterids, Rosids, Fabids, Caryophyllales
+     - Warning: Fungi, protists, and nematodes are out-of-scope for EGAPx; use a different annotation method.
 
 ---
 

@@ -9,6 +9,7 @@
 ## Build, Test, and Development Commands
 - Install deps: `julia --project=. -e "using Pkg; Pkg.instantiate()"`
 - Core tests: `julia --project=. -e "using Pkg; Pkg.test()"` (runs Aqua and optional JET).
+- External tool tests: `MYCELIA_RUN_EXTERNAL=true julia --project=. -e "using Pkg; Pkg.test()"` (no extra flags required).
 - Tutorials sweep: `julia --project=. run_extended_tests.jl tutorials` (manual; small datasets).
 - Benchmarks: `julia --project=. run_extended_tests.jl benchmarks` or `--hpc` to submit via SLURM using `benchmarking/run_all_benchmarks.sh` (resource-intensive).
 - Docs: `julia --project=docs docs/make.jl` to build the site into `docs/build`.
@@ -18,15 +19,24 @@
 - Follow standard Julia style: 4-space indentation, clear docstrings (`"""signature..."""`), favor pure functions and explicit keyword arguments.
 - Names: modules in CamelCase, functions/variables in `snake_case`, constants in `SCREAMING_SNAKE_CASE`; no emojis.
 - Imports: dependencies are imported once in `src/Mycelia.jl`; do not `using` or re-import inside leaf files—fully qualify (e.g., `Test.@test`, `Dates.now()`).
+- Do not introduce shorthand module aliases as constants (e.g., avoid `R = Mycelia.Rhizomorph`); call modules/functions by their full qualified names to keep tests and sources explicit.
 - Sequences: use `BioSequences.LongDNA{4}/LongRNA{4}/LongAA`; avoid string conversions in k-mer/qualmer/assembly code—only convert when interfacing with external tools or outputs.
 - Prefer `joinpath` for portability, avoid type piracy, and keep external tool calls isolated in helpers under `src/`.
 
 ## Collaboration Notes
 - Before large deletions or restructures, explain why the deletion is necessary and what logic is being kept/replaced, then proceed once agreed.
+- Do not re-enable deprecated/removed code or revert deprecations without explicit approval.
+- Rhizomorph and Mycelia do not export symbols by design; tests and callers must use fully qualified names.
+
+## Tutorial & Benchmark Guidelines
+- Do not add generally useful functions inside `tutorials/`, `test/`, or `benchmarking/`. If a helper is broadly useful, add it under `src/` and use it from the tutorial.
+- Tutorials should demonstrate core Mycelia functionality; avoid defining new helper functions except true one-offs that only support the tutorial narrative.
+- Prefer Rhizomorph graph/assembly functionality when newer variants exist; avoid legacy base-graph/assembly APIs in tutorials unless explicitly requested.
 
 ## Testing Guidelines
 - Place new tests in the relevant stage directory; name files after the feature (e.g., `assembly_merging.jl`). Use `Test.@testset` with descriptive labels; do not skip/disable tests for broken functionality—fix the code instead.
 - Use small fixtures from `assembly_test_data/` and deterministic seeds (`StableRNGs`) for reproducibility.
+- External tool tests must run when `MYCELIA_RUN_EXTERNAL=true` without requiring extra tool-specific flags; use simulated inputs and default database paths where possible.
 - Extended tutorials/benchmarks are opt-in; note runtime or external-tool needs.
 
 ## Commit & Pull Request Guidelines

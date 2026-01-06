@@ -2,6 +2,7 @@
 export LD_LIBRARY_PATH="" && julia -e 'import Pkg; Pkg.add(["IJulia"]); using IJulia; n=Sys.CPU_THREADS; ks=[2^i for i in 0:floor(Int,log2(n-1)) if 2^i < n]; ks = push!(ks, n); foreach(k -> IJulia.installkernel("julia-$k", env=Dict("JULIA_NUM_THREADS"=>"$k", "LD_LIBRARY_PATH"=>"")), ks)'
 npm install -g @anthropic-ai/claude-code@latest
 npm install -g @openai/codex@latest
+npm install -g @google/gemini-cli
 # alternate one-liner installation
 # npm install -g @anthropic-ai/claude-code @github/copilot @openai/codex @google/gemini-cli
 
@@ -16,3 +17,6 @@ npm install -g @openai/codex@latest
 # need to run with npx prefix when not installed globally
 # npx codex
 # npx claude
+
+# Note - running codex on extra high (xhigh) is painfully slow, prefer high or default (medium)
+# If xhigh is equivalent to pro level in main app, use pro in app to plan and then switch to high in codex for faster response times.
