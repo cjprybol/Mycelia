@@ -429,13 +429,10 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:A
     end
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
-        edge_data = graph[src, dst]
-        multiplicity = max(1, count_evidence(edge_data))
-        out_degrees[src] += multiplicity
-        in_degrees[dst] += multiplicity
-        for _ in 1:multiplicity
-            push!(adj_list[src], dst)
-        end
+        # Treat each edge once for Eulerian feasibility; evidence counts are coverage, not topology.
+        out_degrees[src] += 1
+        in_degrees[dst] += 1
+        push!(adj_list[src], dst)
     end
 
     # Check Eulerian path conditions

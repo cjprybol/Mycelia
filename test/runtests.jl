@@ -3,8 +3,8 @@
 # curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel lts
 # Usage:
 #   Core tests:                 julia --project=. -e "import Pkg; Pkg.test()"
-#   Full pipeline tests:        MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Legacy alias (deprecated):  MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full pipeline tests (all):  MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full pipeline tests (alt):  MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
 #   Full pipeline - portable:   LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl

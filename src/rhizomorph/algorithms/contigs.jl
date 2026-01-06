@@ -74,18 +74,17 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         out_neighbors = Rhizomorph.get_outgoing_neighbors(graph, current)
         valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path)]
 
-        if length(valid_neighbors) == 1
-            next_vertex = valid_neighbors[1]
-            in_neighbors = Rhizomorph.get_incoming_neighbors(graph, next_vertex)
-            if length(in_neighbors) == 1 && in_neighbors[1] == current
-                push!(path, next_vertex)
-                current = next_vertex
-            else
-                break
-            end
-        else
+        next_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction=:out)
+        if next_vertex === nothing
             break
         end
+
+        if !_edge_is_dominant_among_incoming(graph, current, next_vertex)
+            break
+        end
+
+        push!(path, next_vertex)
+        current = next_vertex
     end
 
     current = start_vertex
@@ -95,21 +94,82 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         in_neighbors = Rhizomorph.get_incoming_neighbors(graph, current)
         valid_neighbors = [n for n in in_neighbors if !(n in visited) && !(n in path) && !(n in backward_path)]
 
-        if length(valid_neighbors) == 1
-            prev_vertex = valid_neighbors[1]
-            out_neighbors = Rhizomorph.get_outgoing_neighbors(graph, prev_vertex)
-            if length(out_neighbors) == 1 && out_neighbors[1] == current
-                pushfirst!(backward_path, prev_vertex)
-                current = prev_vertex
-            else
-                break
-            end
-        else
+        prev_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction=:in)
+        if prev_vertex === nothing
             break
         end
+
+        if !_edge_is_dominant_among_outgoing(graph, prev_vertex, current)
+            break
+        end
+
+        pushfirst!(backward_path, prev_vertex)
+        current = prev_vertex
     end
 
     return [backward_path; path]
+end
+
+const _DOMINANT_EDGE_RATIO = 2.0
+
+function _edge_support(graph, src, dst)
+    if !haskey(graph, src, dst)
+        return 0
+    end
+    edge_data = graph[src, dst]
+    if hasfield(typeof(edge_data), :evidence)
+        return Rhizomorph.count_evidence(edge_data)
+    end
+    if hasfield(typeof(edge_data), :coverage)
+        return length(edge_data.coverage)
+    end
+    return 1
+end
+
+function _select_linear_neighbor(graph, current, neighbors; direction::Symbol)
+    if isempty(neighbors)
+        return nothing
+    end
+    if length(neighbors) == 1
+        return neighbors[1]
+    end
+    return _dominant_neighbor(graph, current, neighbors; direction=direction)
+end
+
+function _dominant_neighbor(graph, current, neighbors; direction::Symbol)
+    supports = Vector{Tuple{eltype(neighbors), Int}}(undef, length(neighbors))
+    for (idx, neighbor) in enumerate(neighbors)
+        support = direction == :out ? _edge_support(graph, current, neighbor) : _edge_support(graph, neighbor, current)
+        supports[idx] = (neighbor, support)
+    end
+    sort!(supports, by=last, rev=true)
+
+    best_neighbor, best_support = supports[1]
+    second_support = length(supports) > 1 ? supports[2][2] : 0
+
+    if best_support >= _DOMINANT_EDGE_RATIO * max(second_support, 1)
+        return best_neighbor
+    end
+
+    return nothing
+end
+
+function _edge_is_dominant_among_incoming(graph, src, dst)
+    incoming = Rhizomorph.get_incoming_neighbors(graph, dst)
+    if length(incoming) <= 1
+        return true
+    end
+    dominant = _dominant_neighbor(graph, dst, incoming; direction=:in)
+    return dominant == src
+end
+
+function _edge_is_dominant_among_outgoing(graph, src, dst)
+    outgoing = Rhizomorph.get_outgoing_neighbors(graph, src)
+    if length(outgoing) <= 1
+        return true
+    end
+    dominant = _dominant_neighbor(graph, src, outgoing; direction=:out)
+    return dominant == dst
 end
 
 """
