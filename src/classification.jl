@@ -2,6 +2,7 @@
 #
 # This file contains wrappers for metagenomic classification tools:
 # - sourmash: MinHash-based sequence search and classification
+# - mash: MinHash sketching and containment screening
 # - metaphlan: Marker-based taxonomic profiling
 # - metabuli: Fast metagenomic classification
 #
@@ -194,13 +195,363 @@ function run_sourmash_gather(;
 end
 
 # ============================================================================
+# Mash - MinHash sketching, screening, and distance
+# ============================================================================
+
+"""
+    run_mash_sketch(; input_files, outdir, k=21, s=1000, r=false,
+                    min_copies=nothing, threads=get_default_threads(),
+                    output_prefix=nothing, additional_args=String[])
+
+Create Mash sketches from input sequences or reads.
+
+# Arguments
+- `input_files::Vector{String}`: Input FASTA/FASTQ files
+- `outdir::String`: Output directory for sketch files
+- `k::Int`: K-mer size (default: 21)
+- `s::Int`: Sketch size (default: 1000)
+- `r::Bool`: Treat input as reads (`-r`, default: false)
+- `min_copies::Union{Nothing,Int}`: Minimum copies for reads (`-m`, requires `r=true`)
+- `threads::Int`: Thread count (`-p`)
+- `output_prefix::Union{Nothing,String}`: Optional prefix for sketch outputs
+- `additional_args::Vector{String}`: Extra CLI args appended to `mash sketch`
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory path
+- `sketches`: Vector of sketch file paths
+"""
+function run_mash_sketch(;
+        input_files::Vector{String},
+        outdir::String,
+        k::Int=21,
+        s::Int=1000,
+        r::Bool=false,
+        min_copies::Union{Nothing,Int}=nothing,
+        threads::Int=get_default_threads(),
+        output_prefix::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    for f in input_files
+        isfile(f) || error("Input file not found: $(f)")
+    end
+    k > 0 || error("k must be positive")
+    s > 0 || error("s must be positive")
+    threads > 0 || error("threads must be positive")
+    if !isnothing(min_copies)
+        min_copies > 0 || error("min_copies must be positive")
+        r || error("min_copies requires r=true for read sketching")
+    end
+
+    Mycelia.add_bioconda_env("mash")
+    mkpath(outdir)
+
+    sketches = String[]
+    for input_file in input_files
+        basename_clean = replace(basename(input_file), r"\.(fa|fasta|fq|fastq)(\.gz)?$"i => "")
+        prefix = if isnothing(output_prefix)
+            joinpath(outdir, basename_clean)
+        elseif length(input_files) == 1
+            joinpath(outdir, output_prefix)
+        else
+            joinpath(outdir, "$(output_prefix)_$(basename_clean)")
+        end
+        sketch_file = prefix * ".msh"
+
+        if !isfile(sketch_file)
+            sketch_args = ["sketch", "-k", string(k), "-s", string(s), "-p", string(threads), "-o", prefix]
+            if r
+                push!(sketch_args, "-r")
+            end
+            if !isnothing(min_copies)
+                append!(sketch_args, ["-m", string(min_copies)])
+            end
+            append!(sketch_args, additional_args)
+            push!(sketch_args, input_file)
+
+            sketch_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $sketch_args`
+            run(sketch_cmd)
+        end
+
+        push!(sketches, sketch_file)
+    end
+
+    return (; outdir, sketches)
+end
+
+"""
+    run_mash_paste(; out_file, in_files)
+
+Combine Mash sketch files into a single database sketch.
+
+# Arguments
+- `out_file::String`: Output sketch path (or prefix) for the combined database
+- `in_files::Vector{String}`: Input `.msh` files to combine
+
+# Returns
+`String` path to the combined `.msh` file.
+"""
+function run_mash_paste(;
+        out_file::String,
+        in_files::Vector{String})
+
+    for f in in_files
+        isfile(f) || error("Input sketch not found: $(f)")
+    end
+
+    Mycelia.add_bioconda_env("mash")
+
+    output_prefix = endswith(out_file, ".msh") ? out_file[1:end-4] : out_file
+    mkpath(dirname(output_prefix))
+    output_sketch = output_prefix * ".msh"
+
+    if !isfile(output_sketch)
+        paste_args = ["paste", output_prefix]
+        append!(paste_args, in_files)
+        paste_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $paste_args`
+        run(paste_cmd)
+    end
+
+    return output_sketch
+end
+
+"""
+    run_mash_dist(; reference, query, outdir, threads=get_default_threads(),
+                  output_tsv=nothing, additional_args=String[])
+
+Compute Mash distances between a reference and query.
+
+# Arguments
+- `reference::String`: Reference sketch or sequence
+- `query::String`: Query sketch or sequence
+- `outdir::String`: Output directory for results
+- `threads::Int`: Thread count (`-p`)
+- `output_tsv::Union{Nothing,String}`: Optional output file path
+- `additional_args::Vector{String}`: Extra CLI args appended to `mash dist`
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory path
+- `results_tsv`: Path to the distance output file
+"""
+function run_mash_dist(;
+        reference::String,
+        query::String,
+        outdir::String,
+        threads::Int=get_default_threads(),
+        output_tsv::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    isfile(reference) || error("Reference not found: $(reference)")
+    isfile(query) || error("Query not found: $(query)")
+    threads > 0 || error("threads must be positive")
+
+    Mycelia.add_bioconda_env("mash")
+    mkpath(outdir)
+
+    ref_base = replace(basename(reference), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    query_base = replace(basename(query), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    results_tsv = isnothing(output_tsv) ?
+        joinpath(outdir, "$(ref_base)_vs_$(query_base)_mash_dist.tsv") :
+        output_tsv
+
+    if !isfile(results_tsv)
+        dist_args = ["dist", "-p", string(threads)]
+        append!(dist_args, additional_args)
+        append!(dist_args, [reference, query])
+        dist_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $dist_args`
+        open(results_tsv, "w") do io
+            run(pipeline(dist_cmd, stdout=io))
+        end
+    end
+
+    return (; outdir, results_tsv)
+end
+
+"""
+    run_mash_screen(; reference, query, outdir, winner_takes_all=true,
+                    threads=get_default_threads(), min_identity=nothing,
+                    output_tsv=nothing, additional_args=String[])
+
+Screen query sequences against a reference sketch database for containment.
+
+# Arguments
+- `reference::String`: Reference sketch file (`.msh`)
+- `query::Union{String,Vector{String}}`: Query sequences (FASTA/FASTQ)
+- `outdir::String`: Output directory for results
+- `winner_takes_all::Bool`: Use Mash `-w` (default: true)
+- `threads::Int`: Thread count (`-p`)
+- `min_identity::Union{Nothing,Float64}`: Minimum identity threshold (`-i`)
+- `output_tsv::Union{Nothing,String}`: Optional output file path
+- `additional_args::Vector{String}`: Extra CLI args appended to `mash screen`
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory path
+- `results_tsv`: Path to the screen output file
+"""
+function run_mash_screen(;
+        reference::String,
+        query::Union{String,Vector{String}},
+        outdir::String,
+        winner_takes_all::Bool=true,
+        threads::Int=get_default_threads(),
+        min_identity::Union{Nothing,Float64}=nothing,
+        output_tsv::Union{Nothing,String}=nothing,
+        additional_args::Vector{String}=String[])
+
+    isfile(reference) || error("Reference not found: $(reference)")
+    query_files = query isa String ? [query] : query
+    for f in query_files
+        isfile(f) || error("Query not found: $(f)")
+    end
+    threads > 0 || error("threads must be positive")
+    if !isnothing(min_identity) && (min_identity < 0.0 || min_identity > 1.0)
+        error("min_identity must be between 0.0 and 1.0")
+    end
+
+    Mycelia.add_bioconda_env("mash")
+    mkpath(outdir)
+
+    query_base = replace(basename(query_files[1]), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    output_name = "$(basename(reference))_vs_$(query_base)_mash_screen.tsv"
+    results_tsv = isnothing(output_tsv) ? joinpath(outdir, output_name) : output_tsv
+
+    if !isfile(results_tsv)
+        screen_args = ["screen", "-p", string(threads)]
+        if winner_takes_all
+            push!(screen_args, "-w")
+        end
+        if !isnothing(min_identity)
+            append!(screen_args, ["-i", string(min_identity)])
+        end
+        append!(screen_args, additional_args)
+        push!(screen_args, reference)
+        append!(screen_args, query_files)
+
+        screen_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $screen_args`
+        open(results_tsv, "w") do io
+            run(pipeline(screen_cmd, stdout=io))
+        end
+    end
+
+    return (; outdir, results_tsv)
+end
+
+"""
+    parse_mash_dist_output(file)
+
+Parse a Mash distance output file into a DataFrame.
+"""
+function parse_mash_dist_output(file::String)
+    isfile(file) || error("Mash dist output not found: $(file)")
+    return CSV.read(
+        file,
+        DataFrames.DataFrame;
+        delim='\t',
+        header=["reference", "query", "distance", "p_value", "matching_hashes"],
+        comment="#"
+    )
+end
+
+"""
+    parse_mash_screen_output(file)
+
+Parse a Mash screen output file into a DataFrame.
+"""
+function parse_mash_screen_output(file::String)
+    isfile(file) || error("Mash screen output not found: $(file)")
+    return CSV.read(
+        file,
+        DataFrames.DataFrame;
+        delim='\t',
+        header=["identity", "shared_hashes", "median_multiplicity", "p_value", "query", "reference"],
+        comment="#"
+    )
+end
+
+# ============================================================================
 # MetaPhlAn - Marker-based taxonomic profiling
 # ============================================================================
+
+function resolve_metaphlan_db_index(; db_index::Union{Nothing, String}=nothing)
+    if db_index !== nothing && !isempty(db_index)
+        return db_index, true
+    end
+    value = get(ENV, "METAPHLAN_DB_INDEX", "")
+    if !isempty(value)
+        return value, true
+    end
+    return nothing, false
+end
+
+function _metaphlan_db_present(db_dir::AbstractString, db_index::Union{Nothing, String}=nothing)
+    if !isdir(db_dir)
+        return false
+    end
+    if db_index !== nothing && !isempty(db_index)
+        return isfile(joinpath(db_dir, "$(db_index).pkl"))
+    end
+    return any(name -> endswith(name, ".pkl"), readdir(db_dir))
+end
+
+function download_metaphlan_db(;
+        db_dir::AbstractString=Mycelia.DEFAULT_METAPHLAN_DB_PATH,
+        db_index::Union{Nothing, String}=nothing,
+        force::Bool=false)
+    db_index_val, _ = resolve_metaphlan_db_index(db_index=db_index)
+    if !force && _metaphlan_db_present(db_dir, db_index_val)
+        return db_dir
+    end
+    mkpath(db_dir)
+    Mycelia.add_bioconda_env("metaphlan")
+    cmd_args = String["metaphlan", "--install", "--db_dir", db_dir]
+    if db_index_val !== nothing && !isempty(db_index_val)
+        append!(cmd_args, ["--index", db_index_val])
+    end
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan $(cmd_args)`)
+    return db_dir
+end
+
+function get_metaphlan_db_path(;
+        require::Bool=true,
+        db_dir::Union{Nothing, String}=nothing,
+        db_index::Union{Nothing, String}=nothing,
+        download::Bool=true)
+    resolved_dir = db_dir
+    if resolved_dir === nothing || isempty(resolved_dir)
+        value = get(ENV, "METAPHLAN_DB_DIR", "")
+        if isempty(value)
+            value = get(ENV, "METAPHLAN_DB_PATH", "")
+        end
+        if isempty(value)
+            value = get(ENV, "METAPHLAN_BOWTIE2DB", "")
+            if !isempty(value)
+                @warn "METAPHLAN_BOWTIE2DB is deprecated; use METAPHLAN_DB_DIR instead."
+            end
+        end
+        resolved_dir = isempty(value) ? Mycelia.DEFAULT_METAPHLAN_DB_PATH : value
+    end
+
+    db_index_val, _ = resolve_metaphlan_db_index(db_index=db_index)
+    if _metaphlan_db_present(resolved_dir, db_index_val)
+        return resolved_dir
+    end
+
+    if download
+        return download_metaphlan_db(db_dir=resolved_dir, db_index=db_index_val)
+    end
+
+    if require
+        error("MetaPhlAn database not found at $(resolved_dir). Set METAPHLAN_DB_DIR (preferred) or METAPHLAN_DB_PATH to override.")
+    end
+    return nothing
+end
 
 """
     run_metaphlan(;input_file, outdir, input_type="fastq",
                   nprocs=get_default_threads(), db_dir=nothing,
-                  unknown_estimation=true, stat_q=0.2,
+                  db_index=nothing, unknown_estimation=true, stat_q=0.2,
                   long_reads=false)
 
 Run MetaPhlAn for marker-based taxonomic profiling.
@@ -211,6 +562,7 @@ Run MetaPhlAn for marker-based taxonomic profiling.
 - `input_type::String`: Input type - "fastq", "fasta", "mapout", "sam" (default: "fastq")
 - `nprocs::Int`: Number of threads (default: get_default_threads())
 - `db_dir::Union{Nothing, String}`: Path to database directory (passed to MetaPhlAn `--db_dir`)
+- `db_index::Union{Nothing, String}`: MetaPhlAn database index (optional; uses METAPHLAN_DB_INDEX when set; otherwise downloads MetaPhlAn's default database)
 - `unknown_estimation::Bool`: Include unknown/unclassified fraction estimation (default: true)
 - `stat_q::Float64`: Quantile for robust average (default: 0.2)
 - `long_reads::Bool`: Use long-read mode (MetaPhlAn `--long_reads`, uses minimap2)
@@ -220,6 +572,10 @@ Named tuple with:
 - `outdir`: Output directory path
 - `profile_txt`: Path to taxonomic profile output
 - `mapout`: Path to mapping output (also returned as `bowtie2_out` for compatibility)
+
+If `db_dir` is not provided, the MetaPhlAn database is resolved from
+METAPHLAN_DB_DIR (preferred) or `$(Mycelia.DEFAULT_METAPHLAN_DB_PATH)` and
+downloaded automatically when missing.
 
 # Example
 ```julia
@@ -236,12 +592,18 @@ function run_metaphlan(;
         input_type::String="fastq",
         nprocs::Int=get_default_threads(),
         db_dir::Union{Nothing, String}=nothing,
+        db_index::Union{Nothing, String}=nothing,
         unknown_estimation::Bool=true,
         stat_q::Float64=0.2,
         long_reads::Bool=false)
 
     isfile(input_file) || error("Input file not found: $(input_file)")
     input_type in ["fastq", "fasta", "mapout", "sam"] || error("Invalid input_type: $(input_type)")
+
+    resolved_index, index_explicit = resolve_metaphlan_db_index(db_index=db_index)
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = get_metaphlan_db_path(db_index=resolved_index)
+    end
 
     Mycelia.add_bioconda_env("metaphlan")
     mkpath(outdir)
@@ -265,6 +627,10 @@ function run_metaphlan(;
         if !isnothing(db_dir)
             push!(cmd_args, "--db_dir")
             push!(cmd_args, db_dir)
+        end
+        if index_explicit
+            push!(cmd_args, "--index")
+            push!(cmd_args, resolved_index)
         end
 
         if !unknown_estimation
@@ -355,6 +721,103 @@ end
 # Metabuli - Fast metagenomic classification
 # ============================================================================
 
+function _metabuli_db_present(db_dir::AbstractString)
+    if !isdir(db_dir)
+        return false
+    end
+    for marker in ("db.info", "info")
+        if isfile(joinpath(db_dir, marker))
+            return true
+        end
+    end
+    return false
+end
+
+function _resolve_metabuli_db_dir(db_root::AbstractString, db_name::AbstractString)
+    target = joinpath(db_root, db_name)
+    if _metabuli_db_present(target)
+        return target
+    end
+    candidates = filter(path -> _metabuli_db_present(path), readdir(db_root; join=true))
+    if !isempty(candidates)
+        named = filter(path -> occursin(db_name, basename(path)), candidates)
+        if length(named) == 1
+            return first(named)
+        elseif length(candidates) == 1
+            return first(candidates)
+        end
+    end
+    error("Metabuli database download completed but no valid db.info/info was found under $(db_root).")
+end
+
+function download_metabuli_db(;
+        db_name::AbstractString,
+        db_root::AbstractString=Mycelia.DEFAULT_METABULI_DB_PATH,
+        force::Bool=false,
+        keep_archive::Bool=false)
+    url = get(Mycelia.METABULI_DB_URLS, db_name, nothing)
+    if url === nothing
+        valid = join(collect(keys(Mycelia.METABULI_DB_URLS)), ", ")
+        error("Unknown Metabuli database '$(db_name)'. Available options: $(valid).")
+    end
+    mkpath(db_root)
+
+    if !force && _metabuli_db_present(joinpath(db_root, db_name))
+        return joinpath(db_root, db_name)
+    end
+
+    archive_name = basename(url)
+    archive_path = joinpath(db_root, archive_name)
+    if force || !isfile(archive_path) || filesize(archive_path) == 0
+        Mycelia.with_retry() do
+            Downloads.download(url, archive_path)
+        end
+    end
+    Mycelia.tar_extract(tarchive=archive_path, directory=db_root)
+    db_dir = _resolve_metabuli_db_dir(db_root, db_name)
+    if !keep_archive && isfile(archive_path)
+        rm(archive_path; force=true)
+    end
+    return db_dir
+end
+
+function get_metabuli_db_path(;
+        require::Bool=true,
+        db_name::Union{Nothing, String}=nothing,
+        db_root::Union{Nothing, String}=nothing,
+        download::Bool=true)
+    for key in ("METABULI_DB", "METABULI_DB_PATH")
+        value = get(ENV, key, "")
+        if !isempty(value)
+            if isdir(value)
+                return value
+            end
+            if require
+                error("Metabuli database directory not found at $(value). Set METABULI_DB/METABULI_DB_PATH to a valid path.")
+            end
+            return nothing
+        end
+    end
+
+    root_value = get(ENV, "METABULI_DB_ROOT", "")
+    resolved_root = db_root === nothing ? (isempty(root_value) ? Mycelia.DEFAULT_METABULI_DB_PATH : root_value) : db_root
+    name_value = get(ENV, "METABULI_DB_NAME", "")
+    resolved_name = db_name === nothing ? (isempty(name_value) ? Mycelia.DEFAULT_METABULI_DB_NAME : name_value) : db_name
+    candidate = joinpath(resolved_root, resolved_name)
+    if _metabuli_db_present(candidate)
+        return candidate
+    end
+
+    if download
+        return download_metabuli_db(db_name=resolved_name, db_root=resolved_root)
+    end
+
+    if require
+        error("Metabuli database directory not found. Set METABULI_DB/METABULI_DB_PATH or METABULI_DB_NAME (default: $(Mycelia.DEFAULT_METABULI_DB_NAME)).")
+    end
+    return nothing
+end
+
 """
     run_metabuli_classify(;input_files, outdir, database_path=nothing,
                           seq_mode="1", threads=get_default_threads(),
@@ -366,7 +829,9 @@ Run Metabuli for fast metagenomic classification.
 - `input_files::Vector{String}`: Input sequence files (FASTA/FASTQ)
 - `outdir::String`: Output directory
 - `database_path::Union{Nothing, String}`: Path to Metabuli database. If not provided,
-  checks METABULI_DB environment variable, then falls back to `\$HOME/workspace/metabuli`
+  uses METABULI_DB/METABULI_DB_PATH or auto-downloads the named database under
+  METABULI_DB_ROOT (default: `$(Mycelia.DEFAULT_METABULI_DB_PATH)`). Set
+  METABULI_DB_NAME to choose a download (default: `$(Mycelia.DEFAULT_METABULI_DB_NAME)`).
 - `seq_mode::String`: Sequence mode - "1" for single-end, "2" for paired-end (default: "1")
 - `threads::Int`: Number of threads (default: get_default_threads())
 - `min_score::Union{Nothing, Float64}`: Minimum score threshold
@@ -402,17 +867,8 @@ function run_metabuli_classify(;
     end
 
     # Determine database path
-    if database_path === nothing
-        database_path = get(ENV, "METABULI_DB", nothing)
-        if database_path === nothing
-            home_db = joinpath(homedir(), "workspace", "metabuli")
-            if isdir(home_db)
-                database_path = home_db
-            else
-                error("No database_path provided and no database found at default location ($(home_db)). " *
-                      "Set METABULI_DB environment variable or provide database_path parameter.")
-            end
-        end
+    if database_path === nothing || isempty(database_path)
+        database_path = get_metabuli_db_path()
     end
     isdir(database_path) || error("Database directory not found: $(database_path)")
     seq_mode in ["1", "2", "3"] || error("Invalid seq_mode: $(seq_mode). Use '1' for single-end, '2' for paired-end interleaved, '3' for paired-end separate")
@@ -489,15 +945,17 @@ function run_metabuli_build_db(;
         isfile(f) || error("Required taxonomy file not found: $(f)")
     end
 
-    db_info_file = joinpath(outdir, "db.info")
-
-    if !isfile(db_info_file)
+    if !_metabuli_db_present(outdir)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli build
             $(reference_fasta)
             $(taxonomy_dir)
             $(outdir)
             --threads $(threads)
             --split-num $(split_num)`)
+    end
+
+    if !_metabuli_db_present(outdir)
+        error("Metabuli database build completed but no valid db.info/info was found under $(outdir).")
     end
 
     return (; database_path=outdir)

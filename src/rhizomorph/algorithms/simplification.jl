@@ -22,6 +22,9 @@ that later rejoin. Bubbles often represent:
 - Sequencing errors
 - Strain variation
 
+# Type Parameter
+- `T`: The vertex label type (e.g., `String`, `Kmers.Kmer`, etc.)
+
 # Fields
 - `entry_vertex`: Vertex where paths diverge
 - `exit_vertex`: Vertex where paths reconverge
@@ -31,19 +34,19 @@ that later rejoin. Bubbles often represent:
 - `path2_support`: Coverage/support for path 2
 - `complexity_score`: Measure of bubble complexity (higher = more complex)
 """
-struct BubbleStructure
-    entry_vertex::String
-    exit_vertex::String
-    path1::Vector{String}
-    path2::Vector{String}
+struct BubbleStructure{T}
+    entry_vertex::T
+    exit_vertex::T
+    path1::Vector{T}
+    path2::Vector{T}
     path1_support::Int
     path2_support::Int
     complexity_score::Float64
 
-    function BubbleStructure(entry::String, exit::String,
-                           p1::Vector{String}, p2::Vector{String},
-                           s1::Int, s2::Int, complexity::Float64)
-        new(entry, exit, p1, p2, s1, s2, complexity)
+    function BubbleStructure(entry::T, exit::T,
+                           p1::Vector{T}, p2::Vector{T},
+                           s1::Int, s2::Int, complexity::Float64) where T
+        new{T}(entry, exit, p1, p2, s1, s2, complexity)
     end
 end
 
@@ -80,8 +83,9 @@ bubbles = detect_bubbles_next(graph, min_bubble_length=2, max_bubble_length=50)
 function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
                            min_bubble_length::Int=2,
                            max_bubble_length::Int=100)
-    bubbles = BubbleStructure[]
     vertices = collect(MetaGraphsNext.labels(graph))
+    T = eltype(vertices)
+    bubbles = BubbleStructure{T}[]
 
     for entry_vertex in vertices
         # Find potential bubble entry points (vertices with out-degree > 1)
@@ -135,10 +139,10 @@ end
 Find potential bubble paths from an entry vertex.
 """
 function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
-                          entry_vertex,
+                          entry_vertex::T,
                           out_neighbors::Vector,
-                          min_length::Int, max_length::Int)
-    bubbles = BubbleStructure[]
+                          min_length::Int, max_length::Int) where T
+    bubbles = BubbleStructure{T}[]
 
     # Try all pairs of outgoing paths
     for i in 1:length(out_neighbors)
@@ -251,7 +255,7 @@ end
 """
 Check if a bubble structure is valid.
 """
-function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure)
+function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure{T}) where T
     # Check that entry and exit vertices exist
     if !haskey(graph, bubble.entry_vertex) || !haskey(graph, bubble.exit_vertex)
         return false
@@ -273,9 +277,9 @@ end
 """
 Remove duplicate bubble detections.
 """
-function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure})
-    unique_bubbles = BubbleStructure[]
-    seen_pairs = Set{Tuple{String, String}}()
+function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where T
+    unique_bubbles = BubbleStructure{T}[]
+    seen_pairs = Set{Tuple{T, T}}()
 
     for bubble in bubbles
         pair = (bubble.entry_vertex, bubble.exit_vertex)
@@ -286,6 +290,48 @@ function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure})
     end
 
     return unique_bubbles
+end
+
+# ============================================================================
+# Tip removal (dead-end pruning)
+# ============================================================================
+
+"""
+    remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
+
+Remove dead-end vertices (tips) whose evidence support is ≤ `min_support`.
+Tips are vertices with indegree == 0 or outdegree == 0. Returns the modified graph.
+"""
+function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
+    if Graphs.nv(graph.graph) == 0
+        return graph
+    end
+
+    labels = collect(MetaGraphsNext.labels(graph))
+    to_delete = Set{eltype(labels)}()
+
+    for label in labels
+        idx = MetaGraphsNext.code_for(graph, label)
+        indeg = Graphs.indegree(graph.graph, idx)
+        outdeg = Graphs.outdegree(graph.graph, idx)
+        if indeg == 0 || outdeg == 0
+            support = 0
+            data = graph[label]
+            if hasproperty(data, :evidence)
+                support = Rhizomorph.count_evidence(data)
+            end
+            if support <= min_support
+                push!(to_delete, label)
+            end
+        end
+    end
+
+    for label in to_delete
+        idx = MetaGraphsNext.code_for(graph, label)
+        MetaGraphsNext.rem_vertex!(graph, idx)
+    end
+
+    return graph
 end
 
 # ============================================================================
@@ -318,7 +364,7 @@ simplified = simplify_graph_next(graph, bubbles)
 ```
 """
 function simplify_graph_next(graph::MetaGraphsNext.MetaGraph,
-                           bubbles::Vector{BubbleStructure})
+                           bubbles::Vector{BubbleStructure{T}}) where T
     # Create a copy of the graph
     simplified_graph = deepcopy(graph)
 
@@ -337,6 +383,8 @@ function simplify_graph_next(graph::MetaGraphsNext.MetaGraph,
         end
     end
 
+    remove_isolated_vertices!(simplified_graph)
+
     return simplified_graph
 end
 
@@ -345,17 +393,216 @@ Remove a path from the graph (helper function for simplification).
 """
 function remove_path_from_graph!(graph::MetaGraphsNext.MetaGraph, path::Vector,
                                 entry_vertex, exit_vertex)
-    # Remove internal vertices and edges along the path
-    for i in 1:(length(path)-1)
-        current = path[i]
-        next_v = path[i+1]
+    prev_vertex = entry_vertex
 
-        # Remove edge from current to next
-        if haskey(graph, current, next_v)
-            # Note: MetaGraphsNext doesn't have delete edge yet, skip for now
-            # This is a placeholder for future implementation
+    for vertex in path
+        if haskey(graph, prev_vertex, vertex)
+            delete!(graph, prev_vertex, vertex)
+        end
+        prev_vertex = vertex
+    end
+
+    if !isempty(path) && haskey(graph, path[end], exit_vertex)
+        delete!(graph, path[end], exit_vertex)
+    end
+
+    for vertex in path
+        if is_isolated_vertex(graph, vertex)
+            delete!(graph, vertex)
+        end
+    end
+end
+
+"""
+Check if a vertex is isolated (no edges).
+"""
+function is_isolated_vertex(graph::MetaGraphsNext.MetaGraph, vertex)
+    return isempty(get_in_neighbors(graph, vertex)) && isempty(get_out_neighbors(graph, vertex))
+end
+
+"""
+Remove all isolated vertices from the graph.
+"""
+function remove_isolated_vertices!(graph::MetaGraphsNext.MetaGraph)
+    vertices_to_remove = Vector{eltype(MetaGraphsNext.labels(graph))}()
+
+    for vertex in MetaGraphsNext.labels(graph)
+        if is_isolated_vertex(graph, vertex)
+            push!(vertices_to_remove, vertex)
         end
     end
 
-    # Note: Full implementation would remove vertices with no remaining edges
+    for vertex in vertices_to_remove
+        delete!(graph, vertex)
+    end
+
+    return graph
+end
+
+# ============================================================================
+# Linear chain collapsing
+# ============================================================================
+
+"""
+    collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
+
+Collapse maximal linear unitigs (vertices with indegree=1 and outdegree=1) into
+single variable-length vertices while preserving aggregated evidence.
+Currently operates on graphs whose vertex data include a `sequence` field
+(`BioSequenceVertexData` or `QualityBioSequenceVertexData`).
+"""
+function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
+    labels = collect(MetaGraphsNext.labels(graph))
+    if isempty(labels)
+        return graph
+    end
+
+    visited = Set{eltype(labels)}()
+
+    for label in labels
+        if label in visited
+            continue
+        end
+
+        path = Rhizomorph.get_maximal_unitig(graph, label)
+        for v in path
+            push!(visited, v)
+        end
+
+        if length(path) < 2
+            continue
+        end
+
+        first_vertex_data = graph[path[1]]
+        if !hasfield(typeof(first_vertex_data), :sequence)
+            # Only collapse variable-length graphs for now
+            continue
+        end
+
+        new_sequence, offsets = _assemble_linear_chain_sequence(graph, path)
+        collapsed_vertex = _build_collapsed_vertex(first_vertex_data, new_sequence)
+        _merge_path_evidence!(collapsed_vertex, graph, path, offsets)
+
+        # Capture external edges before removal
+        edge_copies = Dict{Tuple{eltype(path), eltype(path)}, Any}()
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            in_src = src in offsets
+            in_dst = dst in offsets
+            if xor(in_src, in_dst)
+                edge_copies[(src, dst)] = graph[src, dst]
+            end
+        end
+
+        # Remove internal vertices (and their edges)
+        for v in path
+            MetaGraphsNext.rem_vertex!(graph, v)
+        end
+
+        new_label = new_sequence
+        graph[new_label] = collapsed_vertex
+
+        # Reconnect external edges with position-adjusted evidence
+        for ((src, dst), edge_data) in edge_copies
+            if haskey(offsets, src) && !haskey(offsets, dst)
+                shifted = _shift_edge_data(edge_data, offsets[src]; shift_from=true)
+                graph[new_label, dst] = shifted
+            elseif !haskey(offsets, src) && haskey(offsets, dst)
+                shifted = _shift_edge_data(edge_data, offsets[dst]; shift_to=true)
+                graph[src, new_label] = shifted
+            end
+        end
+    end
+
+    return graph
+end
+
+function _assemble_linear_chain_sequence(graph, path::Vector)
+    first_data = graph[path[1]]
+    sequence = first_data.sequence
+    SequenceType = typeof(sequence)
+    offsets = Dict{eltype(path), Int}()
+    offsets[path[1]] = 0
+
+    for i in 2:length(path)
+        src = path[i - 1]
+        dst = path[i]
+        overlap = _edge_overlap_length(graph, src, dst)
+        append_sequence = graph[dst].sequence
+
+        offset = offsets[src] + length(graph[src].sequence) - overlap
+        offsets[dst] = offset
+
+        if overlap < length(append_sequence)
+            sequence = sequence * append_sequence[(overlap + 1):end]
+        end
+    end
+
+    return sequence, offsets
+end
+
+function _build_collapsed_vertex(first_vertex_data, sequence)
+    if first_vertex_data isa BioSequenceVertexData
+        return BioSequenceVertexData(sequence)
+    elseif first_vertex_data isa QualityBioSequenceVertexData
+        return QualityBioSequenceVertexData(sequence)
+    else
+        error("Unsupported vertex data type for collapsing: $(typeof(first_vertex_data))")
+    end
+end
+
+function _merge_path_evidence!(target_vertex, graph, path, offsets)
+    for vertex in path
+        vertex_data = graph[vertex]
+        offset = offsets[vertex]
+
+        for (dataset_id, dataset_evidence) in vertex_data.evidence
+            for (obs_id, evidence_set) in dataset_evidence
+                for entry in evidence_set
+                    shifted_entry = _shift_evidence_entry(entry, offset)
+                    add_evidence!(target_vertex, dataset_id, obs_id, shifted_entry)
+                end
+            end
+        end
+    end
+end
+
+function _shift_evidence_entry(entry::EvidenceEntry, offset::Int)
+    return EvidenceEntry(entry.position + offset, entry.strand)
+end
+
+function _shift_evidence_entry(entry::QualityEvidenceEntry, offset::Int)
+    return QualityEvidenceEntry(entry.position + offset, entry.strand, entry.quality_scores)
+end
+
+function _shift_edge_data(edge_data, offset::Int; shift_from::Bool=false, shift_to::Bool=false)
+    if hasfield(typeof(edge_data), :overlap_length)
+        new_edge = typeof(edge_data)(edge_data.overlap_length)
+    else
+        new_edge = typeof(edge_data)()
+    end
+
+    for (dataset_id, dataset_evidence) in edge_data.evidence
+        for (obs_id, evidence_set) in dataset_evidence
+            for entry in evidence_set
+                shifted_entry = _shift_edge_entry(entry, offset; shift_from=shift_from, shift_to=shift_to)
+                add_evidence!(new_edge, dataset_id, obs_id, shifted_entry)
+            end
+        end
+    end
+
+    return new_edge
+end
+
+function _shift_edge_entry(entry::EdgeEvidenceEntry, offset::Int; shift_from::Bool, shift_to::Bool)
+    from_pos = shift_from ? entry.from_position + offset : entry.from_position
+    to_pos = shift_to ? entry.to_position + offset : entry.to_position
+    return EdgeEvidenceEntry(from_pos, to_pos, entry.strand)
+end
+
+function _shift_edge_entry(entry::EdgeQualityEvidenceEntry, offset::Int; shift_from::Bool, shift_to::Bool)
+    from_pos = shift_from ? entry.from_position + offset : entry.from_position
+    to_pos = shift_to ? entry.to_position + offset : entry.to_position
+    return EdgeQualityEvidenceEntry(from_pos, to_pos, entry.strand,
+                                    entry.from_quality_scores,
+                                    entry.to_quality_scores)
 end

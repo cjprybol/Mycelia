@@ -12,6 +12,136 @@ Part of the Mycelia bioinformatics package's iterative assembler framework.
 """
 
 # =============================================================================
+# Sparsity Detection and Memory Estimation
+# =============================================================================
+
+"""
+Calculate k-mer sparsity for a given k-mer size.
+Returns fraction of possible k-mers that are NOT observed.
+"""
+function calculate_sparsity(reads::Vector{<:FASTX.FASTQ.Record}, k::Int)::Float64
+    observed_kmers = Set{String}()
+
+    for record in reads
+        seq = FASTX.sequence(String, record)
+        if length(seq) >= k
+            for i in 1:(length(seq) - k + 1)
+                kmer = seq[i:i+k-1]
+                push!(observed_kmers, kmer)
+            end
+        end
+    end
+
+    unique_observed = length(observed_kmers)
+    max_possible = 4.0^k
+    return 1.0 - (unique_observed / max_possible)
+end
+
+"""
+Analyze k-mer coverage distribution to detect if errors are singletons.
+Returns true if low-coverage k-mers (likely errors) are well-separated from high-coverage ones.
+"""
+function errors_are_singletons(reads::Vector{<:FASTX.FASTQ.Record}, k::Int; singleton_threshold::Int = 2)::Bool
+    kmer_counts = Dict{String, Int}()
+
+    for record in reads
+        seq = FASTX.sequence(String, record)
+        if length(seq) >= k
+            for i in 1:(length(seq) - k + 1)
+                kmer = seq[i:i+k-1]
+                kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
+            end
+        end
+    end
+
+    coverage_values = collect(values(kmer_counts))
+    total_unique = length(coverage_values)
+    if total_unique == 0
+        return false
+    end
+    singleton_count = count(x -> x <= singleton_threshold, coverage_values)
+    singleton_fraction = singleton_count / total_unique
+
+    if singleton_count > 0 && total_unique > singleton_count
+        non_singleton_min = minimum(filter(x -> x > singleton_threshold, coverage_values))
+        return singleton_fraction > 0.1 && non_singleton_min > singleton_threshold * 2
+    end
+
+    return false
+end
+
+"""
+Find the optimal starting k-mer size using sparsity detection.
+Only considers prime k-mer sizes for optimal performance.
+"""
+function find_initial_k(reads::Vector{<:FASTX.FASTQ.Record}; 
+                       k_range::Vector{Int} = Primes.primes(3, 51),
+                       sparsity_threshold::Float64 = 0.5)::Int
+    for k in k_range
+        sparsity = calculate_sparsity(reads, k)
+        if sparsity > sparsity_threshold && errors_are_singletons(reads, k)
+            return k
+        end
+    end
+
+    return isempty(k_range) ? 3 : first(k_range)
+end
+
+"""
+Find the next prime number greater than current_k.
+For k-mer progression, we prefer odd numbers and especially primes.
+"""
+function next_prime_k(current_k::Int; max_k::Int = 1000)::Int
+    next_prime = Primes.nextprime(current_k + 1)
+    return next_prime <= max_k ? next_prime : current_k
+end
+
+"""
+Estimate memory usage for a graph with a given number of k-mers.
+Provides a rough estimate for memory monitoring.
+"""
+function estimate_memory_usage(num_kmers::Int, k::Int)::Int
+    kmer_size = k * 1
+    vertex_overhead = 100
+    edge_overhead = 50
+
+    estimated_bytes = num_kmers * (kmer_size + vertex_overhead + edge_overhead * 2)
+    return round(Int, estimated_bytes * 1.2)
+end
+
+function _label_k_length(label)::Int
+    if label isa Qualmer
+        return length(label)
+    elseif label isa Kmers.Kmer
+        return length(label)
+    elseif label isa BioSequences.BioSequence
+        return length(label)
+    elseif label isa AbstractString
+        return length(label)
+    end
+    return length(string(label))
+end
+
+"""
+Check if memory usage is within acceptable limits.
+"""
+function check_memory_limits(graph, memory_limit::Int)::Bool
+    labels = if applicable(MetaGraphsNext.labels, graph)
+        collect(MetaGraphsNext.labels(graph))
+    else
+        Any[]
+    end
+
+    num_kmers = length(labels)
+    if num_kmers == 0
+        return true
+    end
+    k = _label_k_length(first(labels))
+    estimated_usage = estimate_memory_usage(num_kmers, k)
+    return estimated_usage <= memory_limit
+end
+
+# =============================================================================
 # Core Iterative Assembly Framework
 # =============================================================================
 
@@ -26,6 +156,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                                    output_dir::String = "iterative_assembly",
                                    max_iterations_per_k::Int = 10,
                                    improvement_threshold::Float64 = 0.05,
+                                   graph_mode::Symbol = :canonical,
                                    verbose::Bool = true,
                                    enable_parallel::Bool = false,
                                    batch_size::Int = 10000,
@@ -40,6 +171,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         println("Output directory: $output_dir") 
         println("Memory limit: $(memory_limit ÷ 1_000_000_000) GB")
         println("Max k-mer size: $max_k")
+        println("Graph mode: $graph_mode")
         println("Parallel processing: $(enable_parallel ? "enabled ($(Threads.nthreads()) threads)" : "disabled")")
         println("Batch size: $batch_size")
         println("Checkpointing: $(enable_checkpointing ? "enabled (every $checkpoint_interval iterations)" : "disabled")")
@@ -146,8 +278,8 @@ function mycelia_iterative_assemble(input_fastq::String;
             if verbose
                 println("Building qualmer graph with k=$k...")
             end
-            graph = build_qualmer_graph(current_reads, k=k)
-            num_kmers = length(graph.vertex_labels)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode=graph_mode)
+            num_kmers = length(MetaGraphsNext.labels(graph))
             
             if verbose
                 println("Graph built: $num_kmers unique k-mers")
@@ -169,7 +301,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                 current_reads, graph, k, 
                 verbose=verbose, 
                 batch_size=batch_size,
-                enable_parallel=enable_parallel
+                enable_parallel=enable_parallel,
+                graph_mode=graph_mode
             )
             
             # Calculate iteration metrics
@@ -308,7 +441,8 @@ Uses memory-efficient batch processing for large datasets.
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int; 
                                    verbose::Bool = false, 
                                    batch_size::Int = 10000,
-                                   enable_parallel::Bool = false)::Tuple{Vector{FASTX.FASTQ.Record}, Int}
+                                   enable_parallel::Bool = false,
+                                   graph_mode::Symbol = :canonical)::Tuple{Vector{FASTX.FASTQ.Record}, Int}
     
     total_reads = length(reads)
     updated_reads = Vector{FASTX.FASTQ.Record}(undef, total_reads)
@@ -330,7 +464,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             batch_results = Vector{Tuple{FASTX.FASTQ.Record, Bool}}(undef, length(batch_reads))
             
             Threads.@threads for i in eachindex(batch_reads)
-                improved_read, was_improved = improve_read_likelihood(batch_reads[i], graph, k)
+                improved_read, was_improved = improve_read_likelihood(batch_reads[i], graph, k; graph_mode=graph_mode)
                 batch_results[i] = (improved_read, was_improved)
             end
             
@@ -344,7 +478,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         else
             # Sequential processing
             for (i, read) in enumerate(batch_reads)
-                improved_read, was_improved = improve_read_likelihood(read, graph, k)
+                improved_read, was_improved = improve_read_likelihood(read, graph, k; graph_mode=graph_mode)
                 updated_reads[batch_start + i - 1] = improved_read
                 
                 if was_improved
@@ -381,7 +515,7 @@ end
 Improve likelihood of a single read using maximum likelihood path finding.
 Returns improved read and boolean indicating if improvement was made.
 """
-function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int)::Tuple{FASTX.FASTQ.Record, Bool}
+function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol = :canonical)::Tuple{FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
     original_qual = FASTX.quality(read)
@@ -393,7 +527,7 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int)::Tuple
     end
     
     # Find optimal path through graph using enhanced statistical path improvement
-    improved_read, likelihood_improvement = find_optimal_sequence_path(read, graph, k)
+    improved_read, likelihood_improvement = find_optimal_sequence_path(read, graph, k; graph_mode=graph_mode)
     
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -407,14 +541,28 @@ end
 Find optimal sequence path through graph using maximum likelihood principles.
 Returns improved sequence and likelihood improvement score.
 """
-function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int)::Tuple{FASTX.FASTQ.Record, Float64}
+function find_optimal_sequence_path(sequence::AbstractString, quality, graph, k::Int; graph_mode::Symbol = :canonical)::Tuple{String, Float64}
+    quality_string = if quality isa AbstractString
+        String(quality)
+    elseif quality isa AbstractVector{<:Integer}
+        String([Char(Int(q) + 33) for q in quality])
+    else
+        throw(ArgumentError("Unsupported quality type for find_optimal_sequence_path"))
+    end
+
+    record = FASTX.FASTQ.Record("input_sequence", sequence, quality_string)
+    improved_record, improvement = find_optimal_sequence_path(record, graph, k; graph_mode=graph_mode)
+    return FASTX.sequence(String, improved_record), improvement
+end
+
+function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol = :canonical)::Tuple{FASTX.FASTQ.Record, Float64}
     # Enhanced Statistical Path Improvement (Phase 5.2b)
     # Integrates iterative assembly with existing Viterbi algorithms from viterbi-next.jl
     
-    original_likelihood = calculate_read_likelihood(read, graph, k)
+    original_likelihood = calculate_read_likelihood(read, graph, k; graph_mode=graph_mode)
     
     # Option 1: Use Viterbi algorithm for full path optimization
-    viterbi_result = try_viterbi_path_improvement(read, graph, k)
+    viterbi_result = try_viterbi_path_improvement(read, graph, k; graph_mode=graph_mode)
     if viterbi_result !== nothing
         viterbi_read, viterbi_likelihood = viterbi_result
         viterbi_improvement = viterbi_likelihood - original_likelihood
@@ -426,7 +574,7 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int)::Tu
     end
     
     # Option 2: Statistical resampling for alternative paths
-    statistical_result = try_statistical_path_resampling(read, graph, k)
+    statistical_result = try_statistical_path_resampling(read, graph, k; graph_mode=graph_mode)
     if statistical_result !== nothing
         stat_read, stat_likelihood = statistical_result
         stat_improvement = stat_likelihood - original_likelihood
@@ -438,13 +586,13 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int)::Tu
     end
     
     # Option 3: Local heuristic improvements (fallback)
-    return try_local_path_improvements(read, graph, k, original_likelihood)
+    return try_local_path_improvements(read, graph, k, original_likelihood; graph_mode=graph_mode)
 end
 
 """
 Calculate likelihood of a FASTQ read given the current graph.
 """
-function calculate_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int)::Float64
+function calculate_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol = :canonical)::Float64
     # Detect sequence type dynamically using existing alphabets.jl functions
     sequence_string = FASTX.sequence(String, read)
     alphabet = detect_alphabet(sequence_string)
@@ -452,14 +600,54 @@ function calculate_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int)::Flo
     
     sequence = extract_typed_sequence(read, sequence_type)
     quality_scores = collect(FASTX.quality_scores(read))
-    return calculate_sequence_likelihood(sequence, quality_scores, graph, k)
+    return calculate_sequence_likelihood(sequence, quality_scores, graph, k; graph_mode=graph_mode)
 end
 
 """
 Calculate quality-aware likelihood of a sequence given the qualmer graph.
 Uses both k-mer presence and quality-based confidence from qualmer observations.
 """
-function calculate_sequence_likelihood(sequence::BioSequences.BioSequence, quality::Vector{Int8}, graph, k::Int)::Float64
+function calculate_sequence_likelihood(sequence::AbstractString, quality, graph, k::Int; graph_mode::Symbol = :canonical)::Float64
+    alphabet = detect_alphabet(sequence)
+    typed_sequence = detect_and_extract_sequence(sequence, alphabet)
+    quality_scores = if quality isa AbstractString
+        Int8.(Int.(collect(codeunits(quality))) .- 33)
+    elseif quality isa AbstractVector{<:Integer}
+        Int8.(quality)
+    else
+        throw(ArgumentError("Unsupported quality type for calculate_sequence_likelihood"))
+    end
+    return calculate_sequence_likelihood(typed_sequence, quality_scores, graph, k; graph_mode=graph_mode)
+end
+
+function _resolve_kmer_label(graph, kmer; graph_mode::Symbol = :canonical)
+    if haskey(graph, kmer)
+        return kmer
+    end
+    if graph_mode == :canonical && kmer isa Union{Kmers.DNAKmer, Kmers.RNAKmer}
+        canonical_kmer = BioSequences.canonical(kmer)
+        if haskey(graph, canonical_kmer)
+            return canonical_kmer
+        end
+    end
+    return nothing
+end
+
+function _resolve_qualmer_for_graph(graph, qmer::Qualmer; graph_mode::Symbol = :canonical)
+    resolved_kmer = _resolve_kmer_label(graph, qmer.kmer; graph_mode=graph_mode)
+    if resolved_kmer === nothing
+        return nothing
+    end
+    if resolved_kmer == qmer.kmer
+        return qmer
+    end
+    if graph_mode == :canonical && qmer.kmer isa Union{Kmers.DNAKmer, Kmers.RNAKmer}
+        return canonical(qmer)
+    end
+    return Qualmer(resolved_kmer, qmer.qualities)
+end
+
+function calculate_sequence_likelihood(sequence::BioSequences.BioSequence, quality::Vector{Int8}, graph, k::Int; graph_mode::Symbol = :canonical)::Float64
     if length(sequence) < k
         return 0.0
     end
@@ -469,15 +657,14 @@ function calculate_sequence_likelihood(sequence::BioSequences.BioSequence, quali
     # Use Kmers.jl iterators for efficient k-mer extraction with quality awareness
     if sequence isa BioSequences.LongDNA
         for (pos, kmer) in enumerate(Kmers.FwDNAMers{k}(sequence))
-            # Use canonical form for graph lookup (matches qualmer graph structure)
-            canonical_kmer = BioSequences.canonical(kmer)
+            resolved_kmer = _resolve_kmer_label(graph, kmer; graph_mode=graph_mode)
             
-            if canonical_kmer in MetaGraphsNext.labels(graph)
-                vertex_data = graph[canonical_kmer]
+            if resolved_kmer !== nothing
+                vertex_data = graph[resolved_kmer]
                 
                 # Enhanced quality-aware likelihood calculation
                 kmer_likelihood = calculate_qualmer_likelihood(
-                    canonical_kmer, 
+                    resolved_kmer,
                     quality[pos:pos+k-1],  # Quality scores for this k-mer
                     vertex_data
                 )
@@ -491,13 +678,13 @@ function calculate_sequence_likelihood(sequence::BioSequences.BioSequence, quali
         end
     elseif sequence isa BioSequences.LongRNA
         for (pos, kmer) in enumerate(Kmers.FwRNAMers{k}(sequence))
-            canonical_kmer = BioSequences.canonical(kmer)
+            resolved_kmer = _resolve_kmer_label(graph, kmer; graph_mode=graph_mode)
             
-            if canonical_kmer in MetaGraphsNext.labels(graph)
-                vertex_data = graph[canonical_kmer]
+            if resolved_kmer !== nothing
+                vertex_data = graph[resolved_kmer]
                 
                 kmer_likelihood = calculate_qualmer_likelihood(
-                    canonical_kmer, 
+                    resolved_kmer,
                     quality[pos:pos+k-1],
                     vertex_data
                 )
@@ -510,7 +697,7 @@ function calculate_sequence_likelihood(sequence::BioSequences.BioSequence, quali
         end
     else  # LongAA - no canonical form needed
         for (pos, kmer) in enumerate(Kmers.FwAAMers{k}(sequence))
-            if kmer in MetaGraphsNext.labels(graph)
+            if haskey(graph, kmer)
                 vertex_data = graph[kmer]
                 
                 kmer_likelihood = calculate_qualmer_likelihood(
@@ -530,13 +717,69 @@ function calculate_sequence_likelihood(sequence::BioSequences.BioSequence, quali
     return total_log_likelihood
 end
 
+function _rhizomorph_first_dataset_id(vertex_data)
+    dataset_ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex_data)
+    return isempty(dataset_ids) ? nothing : first(dataset_ids)
+end
+
+function _rhizomorph_joint_probability(vertex_data)::Float64
+    dataset_id = _rhizomorph_first_dataset_id(vertex_data)
+    if dataset_id === nothing
+        return 0.0
+    end
+
+    joint_quality = Mycelia.Rhizomorph.get_vertex_joint_quality(vertex_data, dataset_id)
+    if joint_quality === nothing
+        return 0.0
+    end
+
+    log_prob = 0.0
+    for q in joint_quality
+        log_prob += log(max(phred_to_probability(q), 1e-10))
+    end
+    return exp(log_prob)
+end
+
+function _vertex_joint_probability(vertex_data)::Float64
+    if hasproperty(vertex_data, :joint_probability)
+        return vertex_data.joint_probability
+    end
+    return _rhizomorph_joint_probability(vertex_data)
+end
+
+function _vertex_mean_quality(vertex_data)::Float64
+    if hasproperty(vertex_data, :mean_quality)
+        return vertex_data.mean_quality
+    end
+
+    dataset_id = _rhizomorph_first_dataset_id(vertex_data)
+    if dataset_id === nothing
+        return 0.0
+    end
+
+    mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, dataset_id)
+    if mean_quality === nothing || isempty(mean_quality)
+        return 0.0
+    end
+
+    return Statistics.mean(mean_quality)
+end
+
+function _vertex_coverage(vertex_data)::Int
+    if hasproperty(vertex_data, :coverage)
+        coverage = vertex_data.coverage
+        return coverage isa Integer ? coverage : length(coverage)
+    end
+    return Int(Mycelia.Rhizomorph.count_evidence(vertex_data))
+end
+
 """
 Calculate likelihood of a k-mer given its observed quality scores and qualmer vertex data.
 Leverages existing qualmer graph quality calculations.
 """
 function calculate_qualmer_likelihood(kmer, quality_scores::AbstractVector{Int8}, vertex_data)::Float64
     # Base likelihood from graph joint probability
-    base_likelihood = vertex_data.joint_probability
+    base_likelihood = _vertex_joint_probability(vertex_data)
     
     # Quality-based confidence adjustment
     # Convert Int8 quality scores to UInt8 for compatibility with existing functions
@@ -579,7 +822,32 @@ end
 """
 Generate alternative k-mers for improvement attempts using proper k-mer objects.
 """
-function generate_kmer_alternatives(original_kmer, graph, sequence_type::Type{<:BioSequences.BioSequence})
+function generate_kmer_alternatives(original_kmer::Kmers.Kmer, graph; graph_mode::Symbol = :canonical)
+    sequence_type = if original_kmer isa Kmers.DNAKmer
+        BioSequences.LongDNA{4}
+    elseif original_kmer isa Kmers.RNAKmer
+        BioSequences.LongRNA{4}
+    else
+        BioSequences.LongAA
+    end
+    return generate_kmer_alternatives(original_kmer, graph, sequence_type; graph_mode=graph_mode)
+end
+
+function generate_kmer_alternatives(original_kmer::AbstractString, graph; graph_mode::Symbol = :canonical)
+    alphabet = detect_alphabet(original_kmer)
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    k = length(original_kmer)
+    kmer_type = if sequence_type <: BioSequences.LongDNA
+        Kmers.DNAKmer{k}
+    elseif sequence_type <: BioSequences.LongRNA
+        Kmers.RNAKmer{k}
+    else
+        Kmers.AAKmer{k}
+    end
+    return generate_kmer_alternatives(kmer_type(original_kmer), graph, sequence_type; graph_mode=graph_mode)
+end
+
+function generate_kmer_alternatives(original_kmer, graph, sequence_type::Type{<:BioSequences.BioSequence}; graph_mode::Symbol = :canonical)
     alternatives = []
     k = length(original_kmer)
     
@@ -610,28 +878,17 @@ function generate_kmer_alternatives(original_kmer, graph, sequence_type::Type{<:
                 alt_kmer_seq[i] = symbol
                 alt_kmer = kmer_type(alt_kmer_seq)
                 
-                # Use canonical form for DNA/RNA lookup
-                canonical_alt = if alt_kmer isa Union{Kmers.DNAKmer, Kmers.RNAKmer}
-                    BioSequences.canonical(alt_kmer)
-                else
-                    alt_kmer
-                end
-                
-                canonical_orig = if original_kmer isa Union{Kmers.DNAKmer, Kmers.RNAKmer}
-                    BioSequences.canonical(original_kmer)
-                else
-                    original_kmer
-                end
-                
+                # Resolve k-mer labels against the current graph mode
+                resolved_alt = _resolve_kmer_label(graph, alt_kmer; graph_mode=graph_mode)
+                resolved_orig = _resolve_kmer_label(graph, original_kmer; graph_mode=graph_mode)
+
                 # Only include if alternative exists in graph with higher probability
-                if (canonical_alt in MetaGraphsNext.labels(graph) && 
-                    canonical_orig in MetaGraphsNext.labels(graph))
-                    
-                    alt_data = graph[canonical_alt]
-                    orig_data = graph[canonical_orig]
-                    
-                    if alt_data.joint_probability > orig_data.joint_probability
-                        push!(alternatives, canonical_alt)
+                if resolved_alt !== nothing && resolved_orig !== nothing
+                    alt_data = graph[resolved_alt]
+                    orig_data = graph[resolved_orig]
+
+                    if _vertex_joint_probability(alt_data) > _vertex_joint_probability(orig_data)
+                        push!(alternatives, resolved_alt)
                     end
                 end
             end
@@ -642,22 +899,54 @@ function generate_kmer_alternatives(original_kmer, graph, sequence_type::Type{<:
 end
 
 """
+Generate alternative k-mer paths by substituting individual k-mers with plausible alternatives.
+Returns a list of alternative paths, each represented as a vector.
+"""
+function generate_alternative_paths(sequence::AbstractString, graph, k::Int; num_samples::Int = 5, graph_mode::Symbol = :canonical)
+    base_path = sequence_to_kmer_path(String(sequence), k)
+    if isempty(base_path) || num_samples <= 0
+        return Vector{Vector{Any}}()
+    end
+
+    alternative_paths = Vector{Vector{Any}}()
+    for (idx, kmer) in enumerate(base_path)
+        alternatives = generate_kmer_alternatives(kmer, graph; graph_mode=graph_mode)
+        for alt in alternatives
+            if alt != kmer
+                alt_path = Any[k for k in base_path]
+                alt_path[idx] = alt
+                push!(alternative_paths, alt_path)
+                if length(alternative_paths) >= num_samples
+                    return alternative_paths
+                end
+                break
+            end
+        end
+    end
+
+    return alternative_paths
+end
+
+"""
 Adjust quality scores based on likelihood improvement.
 """
-function adjust_quality_scores(original_quality::String, improved_sequence::String, likelihood_improvement::Float64)::String
+function adjust_quality_scores(original_quality::AbstractString, improved_sequence::AbstractString, likelihood_improvement::Float64)::String
+    original_quality_str = String(original_quality)
+    improved_sequence_str = String(improved_sequence)
+
     # For now, return original quality scores
     # This can be enhanced to adjust qualities based on the improvement
-    if length(improved_sequence) == length(original_quality)
-        return original_quality
+    if length(improved_sequence_str) == length(original_quality_str)
+        return original_quality_str
     else
         # Handle length changes by extending or truncating quality
-        if length(improved_sequence) > length(original_quality)
+        if length(improved_sequence_str) > length(original_quality_str)
             # Extend with median quality
-            median_qual = isempty(original_quality) ? 'I' : original_quality[length(original_quality)÷2]
-            return original_quality * repeat(string(median_qual), length(improved_sequence) - length(original_quality))
+            median_qual = isempty(original_quality_str) ? 'I' : original_quality_str[length(original_quality_str)÷2]
+            return original_quality_str * repeat(string(median_qual), length(improved_sequence_str) - length(original_quality_str))
         else
             # Truncate quality
-            return original_quality[1:length(improved_sequence)]
+            return original_quality_str[1:length(improved_sequence_str)]
         end
     end
 end
@@ -838,6 +1127,53 @@ function iterative_assembly_summary(result::Dict)::String
     return report
 end
 
+"""
+Run a minimal self-test of the iterative assembly pipeline.
+Returns a status dictionary with results or error details.
+"""
+function test_iterative_assembly(; max_k::Int = 13, max_iterations_per_k::Int = 1, cleanup::Bool = true)::Dict
+    temp_dir = mktempdir()
+    try
+        test_fastq = joinpath(temp_dir, "test_reads.fastq")
+        sequences = [
+            "ATCGATCGATCGATCGATCG",
+            "CGATCGATCGATCGATCGAT",
+            "GATCGATCGATCGATCGATC",
+            "ATCGATCGATCGTTCGATCG"
+        ]
+        records = [
+            FASTX.FASTQ.Record("read$i", seq, repeat("I", length(seq)))
+            for (i, seq) in enumerate(sequences)
+        ]
+        write_fastq(records=records, filename=test_fastq)
+
+        output_dir = joinpath(temp_dir, "test_output")
+        result = mycelia_iterative_assemble(
+            test_fastq;
+            max_k=max_k,
+            output_dir=output_dir,
+            max_iterations_per_k=max_iterations_per_k,
+            verbose=false
+        )
+
+        return Dict(
+            :status => :success,
+            :final_assembly => result[:final_assembly],
+            :k_progression => result[:k_progression],
+            :metadata => result[:metadata]
+        )
+    catch e
+        return Dict(:status => :error, :error => sprint(showerror, e))
+    finally
+        if cleanup
+            try
+                rm(temp_dir, recursive=true, force=true)
+            catch
+            end
+        end
+    end
+end
+
 # =============================================================================
 # Enhanced Statistical Path Improvement (Phase 5.2b)
 # Integration with Viterbi algorithms and statistical path resampling
@@ -847,7 +1183,7 @@ end
 Try to improve FASTQ read using Viterbi algorithm from viterbi-next.jl.
 Returns (improved_read, likelihood) or nothing if no improvement.
 """
-function try_viterbi_path_improvement(read::FASTX.FASTQ.Record, graph, k::Int)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+function try_viterbi_path_improvement(read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol = :canonical)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         # Detect sequence type dynamically
         sequence_string = FASTX.sequence(String, read)
@@ -884,7 +1220,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record, graph, k::Int)::
                 improved_sequence = detect_and_extract_sequence(viterbi_result.polished_sequence, alphabet)
                 
                 # Calculate likelihood of improved sequence
-                improved_likelihood = calculate_sequence_likelihood(improved_sequence, quality_scores, graph, k)
+                improved_likelihood = calculate_sequence_likelihood(improved_sequence, quality_scores, graph, k; graph_mode=graph_mode)
                 
                 # Create improved FASTQ record
                 improved_quality = adjust_quality_scores(FASTX.quality(read), viterbi_result.polished_sequence, improved_likelihood)
@@ -902,11 +1238,30 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record, graph, k::Int)::
     return nothing
 end
 
+function try_viterbi_path_improvement(sequence::AbstractString, quality, graph, k::Int; graph_mode::Symbol = :canonical)
+    quality_string = if quality isa AbstractString
+        String(quality)
+    elseif quality isa AbstractVector{<:Integer}
+        String([Char(Int(q) + 33) for q in quality])
+    else
+        throw(ArgumentError("Unsupported quality type for try_viterbi_path_improvement"))
+    end
+
+    record = FASTX.FASTQ.Record("input_sequence", sequence, quality_string)
+    result = try_viterbi_path_improvement(record, graph, k; graph_mode=graph_mode)
+    if result === nothing
+        return nothing
+    end
+
+    improved_record, improvement = result
+    return FASTX.sequence(String, improved_record), improvement
+end
+
 """
 Try statistical path resampling for alternative high-likelihood paths.
 Returns (improved_read, likelihood) or nothing if no improvement.
 """
-function try_statistical_path_resampling(read::FASTX.FASTQ.Record, graph, k::Int)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+function try_statistical_path_resampling(read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol = :canonical)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         # Detect sequence type dynamically
         sequence_string = FASTX.sequence(String, read)
@@ -918,10 +1273,10 @@ function try_statistical_path_resampling(read::FASTX.FASTQ.Record, graph, k::Int
         quality_string = FASTX.quality(read)
         
         # Generate multiple alternative paths using qualmer sampling
-        alternative_paths = generate_alternative_qualmer_paths(read, graph, k, num_samples=5)
+        alternative_paths = generate_alternative_qualmer_paths(read, graph, k, num_samples=5, graph_mode=graph_mode)
         
         best_sequence = sequence
-        best_likelihood = calculate_sequence_likelihood(sequence, quality_scores, graph, k)
+        best_likelihood = calculate_sequence_likelihood(sequence, quality_scores, graph, k; graph_mode=graph_mode)
         best_quality_scores = quality_scores
         
         # Evaluate each alternative path
@@ -932,7 +1287,7 @@ function try_statistical_path_resampling(read::FASTX.FASTQ.Record, graph, k::Int
                 alt_sequence = alt_result.sequence
                 alt_quality_scores = alt_result.quality_scores
                 
-                alt_likelihood = calculate_sequence_likelihood(alt_sequence, alt_quality_scores, graph, k)
+                alt_likelihood = calculate_sequence_likelihood(alt_sequence, alt_quality_scores, graph, k; graph_mode=graph_mode)
                 
                 if alt_likelihood > best_likelihood
                     best_sequence = alt_sequence
@@ -959,43 +1314,69 @@ function try_statistical_path_resampling(read::FASTX.FASTQ.Record, graph, k::Int
     return nothing
 end
 
+function try_statistical_path_resampling(sequence::AbstractString, quality, graph, k::Int; graph_mode::Symbol = :canonical)
+    quality_string = if quality isa AbstractString
+        String(quality)
+    elseif quality isa AbstractVector{<:Integer}
+        String([Char(Int(q) + 33) for q in quality])
+    else
+        throw(ArgumentError("Unsupported quality type for try_statistical_path_resampling"))
+    end
+
+    record = FASTX.FASTQ.Record("input_sequence", sequence, quality_string)
+    result = try_statistical_path_resampling(record, graph, k; graph_mode=graph_mode)
+    if result === nothing
+        return nothing
+    end
+
+    improved_record, improvement = result
+    return FASTX.sequence(String, improved_record), improvement
+end
+
 """
 Local heuristic improvements (fallback method).
 Returns (improved_read, likelihood_improvement).
 """
-function try_local_path_improvements(read::FASTX.FASTQ.Record, graph, k::Int, original_likelihood::Float64)::Tuple{FASTX.FASTQ.Record, Float64}
-    improved_seq = sequence  # Start with original
+function try_local_path_improvements(read::FASTX.FASTQ.Record, graph, k::Int, original_likelihood::Float64; graph_mode::Symbol = :canonical)::Tuple{FASTX.FASTQ.Record, Float64}
+    sequence_string = FASTX.sequence(String, read)
+    alphabet = detect_alphabet(sequence_string)
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    quality_scores = collect(FASTX.quality_scores(read))
+
+    improved_seq = sequence_string  # Start with original
     best_likelihood = original_likelihood
     
     # Try local improvements at positions with low-probability k-mers
-    for i in 1:(length(sequence) - k + 1)
-        kmer_str = sequence[i:i+k-1]
-        
-        # Find this k-mer in the graph by checking vertex labels
-        target_kmer = nothing
-        for kmer_obj in values(graph.vertex_labels)
-            if string(kmer_obj) == kmer_str
-                target_kmer = kmer_obj
-                break
-            end
+    for i in 1:(length(sequence_string) - k + 1)
+        kmer_str = sequence_string[i:i+k-1]
+
+        raw_kmer = if sequence_type <: BioSequences.LongDNA
+            Kmers.DNAKmer{k}(kmer_str)
+        elseif sequence_type <: BioSequences.LongRNA
+            Kmers.RNAKmer{k}(kmer_str)
+        else
+            Kmers.AAKmer{k}(kmer_str)
         end
-        
+
+        target_kmer = _resolve_kmer_label(graph, raw_kmer; graph_mode=graph_mode)
         if target_kmer !== nothing
             vertex_data = graph[target_kmer]
-            if vertex_data.joint_probability < 0.7  # Low confidence k-mer
+            if _vertex_joint_probability(vertex_data) < 0.7  # Low confidence k-mer
                 # Try improving this position
-                alternatives = generate_kmer_alternatives(kmer_str, graph)
+                alternatives = generate_kmer_alternatives(target_kmer, graph, sequence_type; graph_mode=graph_mode)
                 for alt_kmer in alternatives
+                    alt_kmer_str = string(alt_kmer)
                     if i == 1
-                        candidate_seq = alt_kmer * sequence[i+k:end]
-                    elseif i+k-1 == length(sequence)
-                        candidate_seq = sequence[1:i-1] * alt_kmer
+                        candidate_seq = alt_kmer_str * sequence_string[i+k:end]
+                    elseif i+k-1 == length(sequence_string)
+                        candidate_seq = sequence_string[1:i-1] * alt_kmer_str
                     else
-                        candidate_seq = sequence[1:i-1] * alt_kmer * sequence[i+k:end]
+                        candidate_seq = sequence_string[1:i-1] * alt_kmer_str * sequence_string[i+k:end]
                     end
-                    
-                    candidate_likelihood = calculate_sequence_likelihood(candidate_seq, quality, graph, k)
-                    
+
+                    candidate_bioseq = detect_and_extract_sequence(candidate_seq, alphabet)
+                    candidate_likelihood = calculate_sequence_likelihood(candidate_bioseq, quality_scores, graph, k; graph_mode=graph_mode)
+
                     if candidate_likelihood > best_likelihood
                         improved_seq = candidate_seq
                         best_likelihood = candidate_likelihood
@@ -1006,27 +1387,48 @@ function try_local_path_improvements(read::FASTX.FASTQ.Record, graph, k::Int, or
     end
     
     likelihood_improvement = best_likelihood - original_likelihood
-    return improved_seq, likelihood_improvement
+    improved_quality = adjust_quality_scores(FASTX.quality(read), improved_seq, likelihood_improvement)
+    improved_record = FASTX.FASTQ.Record(FASTX.identifier(read), improved_seq, improved_quality)
+    return improved_record, likelihood_improvement
+end
+
+function try_local_path_improvements(sequence::AbstractString, quality, graph, k::Int, original_likelihood::Float64; graph_mode::Symbol = :canonical)::Tuple{String, Float64}
+    quality_string = if quality isa AbstractString
+        String(quality)
+    elseif quality isa AbstractVector{<:Integer}
+        String([Char(Int(q) + 33) for q in quality])
+    else
+        throw(ArgumentError("Unsupported quality type for try_local_path_improvements"))
+    end
+
+    record = FASTX.FASTQ.Record("input_sequence", sequence, quality_string)
+    improved_record, improvement = try_local_path_improvements(record, graph, k, original_likelihood; graph_mode=graph_mode)
+    return FASTX.sequence(String, improved_record), improvement
 end
 
 """
 Generate alternative qualmer paths through the graph using quality-aware probabilistic sampling.
 """
-function generate_alternative_qualmer_paths(record::FASTX.FASTQ.Record, graph, k::Int; num_samples::Int = 5)::Vector{Vector{<:Qualmer}}
+function generate_alternative_qualmer_paths(record::FASTX.FASTQ.Record, graph, k::Int; num_samples::Int = 5, graph_mode::Symbol = :canonical)::Vector{Vector{<:Qualmer}}
     paths = Vector{Vector{Qualmer}}()
     
     try
-        # Extract sequence and quality from FASTQ record using proper types
-        sequence = convert_sequence(FASTX.sequence(record))
-        quality_scores = collect(FASTX.quality_scores(record))
-        
         # Generate qualmers using existing qualmer-analysis functions
-        original_qualmers = collect(qualmers_unambiguous_canonical(record, k))
+        original_qualmers = collect(qualmers_unambiguous(record, k))
         if isempty(original_qualmers)
             return Vector{Vector{Qualmer}}()
         end
-        
-        original_path = [qmer for (qmer, pos) in original_qualmers]
+
+        original_path = Qualmer[]
+        for (qmer, pos) in original_qualmers
+            resolved = _resolve_qualmer_for_graph(graph, qmer; graph_mode=graph_mode)
+            if resolved !== nothing
+                push!(original_path, resolved)
+            end
+        end
+        if isempty(original_path)
+            return Vector{Vector{Qualmer}}()
+        end
         
         # For each sample, create alternative path using quality-aware sampling
         for sample in 1:num_samples
@@ -1035,11 +1437,11 @@ function generate_alternative_qualmer_paths(record::FASTX.FASTQ.Record, graph, k
             # Select positions to modify based on quality confidence
             low_confidence_positions = Int[]
             for (i, qmer) in enumerate(original_path)
-                canonical_qmer = canonical(qmer)
-                if canonical_qmer in MetaGraphsNext.labels(graph)
-                    vertex_data = graph[canonical_qmer]
+                current_kmer = qmer.kmer
+                if haskey(graph, current_kmer)
+                    vertex_data = graph[current_kmer]
                     # Prefer modifying low-confidence positions
-                    if vertex_data.joint_probability < 0.8 || vertex_data.mean_quality < 30.0
+                    if _vertex_joint_probability(vertex_data) < 0.8 || _vertex_mean_quality(vertex_data) < 30.0
                         push!(low_confidence_positions, i)
                     end
                 end
@@ -1055,11 +1457,12 @@ function generate_alternative_qualmer_paths(record::FASTX.FASTQ.Record, graph, k
             for pos in modification_positions
                 if pos <= length(alternative_path)
                     current_qualmer = alternative_path[pos]
-                    canonical_qualmer = canonical(current_qualmer)
-                    
-                    if canonical_qualmer in MetaGraphsNext.labels(graph)
+                    current_kmer = current_qualmer.kmer
+
+                    if haskey(graph, current_kmer)
                         # Get high-quality neighbor k-mers for potential transitions
-                        vertex_data = graph[canonical_qualmer]
+                        vertex_data = graph[current_kmer]
+                        vertex_coverage = _vertex_coverage(vertex_data)
                         all_vertices = collect(MetaGraphsNext.labels(graph))
                         
                         # Filter neighbors that could be valid transitions
@@ -1070,9 +1473,9 @@ function generate_alternative_qualmer_paths(record::FASTX.FASTQ.Record, graph, k
                             neighbor_data = graph[neighbor_kmer]
                             
                             # Quality-aware weighting combining multiple factors
-                            weight = neighbor_data.joint_probability * 
-                                    (neighbor_data.mean_quality / 60.0) *  # Normalize quality (max ~60)
-                                    (neighbor_data.coverage / max(1, vertex_data.coverage))  # Relative coverage
+                            weight = _vertex_joint_probability(neighbor_data) * 
+                                    (_vertex_mean_quality(neighbor_data) / 60.0) *  # Normalize quality (max ~60)
+                                    (_vertex_coverage(neighbor_data) / max(1, vertex_coverage))  # Relative coverage
                             
                             if weight > 0.01  # Minimum threshold for consideration
                                 push!(valid_neighbors, neighbor_kmer)
@@ -1111,32 +1514,28 @@ end
 """
 Convert sequence with quality to qualmer path representation using graph vertices.
 """
-function sequence_to_qualmer_path(sequence::String, quality::String, graph, k::Int)::Vector{<:Qualmer}
+function sequence_to_qualmer_path(sequence::String, quality::String, graph, k::Int; graph_mode::Symbol = :canonical)::Vector{<:Qualmer}
     path = Qualmer[]
-    
+
+    labels = collect(MetaGraphsNext.labels(graph))
+    if isempty(labels) || length(sequence) < k
+        return path
+    end
+
+    kmer_type = typeof(first(labels))
+
     for i in 1:(length(sequence) - k + 1)
         kmer_str = sequence[i:i+k-1]
         qual_segment = quality[i:i+k-1]
-        
-        # Find matching qualmer in graph
-        target_qualmer = nothing
-        for qualmer_obj in values(graph.vertex_labels)
-            if string(qualmer_obj.kmer) == kmer_str
-                # Could add quality score matching here if needed
-                target_qualmer = qualmer_obj
-                break
-            end
-        end
-        
-        if target_qualmer !== nothing
-            push!(path, target_qualmer)
-        else
-            # If not found in graph, create a placeholder or skip
-            # For now, we'll skip missing k-mers to maintain path integrity
-            continue
+        quality_scores = UInt8.(codeunits(qual_segment)) .- UInt8(33)
+
+        qmer = Qualmer(kmer_type(kmer_str), quality_scores)
+        resolved = _resolve_qualmer_for_graph(graph, qmer; graph_mode=graph_mode)
+        if resolved !== nothing
+            push!(path, resolved)
         end
     end
-    
+
     return path
 end
 
@@ -1151,6 +1550,43 @@ function sequence_to_kmer_path(sequence::String, k::Int)::Vector{String}
     end
     
     return path
+end
+
+function _kmer_to_string(kmer)::String
+    return kmer isa AbstractString ? String(kmer) : string(kmer)
+end
+
+"""
+Convert k-mer path back to sequence string.
+"""
+function kmer_path_to_sequence(path::AbstractVector, k::Int)::String
+    if isempty(path)
+        return ""
+    end
+
+    first_kmer = _kmer_to_string(path[1])
+    if isempty(first_kmer)
+        return ""
+    end
+
+    buffer = IOBuffer()
+    write(buffer, first_kmer)
+
+    for i in 2:length(path)
+        kmer_str = _kmer_to_string(path[i])
+        if !isempty(kmer_str)
+            write(buffer, kmer_str[end])
+        end
+    end
+
+    return String(take!(buffer))
+end
+
+"""
+Convert a generic path back to sequence string (alias for k-mer paths).
+"""
+function path_to_sequence(path::AbstractVector, k::Int)::String
+    return kmer_path_to_sequence(path, k)
 end
 
 """

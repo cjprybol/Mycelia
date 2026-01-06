@@ -6,6 +6,7 @@ import Test
 import Mycelia
 import DataFrames
 import HTTP
+import CSV
 
 Test.@testset "Genome Features Tests" begin
     Test.@testset "GFF Reading and Writing" begin
@@ -25,7 +26,7 @@ ctg123	.	mRNA	1050	9000	.	+	.	ID=mRNA00002;Parent=gene00001;Name=EDEN.2
         # Test reading GFF
         gff_df = Mycelia.read_gff(temp_gff)
         
-        Test.@test gff_df isa DataFrame
+        Test.@test gff_df isa DataFrames.DataFrame
         Test.@test size(gff_df, 1) == 4  # 4 feature lines
         Test.@test names(gff_df) == ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]
         
@@ -42,8 +43,8 @@ ctg123	.	mRNA	1050	9000	.	+	.	ID=mRNA00002;Parent=gene00001;Name=EDEN.2
     end
 
     Test.@testset "GFF Attributes Splitting" begin
-        # Create test DataFrame with GFF attributes
-        test_df = DataFrame(
+        # Create test DataFrames.DataFrame with GFF attributes
+        test_df = DataFrames.DataFrame(
             attributes = [
                 "ID=gene1;Name=BRCA1;Type=gene",
                 "ID=mRNA1;Parent=gene1;Name=transcript1",
@@ -69,16 +70,16 @@ ctg123	.	mRNA	1050	9000	.	+	.	ID=mRNA00002;Parent=gene00001;Name=EDEN.2
 
     Test.@testset "GFF Writing" begin
         # Create test data
-        test_data = DataFrame(
-            seqid = ["chr1", "chr1", "chr2"],
-            source = ["test", "test", "test"],
-            type = ["gene", "mRNA", "exon"],
-            start = [1000, 1000, 1200],
-            end = [2000, 2000, 1800],
-            score = [100, 90, 80],
-            strand = ["+", "+", "-"],
-            phase = [0, 0, 1],
-            attributes = ["ID=gene1", "ID=mRNA1;Parent=gene1", "ID=exon1;Parent=mRNA1"]
+        test_data = DataFrames.DataFrame(
+            :seqid => ["chr1", "chr1", "chr2"],
+            :source => ["test", "test", "test"],
+            :type => ["gene", "mRNA", "exon"],
+            :start => [1000, 1000, 1200],
+            :end => [2000, 2000, 1800],
+            :score => [100, 90, 80],
+            :strand => ["+", "+", "-"],
+            :phase => [0, 0, 1],
+            :attributes => ["ID=gene1", "ID=mRNA1;Parent=gene1", "ID=exon1;Parent=mRNA1"],
         )
         
         # Write to file
@@ -108,7 +109,7 @@ ctg123	prodigal	CDS	3000	4000	.	-	0	ID=gene_002;product=unknown_function
         write(temp_gff, gff_content)
         
         # Create mock MMseqs results
-        mmseqs_data = DataFrame(
+        mmseqs_data = DataFrames.DataFrame(
             query = ["gene_001", "gene_002"],
             target = ["target1", "target2"],
             theader = ["ATP synthase subunit alpha", "DNA polymerase"],
@@ -171,8 +172,10 @@ chr1	source	gene	not_a_number	2000	.	+	.	ID=gene1
         temp_malformed = tempname() * ".gff"
         write(temp_malformed, malformed_gff)
         
-        # This should either handle the error gracefully or fail predictably
-        Test.@test_throws Exception Mycelia.read_gff(temp_malformed)
+        # This should handle malformed numeric fields without throwing
+        malformed_df = Mycelia.read_gff(temp_malformed)
+        Test.@test malformed_df isa DataFrames.DataFrame
+        Test.@test !isa(malformed_df[1, "start"], Int)
         
         # Cleanup
         rm(temp_malformed, force=true)
@@ -206,7 +209,7 @@ chr1	.	gene	1	100	.	+	.	ID=gene1
             ""  # Empty attributes
         ]
         
-        test_df = DataFrame(attributes = test_cases)
+        test_df = DataFrames.DataFrame(attributes = test_cases)
         expanded_df = Mycelia.split_gff_attributes_into_columns(test_df)
         
         # All rows should have ID column populated (except empty one)
@@ -225,8 +228,8 @@ chr1	.	gene	1	100	.	+	.	ID=gene1
         non_existent = "/path/that/does/not/exist.gff"
         Test.@test_throws Exception Mycelia.read_gff(non_existent)
         
-        # Test empty DataFrame for attribute splitting
-        empty_df = DataFrame(attributes = String[])
+        # Test empty DataFrames.DataFrame for attribute splitting
+        empty_df = DataFrames.DataFrame(attributes = String[])
         result = Mycelia.split_gff_attributes_into_columns(empty_df)
         Test.@test size(result, 1) == 0
         Test.@test "attributes" in names(result)
@@ -234,7 +237,7 @@ chr1	.	gene	1	100	.	+	.	ID=gene1
 
     Test.@testset "Integration Tests" begin
         # Test complete workflow: create GFF -> read -> modify -> write
-        original_data = DataFrame(
+        original_data = DataFrames.DataFrame(
             "#seqid" => ["chr1", "chr1"],
             "source" => ["test", "test"],
             "type" => ["gene", "mRNA"],

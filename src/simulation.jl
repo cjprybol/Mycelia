@@ -184,8 +184,8 @@ Generates gzipped FASTQ files in the working directory:
 - For paired-end: `\$(outbase)1.fq.gz` (forward) and `\$(outbase)2.fq.gz` (reverse).
 - For single-end: `\$(outbase)1.fq.gz`.
 
-Additional SAM files may be produced if `--errfree` is enabled and/or if
-the ART `--samout` option is specified.
+SAM files are produced via ART's `--samout` option, and additional error-free
+SAM output is created when `--errfree` is enabled.
 
 # Details
 This function calls ART with the provided options. Note that if `read_count` is supplied,
@@ -207,7 +207,7 @@ function simulate_illumina_reads(;fasta::String,
     sdev::Int = 10,
     seqSys::String = "HS25",
     amplicon::Bool = false,
-    errfree::Bool = true,
+    errfree::Bool = false,
     paired::Bool = true,
     rndSeed::Int = current_unix_datetime(),
     quiet::Bool = true
@@ -216,6 +216,7 @@ function simulate_illumina_reads(;fasta::String,
     # Ensure ART is available via Bioconda
     Mycelia.add_bioconda_env("art", quiet=quiet)
     
+    errfree_flag = errfree ? ["--errfree"] : String[]
     # Determine read count or coverage
     if read_count !== nothing
         if isempty(outbase)
@@ -225,23 +226,23 @@ function simulate_illumina_reads(;fasta::String,
         if paired
             full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
                 --paired \
-                --errfree \
-                --noALN \
+                --samout \
                 --seqSys $(seqSys) \
                 --len $(read_length) \
                 --mflen $(mflen) \
                 --sdev $(sdev) \
                 --rndSeed $(rndSeed) \
+                $(errfree_flag...) \
                 --rcount $(read_count) \
                 --in $(fasta) \
                 --out $(outbase)`
         else
             full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
-                --errfree \
-                --noALN \
+                --samout \
                 --seqSys $(seqSys) \
                 --len $(read_length) \
                 --rndSeed $(rndSeed) \
+                $(errfree_flag...) \
                 --rcount $(read_count) \
                 --in $(fasta) \
                 --out $(outbase)`
@@ -254,23 +255,23 @@ function simulate_illumina_reads(;fasta::String,
         if paired
             full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
                 --paired \
-                --errfree \
-                --noALN \
+                --samout \
                 --seqSys $(seqSys) \
                 --len $(read_length) \
                 --mflen $(mflen) \
                 --sdev $(sdev) \
                 --rndSeed $(rndSeed) \
+                $(errfree_flag...) \
                 --fcov $(coverage) \
                 --in $(fasta) \
                 --out $(outbase)`
         else
             full_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n art art_illumina \
-                --errfree \
-                --noALN \
+                --samout \
                 --seqSys $(seqSys) \
                 --len $(read_length) \
                 --rndSeed $(rndSeed) \
+                $(errfree_flag...) \
                 --fcov $(coverage) \
                 --in $(fasta) \
                 --out $(outbase)`
@@ -294,9 +295,12 @@ function simulate_illumina_reads(;fasta::String,
     error_free_samfile_gz = error_free_samfile * ".gz"
 
     # Check if all expected files exist
-    expected_files = [forward_gz, samfile_gz, error_free_samfile_gz]
+    expected_files = [forward_gz, samfile_gz]
     if paired
         push!(expected_files, reverse_gz)
+    end
+    if errfree
+        push!(expected_files, error_free_samfile_gz)
     end
     if !all(isfile.(expected_files))
         if !quiet
@@ -313,13 +317,13 @@ function simulate_illumina_reads(;fasta::String,
         # For single-end, only outbase1.fq is produced.
     
         @assert isfile(forward_fq) "Forward FASTQ file not found: $(forward_fq)"
-        run(`gzip $(forward_fq)`)
+        run(`gzip -f $(forward_fq)`)
         @assert isfile(forward_gz) "Gzipped forward FASTQ not found: $(forward_gz)"
     
         # Only process reverse reads if paired-end
         if paired
             @assert isfile(reverse_fq) "Reverse FASTQ file not found: $(reverse_fq)"
-            run(`gzip $(reverse_fq)`)
+            run(`gzip -f $(reverse_fq)`)
             @assert isfile(reverse_gz) "Gzipped reverse FASTQ not found: $(reverse_gz)"
         end
     
@@ -327,20 +331,354 @@ function simulate_illumina_reads(;fasta::String,
     
         @assert isfile(samfile)
         if !isfile(samfile_gz)
-            run(`gzip $(samfile)`)
+            run(`gzip -f $(samfile)`)
             @assert isfile(samfile_gz)
         end
         
-        @assert isfile(error_free_samfile)
-        if !isfile(error_free_samfile_gz)
-            run(`gzip $(error_free_samfile)`)
-            @assert isfile(error_free_samfile_gz)
+        if errfree
+            @assert isfile(error_free_samfile)
+            if !isfile(error_free_samfile_gz)
+                run(`gzip -f $(error_free_samfile)`)
+                @assert isfile(error_free_samfile_gz)
+            end
         end
     else
         @info "All files already present, returning existing paths..."
     end
 
-    return (forward_reads = forward_gz, reverse_reads = paired ? reverse_gz : nothing, sam = samfile_gz, error_free_sam = error_free_samfile_gz)
+    return (forward_reads = forward_gz, reverse_reads = paired ? reverse_gz : nothing, sam = samfile_gz, error_free_sam = errfree ? error_free_samfile_gz : nothing)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Sample abundance weights for a community.
+
+# Arguments
+- `n_organisms::Int`: Number of organisms in the community.
+- `balance::Symbol`: `:equal`, `:random`, or `:log_normal`.
+
+# Keywords
+- `rng::Random.AbstractRNG=StableRNGs.StableRNG(1)`: RNG for reproducibility.
+- `lognorm_mu::Float64=0.0`, `lognorm_sigma::Float64=1.0`: Log-normal parameters.
+
+# Returns
+Vector of weights summing to 1.0.
+"""
+function sample_abundance_weights(;n_organisms::Int, balance::Symbol, rng::Random.AbstractRNG=StableRNGs.StableRNG(1), lognorm_mu::Float64=0.0, lognorm_sigma::Float64=1.0)
+    @assert n_organisms > 0 "n_organisms must be positive"
+    @assert balance in (:equal, :random, :log_normal)
+    if balance == :equal
+        return fill(1.0 / n_organisms, n_organisms)
+    elseif balance == :random
+        return rand(rng, Distributions.Dirichlet(fill(1.0, n_organisms)))
+    else
+        raw = rand(rng, Distributions.LogNormal(lognorm_mu, lognorm_sigma), n_organisms)
+        return raw ./ sum(raw)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Simulate a metagenomic community by sampling reference sequences, applying an
+abundance profile, and generating reads per organism before merging.
+
+# Arguments
+- `reference_fasta::String`: Reference FASTA with all candidate sequences.
+- `reference_table::DataFrames.DataFrame`: Table containing `sequence_id` (or `accession`) and taxonomy columns.
+- `n_organisms::Int`: Number of organisms to sample (diversity).
+- `depth_target::Real`: Mean per-genome coverage target.
+- `abundance_profile::Symbol`: `:equal`, `:random`, `:log_normal`, or `:custom`.
+- `readset::Symbol`: `:illumina_pe150`, `:illumina_se250`, `:nanopore`, or `:pacbio_hifi`.
+- `outdir::String`: Output directory for reads and truth tables.
+
+# Keywords
+- `selected_ids::Union{Nothing,Vector{String}}=nothing`: Optional preselected IDs.
+- `weights::Union{Nothing,Vector{Float64}}=nothing`: Optional precomputed abundance weights.
+- `rng::Random.AbstractRNG=StableRNGs.StableRNG(1)`: RNG for reproducibility.
+- `replicate::Int=1`: Replicate identifier.
+- `run_simulation::Bool=true`: Skip external tool execution when false.
+- `emit_truth_reads::Bool=true`: For Illumina readsets, also generate error-free reads.
+- `lognorm_mu::Float64=0.0`, `lognorm_sigma::Float64=1.0`: Log-normal parameters.
+- `mflen::Int=500`, `sdev::Int=10`: ART fragment length parameters.
+- `quiet::Bool=true`: Suppress external tool output where supported.
+- `cleanup::Bool=true`: Remove temporary per-genome FASTA/FASTQ files.
+
+# Returns
+Named tuple with `truth_table`, `reads`, `truth_reads`, `per_genome_fastas`, and `per_genome_reads`.
+"""
+function simulate_metagenome_community(;
+    reference_fasta::String,
+    reference_table::DataFrames.DataFrame,
+    n_organisms::Int,
+    depth_target::Real,
+    abundance_profile::Symbol,
+    readset::Symbol,
+    outdir::String,
+    selected_ids::Union{Nothing,Vector{String}}=nothing,
+    weights::Union{Nothing,Vector{Float64}}=nothing,
+    rng::Random.AbstractRNG=StableRNGs.StableRNG(1),
+    replicate::Int=1,
+    run_simulation::Bool=true,
+    emit_truth_reads::Bool=true,
+    lognorm_mu::Float64=0.0,
+    lognorm_sigma::Float64=1.0,
+    mflen::Int=500,
+    sdev::Int=10,
+    quiet::Bool=true,
+    cleanup::Bool=true
+)
+    @assert isfile(reference_fasta) "Reference FASTA not found: $(reference_fasta)"
+    @assert n_organisms > 0 "n_organisms must be positive"
+    @assert depth_target > 0 "depth_target must be positive"
+    @assert abundance_profile in (:equal, :random, :log_normal, :custom)
+    @assert readset in (:illumina_pe150, :illumina_se250, :nanopore, :pacbio_hifi)
+    mkpath(outdir)
+
+    id_col = if "sequence_id" in DataFrames.names(reference_table)
+        "sequence_id"
+    elseif "accession" in DataFrames.names(reference_table)
+        "accession"
+    else
+        error("reference_table must contain sequence_id or accession column")
+    end
+    id_col_sym = Symbol(id_col)
+    length_col = "length" in DataFrames.names(reference_table) ? "length" : nothing
+    length_col_sym = isnothing(length_col) ? nothing : Symbol(length_col)
+    valid_rows = DataFrames.filter(row -> !ismissing(row[id_col_sym]), reference_table)
+    available_ids = String.(valid_rows[!, id_col_sym])
+    @assert length(available_ids) >= n_organisms "Not enough sequences to sample from reference_table"
+
+    if isnothing(selected_ids)
+        selected_ids = StatsBase.sample(rng, available_ids, n_organisms; replace=false)
+    else
+        @assert length(selected_ids) == n_organisms "selected_ids must match n_organisms"
+    end
+    if isnothing(weights)
+        if abundance_profile == :custom
+            error("abundance_profile=:custom requires explicit weights")
+        else
+            weights = Mycelia.sample_abundance_weights(
+                n_organisms=n_organisms,
+                balance=abundance_profile,
+                rng=rng,
+                lognorm_mu=lognorm_mu,
+                lognorm_sigma=lognorm_sigma
+            )
+        end
+    else
+        @assert length(weights) == n_organisms "weights must match n_organisms"
+        weights = weights ./ sum(weights)
+    end
+    coverages = depth_target * n_organisms .* weights
+
+    selected_df = DataFrames.leftjoin(
+        DataFrames.DataFrame(sequence_id = selected_ids, selection_order = collect(1:n_organisms)),
+        valid_rows,
+        on = [:sequence_id => id_col_sym],
+        makeunique=true
+    )
+    DataFrames.sort!(selected_df, :selection_order)
+    selected_df[!, :weight] = weights
+    selected_df[!, :coverage] = coverages
+    if !isnothing(length_col_sym)
+        lengths = Float64.(selected_df[!, length_col_sym])
+        base_weights = coverages .* lengths
+        selected_df[!, :expected_relative_bases] = base_weights ./ sum(base_weights)
+    end
+    selected_df[!, :replicate] .= replicate
+    truth_table = selected_df
+
+    tmpdir = joinpath(outdir, "tmp")
+    mkpath(tmpdir)
+    fasta_dir = joinpath(tmpdir, "genomes")
+    mkpath(fasta_dir)
+    reads_dir = joinpath(outdir, "reads")
+    mkpath(reads_dir)
+    truth_reads_dir = joinpath(outdir, "truth_reads")
+    mkpath(truth_reads_dir)
+
+    selected_set = Set(selected_ids)
+    per_genome_fastas = Dict{String,String}()
+    for record in Mycelia.open_fastx(reference_fasta)
+        record_id = String(FASTX.identifier(record))
+        if record_id in selected_set
+            safe_id = Mycelia.sanitize_fastx_identifier(record_id)
+            fasta_path = joinpath(fasta_dir, "$(safe_id).fna")
+            Mycelia.write_fasta(outfile=fasta_path, records=[record], gzip=false)
+            per_genome_fastas[record_id] = fasta_path
+        end
+    end
+    missing_ids = setdiff(selected_set, Set(keys(per_genome_fastas)))
+    @assert isempty(missing_ids) "Missing sequences in reference_fasta: $(collect(missing_ids)[1:min(end, 5)])"
+
+    per_genome_reads = DataFrames.DataFrame(
+        sequence_id = String[],
+        coverage = Float64[],
+        readset = String[],
+        forward_reads = Union{String,Missing}[],
+        reverse_reads = Union{String,Missing}[],
+        truth_forward_reads = Union{String,Missing}[],
+        truth_reverse_reads = Union{String,Missing}[],
+        sam = Union{String,Missing}[],
+        truth_sam = Union{String,Missing}[]
+    )
+
+    merged_forward = nothing
+    merged_reverse = nothing
+    merged_truth_forward = nothing
+    merged_truth_reverse = nothing
+
+    if run_simulation
+        forward_reads = String[]
+        reverse_reads = String[]
+        truth_forward_reads = String[]
+        truth_reverse_reads = String[]
+
+        for (idx, sequence_id) in enumerate(selected_ids)
+            fasta = per_genome_fastas[sequence_id]
+            coverage = coverages[idx]
+            seed = rand(rng, 1:2^31-1)
+            if readset == :illumina_pe150 || readset == :illumina_se250
+                paired = readset == :illumina_pe150
+                read_length = paired ? 150 : 250
+                seq_sys = paired ? "HS25" : "MSv3"
+                outbase = joinpath(tmpdir, "$(Mycelia.sanitize_fastx_identifier(sequence_id)).$(readset).r$(replicate)")
+                sim = Mycelia.simulate_illumina_reads(
+                    fasta=fasta,
+                    coverage=coverage,
+                    outbase=outbase,
+                    read_length=read_length,
+                    mflen=mflen,
+                    sdev=sdev,
+                    seqSys=seq_sys,
+                    paired=paired,
+                    rndSeed=seed,
+                    errfree=false,
+                    quiet=quiet
+                )
+                push!(forward_reads, sim.forward_reads)
+                if paired && !isnothing(sim.reverse_reads)
+                    push!(reverse_reads, sim.reverse_reads)
+                end
+                truth_forward = missing
+                truth_reverse = missing
+                truth_sam = missing
+                if emit_truth_reads
+                    truth_outbase = outbase * ".errfree"
+                    truth_sim = Mycelia.simulate_illumina_reads(
+                        fasta=fasta,
+                        coverage=coverage,
+                        outbase=truth_outbase,
+                        read_length=read_length,
+                        mflen=mflen,
+                        sdev=sdev,
+                        seqSys=seq_sys,
+                        paired=paired,
+                        rndSeed=seed,
+                        errfree=true,
+                        quiet=quiet
+                    )
+                    truth_forward = truth_sim.forward_reads
+                    if paired && !isnothing(truth_sim.reverse_reads)
+                        truth_reverse = truth_sim.reverse_reads
+                    end
+                    if !isnothing(truth_sim.error_free_sam)
+                        truth_sam = truth_sim.error_free_sam
+                    end
+                    push!(truth_forward_reads, truth_forward)
+                    if paired && truth_reverse !== missing
+                        push!(truth_reverse_reads, truth_reverse)
+                    end
+                end
+                DataFrames.push!(
+                    per_genome_reads,
+                    (sequence_id=sequence_id,
+                     coverage=coverage,
+                     readset=string(readset),
+                     forward_reads=sim.forward_reads,
+                     reverse_reads=paired ? sim.reverse_reads : missing,
+                     truth_forward_reads=truth_forward,
+                     truth_reverse_reads=paired ? truth_reverse : missing,
+                     sam=sim.sam,
+                     truth_sam=truth_sam)
+                )
+            elseif readset == :nanopore
+                outbase = joinpath(tmpdir, "$(Mycelia.sanitize_fastx_identifier(sequence_id)).nanopore.r$(replicate).fq.gz")
+                read_path = Mycelia.simulate_nanopore_reads(
+                    fasta=fasta,
+                    quantity="$(coverage)x",
+                    outfile=outbase,
+                    quiet=quiet,
+                    seed=seed
+                )
+                push!(forward_reads, read_path)
+                DataFrames.push!(
+                    per_genome_reads,
+                    (sequence_id=sequence_id,
+                     coverage=coverage,
+                     readset=string(readset),
+                     forward_reads=read_path,
+                     reverse_reads=missing,
+                     truth_forward_reads=missing,
+                     truth_reverse_reads=missing,
+                     sam=missing,
+                     truth_sam=missing)
+                )
+            else
+                outbase = joinpath(tmpdir, "$(Mycelia.sanitize_fastx_identifier(sequence_id)).pacbio_hifi.r$(replicate).fq.gz")
+                read_path = Mycelia.simulate_pacbio_reads(
+                    fasta=fasta,
+                    quantity="$(coverage)x",
+                    outfile=outbase,
+                    quiet=quiet,
+                    seed=seed
+                )
+                push!(forward_reads, read_path)
+                DataFrames.push!(
+                    per_genome_reads,
+                    (sequence_id=sequence_id,
+                     coverage=coverage,
+                     readset=string(readset),
+                     forward_reads=read_path,
+                     reverse_reads=missing,
+                     truth_forward_reads=missing,
+                     truth_reverse_reads=missing,
+                     sam=missing,
+                     truth_sam=missing)
+                )
+            end
+        end
+
+        merged_forward = joinpath(reads_dir, "community.$(readset).r$(replicate).R1.fq.gz")
+        merged_forward = Mycelia.concatenate_fastq_files(fastq_files=forward_reads, output_fastq=merged_forward, gzip=true, force=true)
+        if readset == :illumina_pe150
+            merged_reverse = joinpath(reads_dir, "community.$(readset).r$(replicate).R2.fq.gz")
+            merged_reverse = Mycelia.concatenate_fastq_files(fastq_files=reverse_reads, output_fastq=merged_reverse, gzip=true, force=true)
+        end
+
+        if emit_truth_reads && (readset == :illumina_pe150 || readset == :illumina_se250)
+            merged_truth_forward = joinpath(truth_reads_dir, "community.$(readset).r$(replicate).truth.R1.fq.gz")
+            merged_truth_forward = Mycelia.concatenate_fastq_files(fastq_files=truth_forward_reads, output_fastq=merged_truth_forward, gzip=true, force=true)
+            if readset == :illumina_pe150
+                merged_truth_reverse = joinpath(truth_reads_dir, "community.$(readset).r$(replicate).truth.R2.fq.gz")
+                merged_truth_reverse = Mycelia.concatenate_fastq_files(fastq_files=truth_reverse_reads, output_fastq=merged_truth_reverse, gzip=true, force=true)
+            end
+        end
+    end
+
+    if cleanup
+        rm(tmpdir; force=true, recursive=true)
+    end
+
+    return (
+        truth_table = truth_table,
+        reads = (forward=merged_forward, reverse=merged_reverse),
+        truth_reads = (forward=merged_truth_forward, reverse=merged_truth_reverse),
+        per_genome_fastas = per_genome_fastas,
+        per_genome_reads = per_genome_reads
+    )
 end
 
 # Individual ART Illumina profile functions with specific parameters
@@ -614,15 +952,20 @@ Follows the recommended PacBio HiFi simulation parameters from the Badread docum
 
 See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simulate_badread_reads`
 """
-function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"), quiet=false)
+function simulate_pacbio_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"), quiet=false, seed::Union{Nothing,Int}=nothing)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
+        cmd_args = ["badread", "simulate", "--error_model", "pacbio2021", "--qscore_model", "pacbio2021", "--identity", "30,3", "--reference", fasta, "--quantity", quantity]
+        if !isnothing(seed)
+            push!(cmd_args, "--seed")
+            push!(cmd_args, string(seed))
+        end
         if quiet
-            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread $(cmd_args)`, stderr=devnull)
             p = pipeline(cmd, `gzip`)
             run(pipeline(p, outfile))
         else
-            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --error_model pacbio2021 --qscore_model pacbio2021 --identity 30,3 --reference $(fasta) --quantity $(quantity)`, `gzip`)
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread $(cmd_args)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else
@@ -649,15 +992,20 @@ Uses nanopore2023 error and quality models with default identity and length dist
 
 See also: `simulate_pacbio_reads`, `simulate_nanopore_r941_reads`, `simulate_badread_reads`
 """
-function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"), quiet=false)
+function simulate_nanopore_reads(;fasta, quantity, outfile=replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"), quiet=false, seed::Union{Nothing,Int}=nothing)
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
+        cmd_args = ["badread", "simulate", "--reference", fasta, "--quantity", quantity]
+        if !isnothing(seed)
+            push!(cmd_args, "--seed")
+            push!(cmd_args, string(seed))
+        end
         if quiet
-            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, stderr=devnull)
+            cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread $(cmd_args)`, stderr=devnull)
             p = pipeline(cmd, `gzip`)
             run(pipeline(p, outfile))
         else
-            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread badread simulate --reference $(fasta) --quantity $(quantity)`, `gzip`)
+            p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n badread $(cmd_args)`, `gzip`)
             run(pipeline(p, outfile))
         end
     else

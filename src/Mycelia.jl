@@ -61,6 +61,7 @@ import Pkg
 import Plots
 import POMDPs
 import PooledArrays
+import PrecompileTools
 import Primes
 import Printf
 import ProgressMeter
@@ -98,11 +99,14 @@ include("alphabets.jl")
 include("constants.jl")
 include("fastx.jl")
 
-# Rhizomorph graph ecosystem (NEW - correct implementation)
-include("rhizomorph/rhizomorph.jl")
+# Topological data analysis utilities (depends on Graphs)
+include("tda.jl")
 
 # Graph type definitions and enums (foundation layer)
 include("graph-core.jl")            # Shared graph enums (OLD - to be deprecated)
+
+# Rhizomorph graph ecosystem (NEW - correct implementation)
+include("rhizomorph/rhizomorph.jl")
 include("kmer-graphs.jl")           # K-mer graph construction utilities (OLD - to be replaced)
 include("sequence-graphs-next.jl")  # Higher-level graph algorithms (depends on enums & k-mer types)
 include("string-graphs.jl")         # N-gram graphs
@@ -141,23 +145,31 @@ remaining_files = [
     "alignments-and-mapping.jl",
     "amino-acid-analysis.jl",
     "annotation.jl",
+    "autocycler.jl",
+    "bcalm.jl",
     "bioconda.jl",
     "binning.jl",
     "classification.jl",
+    "metagraph.jl",
     "metagenomic-classification.jl",
     "clustering.jl",
     "codon-optimization.jl",
     "dimensionality-reduction.jl",
     "distance-metrics.jl",
+    "foldseek.jl",
     "genome-features.jl",
+    "ggcat.jl",
     "kmer-analysis.jl",
     "neo4jl.jl",
     "pangenome-analysis.jl",
     "pantools.jl",
     "performance-benchmarks.jl",
     "plotting-and-visualization.jl",
+    "prokrustean.jl",
     "quality-control-and-benchmarking.jl",
+    "read-quality-control.jl",
     "busco-datasets.jl",
+    "ncbi-datasets-cli.jl",
     "rclone.jl",
     "reference-databases.jl",
     "sentencepiece.jl",
@@ -178,5 +190,9 @@ for file in remaining_files
         include(file)
     end
 end
+
+# PrecompileTools workload for faster startup
+# This must be included last, after all other definitions are loaded
+include("precompile_workload.jl")
 
 end # module

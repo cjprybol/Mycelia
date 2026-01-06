@@ -4,7 +4,7 @@
 #   julia --project=. -e 'include("test/8_tool_integration/pantools.jl")'
 #
 # To run optional CLI smoke tests (requires conda + network):
-#   MYCELIA_RUN_PANTOOLS_INTEGRATION=true julia --project=. -e 'include("test/8_tool_integration/pantools.jl")'
+#   MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/pantools.jl")'
 
 import Test
 import Mycelia
@@ -95,9 +95,9 @@ Test.@testset "PanTools Wrapper Tests" begin
 
     # Optional smoke test: install env + check CLI responds
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
-    run_pantools = run_all || get(ENV, "MYCELIA_RUN_PANTOOLS_INTEGRATION", "false") == "true"
+    run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
-    if run_pantools
+    if run_external
         Test.@testset "PanTools CLI Smoke (Requires Installation)" begin
             if isfile(Mycelia.CONDA_RUNNER) || haskey(ENV, "CONDA_PREFIX")
                 Mycelia.add_bioconda_env("pantools")
@@ -108,6 +108,6 @@ Test.@testset "PanTools Wrapper Tests" begin
             end
         end
     else
-        @info "Skipping PanTools CLI smoke test; set MYCELIA_RUN_PANTOOLS_INTEGRATION=true to enable"
+        @info "Skipping PanTools CLI smoke test; set MYCELIA_RUN_EXTERNAL=true to enable"
     end
 end

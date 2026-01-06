@@ -44,6 +44,37 @@ Test.@testset "Sequence Comparison Tests" begin
         Test.@test dist_k15 > dist_k21  # Smaller k should give larger distance
     end
 
+    Test.@testset "Sketch-Guided Reference Selection" begin
+        scores = Dict(
+            "ref_a" => 0.12,
+            "ref_b" => 0.02,
+            "ref_c" => 0.18,
+            "ref_d" => 0.05
+        )
+
+        selected = Mycelia.select_sketch_supported_references(scores; min_score=0.05, max_refs=2)
+        Test.@test selected == ["ref_c" => 0.18, "ref_a" => 0.12]
+
+        selected_all = Mycelia.select_sketch_supported_references(scores; min_score=0.05)
+        Test.@test selected_all == ["ref_c" => 0.18, "ref_a" => 0.12, "ref_d" => 0.05]
+
+        distance_scores = Dict(
+            "ref_a" => 0.1,
+            "ref_b" => 0.01,
+            "ref_c" => 0.2
+        )
+        selected_distance = Mycelia.select_sketch_supported_references(
+            distance_scores;
+            max_score=0.1,
+            prefer=:lower
+        )
+        Test.@test selected_distance == ["ref_b" => 0.01, "ref_a" => 0.1]
+
+        Test.@test_throws ErrorException Mycelia.select_sketch_supported_references(scores; prefer=:unknown)
+        Test.@test_throws ErrorException Mycelia.select_sketch_supported_references(scores; min_score=0.2, max_score=0.1)
+        Test.@test_throws ErrorException Mycelia.select_sketch_supported_references(scores; max_refs=-1)
+    end
+
     Test.@testset "SHA256 Sequence Hashing" begin
         # Test string input
         test_seq = "ATCGATCG"
@@ -296,8 +327,10 @@ Test.@testset "Sequence Comparison Tests" begin
             threads=2,
             k=31,
             min_ani=90.0,
-            quiet=true,
-            outdir=workdir)
+            quiet=true)
+
+        Test.@test isfile(result.syldb)
+        Test.@test isfile(result.output_tsv)
 
         df = result.table
         lower_cols = Dict(lowercase(string(c)) => c for c in names(df))
@@ -325,23 +358,22 @@ Test.@testset "Sequence Comparison Tests" begin
         ]
         if isempty(rows)
             @info "Sylph profiling returned no rows; skipping abundance/ANI assertions (check inputs or Sylph version)"
-            return
-        end
-
-        sorted_rows = sort(rows; by = r -> r.abundance, rev = true)
-        if length(sorted_rows) == 1
+        elseif length(rows) == 1
             @info "Sylph profiling returned a single row; skipping ratio check but asserting ANI"
-            top = sorted_rows[1]
+            top = rows[1]
             Test.@test top.ani ≥ 0.85
-            return
+        else
+            sorted_rows = sort(rows; by = r -> r.abundance, rev = true)
+            top, second = sorted_rows[1], sorted_rows[2]
+            Test.@test top.abundance > second.abundance
+            Test.@test top.ani ≥ 0.9
+            Test.@test second.ani ≥ 0.8
         end
 
-        top, second = sorted_rows[1], sorted_rows[2]
-
-        Test.@test top.abundance > second.abundance
-        Test.@test top.ani ≥ 0.9
-        Test.@test second.ani ≥ 0.8
-
+        sylph_dir = dirname(result.syldb)
+        if sylph_dir != workdir
+            rm(sylph_dir; recursive=true, force=true)
+        end
         rm(workdir; recursive=true, force=true)
     end
 

@@ -521,122 +521,30 @@ graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31})
 graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
 ```
 """
-function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode=DoubleStrand)
-    # Parse GFA file content
-    segments = Dict{String, String}()  # id -> sequence
-    links = Vector{Tuple{String, Bool, String, Bool}}()  # (src_id, src_forward, dst_id, dst_forward)
-    paths = Dict{String, Vector{String}}()  # path_name -> vertex_ids
-    
-    for line in eachline(gfa_file)
-        fields = split(line, '\t')
-        if isempty(fields)
-            continue
-        end
-        
-        line_type = first(fields)
-        
-        if line_type == "H"
-            # Header line - skip for now
-            continue
-        elseif line_type == "S"
-            # Segment line: S<tab>id<tab>sequence<tab>optional_fields
-            if length(fields) >= 3
-                seg_id = fields[2]
-                sequence = fields[3]
-                segments[seg_id] = sequence
-            end
-        elseif line_type == "L"
-            # Link line: L<tab>src<tab>src_orient<tab>dst<tab>dst_orient<tab>overlap
-            if length(fields) >= 6
-                src_id = fields[2]
-                src_orient = fields[3] == "+"
-                dst_id = fields[4]
-                dst_orient = fields[5] == "+"
-                push!(links, (src_id, src_orient, dst_id, dst_orient))
-            end
-        elseif line_type == "P"
-            # Path line: P<tab>path_name<tab>path<tab>overlaps
-            if length(fields) >= 3
-                path_name = fields[2]
-                # Parse path string (removes +/- orientations for now)
-                path_vertices = split(replace(fields[3], r"[+-]" => ""), ',')
-                paths[path_name] = string.(path_vertices)
-            end
-        elseif line_type == "A"
-            # Assembly info line (hifiasm) - skip for now
-            continue
-        else
-            @warn "Unknown GFA line type: $line_type in line: $line"
-        end
-    end
-    
-    # Create MetaGraphsNext graph
-    graph = MetaGraphsNext.MetaGraph(
-        MetaGraphsNext.DiGraph(),
-        label_type=kmer_type,
-        vertex_data_type=KmerVertexData{kmer_type},
-        edge_data_type=KmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
-        default_weight=0.0
-    )
-    
-    # Add vertices (segments) - convert sequences to k-mer types
-    for (seg_id, sequence) in segments
-        # Convert sequence to k-mer type
-        kmer_seq = kmer_type(sequence)
-        
-        # Determine canonical k-mer based on graph mode
-        canonical_kmer = if graph_mode == DoubleStrand && kmer_type <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
-            # Use canonical representation for double-strand mode
-            rc_kmer = BioSequences.reverse_complement(kmer_seq)
-            kmer_seq <= rc_kmer ? kmer_seq : rc_kmer
-        else
-            # Use k-mer as-is for single-strand mode or amino acids
-            kmer_seq
-        end
-        
-        # Create vertex with empty coverage (will be populated if we have observations)
-        graph[canonical_kmer] = KmerVertexData(canonical_kmer)
-    end
-    
-    # Create mapping from segment IDs to k-mers
-    id_to_kmer = Dict{String, kmer_type}()
-    for (seg_id, sequence) in segments
-        kmer_seq = kmer_type(sequence)
-        canonical_kmer = if graph_mode == DoubleStrand && kmer_type <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
-            rc_kmer = BioSequences.reverse_complement(kmer_seq)
-            kmer_seq <= rc_kmer ? kmer_seq : rc_kmer
-        else
-            kmer_seq
-        end
-        id_to_kmer[seg_id] = canonical_kmer
-    end
-    
-    # Add edges (links)
-    for (src_id, src_forward, dst_id, dst_forward) in links
-        if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
-            src_kmer = id_to_kmer[src_id]
-            dst_kmer = id_to_kmer[dst_id]
-            
-            # Convert GFA orientations to StrandOrientation
-            src_strand = src_forward ? Forward : Reverse
-            dst_strand = dst_forward ? Forward : Reverse
-            
-            # Create strand-aware edge
-            graph[src_kmer, dst_kmer] = KmerEdgeData(src_strand, dst_strand)
-        else
-            @warn "Link references unknown segment: $src_id -> $dst_id"
-        end
-    end
-    
-    # Store paths as graph metadata if needed (future enhancement)
-    # MetaGraphsNext doesn't have global properties like MetaGraphs, so we'd need
-    # a different approach for storing paths
-    
-    return graph
+function read_gfa_next(
+    gfa_file::AbstractString,
+    kmer_type::Type,
+    graph_mode::Union{GraphMode,Rhizomorph.GraphMode}=DoubleStrand,
+)
+    # Normalize legacy GraphMode to Rhizomorph.GraphMode
+    rhizo_mode = graph_mode isa Rhizomorph.GraphMode ? graph_mode :
+        Rhizomorph.GraphMode(Int(graph_mode))
+    return Rhizomorph.read_gfa_next(gfa_file, kmer_type, rhizo_mode)
 end
 
 """
+function read_gfa_next(
+    gfa_file::AbstractString,
+    graph_mode::Rhizomorph.GraphMode;
+    force_biosequence_graph::Bool=false,
+)
+    return Rhizomorph.read_gfa_next(
+        gfa_file,
+        graph_mode;
+        force_biosequence_graph=force_biosequence_graph,
+    )
+end
+
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Read a GFA file and auto-detect whether to create a k-mer graph or BioSequence graph.
@@ -777,7 +685,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         label_type=biosequence_type,
         vertex_data_type=KmerVertexData{biosequence_type},
         edge_data_type=KmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
     
@@ -787,19 +695,9 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         # Convert sequence to BioSequence type
         biosequence = biosequence_type(sequence)
         
-        # Determine canonical representation based on graph mode
-        canonical_seq = if graph_mode == DoubleStrand && biosequence_type <: Union{BioSequences.LongDNA, BioSequences.LongRNA}
-            # Use canonical representation for double-strand mode
-            rc_seq = BioSequences.reverse_complement(biosequence)
-            biosequence <= rc_seq ? biosequence : rc_seq
-        else
-            # Use sequence as-is for single-strand mode or amino acids
-            biosequence
-        end
-        
-        # Create vertex with empty coverage (will be populated if we have observations)
-        graph[canonical_seq] = KmerVertexData(canonical_seq)
-        id_to_sequence[seg_id] = canonical_seq
+        # Preserve sequence orientation as observed in the GFA.
+        graph[biosequence] = KmerVertexData(biosequence)
+        id_to_sequence[seg_id] = biosequence
     end
     
     # Add edges (links)
@@ -1054,6 +952,45 @@ end
 
 Detect bubble structures (alternative paths) in the assembly graph.
 """
+const RHIZOMORPH_VERTEX_TYPES = Union{
+    Rhizomorph.KmerVertexData,
+    Rhizomorph.QualmerVertexData,
+    Rhizomorph.BioSequenceVertexData,
+    Rhizomorph.QualityBioSequenceVertexData,
+    Rhizomorph.StringVertexData,
+    Rhizomorph.QualityStringVertexData,
+}
+
+const RHIZOMORPH_EDGE_TYPES = Union{
+    Rhizomorph.KmerEdgeData,
+    Rhizomorph.QualmerEdgeData,
+    Rhizomorph.BioSequenceEdgeData,
+    Rhizomorph.QualityBioSequenceEdgeData,
+    Rhizomorph.StringEdgeData,
+    Rhizomorph.QualityStringEdgeData,
+}
+
+# Delegate GFA export for Rhizomorph graphs to the evidence-aware implementation.
+function write_gfa_next(
+    graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, <:Any, V, E},
+    outfile::AbstractString,
+) where {V<:RHIZOMORPH_VERTEX_TYPES, E<:RHIZOMORPH_EDGE_TYPES}
+    return Rhizomorph.write_gfa_next(graph, outfile)
+end
+
+# Fallback for Rhizomorph graphs that use evidence-based metadata rather than coverage vectors.
+function detect_bubbles_next(
+    graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, <:Any, V, E};
+    min_bubble_length::Int=2,
+    max_bubble_length::Int=100,
+) where {V<:RHIZOMORPH_VERTEX_TYPES, E<:RHIZOMORPH_EDGE_TYPES}
+    return Rhizomorph.detect_bubbles_next(
+        graph;
+        min_bubble_length=min_bubble_length,
+        max_bubble_length=max_bubble_length,
+    )
+end
+
 function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph{<:Integer, String, KmerVertexData, KmerEdgeData};
                            min_bubble_length::Int=2,
                            max_bubble_length::Int=100)
@@ -2027,7 +1964,7 @@ at each step, useful for finding high-confidence assembly paths.
 - `graph`: MetaGraphsNext k-mer graph
 - `start_vertex`: Starting vertex label
 - `max_steps`: Maximum steps to take
-- `weight_function`: Function to extract weight from edge data (default: uses edge.weight)
+- `weight_function`: Function to extract weight from edge data (default: uses edge_data_weight)
 
 # Returns
 - `GraphPath`: Path following maximum weight edges
@@ -2035,7 +1972,7 @@ at each step, useful for finding high-confidence assembly paths.
 function maximum_weight_walk_next(graph::MetaGraphsNext.MetaGraph,
                                  start_vertex::String,
                                  max_steps::Int;
-                                 weight_function::Function = edge_data -> edge_data.weight)
+                                 weight_function::Function = edge_data_weight)
     if !(start_vertex in MetaGraphsNext.labels(graph))
         throw(ArgumentError("Start vertex $start_vertex not found in graph"))
     end
@@ -2582,12 +2519,8 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:A
         return Vector{Vector{T}}()
     end
 
-    # Convert vertex indices back to labels
-    # graph.vertex_labels is index -> label, so we can use it directly
-    index_to_label = graph.vertex_labels
-
     # Convert path from indices to labels
-    label_path = [index_to_label[idx] for idx in path]
+    label_path = [MetaGraphsNext.label_for(graph, idx) for idx in path]
 
     return [label_path]
 end
@@ -2696,7 +2629,7 @@ function build_biosequence_graph_next(sequence_type::Type{<:BioSequences.BioSequ
         label_type=sequence_type,
         vertex_data_type=BioSequenceVertexData{sequence_type},
         edge_data_type=BioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2740,7 +2673,7 @@ function build_biosequence_graph_next(sequence_type::Type{String},
         label_type=String,
         vertex_data_type=StringVertexData,
         edge_data_type=StringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2786,7 +2719,7 @@ function build_qualmer_graph_next(kmer_type, fastq_records::Vector{FASTX.FASTQ.R
         label_type=actual_kmer_type,
         vertex_data_type=QualmerVertexData{actual_kmer_type},
         edge_data_type=QualmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2824,7 +2757,7 @@ Build a quality-aware BioSequence graph from FASTQ records.
         label_type=sequence_type,
         vertex_data_type=QualityBioSequenceVertexData{sequence_type},
         edge_data_type=QualityBioSequenceEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2873,7 +2806,7 @@ Build a string n-gram graph using MetaGraphsNext.
         label_type=String,
         vertex_data_type=StringVertexData,
         edge_data_type=StringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2935,7 +2868,7 @@ Build a quality-aware string graph from FASTQ records.
         label_type=String,
         vertex_data_type=QualityStringVertexData,
         edge_data_type=QualityStringEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 
@@ -2974,7 +2907,7 @@ function _create_empty_qualmer_graph(kmer_type)
         label_type=kmer_type,
         vertex_data_type=QualmerVertexData{kmer_type},
         edge_data_type=QualmerEdgeData,
-        weight_function=edge_data -> edge_data.weight,
+        weight_function=edge_data_weight,
         default_weight=0.0
     )
 end

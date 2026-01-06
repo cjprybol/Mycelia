@@ -10,7 +10,7 @@
 # - Strand-specific by default (stores k-mers as observed)
 # - Evidence tracking with nested Dict structure including quality data
 # - Type-stable core functions for performance
-# - Support for both SingleStrand and DoubleStrand modes
+# - Support for SingleStrand, DoubleStrand, and Canonical modes
 #
 # Based on rhizomorph-graph-ecosystem-plan.md Section 2.1
 
@@ -30,14 +30,15 @@ Preserves per-base quality scores for quality-aware assembly algorithms.
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records (MUST be FASTQ for quality)
 - `k::Int`: K-mer size
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
-- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand or :doublestrand)
+- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph with Phred scores
 
 # Graph Modes
 - `:singlestrand` - Records k-mers exactly as observed (strand-specific)
-- `:doublestrand` - Merges forward and reverse-complement k-mers (canonical)
+- `:doublestrand` - Adds reverse-complement strand with directed edges (DNA/RNA only)
+- `:canonical` - Merges reverse-complement pairs into canonical vertices (DNA/RNA only)
 
 # Examples
 ```julia
@@ -47,8 +48,8 @@ records = collect(open_fastx("reads.fastq.gz"))
 # Build strand-specific qualmer graph (default)
 graph = build_qualmer_graph(records, 31)
 
-# Build canonical (doublestrand) qualmer graph
-graph_canonical = build_qualmer_graph(records, 31; mode=:doublestrand)
+# Build canonical qualmer graph
+graph_canonical = build_qualmer_graph(records, 31; mode=:canonical)
 
 # Multiple datasets
 graph = build_qualmer_graph(records1, 31; dataset_id="sample_A")
@@ -71,7 +72,7 @@ joint_quality = get_vertex_joint_quality(vertex_data, "sample_A")
 - REQUIRES FASTQ input (will error on FASTA)
 - Automatically detects sequence type (DNA or RNA only, not amino acids)
 - Uses type-stable core functions for performance
-- All k-mers stored as observed, not canonical (unless mode=:doublestrand)
+- All k-mers stored as observed, not canonical (unless mode=:canonical)
 
 # See Also
 - `build_kmer_graph`: Non-quality version for FASTA data
@@ -88,8 +89,10 @@ function build_qualmer_graph(
         return build_qualmer_graph_singlestrand(records, k; dataset_id=dataset_id)
     elseif mode == :doublestrand
         return build_qualmer_graph_doublestrand(records, k; dataset_id=dataset_id)
+    elseif mode == :canonical
+        return build_qualmer_graph_canonical(records, k; dataset_id=dataset_id)
     else
-        error("Invalid mode: $mode. Must be :singlestrand or :doublestrand")
+        error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
 end
 
@@ -113,7 +116,7 @@ dataset_id if not specified.
 - `filepath::String`: Path to FASTQ file (compressed or uncompressed)
 - `k::Int`: K-mer size
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename without extension)
-- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand or :doublestrand)
+- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph
@@ -152,7 +155,7 @@ function build_qualmer_graph_from_file(
 
     # Validate that we got FASTQ records
     if isempty(records)
-        error("No records found in file: $filepath")
+        throw(ArgumentError("No records found in file: $filepath"))
     end
     if !(records[1] isa FASTX.FASTQ.Record)
         error("Qualmer graphs require FASTQ input. File appears to be FASTA: $filepath")
@@ -172,7 +175,7 @@ Handles compressed files automatically.
 # Arguments
 - `filepaths::Vector{String}`: List of FASTQ files (compressed or uncompressed)
 - `k::Int`: K-mer size
-- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand or :doublestrand)
+- `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph with evidence from all files
@@ -197,8 +200,8 @@ function build_qualmer_graph_from_files(
         error("No files provided")
     end
 
-    if !(mode in (:singlestrand, :doublestrand))
-        error("Invalid mode: $mode. Must be :singlestrand or :doublestrand")
+    if !(mode in (:singlestrand, :doublestrand, :canonical))
+        error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
 
     # Build graph from first file (strand-specific) and convert later if needed
@@ -223,9 +226,11 @@ function build_qualmer_graph_from_files(
         add_observations_to_graph!(graph, records, k; dataset_id=dataset_id)
     end
 
-    # Convert to doublestrand if requested
+    # Convert to doublestrand or canonical if requested
     if mode == :doublestrand
         graph = convert_to_doublestrand(graph)
+    elseif mode == :canonical
+        graph = convert_to_canonical(graph)
     end
 
     return graph

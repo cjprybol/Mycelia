@@ -793,307 +793,178 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Process and error-correct a FASTQ sequence record using quality-guided path resampling.
-
-This function implements the core polishing logic from the iterative k-mer polishing algorithm:
-1. Trims low-quality sequence ends to solid k-mers
-2. Identifies stretches requiring resampling between solid branching k-mers  
-3. Uses Yen's k-shortest paths to find alternative high-quality paths
-4. Selects paths based on quality scores, transition probabilities, and length similarity
-
-# Arguments
-- `record`: FASTQ record containing the sequence to process
-- `graph`: SimpleDiGraph representing k-mer transitions
-- `likely_valid_kmers`: Set of k-mers identified as likely valid (above quality threshold)
-- `kmer_to_index_map`: Dict mapping k-mers to graph node indices
-- `branching_nodes_set`: Set of graph nodes with multiple edges (branching points)
-- `assembly_k`: K-mer size being used
-- `kmer_mean_quality`: Dict of mean quality scores per k-mer position
-- `transition_likelihoods`: Sparse matrix of transition probabilities between k-mers
-- `yen_k_shortest_paths_and_weights`: Cache for k-shortest paths computations
-- `kmer_total_quality`: Dict of total quality scores per k-mer
-- `ordered_kmers`: Vector of k-mers in consistent ordering
-- `yen_k`: Number of alternative paths to consider (default: 7)
-
-# Returns
-- Modified FASTQ record with error-corrected sequence and updated quality scores
-- Original record if no error correction was needed
-
-# Algorithm Details
-- Low-quality regions are identified between solid branching k-mers
-- Yen's algorithm finds k alternative paths through the graph
-- Path selection weights combine quality scores and transition probabilities
-- Length penalties discourage dramatic sequence length changes
-- Quality scores are updated based on k-mer mean qualities
+Traverse a Rhizomorph graph to polish a FASTQ record with configurable traversal.
 """
-function process_fastq_record_with_polishing(;record, graph, likely_valid_kmers, kmer_to_index_map, branching_nodes_set, assembly_k, kmer_mean_quality, transition_likelihoods, yen_k_shortest_paths_and_weights, kmer_total_quality, ordered_kmers, yen_k=7)
-    new_record_identifier = FASTX.identifier(record) * ".k$(assembly_k)"
-    record_sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
+function _record_kmer_iterator(sequence_type::Type{<:BioSequences.BioSequence}, k::Int, sequence)
+    if sequence_type <: BioSequences.LongDNA
+        return Kmers.FwDNAMers{k}(sequence)
+    elseif sequence_type <: BioSequences.LongRNA
+        return Kmers.FwRNAMers{k}(sequence)
+    elseif sequence_type <: BioSequences.LongAA
+        return Kmers.FwAAMers{k}(sequence)
+    end
 
-    kmer_type = Kmers.DNAKmer{assembly_k}
-    record_kmers = last.(collect(Kmers.EveryKmer{kmer_type}(record_sequence)))
-    record_quality_scores = collect(FASTX.quality_scores(record))
-    record_kmer_quality_scores = [record_quality_scores[i:i+assembly_k-1] for i in 1:length(record_quality_scores)-assembly_k+1]
-    
-    record_kmer_solidity = map(kmer -> kmer in likely_valid_kmers, record_kmers)
-    record_branching_kmers = [kmer_to_index_map[kmer] in branching_nodes_set for kmer in record_kmers]
-    record_solid_branching_kmers = record_kmer_solidity .& record_branching_kmers
-    
-    # trim beginning of fastq
-    initial_solid_kmer = findfirst(record_kmer_solidity)
-    if isnothing(initial_solid_kmer)
-        return record
-    elseif initial_solid_kmer > 1
-        record_kmers = record_kmers[initial_solid_kmer:end]
-        record_kmer_quality_scores = record_kmer_quality_scores[initial_solid_kmer:end]
-        record_kmer_solidity = map(kmer -> kmer in likely_valid_kmers, record_kmers)
-        record_branching_kmers = [kmer_to_index_map[kmer] in branching_nodes_set for kmer in record_kmers]
-        record_solid_branching_kmers = record_kmer_solidity .& record_branching_kmers
-    end
-    initial_solid_kmer = 1
-    
-    # trim end of fastq
-    last_solid_kmer = findlast(record_kmer_solidity)
-    if last_solid_kmer != length(record_kmer_solidity)
-        record_kmers = record_kmers[1:last_solid_kmer]
-        record_kmer_quality_scores = record_kmer_quality_scores[1:last_solid_kmer]
-        record_kmer_solidity = map(kmer -> kmer in likely_valid_kmers, record_kmers)
-        record_branching_kmers = [kmer_to_index_map[kmer] in branching_nodes_set for kmer in record_kmers]
-        record_solid_branching_kmers = record_kmer_solidity .& record_branching_kmers
-    end
-    
-    # identify low quality runs and the solid branchpoints we will use for resampling
-    solid_branching_kmer_indices = findall(record_solid_branching_kmers)
-    resampling_stretches = find_resampling_stretches(;record_kmer_solidity, solid_branching_kmer_indices)
-
-    # nothing to do
-    if isempty(resampling_stretches)
-        return record
-    end
-    trusted_range = 1:max(first(first(resampling_stretches))-1, 1)
-    
-    new_record_kmers = record_kmers[trusted_range]
-    new_record_kmer_qualities = record_kmer_quality_scores[trusted_range]
-    
-    
-    for (i, resampling_stretch) in enumerate(resampling_stretches)
-        starting_solid_kmer = record_kmers[first(resampling_stretch)]
-        ending_solid_kmer = record_kmers[last(resampling_stretch)]
-        
-        current_quality_scores = record_quality_scores[resampling_stretch]
-        u = kmer_to_index_map[starting_solid_kmer]
-        v = kmer_to_index_map[ending_solid_kmer]
-        if !haskey(yen_k_shortest_paths_and_weights, u => v)
-            yen_k_result = Graphs.yen_k_shortest_paths(graph, u, v, Graphs.weights(graph), yen_k)
-            yen_k_shortest_paths_and_weights[u => v] = Vector{Pair{Vector{Int}, Float64}}()
-            for path in yen_k_result.paths
-                path_weight = Statistics.mean([kmer_total_quality[ordered_kmers[node]] for node in path])
-                path_transition_likelihoods = 1.0
-                for (a, b) in zip(path[1:end-1], path[2:end])
-                    path_transition_likelihoods *= transition_likelihoods[a, b]
-                end
-                joint_weight = path_weight * path_transition_likelihoods
-                push!(yen_k_shortest_paths_and_weights[u => v], path => joint_weight)
-            end
-        end
-        yen_k_path_weights = yen_k_shortest_paths_and_weights[u => v]      
-        if length(yen_k_path_weights) > 1
-            current_distance = length(resampling_stretch)
-            initial_weights = last.(yen_k_path_weights)
-            path_lengths = length.(first.(yen_k_path_weights))
-            deltas = map(l -> abs(l-current_distance), path_lengths)
-            adjusted_weights = initial_weights .* map(d -> exp(-d * log(2)), deltas)
-            
-            selected_path_index = StatsBase.sample(StatsBase.weights(adjusted_weights))
-            selected_path, selected_path_weights = yen_k_path_weights[selected_path_index]
-            selected_path_kmers = [ordered_kmers[kmer_index] for kmer_index in selected_path]
-            
-            if last(new_record_kmers) == first(selected_path_kmers)
-                selected_path_kmers = selected_path_kmers[2:end]
-            end
-            append!(new_record_kmers, selected_path_kmers)
-            selected_kmer_qualities = [Int8.(min.(typemax(Int8), floor.(kmer_mean_quality[kmer]))) for kmer in selected_path_kmers]
-            append!(new_record_kmer_qualities, selected_kmer_qualities)
-        else
-            selected_path_kmers = record_kmers[resampling_stretch]
-            if last(new_record_kmers) == first(selected_path_kmers)
-                selected_path_kmers = selected_path_kmers[2:end]
-            end
-            append!(new_record_kmers, selected_path_kmers)
-            selected_kmer_qualities = [Int8.(min.(typemax(Int8), floor.(kmer_mean_quality[kmer]))) for kmer in selected_path_kmers]
-            append!(new_record_kmer_qualities, selected_kmer_qualities)
-        end
-        if i < length(resampling_stretches) # append high quality gap
-            next_solid_start = last(resampling_stretch)+1
-            next_resampling_stretch = resampling_stretches[i+1]
-            next_solid_stop = first(next_resampling_stretch)-1
-            if !isempty(next_solid_start:next_solid_stop)
-                selected_path_kmers = record_kmers[next_solid_start:next_solid_stop]
-                append!(new_record_kmers, selected_path_kmers)
-                selected_kmer_qualities = record_kmer_quality_scores[next_solid_start:next_solid_stop]
-                append!(new_record_kmer_qualities, selected_kmer_qualities)
-            end
-        else # append remainder of sequence
-            @assert i == length(resampling_stretches)
-            next_solid_start = last(resampling_stretch)+1
-            if next_solid_start < length(record_kmers)
-                selected_path_kmers = record_kmers[next_solid_start:end]
-                append!(new_record_kmers, selected_path_kmers)
-                selected_kmer_qualities = record_kmer_quality_scores[next_solid_start:end]
-                append!(new_record_kmer_qualities, selected_kmer_qualities)
-            end
-        end
-    end
-    
-    for (a, b) in zip(new_record_kmers[1:end-1], new_record_kmers[2:end])
-        @assert a != b
-    end
-    new_record_sequence = Mycelia.kmer_path_to_sequence(new_record_kmers)
-    new_record_quality_scores = new_record_kmer_qualities[1]
-    for new_record_kmer_quality in new_record_kmer_qualities[2:end]
-        push!(new_record_quality_scores, last(new_record_kmer_quality))
-    end
-    new_record = fastq_record(identifier=new_record_identifier, sequence=new_record_sequence, quality_scores=new_record_quality_scores)
-    return new_record
+    return Kmers.FwDNAMers{k}(sequence)
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Polish FASTQ reads using iterative k-mer graph-based error correction.
-
-This function implements the complete iterative k-mer polishing algorithm that:
-1. Builds k-mer graphs from input sequences  
-2. Identifies likely valid vs artifact k-mers using quality-based clustering
-3. Finds low-quality stretches between solid branching k-mers
-4. Uses Yen's k-shortest paths algorithm to resample problematic regions
-5. Selects optimal paths based on quality scores and transition probabilities
-
-# Arguments
-- `fastq::String`: Path to input FASTQ file
-- `k::Int=1`: K-mer size to use. If k=1, automatically determines optimal k-mer size.
-
-# Returns
-Named tuple with:
-- `fastq::String`: Path to output gzipped FASTQ file  
-- `k::Int`: K-mer size used for polishing
-
-# Algorithm Details
-The polishing process involves:
-- Quality-aware k-mer counting with strand normalization
-- Statistical separation of valid vs artifact k-mers using quality thresholds
-- Graph construction with transition probabilities
-- Path resampling using Yen's k-shortest paths for error correction
-- Quality score preservation and updating
+Process and error-correct a FASTQ record by walking a Rhizomorph graph.
 """
-function polish_fastq(;fastq, k=1)
-    if k == 1
-        assembly_k = Mycelia.assess_dnamer_saturation([fastq])
-    else
-        assembly_k = k
+function process_fastq_record(;record, graph, weighted_graph, traversal::Symbol=:probabilistic, max_steps::Union{Int,Nothing}=nothing, seed::Union{Int,Nothing}=nothing)
+    labels = collect(MetaGraphsNext.labels(graph))
+    if isempty(labels)
+        return (record=record, polished_record=record, status=:empty_graph)
     end
-    
-    fastq_out = replace(fastq, Mycelia.FASTQ_REGEX => ".k$(assembly_k).fq")
-    kmer_type = Kmers.DNAKmer{assembly_k}
-    records = collect(Mycelia.open_fastx(fastq))
 
-    # Build k-mer quality support dictionary
-    all_kmer_quality_support = Dict{kmer_type, Vector{Float64}}()
-    for record in records
-        record_quality_scores = collect(FASTX.quality_scores(record))
-        record_quality_score_slices = [record_quality_scores[i:i+assembly_k-1] for i in 1:length(record_quality_scores)-assembly_k+1]
-        sequence = BioSequences.LongDNA{2}(FASTX.sequence(record))
-        for ((i, kmer), kmer_base_qualities) in zip(Kmers.EveryKmer{kmer_type}(sequence), record_quality_score_slices)
-            if haskey(all_kmer_quality_support, kmer)
-                all_kmer_quality_support[kmer] = all_kmer_quality_support[kmer] .+ kmer_base_qualities
-            else
-                all_kmer_quality_support[kmer] = kmer_base_qualities
+    first_label = first(labels)
+    record_sequence = nothing
+    record_kmers = nothing
+    start_vertex = first_label
+    record_identifier = String(FASTX.identifier(record))
+
+    if first_label isa Kmers.Kmer
+        k = Kmers.ksize(typeof(first_label))
+        sequence_type = Mycelia.Rhizomorph._sequence_type_from_kmer_type(typeof(first_label))
+        record_sequence = FASTX.sequence(sequence_type, record)
+        record_kmers = collect(_record_kmer_iterator(sequence_type, k, record_sequence))
+        if isempty(record_kmers)
+            return (record=record, polished_record=record, status=:short_record)
+        end
+        start_vertex = record_kmers[1]
+        if !haskey(weighted_graph, start_vertex) && !Graphs.is_directed(graph.graph)
+            if start_vertex isa Kmers.DNAKmer || start_vertex isa Kmers.RNAKmer
+                start_vertex = BioSequences.canonical(start_vertex)
             end
         end
+        record_identifier *= ".k$(k)"
+    else
+        record_sequence = FASTX.sequence(record)
+        start_vertex = record_sequence
     end
 
-    # Count k-mers and build indices
-    kmer_counts = Mycelia.count_kmers(kmer_type, fastq)
-    kmer_indices = Dict(kmer => i for (i, kmer) in enumerate(keys(kmer_counts)))
-    canonical_kmer_counts = Mycelia.count_canonical_kmers(kmer_type, fastq)
+    if !haskey(weighted_graph, start_vertex)
+        start_vertex = first(MetaGraphsNext.labels(weighted_graph))
+    end
 
-    # Strand-normalize quality support
-    strand_normalized_quality_support = Dict{kmer_type, Vector{Float64}}()
-    for (kmer, support) in all_kmer_quality_support
-        strand_normalized_quality_support[kmer] = support
-        if haskey(all_kmer_quality_support, BioSequences.reverse_complement(kmer))
-            strand_normalized_quality_support[kmer] .+= all_kmer_quality_support[BioSequences.reverse_complement(kmer)]
+    if max_steps === nothing
+        if record_kmers === nothing
+            max_steps = max(length(record_sequence) - 1, 0)
+        else
+            max_steps = max(length(record_kmers) - 1, 0)
         end
     end
-    
-    ordered_kmers = collect(keys(kmer_counts))
-    kmer_mean_quality = Dict(kmer => strand_normalized_quality_support[kmer] ./ canonical_kmer_counts[BioSequences.canonical(kmer)] for kmer in ordered_kmers)
-    kmer_total_quality = Dict(kmer => sum(quality_values) for (kmer, quality_values) in strand_normalized_quality_support)
-    
-    # Build state and transition likelihoods
-    state_likelihoods = Dict(kmer => total_quality / sum(values(kmer_total_quality)) for (kmer, total_quality) in kmer_total_quality)
-    total_states = length(state_likelihoods)
-    
-    transition_likelihoods = SparseArrays.spzeros(total_states, total_states)
+
+    path = if traversal == :probabilistic
+        Mycelia.Rhizomorph.probabilistic_walk_next(weighted_graph, start_vertex, max_steps; seed=seed)
+    elseif traversal == :greedy
+        Mycelia.Rhizomorph.maximum_weight_walk_next(weighted_graph, start_vertex, max_steps)
+    else
+        throw(ArgumentError("Unsupported traversal: $(traversal)"))
+    end
+
+    polished_sequence = Mycelia.Rhizomorph.path_to_sequence(path, weighted_graph)
+    polished_sequence_str = polished_sequence isa AbstractString ? polished_sequence : string(polished_sequence)
+
+    quality_scores = Int.(collect(FASTX.quality_scores(record)))
+    if isempty(quality_scores)
+        quality_scores = fill(30, length(polished_sequence_str))
+    elseif length(quality_scores) != length(polished_sequence_str)
+        if length(quality_scores) < length(polished_sequence_str)
+            padding = fill(last(quality_scores), length(polished_sequence_str) - length(quality_scores))
+            quality_scores = vcat(quality_scores, padding)
+        else
+            quality_scores = quality_scores[1:length(polished_sequence_str)]
+        end
+    end
+
+    polished_record = Mycelia.fastq_record(
+        identifier=record_identifier,
+        sequence=polished_sequence_str,
+        quality_scores=quality_scores
+    )
+
+    return (record=record, polished_record=polished_record, traversal=traversal, max_steps=max_steps)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compatibility wrapper for process_fastq_record using the Rhizomorph traversal.
+"""
+function process_fastq_record_with_polishing(;record, graph, weighted_graph, traversal::Symbol=:probabilistic, max_steps::Union{Int,Nothing}=nothing, seed::Union{Int,Nothing}=nothing)
+    return process_fastq_record(
+        record=record,
+        graph=graph,
+        weighted_graph=weighted_graph,
+        traversal=traversal,
+        max_steps=max_steps,
+        seed=seed
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Polish FASTQ reads by traversing a Rhizomorph graph with configurable traversal and weighting.
+"""
+function polish_fastq(;
+    fastq,
+    k=1,
+    graph_mode::Symbol=:singlestrand,
+    traversal::Symbol=:probabilistic,
+    weighting::Symbol=:quality,
+    seed::Union{Int,Nothing}=nothing,
+    max_steps::Union{Int,Nothing}=nothing,
+    dataset_id::String="dataset_01"
+)
+    if !isfile(fastq)
+        error("FASTQ file not found: $(fastq)")
+    end
+    if !(graph_mode in (:singlestrand, :doublestrand, :canonical))
+        throw(ArgumentError("Invalid graph_mode: $(graph_mode)"))
+    end
+    if !(traversal in (:probabilistic, :greedy))
+        throw(ArgumentError("Unsupported traversal: $(traversal)"))
+    end
+    if !(weighting in (:evidence, :quality))
+        throw(ArgumentError("Unsupported weighting: $(weighting)"))
+    end
+
+    assembly_k = k == 1 ? Mycelia.assess_dnamer_saturation([fastq]) : k
+    fastq_out = replace(fastq, Mycelia.FASTQ_REGEX => ".k$(assembly_k).fq")
+    records = collect(Mycelia.open_fastx(fastq))
+
+    if isempty(records)
+        error("No records found in FASTQ: $(fastq)")
+    end
+    if weighting == :quality && !(records[1] isa FASTX.FASTQ.Record)
+        error("Quality-weighted polishing requires FASTQ input")
+    end
+
+    graph = if weighting == :quality
+        Mycelia.Rhizomorph.build_qualmer_graph(records, assembly_k; dataset_id=dataset_id, mode=graph_mode)
+    else
+        Mycelia.Rhizomorph.build_kmer_graph(records, assembly_k; dataset_id=dataset_id, mode=graph_mode)
+    end
+
+    edge_weight = weighting == :quality ? Mycelia.Rhizomorph.edge_quality_weight : Mycelia.Rhizomorph.compute_edge_weight
+    weighted_graph = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight=edge_weight)
+
+    revised_records = FASTX.FASTQ.Record[]
     for record in records
-        sequence = BioSequences.LongDNA{4}(FASTX.sequence(record))
-        sources = Kmers.EveryKmer{kmer_type}(sequence[1:end-1])
-        destinations = Kmers.EveryKmer{kmer_type}(sequence[2:end])
-        for ((source_i, source), (destination_i, destination)) in zip(sources, destinations)
-            source_index = kmer_indices[source]
-            destination_index = kmer_indices[destination]
-            transition_likelihoods[source_index, destination_index] += 1
-        end
-    end
-    
-    # Normalize transition probabilities
-    for source in 1:total_states
-        outgoing_transition_counts = transition_likelihoods[source, :]
-        if sum(outgoing_transition_counts) > 0
-            transition_likelihoods[source, :] .= transition_likelihoods[source, :] ./ sum(transition_likelihoods[source, :]) 
-        end
+        result = process_fastq_record(
+            record=record,
+            graph=graph,
+            weighted_graph=weighted_graph,
+            traversal=traversal,
+            max_steps=max_steps,
+            seed=seed
+        )
+        push!(revised_records, result.polished_record)
     end
 
-    # Build graph and identify branching nodes
-    graph = Graphs.SimpleDiGraph(total_states)
-    row_indices, column_indices, cell_values = SparseArrays.findnz(transition_likelihoods)
-    for (row, col) in zip(row_indices, column_indices)
-        Graphs.add_edge!(graph, row, col)
-    end
-
-    unbranching_nodes = Set(Int[])
-    for node in Graphs.vertices(graph)
-        if (Graphs.indegree(graph, node) <= 1) && (Graphs.outdegree(graph, node) <= 1)
-            push!(unbranching_nodes, node)
-        end
-    end
-    branching_nodes = setdiff(Graphs.vertices(graph), unbranching_nodes)
-    branching_nodes_set = Set(branching_nodes)
-    
-    # Identify likely valid vs artifact k-mers using quality threshold
-    total_strand_normalized_quality_support = sum.(collect(values(strand_normalized_quality_support)))
-    mean_total_support = Statistics.mean(total_strand_normalized_quality_support)
-    
-    sorted_kmer_total_quality = sort(kmer_total_quality)
-    sorted_kmer_total_quality_values = collect(values(sorted_kmer_total_quality))
-    mean_quality_value = Statistics.mean(sorted_kmer_total_quality_values)
-    threshold = mean_quality_value
-
-    likely_valid_kmer_indices = [i for (i, y) in enumerate(sorted_kmer_total_quality_values) if y > threshold]
-    likely_sequencing_artifact_indices = [i for (i, y) in enumerate(sorted_kmer_total_quality_values) if y <= threshold]
-    likely_sequencing_artifact_kmers = Set(ordered_kmers[likely_sequencing_artifact_indices])
-    likely_valid_kmers = Set(ordered_kmers[likely_valid_kmer_indices])
-    kmer_to_index_map = Dict(kmer => i for (i, kmer) in enumerate(ordered_kmers))
-    
-    # Process records with polishing
-    revised_records = []
-    ProgressMeter.@showprogress for record in records
-        yen_k_shortest_paths_and_weights = Dict{Pair{Int, Int}, Vector{Pair{Vector{Int}, Float64}}}()
-        revised_record = process_fastq_record_with_polishing(;record, graph, likely_valid_kmers, kmer_to_index_map, branching_nodes_set, assembly_k, kmer_mean_quality, transition_likelihoods, yen_k_shortest_paths_and_weights, kmer_total_quality, ordered_kmers)
-        push!(revised_records, revised_record)
-    end
-    
-    # Write output
     open(fastq_out, "w") do io
         fastx_io = FASTX.FASTQ.Writer(io)
         for record in revised_records
@@ -1102,50 +973,46 @@ function polish_fastq(;fastq, k=1)
         close(fastx_io)
     end
     run(`gzip --force $(fastq_out)`)
-    return (fastq = fastq_out * ".gz", k=assembly_k)
+    return (fastq = fastq_out * ".gz", k=assembly_k, traversal=traversal, weighting=weighting, graph_mode=graph_mode)
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Performs iterative k-mer polishing using progressively larger prime k-mer sizes.
-
-This is the complete implementation of the iterative k-mer polishing algorithm that:
-1. Starts with k=11 (first prime in the strain-level resolution range)
-2. Iteratively applies polishing at increasing prime k-values 
-3. Continues until reaching max_k (default: 53, the strain-level separation boundary)
-4. Each round uses the output of the previous round as input
-5. Stops early if polishing fails (returns missing k)
-
-# Arguments
-- `fastq`: Path to input FASTQ file
-- `max_k`: Maximum k-mer size to attempt (default: 53 for strain-level resolution)
-
-# Returns
-Vector of polishing results, where each element is a named tuple containing:
-- `fastq::String`: Path to polished FASTQ file for this k-value
-- `k::Union{Int, Missing}`: K-mer size used, or missing if polishing failed
-
-# Algorithm Details
-The iterative approach provides progressive error correction:
-- Smaller k-values correct high-frequency errors  
-- Larger k-values provide strain-level discrimination
-- Prime k-values are used to minimize repeat artifacts
-- Each iteration builds on the previous correction results
-
-# Performance Notes
-Demonstrates 3-5% improvement in assembly accuracy compared to single-pass polishing.
-The multi-scale approach is particularly effective for long-read sequencing data.
+Iterative polishing that reuses the traversal and weighting configuration.
 """
-function iterative_polishing(fastq, max_k = 53)
-    # Start with k=11 as the first prime in the strain-level resolution range
-    polishing_results = [polish_fastq(fastq=fastq, k=11)]
-    
+function iterative_polishing(
+    fastq,
+    max_k = 53;
+    graph_mode::Symbol=:singlestrand,
+    traversal::Symbol=:probabilistic,
+    weighting::Symbol=:quality,
+    seed::Union{Int,Nothing}=nothing,
+    max_steps::Union{Int,Nothing}=nothing
+)
+    polishing_results = [polish_fastq(
+        fastq=fastq,
+        k=11,
+        graph_mode=graph_mode,
+        traversal=traversal,
+        weighting=weighting,
+        seed=seed,
+        max_steps=max_steps
+    )]
+
     while (!ismissing(last(polishing_results).k)) && (last(polishing_results).k < max_k)
         next_k = first(filter(k -> k > last(polishing_results).k, Mycelia.ks()))
-        push!(polishing_results, polish_fastq(fastq=last(polishing_results).fastq, k=next_k))
+        push!(polishing_results, polish_fastq(
+            fastq=last(polishing_results).fastq,
+            k=next_k,
+            graph_mode=graph_mode,
+            traversal=traversal,
+            weighting=weighting,
+            seed=seed,
+            max_steps=max_steps
+        ))
     end
-    
+
     return polishing_results
 end
 

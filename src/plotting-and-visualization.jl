@@ -1555,6 +1555,322 @@ function draw_radial_tree(
     Luxor.preview()
 end
 
+
+# -----------------------------------------------------------------------------
+# Radial Dendrogram Visualization
+# -----------------------------------------------------------------------------
+
+"""
+Internal structure to represent a radial dendrogram node.
+"""
+mutable struct RadialNode
+    left::Union{RadialNode, Nothing}
+    right::Union{RadialNode, Nothing}
+    height::Float64
+    angle::Float64
+    leaf_index::Int # -1 for internal nodes, >0 for original leaf index
+end
+
+"""
+    hclust_to_radial_tree(hclust::Clustering.Hclust)
+
+Convert a Clustering.Hclust object into a linked RadialNode tree structure.
+"""
+function hclust_to_radial_tree(hclust::Clustering.Hclust)
+    n = length(hclust.order)
+    merges = hclust.merges
+    heights = hclust.heights
+    
+    nodes = Dict{Int, RadialNode}()
+    
+    # Initialize leaves
+    for i in 1:n
+        nodes[-i] = RadialNode(nothing, nothing, 0.0, 0.0, i)
+    end
+    
+    # Build tree from merges
+    root_node = nothing
+    for i in 1:size(merges, 1)
+        left_idx = merges[i, 1]
+        right_idx = merges[i, 2]
+        height = heights[i]
+        
+        left_node = nodes[left_idx]
+        right_node = nodes[right_idx]
+        
+        parent_node = RadialNode(left_node, right_node, height, 0.0, -1)
+        nodes[i] = parent_node
+        root_node = parent_node
+    end
+    
+    return root_node
+end
+
+"""
+    assign_radial_angles!(node, leaf_order_map, angle_map, start_angle, end_angle)
+
+Recursively assign angular positions to nodes based on the number of leaves in their subtrees.
+"""
+function assign_radial_angles!(
+    node::RadialNode,
+    leaf_order_map::Dict{Int, Int},
+    angle_map::Dict{Int, Float64},
+    start_angle::Float64,
+    end_angle::Float64
+)
+    if isnothing(node.left) && isnothing(node.right)
+        # It's a leaf
+        leaf_pos = leaf_order_map[node.leaf_index]
+        n_leaves = length(leaf_order_map)
+        
+        # Calculate angle based on position in the optimal ordering
+        # Using (leaf_pos - 1) / (n_leaves - 1) spreads leaves exactly from start to end
+        angle_fraction = n_leaves > 1 ? (leaf_pos - 1) / (n_leaves - 1) : 0.5
+        node.angle = start_angle + angle_fraction * (end_angle - start_angle)
+        angle_map[node.leaf_index] = node.angle
+    else
+        # It's an internal node
+        left_leaves = count_leaves(node.left)
+        right_leaves = count_leaves(node.right)
+        total_leaves = left_leaves + right_leaves
+        
+        # Proportional split of the angular wedge
+        mid_angle = start_angle + (left_leaves / total_leaves) * (end_angle - start_angle)
+        
+        assign_radial_angles!(node.left, leaf_order_map, angle_map, start_angle, mid_angle)
+        assign_radial_angles!(node.right, leaf_order_map, angle_map, mid_angle, end_angle)
+        
+        # Parent angle is the midpoint of children angles
+        node.angle = (node.left.angle + node.right.angle) / 2
+    end
+end
+
+"""
+Helper to count leaves in a RadialNode subtree.
+"""
+function count_leaves(node::RadialNode)
+    if isnothing(node.left) && isnothing(node.right)
+        return 1
+    else
+        return count_leaves(node.left) + count_leaves(node.right)
+    end
+end
+
+"""
+    plot_radial_dendrogram_branches!(ax, node, max_height, inner_radius, outer_radius; color, linewidth)
+
+Recursively plot the lines (arcs and radials) of the dendrogram.
+"""
+function plot_radial_dendrogram_branches!(
+    ax,
+    node::RadialNode,
+    max_height::Float64,
+    inner_radius::Float64,
+    outer_radius::Float64;
+    line_color=(:black, 0.4),
+    linewidth=1.0
+)
+    if isnothing(node.left) || isnothing(node.right)
+        return
+    end
+    
+    # Calculate radius r based on height (inverted: root is at inner_radius, leaves at outer_radius is standard,
+    # but dendrograms usually have root at center (0 height) or outside. 
+    # Standard dendrogram: leaves are at height 0, root at max_height.
+    # Here we map height 0 (leaves) to outer_radius, and max_height (root) to inner_radius.
+    
+    # Normalize height: 0.0 (leaves) -> 1.0 (tips), max_height -> 0.0 (root)
+    # Actually, hclust heights go from small (leaves merged) to large (root).
+    # We want root at center (inner) and leaves at periphery (outer).
+    
+    function get_r(h)
+        # Linear interpolation
+        # h=0 (leaves) => outer_radius
+        # h=max_height => inner_radius
+        return outer_radius - (h / max_height) * (outer_radius - inner_radius)
+    end
+
+    parent_r = get_r(node.height)
+    left_r = get_r(node.left.height)
+    right_r = get_r(node.right.height)
+    
+    # Polar to Cartesian
+    px, py = parent_r .* (cos(node.angle), sin(node.angle))
+    lx, ly = left_r .* (cos(node.left.angle), sin(node.left.angle))
+    rx, ry = right_r .* (cos(node.right.angle), sin(node.right.angle))
+    
+    # Draw arcs between children angles at parent radius
+    # We need to draw the crossbar at the parent's radius spanning from left child angle to right child angle
+    
+    theta_left = node.left.angle
+    theta_right = node.right.angle
+    
+    # Ensure we take the shortest path around circle? 
+    # For dendrograms, we usually strictly follow the wedge.
+    # Just ensure ordering for range
+    if theta_left > theta_right
+        theta_left, theta_right = theta_right, theta_left
+    end
+    
+    n_arc = max(2, Int(floor(50 * abs(theta_right - theta_left))))
+    arc_angles = range(theta_left, theta_right, length=n_arc)
+    
+    arc_x = [parent_r * cos(a) for a in arc_angles]
+    arc_y = [parent_r * sin(a) for a in arc_angles]
+    
+    # Plot the "crossbar" arc
+    CairoMakie.lines!(ax, arc_x, arc_y, color=line_color, linewidth=linewidth)
+    
+    # Plot the "drops" to children
+    # Line from left child's radius to parent's radius at left child's angle
+    # Wait, standard dendrograms usually:
+    # 1. Draw stems from children up to parent height.
+    # 2. Draw crossbar at parent height.
+    
+    # Stem for left child
+    l_stem_start_x = left_r * cos(node.left.angle)
+    l_stem_start_y = left_r * sin(node.left.angle)
+    l_stem_end_x = parent_r * cos(node.left.angle)
+    l_stem_end_y = parent_r * sin(node.left.angle)
+    CairoMakie.lines!(ax, [l_stem_start_x, l_stem_end_x], [l_stem_start_y, l_stem_end_y], color=line_color, linewidth=linewidth)
+
+    # Stem for right child
+    r_stem_start_x = right_r * cos(node.right.angle)
+    r_stem_start_y = right_r * sin(node.right.angle)
+    r_stem_end_x = parent_r * cos(node.right.angle)
+    r_stem_end_y = parent_r * sin(node.right.angle)
+    CairoMakie.lines!(ax, [r_stem_start_x, r_stem_end_x], [r_stem_start_y, r_stem_end_y], color=line_color, linewidth=linewidth)
+    
+    # Recurse
+    plot_radial_dendrogram_branches!(ax, node.left, max_height, inner_radius, outer_radius; line_color=line_color, linewidth=linewidth)
+    plot_radial_dendrogram_branches!(ax, node.right, max_height, inner_radius, outer_radius; line_color=line_color, linewidth=linewidth)
+end
+
+"""
+    plot_radial_dendrogram(hclust; rings, title, ...)
+
+Generate a generalized radial dendrogram with optional concentric annotation rings.
+
+# Arguments
+- `hclust`: `Clustering.Hclust` object.
+- `rings`: Vector of NamedTuples or Dicts defining annotation layers. 
+   Each element should look like `(indices=[...], label="Name", color=:red, marker=:circle, size=10)`.
+   Only `indices` is strictly required; defaults will be supplied for others.
+
+# Keywords
+- `title`: Plot title.
+- `figure_size`: Tuple (width, height).
+- `inner_radius`: Radius where the tree root sits (can be 0 for center).
+- `outer_radius`: Radius where tree leaves end.
+- `ring_start_radius`: Radius where the first annotation ring starts (default: `outer_radius + 0.05`).
+- `ring_spacing`: Gap between annotation rings.
+- `line_color`: Color of dendrogram branches.
+- `line_width`: Width of dendrogram branches.
+
+# Returns
+- `CairoMakie.Figure`
+"""
+function plot_radial_dendrogram(
+    hclust::Clustering.Hclust;
+    rings::Vector = [], # Vector of NamedTuples/Dicts
+    title::String = "",
+    figure_size::Tuple{Int,Int} = (1000, 1000),
+    inner_radius::Float64 = 0.0, # Tree root
+    outer_radius::Float64 = 0.8, # Tree tips
+    ring_start_radius::Union{Float64, Nothing} = nothing,
+    ring_spacing::Float64 = 0.05,
+    line_color = (:black, 0.5),
+    line_width = 1.0,
+    legend_title = "Legend"
+)
+    # 1. Build Radial Tree
+    root = hclust_to_radial_tree(hclust)
+    n_leaves = length(hclust.order)
+    
+    # 2. Assign Angles (Optimized)
+    # Map leaf index to its position in the sort order (1..N)
+    leaf_order_map = Dict{Int,Int}(idx => pos for (pos, idx) in enumerate(hclust.order))
+    angle_map = Dict{Int, Float64}()
+    
+    start_angle = -π/2
+    end_angle = start_angle + 2π
+    
+    assign_radial_angles!(root, leaf_order_map, angle_map, start_angle, end_angle)
+    max_height = maximum(hclust.heights)
+
+    # 3. Setup Figure
+    fig = CairoMakie.Figure(size=figure_size)
+    ax = CairoMakie.Axis(fig[1, 1], aspect=CairoMakie.DataAspect(), title=title)
+    CairoMakie.hidedecorations!(ax)
+    CairoMakie.hidespines!(ax)
+
+    # 4. Plot Tree
+    plot_radial_dendrogram_branches!(
+        ax, root, max_height, inner_radius, outer_radius; 
+        line_color=line_color, linewidth=line_width
+    )
+
+    # 5. Plot Rings
+    current_radius = isnothing(ring_start_radius) ? outer_radius + 0.02 : ring_start_radius
+    
+    legend_entries = []
+    legend_labels = []
+    
+    # Default palettes
+    default_colors = Mycelia.n_maximally_distinguishable_colors(max(length(rings), 3))
+    
+    for (i, ring_data) in enumerate(rings)
+        # normalize inputs to ensure fields exist
+        indices = get(ring_data, :indices, Int[])
+        label = get(ring_data, :label, "Group $i")
+        color = get(ring_data, :color, default_colors[mod1(i, length(default_colors))])
+        marker = get(ring_data, :marker, :circle)
+        msize = get(ring_data, :size, 10.0)
+        
+        xs = Float64[]
+        ys = Float64[]
+        
+        indices_set = Set(indices)
+        
+        for leaf_idx in hclust.order
+            if leaf_idx in indices_set
+                ang = angle_map[leaf_idx]
+                push!(xs, current_radius * cos(ang))
+                push!(ys, current_radius * sin(ang))
+            end
+        end
+        
+        if !isempty(xs)
+            CairoMakie.scatter!(ax, xs, ys; color=color, marker=marker, markersize=msize, strokewidth=0.5, strokecolor=:black)
+            
+            # Add to legend
+            push!(legend_entries, CairoMakie.MarkerElement(color=color, marker=marker, markersize=15, strokecolor=:black, strokewidth=0.5))
+            push!(legend_labels, label)
+        end
+        
+        current_radius += ring_spacing
+    end
+
+    # 6. Add Legend
+    if !isempty(legend_entries)
+        CairoMakie.Legend(
+            fig[1, 2],
+            legend_entries,
+            legend_labels,
+            legend_title,
+            framevisible=true
+        )
+    end
+    
+    # Adjust limits to fit everything
+    limit_radius = current_radius + 0.05
+    CairoMakie.xlims!(ax, -limit_radius, limit_radius)
+    CairoMakie.ylims!(ax, -limit_radius, limit_radius)
+    
+    return fig
+end
+
+
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2846,4 +3162,953 @@ function plot_per_base_quality(fastq_file::String;
                         Plots.text("Reads: $(read_count)", 10, :black))
     
     return p
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Visualize biological diversity saturation (e.g., k-mer accumulation) against reference benchmarks.
+
+Designed to track the accumulation of unique biological features (k-mers, genes, taxa) as more samples are sequenced or analyzed. 
+This visualization helps assess "saturation"—whether sampling more data yields diminishing returns in novel diversity.
+
+# Arguments
+- `diversity_counts`: The primary data. Can be:
+    - A single `Vector{<:Number}` (one series).
+    - A `Vector{Vector{<:Number}}` (multiple series, e.g., different experimental cohorts).
+
+# Keyword Arguments
+## Data & Grouping
+- `x_values`: X-axis values (e.g., "Genomes Processed"). Defaults to `1:length`.
+- `labels`: Label(s) for the diversity count series (for the legend).
+- `grouping_values`: A vector aligned with the x-axis indicating distinct groups (e.g., "Discovery Wave", "Year"). 
+   If provided, the line color changes at group transitions, and vertical separators are added.
+   *Note: If `grouping_values` is provided, gradient coloring applies to these segments.*
+
+## Benchmarks
+- `reference_values`: Vector of scalar numbers representing horizontal benchmark lines (e.g., "Total RefSeq Diversity").
+- `reference_labels`: Labels corresponding to `reference_values`.
+- `reference_colors`: Colors for `reference_values`. Defaults to dark gray.
+
+## Aesthetics
+- `grouping_colors`: Vector of colors for the segments defined by `grouping_values`. Defaults to a blue-gradient.
+- `title`: Plot title.
+- `xlabel`: X-axis label.
+- `ylabel`: Y-axis label.
+- `figure_size`: Tuple (width, height).
+"""
+function plot_diversity_saturation(
+    diversity_counts::Union{AbstractVector{<:Real}, AbstractVector{<:AbstractVector{<:Real}}};
+    # Data context
+    x_values::Union{Nothing, AbstractVector} = nothing,
+    labels::Union{Nothing, String, Vector{String}} = nothing,
+    # Segmentation / Waves
+    grouping_values::Union{Nothing, AbstractVector} = nothing,
+    grouping_colors::Union{Nothing, AbstractVector} = nothing,
+    # Reference Lines
+    reference_values::AbstractVector{<:Real} = Float64[],
+    reference_labels::AbstractVector{String} = String[],
+    reference_colors::Union{Nothing, AbstractVector} = nothing,
+
+    # Styling
+    title::String = "Diversity Saturation Analysis",
+    xlabel::String = "Samples Processed",
+    ylabel::String = "Cumulative Unique Features",
+    figure_size::Tuple{Int, Int} = (1200, 700),
+    linewidth::Real = 3.0,
+    base_color = :blue # Default color if no grouping is used
+  )
+  # Normalize input to vector of vectors
+  series_list = eltype(diversity_counts) <: Real ? [diversity_counts] : diversity_counts
+  n_series = length(series_list)
+  # Normalize labels
+  series_labels = if isnothing(labels)
+      n_series == 1 ? ["Diversity"] : ["Series $i" for i in 1:n_series]
+  elseif labels isa String
+      [labels]
+  else
+      labels
+  end
+
+  # Determine X values (assume all series share the same X if not specified, or match length)
+  # If x_values not provided, use 1:N of the first series
+  xs = isnothing(x_values) ? collect(1:length(series_list[1])) : x_values
+
+  # Setup Colors
+  # Default wave colors: Progressive gradient from Drab/Gray (Wave 1) to Vivid Blue (Wave N)
+  # If user didn't provide colors, we generate them based on the number of unique groups
+  unique_groups = isnothing(grouping_values) ? [] : sort(unique(grouping_values))
+  n_groups = length(unique_groups)
+
+  segment_palette = if !isnothing(grouping_colors)
+      grouping_colors
+  elseif n_groups > 0
+      # Generate a custom blue-ish gradient similar to the user's example
+      # Interpolate between Gray-Blue and Vivid Blue
+      c1 = Colors.RGB(0.65, 0.67, 0.70)
+      c2 = Colors.RGB(0.00, 0.30, 0.90)
+      Colors.range(c1, stop=c2, length=n_groups)
+  else
+      [base_color]
+  end
+
+  # Reference colors
+  ref_palette = isnothing(reference_colors) ? 
+      [Colors.RGB(0.4, 0.4, 0.4) for _ in 1:length(reference_values)] : 
+      reference_colors
+
+  # --- Plotting ---
+  fig = CairoMakie.Figure(size = figure_size, fontsize = 14, backgroundcolor = :white)
+
+  ax = CairoMakie.Axis(
+      fig[1, 1],
+      xlabel = xlabel,
+      ylabel = ylabel,
+      title = title,
+      titlesize = 18,
+      xlabelsize = 16,
+      ylabelsize = 16,
+      xticklabelsize = 12,
+      yticklabelsize = 12,
+      xgridvisible = false, # Turn OFF vertical grid lines (standard for saturation plots)
+      ygridvisible = true,
+      ygridcolor = Colors.RGB(0.9, 0.9, 0.9)
+  )
+
+  legend_elements = []
+  legend_entries = String[]
+
+  # 1. Plot Data Series
+  for (si, y_data) in enumerate(series_list)
+      current_x = xs[1:length(y_data)] # Handle if x is longer than y
+      
+      if !isnothing(grouping_values) && n_groups > 0
+          # --- Segmented Plotting ---
+          # We assume grouping_values corresponds to the X axis
+          
+          # Find transitions for vertical lines
+          transitions = Int[]
+          for i in 2:length(grouping_values)
+              if grouping_values[i] != grouping_values[i-1]
+                  push!(transitions, i)
+              end
+          end
+          
+          # Add vertical lines at transitions
+          if !isempty(transitions)
+              CairoMakie.vlines!(ax, current_x[transitions],
+                  color = Colors.RGB(0.5, 0.5, 0.5),
+                  linewidth = 1.5,
+                  linestyle = :dash
+              )
+          end
+
+          # Plot segments
+          for (gi, group_val) in enumerate(unique_groups)
+              mask = grouping_values .== group_val
+              indices = findall(mask)
+              
+              if isempty(indices); continue; end
+
+              # Extend segment to overlap with next for continuity (visual gap closing)
+              if maximum(indices) < length(current_x)
+                  # Only extend if the NEXT point exists in data
+                  push!(indices, maximum(indices) + 1)
+              end
+              
+              # Safety for color indexing
+              c_idx = mod1(gi, length(segment_palette))
+              color = segment_palette[c_idx]
+              
+              CairoMakie.lines!(ax, current_x[indices], y_data[indices],
+                  color = color,
+                  linewidth = linewidth
+              )
+              
+              # Add to legend only once (for the first series, if multiple)
+              if si == 1
+                  push!(legend_elements, CairoMakie.LineElement(color = color, linewidth = linewidth))
+                  push!(legend_entries, "Group: $group_val")
+              end
+          end
+      else
+          # --- Continuous Plotting ---
+          # If no grouping, just plot the line
+          color = n_series > 1 ? Mycelia.n_maximally_distinguishable_colors(n_series)[si] : segment_palette[1]
+          
+          CairoMakie.lines!(ax, current_x, y_data,
+              color = color,
+              linewidth = linewidth
+          )
+          
+          push!(legend_elements, CairoMakie.LineElement(color = color, linewidth = linewidth))
+          push!(legend_entries, series_labels[si])
+      end
+  end
+
+  # 2. Plot References
+  for (i, val) in enumerate(reference_values)
+      if i > length(reference_labels); break; end
+      
+      c = ref_palette[mod1(i, length(ref_palette))]
+      
+      CairoMakie.hlines!(ax, [val],
+          color = c,
+          linewidth = linewidth,
+          linestyle = :dashdot
+      )
+      
+      push!(legend_elements, CairoMakie.LineElement(color = c, linewidth = linewidth, linestyle = :dashdot))
+      push!(legend_entries, reference_labels[i])
+  end
+
+  # 3. Create Legend
+  if !isempty(legend_elements)
+      CairoMakie.Legend(
+          fig[1, 2],
+          legend_elements,
+          legend_entries,
+          framevisible = true,
+          framecolor = Colors.RGB(0.8, 0.8, 0.8),
+          backgroundcolor = Colors.RGB(0.98, 0.98, 0.98),
+          labelsize = 12,
+          rowgap = 5
+      )
+  end
+
+  CairoMakie.resize_to_layout!(fig)
+  return fig
+end
+
+import CairoMakie
+import Statistics
+import LinearAlgebra
+import OrderedCollections
+
+# --- Data Structures ---
+
+"""
+    PointSeries(indices, label, color; marker=:circle, size=10.0, z_order=1)
+
+Defines a group of points that share a common visual style (e.g., "Environmental Isolates").
+Used for coloring points and creating the source legend.
+"""
+struct PointSeries
+    indices::Vector{Int}
+    label::String
+    color::Any             # Symbol (e.g., :red) or String hex or RGB object
+    marker::Symbol         # Default marker for this group
+    size::Float64
+    z_order::Int           # Higher numbers plot on top of lower numbers
+end
+
+# Constructor with keywords
+PointSeries(idx, lbl, col; marker=:circle, size=10.0, z_order=1) = 
+    PointSeries(idx, lbl, col, marker, size, z_order)
+
+"""
+    EllipseConfig(indices, label, color; anchor=:top, align=(:center, :bottom), offset=(0.0, 5.0))
+
+Defines a target for drawing a confidence ellipse and its label.
+"""
+struct EllipseConfig
+    indices::Vector{Int}
+    label::String          
+    color::Any             
+    label_anchor::Symbol   # :top, :bottom, :left, :right
+    label_align::Tuple{Symbol, Symbol} 
+    label_offset::Tuple{Float64, Float64}
+end
+
+# Constructor with keywords
+function EllipseConfig(indices, label, color; 
+                       anchor=:top, 
+                       align=(:center, :bottom), 
+                       offset=(0.0, 5.0))
+    return EllipseConfig(indices, label, color, anchor, align, offset)
+end
+
+
+# --- Helper Functions ---
+
+"""
+    get_ellipse_points(x_coords, y_coords; scale=3.5)
+
+Calculates the boundary points of a confidence ellipse for a set of 2D coordinates.
+Returns a vector of `CairoMakie.Point2f` and a dictionary of anchor points for labeling.
+"""
+function get_ellipse_points(x_coords, y_coords; scale=3.5)
+    # Need at least 3 points to define a covariance
+    if length(x_coords) < 3
+        return CairoMakie.Point2f[], Dict{Symbol, CairoMakie.Point2f}()
+    end
+    
+    # Calculate Covariance and Mean
+    cov_matrix = Statistics.cov(hcat(x_coords, y_coords))
+    mean_vec = [Statistics.mean(x_coords), Statistics.mean(y_coords)]
+    
+    # Eigen decomposition for axis lengths and rotation
+    eigen_decomp = LinearAlgebra.eigen(cov_matrix)
+    vals, vecs = eigen_decomp.values, eigen_decomp.vectors
+    
+    # Calculate angle and axis lengths
+    angle = atan(vecs[2, 2], vecs[1, 2])
+    major_axis = scale * sqrt(vals[2])
+    minor_axis = scale * sqrt(vals[1])
+    
+    # Generate parametric points
+    t = range(0, 2π, length=100)
+    ellipse_x = major_axis .* cos.(t)
+    ellipse_y = minor_axis .* sin.(t)
+    
+    # Rotate and translate points
+    rotated_x = ellipse_x .* cos(angle) .- ellipse_y .* sin(angle) .+ mean_vec[1]
+    rotated_y = ellipse_x .* sin(angle) .+ ellipse_y .* cos(angle) .+ mean_vec[2]
+    
+    points = [CairoMakie.Point2f(x, y) for (x, y) in zip(rotated_x, rotated_y)]
+    
+    # Define anchors for text placement
+    anchors = Dict(
+        :top    => points[argmax(rotated_y)],
+        :bottom => points[argmin(rotated_y)],
+        :left   => points[argmin(rotated_x)],
+        :right  => points[argmax(rotated_x)]
+    )
+    
+    return points, anchors
+end
+
+
+# --- Main Plotting Function ---
+
+"""
+    plot_generalized_pcoa(x_all, y_all, series_list; ...)
+
+A generalized visualizer for PCoA/PCA data within the Mycelia ecosystem.
+Separates data logic from drawing logic using `PointSeries` and `EllipseConfig`.
+
+# Arguments
+- `x_all`, `y_all`: Vectors containing coordinates for all points in the dataset.
+- `series_list`: Vector of `PointSeries`. Rules for how to color/group specific indices.
+
+# Keywords
+- `species_map`: Dict mapping indices to species names (used to assign shapes).
+- `marker_map`: Dict mapping species names to Makie symbols (e.g. :rect, :circle).
+- `ellipses`: Vector of `EllipseConfig`.
+- `title`, `xlabel`, `ylabel`.
+- `layout_target`: Optional Makie layout location (e.g. `fig[1,1]`) for subplots.
+"""
+function plot_generalized_pcoa(
+    x_all::AbstractVector, 
+    y_all::AbstractVector, 
+    series_list::Vector{PointSeries};
+    species_map::Dict = Dict(), # Index -> String
+    marker_map::AbstractDict = Dict(), # String -> Symbol
+    ellipses::Vector{EllipseConfig} = EllipseConfig[],
+    title::String = "Principal Coordinate Analysis",
+    xlabel::String = "PC1",
+    ylabel::String = "PC2",
+    output_file::String = "",
+    figure_size = (1000, 750),
+    layout_target = nothing
+)
+    # 1. Initialize Figure or Layout
+    if isnothing(layout_target)
+        fig = CairoMakie.Figure(size=figure_size)
+        ax = CairoMakie.Axis(
+            fig[1, 1], 
+            title=title, 
+            xlabel=xlabel, 
+            ylabel=ylabel,
+            titlesize=16, xlabelsize=14, ylabelsize=14
+        )
+        legend_layout = fig[1, 2] = CairoMakie.GridLayout()
+    else
+        # Subplot mode
+        ax = CairoMakie.Axis(
+            layout_target, 
+            title=title, 
+            xlabel=xlabel, 
+            ylabel=ylabel
+        )
+        legend_layout = nothing # Legends handled externally or manually for subplots
+    end
+
+    # 2. Pre-allocate visual property vectors
+    n = length(x_all)
+    # Default styling for points not covered by any series
+    plot_colors = Vector{Any}(fill(:gray90, n))
+    plot_markers = Vector{Symbol}(fill(:circle, n))
+    plot_sizes = Vector{Float64}(fill(6.0, n))
+    plot_z_orders = Vector{Int}(fill(0, n))
+    
+    # 3. Apply Series Configurations
+    # Last series in the list takes precedence if indices overlap
+    for series in series_list
+        for idx in series.indices
+            if 1 <= idx <= n
+                plot_colors[idx] = series.color
+                plot_sizes[idx] = series.size
+                plot_z_orders[idx] = series.z_order
+                
+                # Assign marker:
+                # 1. Default to series marker
+                plot_markers[idx] = series.marker
+                
+                # 2. If species logic exists, override it
+                if !isempty(species_map) && haskey(species_map, idx)
+                    sp = species_map[idx]
+                    if haskey(marker_map, sp)
+                        plot_markers[idx] = marker_map[sp]
+                    end
+                end
+            end
+        end
+    end
+
+    # 4. Sort indices by z-order to ensure correct layering
+    # Stable sort preserves order of series definition for equal z-orders
+    draw_order = sortperm(plot_z_orders)
+    
+    x_sorted = x_all[draw_order]
+    y_sorted = y_all[draw_order]
+    c_sorted = plot_colors[draw_order]
+    m_sorted = plot_markers[draw_order]
+    s_sorted = plot_sizes[draw_order]
+
+    # 5. Draw the Scatter Plot
+    CairoMakie.scatter!(
+        ax, 
+        x_sorted, 
+        y_sorted, 
+        color=c_sorted, 
+        marker=m_sorted, 
+        markersize=s_sorted, 
+        strokewidth=0.5,
+        strokecolor=:black
+    )
+
+    # 6. Draw Ellipses and Labels
+    for ell in ellipses
+        # Filter indices that exist in the current dataset
+        valid_indices = filter(i -> 1 <= i <= n, ell.indices)
+        if isempty(valid_indices) continue end
+        
+        ex = x_all[valid_indices]
+        ey = y_all[valid_indices]
+        
+        pts, anchors = get_ellipse_points(ex, ey)
+        
+        if !isempty(pts)
+            # Draw ellipse outline
+            CairoMakie.poly!(
+                ax, 
+                pts, 
+                color=:transparent, 
+                strokecolor=ell.color, 
+                strokewidth=1.5
+            )
+            
+            # Draw label if anchor exists
+            if haskey(anchors, ell.label_anchor)
+                CairoMakie.text!(
+                    ax, 
+                    ell.label,
+                    position = anchors[ell.label_anchor],
+                    fontsize = 14,
+                    color = ell.color,
+                    font = :bold,
+                    align = ell.label_align,
+                    offset = ell.label_offset
+                )
+            end
+        end
+    end
+
+    # 7. Set Axis Limits with Padding
+    x_span = maximum(x_sorted) - minimum(x_sorted)
+    y_span = maximum(y_sorted) - minimum(y_sorted)
+    
+    CairoMakie.xlims!(ax, minimum(x_sorted) - x_span*0.1, maximum(x_sorted) + x_span*0.1)
+    CairoMakie.ylims!(ax, minimum(y_sorted) - y_span*0.1, maximum(y_sorted) + y_span*0.1)
+
+    # 8. Generate Legends (Only if not in subplot mode)
+    if !isnothing(legend_layout)
+        # -- Source/Group Legend --
+        group_elements = [
+            CairoMakie.MarkerElement(color=s.color, marker=:circle, markersize=10, strokewidth=0.5, strokecolor=:black) 
+            for s in series_list
+        ]
+        group_labels = [s.label for s in series_list]
+        
+        CairoMakie.Legend(
+            legend_layout[1, 1], 
+            group_elements, 
+            group_labels, 
+            "Source", 
+            halign=:left, valign=:top, framevisible=false
+        )
+        
+        # -- Species/Shape Legend (if used) --
+        if !isempty(marker_map)
+            # Create a sorted list of species for consistent legend order
+            sorted_species = sort(collect(keys(marker_map)))
+            
+            shape_elements = [
+                CairoMakie.MarkerElement(color=:black, marker=marker_map[s], markersize=10) 
+                for s in sorted_species
+            ]
+            # Helper to abbreviate Genus
+            abbrev_labels = [replace(s, r"^(\w)\w+\s" => s"\1. ") for s in sorted_species]
+            
+            CairoMakie.Legend(
+                legend_layout[2, 1], 
+                shape_elements, 
+                abbrev_labels, 
+                "Species", 
+                halign=:left, valign=:top, framevisible=false
+            )
+        end
+        
+        if !isempty(marker_map)
+            CairoMakie.rowgap!(legend_layout, 1, 20)
+        end
+    end
+
+    # 9. Save and Return
+    if !isempty(output_file) && isnothing(layout_target)
+        CairoMakie.save(output_file, fig)
+        println("Saved PCoA plot to: $output_file")
+    end
+
+    return isnothing(layout_target) ? fig : ax
+end
+
+import CairoMakie
+import Clustering
+import Statistics
+import DataFrames
+import OrderedCollections
+
+# --- Tree Visualization Helpers ---
+
+mutable struct ClusterNode
+    left::Union{ClusterNode, Nothing}
+    right::Union{ClusterNode, Nothing}
+    height::Float64
+    x::Float64
+    leaf_index::Int
+end
+
+function hclust_to_tree(hclust::Clustering.Hclust)
+    n = length(hclust.order)
+    merges = hclust.merges
+    heights = hclust.heights
+    
+    nodes = Dict{Int, ClusterNode}()
+    
+    for i in 1:n
+        nodes[-i] = ClusterNode(nothing, nothing, 0.0, 0.0, i)
+    end
+    
+    for i in 1:size(merges, 1)
+        left_idx = merges[i, 1]
+        right_idx = merges[i, 2]
+        height = heights[i]
+        
+        left_node = nodes[left_idx]
+        right_node = nodes[right_idx]
+        
+        parent_node = ClusterNode(left_node, right_node, height, 0.0, -1)
+        nodes[i] = parent_node
+    end
+    
+    return nodes[size(merges, 1)]
+end
+
+function assign_x_coordinates!(node::ClusterNode, order::Vector{Int}, position_map::Dict{Int, Float64})
+    if isnothing(node.left) && isnothing(node.right)
+        # It's a leaf
+        leaf_pos = findfirst(==(node.leaf_index), order)
+        node.x = Float64(leaf_pos)
+        position_map[node.leaf_index] = node.x
+    else
+        assign_x_coordinates!(node.left, order, position_map)
+        assign_x_coordinates!(node.right, order, position_map)
+        node.x = (node.left.x + node.right.x) / 2
+    end
+end
+
+function plot_dendrogram!(ax, node::ClusterNode, scale_func::Function, orientation::Symbol)
+    if isnothing(node.left) || isnothing(node.right)
+        return
+    end
+    
+    parent_h = scale_func(node.height)
+    left_h = scale_func(node.left.height)
+    right_h = scale_func(node.right.height)
+    
+    if orientation == :vertical
+        # Standard dendrogram (top/bottom)
+        # Vertical lines
+        CairoMakie.lines!(ax, [node.left.x, node.left.x], [left_h, parent_h], color=:black, linewidth=1)
+        CairoMakie.lines!(ax, [node.right.x, node.right.x], [right_h, parent_h], color=:black, linewidth=1)
+        # Horizontal bar
+        CairoMakie.lines!(ax, [node.left.x, node.right.x], [parent_h, parent_h], color=:black, linewidth=1)
+    else
+        # Horizontal dendrogram (left/right)
+        # Horizontal lines (height is x-axis now)
+        CairoMakie.lines!(ax, [left_h, parent_h], [node.left.x, node.left.x], color=:black, linewidth=1)
+        CairoMakie.lines!(ax, [right_h, parent_h], [node.right.x, node.right.x], color=:black, linewidth=1)
+        # Vertical bar
+        CairoMakie.lines!(ax, [parent_h, parent_h], [node.left.x, node.right.x], color=:black, linewidth=1)
+    end
+    
+    plot_dendrogram!(ax, node.left, scale_func, orientation)
+    plot_dendrogram!(ax, node.right, scale_func, orientation)
+end
+
+function plot_dendrogram_from_hclust!(ax, hclust::Clustering.Hclust; 
+                                      scale_func=sqrt, 
+                                      orientation=:vertical, 
+                                      cut_height=nothing)
+    root = hclust_to_tree(hclust)
+    position_map = Dict{Int, Float64}()
+    assign_x_coordinates!(root, hclust.order, position_map)
+    
+    # Ensure min height isn't negative for log scales or sqrt
+    min_h = minimum(hclust.heights)
+    offset = max(0.001, min_h * 0.1)
+    safe_scale(h) = scale_func(h + offset)
+    
+    plot_dendrogram!(ax, root, safe_scale, orientation)
+    
+    n = length(hclust.order)
+    
+    # Set axis limits
+    if orientation == :vertical
+        CairoMakie.xlims!(ax, 0.5, n + 0.5)
+        if !isnothing(cut_height)
+            CairoMakie.hlines!(ax, [safe_scale(cut_height)], color=:red, linestyle=:dash, linewidth=2)
+        end
+    else
+        CairoMakie.ylims!(ax, 0.5, n + 0.5)
+        CairoMakie.hidedecorations!(ax) # Usually hide axis for side dendrogram
+        CairoMakie.xlims!(ax, nothing, nothing) # Let autoscaling handle height width
+        if !isnothing(cut_height)
+            CairoMakie.vlines!(ax, [safe_scale(cut_height)], color=:red, linestyle=:dash, linewidth=2)
+        end
+    end
+    
+    return ax
+end
+
+# --- Main Generalized Visualization Function ---
+
+"""
+    visualize_hierarchical_heatmap(
+        data_matrix::AbstractMatrix;
+        
+        # Axis Information
+        x_labels::Union{Nothing, Vector{String}} = nothing,
+        y_labels::Union{Nothing, Vector{String}} = nothing,
+        
+        # Clustering Information
+        x_hclust::Union{Nothing, Clustering.Hclust} = nothing,
+        x_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
+        y_hclust::Union{Nothing, Clustering.Hclust} = nothing,
+        y_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
+        
+        # Visualization Configuration
+        color_normalization::Symbol = :row, # :row, :col, :global
+        dendrogram_scale_func::Function = sqrt,
+        color_func::Function = (val, max_val) -> CairoMakie.RGBAf(0.0, 0.0, 1.0, 0.2 + 0.8 * (val / max_val)),
+        
+        # Layout & Text
+        title::String = "Cluster Heatmap",
+        show_values::Bool = true,
+        figure_size::Tuple{Int, Int} = (1600, 1000)
+    )
+
+Generalized function to visualize a heatmap with optional hierarchical clustering on X and Y axes.
+Supports "collapsed" clusters where the heatmap cells represent groups of leaves from the tree.
+
+# Arguments
+- `data_matrix`: Matrix of values to plot. If clustering assignments are provided, 
+  this should be aggregated (e.g. counts) matching the number of clusters.
+  Dimensions should be (N_Y_Items, N_X_Items).
+  
+- `x_cluster_assignments`: If provided, maps the leaves of `x_hclust` to the columns of `data_matrix`.
+  Must be length equal to number of leaves in `x_hclust`.
+  
+- `color_normalization`: Defines how the maximum value for color scaling is determined.
+  - `:row`: Max value per row.
+  - `:col`: Max value per column.
+  - `:global`: Max value in entire matrix.
+"""
+function visualize_hierarchical_heatmap(
+    data_matrix::AbstractMatrix;
+    
+    # X-axis (Columns) config
+    x_labels::Union{Nothing, Vector{String}} = nothing,
+    x_hclust::Union{Nothing, Clustering.Hclust} = nothing,
+    x_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
+    
+    # Y-axis (Rows) config
+    y_labels::Union{Nothing, Vector{String}} = nothing,
+    y_hclust::Union{Nothing, Clustering.Hclust} = nothing,
+    y_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
+    
+    # Options
+    color_normalization::Symbol = :row,
+    dendrogram_scale_func::Function = sqrt,
+    color_func::Function = (val, max_val) -> CairoMakie.RGBAf(0.0, 0.0, 1.0, 0.2 + 0.8 * (val / max(1e-10, max_val))),
+    cut_height_x::Union{Nothing, Real} = nothing,
+    cut_height_y::Union{Nothing, Real} = nothing,
+    
+    title::String = "",
+    show_values::Bool = true,
+    figure_size::Tuple{Int, Int} = (1600, 1000)
+)
+    # --- 1. Compute Layout Geometries ---
+    
+    # Helper to calculate cell positions and sizes based on trees/clusters
+    function calculate_axis_geometry(n_items, hclust, assignments)
+        if isnothing(hclust)
+            # No tree: Uniform spacing
+            centers = collect(1.0:n_items)
+            widths = ones(Float64, n_items)
+            ordering = 1:n_items
+            total_span = Float64(n_items)
+        else
+            # Tree exists
+            if isnothing(assignments)
+                # No collapsing: 1-to-1 mapping
+                centers = collect(1.0:n_items)
+                widths = ones(Float64, n_items)
+                ordering = hclust.order # Heatmap follows tree order
+                total_span = Float64(n_items)
+            else
+                # Collapsing: Clusters have variable widths
+                # Identify unique clusters in tree order
+                tree_ordered_assignments = assignments[hclust.order]
+                
+                # We assume the data_matrix is ordered such that column j corresponds to 
+                # the j-th unique cluster encountered when traversing the tree leaves.
+                # If your data_matrix is ordered differently, you must reorder it before calling this.
+                unique_clusters_ordered = unique(tree_ordered_assignments)
+                
+                centers = Float64[]
+                widths = Float64[]
+                
+                # Calculate span for each cluster
+                for cluster_id in unique_clusters_ordered
+                    # Find indices in the *ordered* list
+                    indices = findall(==(cluster_id), tree_ordered_assignments)
+                    min_pos = minimum(indices)
+                    max_pos = maximum(indices)
+                    
+                    push!(centers, (min_pos + max_pos) / 2.0)
+                    push!(widths, max_pos - min_pos + 1.0)
+                end
+                
+                ordering = 1:length(unique_clusters_ordered) # 1..N_Clusters
+                total_span = length(hclust.order)
+            end
+        end
+        return centers, widths, ordering, total_span
+    end
+
+    n_rows, n_cols = size(data_matrix)
+    
+    # Calculate X geometries
+    x_centers, x_widths, x_ordering, x_span = calculate_axis_geometry(
+        n_cols, x_hclust, x_cluster_assignments
+    )
+    
+    # Calculate Y geometries
+    y_centers, y_widths, y_ordering, y_span = calculate_axis_geometry(
+        n_rows, y_hclust, y_cluster_assignments
+    )
+    
+    # --- 2. Setup Figure and Layout ---
+    
+    fig = CairoMakie.Figure(size = figure_size)
+    
+    # Layout definition
+    # Col 1: Y-Dendrogram (optional)
+    # Col 2: Heatmap
+    # Col 3: Legend
+    # Row 1: X-Dendrogram (optional)
+    # Row 2: Heatmap
+    
+    hm_row, hm_col = 2, 2
+    
+    # --- 3. Draw Heatmap ---
+    
+    ax_hm = CairoMakie.Axis(
+        fig[hm_row, hm_col],
+        title = isnothing(x_hclust) && isnothing(y_hclust) ? title : "",
+        titlesize = 24,
+        xticklabelrotation = π/4,
+        xgridvisible = false,
+        ygridvisible = false
+    )
+    
+    # Apply labels if provided
+    if !isnothing(x_labels)
+        ax_hm.xticks = (x_centers, x_labels)
+    end
+    
+    if !isnothing(y_labels)
+        ax_hm.yticks = (y_centers, y_labels)
+    end
+    
+    # Set limits based on the total span of the trees (or count)
+    CairoMakie.xlims!(ax_hm, 0.5, x_span + 0.5)
+    CairoMakie.ylims!(ax_hm, 0.5, y_span + 0.5)
+    
+    # Draw Cells
+    global_max = maximum(data_matrix)
+    
+    for r_idx in 1:n_rows
+        # Get visual Y coordinates
+        y_c = y_centers[r_idx]
+        y_w = y_widths[r_idx]
+        y_min = y_c - y_w/2
+        y_max = y_c + y_w/2
+        
+        # Calculate normalization factor for this row
+        row_max = maximum(data_matrix[r_idx, :])
+        
+        for c_idx in 1:n_cols
+            # Get visual X coordinates
+            x_c = x_centers[c_idx]
+            x_w = x_widths[c_idx]
+            x_min = x_c - x_w/2
+            x_max = x_c + x_w/2
+            
+            val = data_matrix[r_idx, c_idx]
+            
+            # Determine max for normalization
+            norm_max = if color_normalization == :row
+                row_max
+            elseif color_normalization == :col
+                maximum(data_matrix[:, c_idx])
+            else
+                global_max
+            end
+            
+            if val > 0
+                color = color_func(val, norm_max)
+                
+                CairoMakie.poly!(ax_hm,
+                    CairoMakie.Point2f[
+                        (x_min, y_min), (x_max, y_min),
+                        (x_max, y_max), (x_min, y_max)
+                    ],
+                    color = color,
+                    strokecolor = :black,
+                    strokewidth = 0.5
+                )
+                
+                if show_values
+                    # Contrast text color check
+                    text_color = val > (norm_max * 0.5) ? :white : :black
+                    CairoMakie.text!(ax_hm, x_c, y_c, 
+                        text = string(val), 
+                        align = (:center, :center), 
+                        color = text_color,
+                        fontsize = 12
+                    )
+                end
+            end
+        end
+    end
+    
+    # --- 4. Draw X-Axis Dendrogram (Top) ---
+    if !isnothing(x_hclust)
+        ax_dendro_x = CairoMakie.Axis(
+            fig[hm_row - 1, hm_col],
+            ylabel = "Height",
+            title = title,
+            titlesize = 24,
+            xgridvisible = false,
+            ygridvisible = false,
+            xticklabelsvisible = false,
+            xticksvisible = false,
+            bottomspinevisible = false
+        )
+        
+        plot_dendrogram_from_hclust!(
+            ax_dendro_x, x_hclust, 
+            scale_func=dendrogram_scale_func, 
+            orientation=:vertical,
+            cut_height=cut_height_x
+        )
+        
+        # Link X axis
+        CairoMakie.linkxaxes!(ax_hm, ax_dendro_x)
+        CairoMakie.rowsize!(fig.layout, hm_row - 1, CairoMakie.Relative(0.2))
+    end
+    
+    # --- 5. Draw Y-Axis Dendrogram (Left) ---
+    if !isnothing(y_hclust)
+        ax_dendro_y = CairoMakie.Axis(
+            fig[hm_row, hm_col - 1],
+            xlabel = "Height",
+            xgridvisible = false,
+            ygridvisible = false,
+            yticklabelsvisible = false,
+            yticksvisible = false,
+            rightspinevisible = false
+        )
+        
+        plot_dendrogram_from_hclust!(
+            ax_dendro_y, y_hclust, 
+            scale_func=dendrogram_scale_func, 
+            orientation=:horizontal,
+            cut_height=cut_height_y
+        )
+        
+        # Invert X axis for the side dendrogram so root is left/top depending on preference?
+        # Usually roots are far away from the map.
+        CairoMakie.xreverse!(ax_dendro_y) 
+        
+        # Link Y axis
+        CairoMakie.linkyaxes!(ax_hm, ax_dendro_y)
+        CairoMakie.colsize!(fig.layout, hm_col - 1, CairoMakie.Relative(0.15))
+    end
+    
+    # --- 6. Legend ---
+    # Construct a representative legend based on the normalization
+    legend_labels = ["20%", "40%", "60%", "80%", "100%"]
+    legend_vals = [0.2, 0.4, 0.6, 0.8, 1.0]
+    
+    # Dummy max for legend generation
+    dummy_max = 100.0
+    legend_elements = [
+        CairoMakie.PolyElement(
+            color = color_func(v * dummy_max, dummy_max), 
+            strokecolor = :black
+        ) for v in legend_vals
+    ]
+    
+    legend_title = if color_normalization == :row
+        "Relative Proportion\n(within row)"
+    elseif color_normalization == :col
+        "Relative Proportion\n(within col)"
+    else
+        "Relative Proportion\n(global)"
+    end
+    
+    CairoMakie.Legend(
+        fig[hm_row, hm_col + 1],
+        legend_elements,
+        legend_labels,
+        legend_title,
+        framevisible = true
+    )
+    
+    return fig
 end

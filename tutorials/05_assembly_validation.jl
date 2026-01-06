@@ -22,10 +22,15 @@ end
 import Test
 import Mycelia
 import FASTX
+import CSV
+import DataFrames
+import Plots
 import Random
 import Statistics
 
 Random.seed!(42)
+
+output_dir = mkpath(joinpath(@__DIR__, "..", "results", "assembly_validation"))
 
 # ## Part 1: Validation Strategy Overview
 #
@@ -66,25 +71,28 @@ println("--- Preparing Test Data ---")
 # Reference genome
 reference_size = 100000  ## 100 kb
 reference_genome = Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=reference_size)
-reference_file = "reference.fasta"
+reference_file = joinpath(output_dir, "reference.fasta")
 Mycelia.write_fasta(outfile=reference_file, records=[reference_genome])
 
 # Simulated assembly with some differences
-assembly_contigs = [
-    ## Contig 1: Perfect match to reference positions 1-40000
-    Mycelia.random_fasta_record(moltype=:DNA, seed=1, L=40000),
-    ## Contig 2: Reference positions 40001-80000 with some variants
-    Mycelia.random_fasta_record(moltype=:DNA, seed=2, L=40000),
-    ## Contig 3: Reference positions 80001-100000
-    Mycelia.random_fasta_record(moltype=:DNA, seed=3, L=20000)
-]
+reference_seq = FASTX.FASTA.sequence(reference_genome)
+contig_1 = FASTX.FASTA.Record("contig_1", reference_seq[1:40000])
+contig_2_seq, _ = Mycelia.observe(reference_seq[40001:80000]; error_rate=0.005)
+contig_2 = FASTX.FASTA.Record("contig_2", contig_2_seq)
+contig_3 = FASTX.FASTA.Record("contig_3", reference_seq[80001:100000])
+assembly_contigs = [contig_1, contig_2, contig_3]
 
-assembly_file = "assembly.fasta"
+assembly_file = joinpath(output_dir, "assembly.fasta")
 Mycelia.write_fasta(outfile=assembly_file, records=assembly_contigs)
+
+reads = Mycelia.create_test_reads(reference_seq, 200, 0.01)
+reads_file = joinpath(output_dir, "reads.fastq")
+Mycelia.write_fastq(records=reads, filename=reads_file)
 
 println("Test data prepared:")
 println("  Reference: $(reference_size) bp")
 println("  Assembly: $(length(assembly_contigs)) contigs")
+println("  Reads: $(reads_file)")
 
 # ### Alignment-Based Validation
 #
@@ -92,19 +100,41 @@ println("  Assembly: $(length(assembly_contigs)) contigs")
 
 println("--- Alignment-Based Validation ---")
 
-# TODO: Implement alignment-based validation
-# - Whole genome alignment (MUMmer, minimap2)
-# - Calculate alignment statistics
-# - Identify structural differences
-# - Assess coverage and identity
+println("Mycelia will auto-install missing tools via conda when you run these wrappers.")
+
+mummer_dir = Mycelia.run_mummer(
+    reference_file,
+    assembly_file;
+    outdir=joinpath(output_dir, "mummer"),
+    prefix="validation"
+)
+coords_file = joinpath(mummer_dir, "validation.coords")
+coords_lines = filter(line -> !isempty(strip(line)) && occursin(r"^\d", strip(line)), readlines(coords_file))
+coords_rows = [split(strip(line)) for line in coords_lines if length(split(strip(line))) >= 7]
+aligned_lengths = [parse(Int, row[5]) for row in coords_rows]
+percent_identities = [parse(Float64, row[7]) for row in coords_rows]
+total_aligned = isempty(aligned_lengths) ? 0 : sum(aligned_lengths)
+mean_identity = isempty(percent_identities) ? missing : Statistics.mean(percent_identities)
+coverage_estimate = total_aligned == 0 ? 0.0 : total_aligned / reference_size * 100
+
+quast_dir = Mycelia.run_quast(
+    assembly_file;
+    reference=reference_file,
+    outdir=joinpath(output_dir, "quast")
+)
+quast_report = CSV.read(joinpath(quast_dir, "report.tsv"), DataFrames.DataFrame; delim='\t')
+metric_col = names(quast_report)[1]
+value_col = names(quast_report)[2]
+quast_metrics = Dict(row[metric_col] => row[value_col] for row in DataFrames.eachrow(quast_report))
+quast_misassemblies = get(quast_metrics, "Misassemblies", get(quast_metrics, "# misassemblies", missing))
 
 alignment_stats = Dict(
-    "total_aligned" => 98500,
-    "percent_identity" => 99.2,
-    "coverage" => 98.5,
-    "n_mismatches" => 800,
-    "n_indels" => 45,
-    "n_structural_variants" => 3
+    "total_aligned_bp" => total_aligned,
+    "mean_identity_percent" => mean_identity,
+    "estimated_coverage_percent" => coverage_estimate,
+    "quast_genome_fraction_percent" => get(quast_metrics, "Genome fraction (%)", missing),
+    "quast_avg_identity_percent" => get(quast_metrics, "Avg. % identity", missing),
+    "quast_misassemblies" => quast_misassemblies
 )
 
 println("Alignment Statistics:")
@@ -118,11 +148,13 @@ end
 
 println("--- Synteny Analysis ---")
 
-# TODO: Implement synteny analysis
-# - Identify orthologous regions
-# - Analyze gene order conservation
-# - Detect chromosomal rearrangements
-# - Visualize synteny relationships
+dotplot_file = Mycelia.run_mummer_plot(
+    joinpath(mummer_dir, "validation.delta");
+    outdir=mummer_dir,
+    prefix="validation_dotplot",
+    plot_type="png"
+)
+println("Synteny dot plot: $(dotplot_file)")
 
 # ### Structural Variant Detection
 #
@@ -130,11 +162,17 @@ println("--- Synteny Analysis ---")
 
 println("--- Structural Variant Detection ---")
 
-# TODO: Implement structural variant detection
-# - Detect insertions, deletions, inversions
-# - Identify duplications and translocations
-# - Validate with read evidence
-# - Classify variant types and sizes
+structural_variants = Dict(
+    "misassemblies" => quast_misassemblies,
+    "relocations" => get(quast_metrics, "Relocations", missing),
+    "translocations" => get(quast_metrics, "Translocations", missing),
+    "inversions" => get(quast_metrics, "Inversions", missing)
+)
+
+println("Structural variant summary (QUAST):")
+for (metric, value) in structural_variants
+    println("  $metric: $value")
+end
 
 # ## Part 3: Reference-Free Validation
 #
@@ -149,24 +187,21 @@ println("\n=== Reference-Free Validation ===")
 
 println("--- K-mer Based Validation ---")
 
-# TODO: Implement Merqury-style validation
-# - Generate k-mer database from reads
-# - Calculate assembly QV (Quality Value)
-# - Assess k-mer completeness
-# - Detect assembly errors
-
-# Simulate k-mer validation results
+qv_results = Mycelia.assess_assembly_quality(
+    assembly=assembly_file,
+    observations=[reads_file],
+    ks=[17, 21]
+)
 merqury_results = Dict(
-    "assembly_qv" => 35.2,        ## Phred-scaled quality
-    "kmer_completeness" => 98.7,   ## Percentage of read k-mers in assembly
-    "false_duplications" => 0.8,   ## Percentage of duplicated k-mers
-    "solid_kmers" => 1250000,     ## Number of reliable k-mers
-    "error_kmers" => 15000        ## Number of error k-mers
+    "mean_qv" => Statistics.mean(qv_results.qv),
+    "best_qv" => maximum(qv_results.qv),
+    "mean_js_divergence" => Statistics.mean(qv_results.js_divergence)
 )
 
-println("Merqury Results:")
+println("Merqury-style QV results:")
+println(qv_results)
 for (metric, value) in merqury_results
-    println("  $metric: $value")
+    println("  $metric: $(round(value, digits=3))")
 end
 
 # ### Read Mapping Validation
@@ -175,18 +210,53 @@ end
 
 println("--- Read Mapping Validation ---")
 
-# TODO: Implement read mapping validation
-# - Map reads to assembly
-# - Calculate mapping statistics
-# - Identify unmapped regions
-# - Assess coverage uniformity
+map_result = Mycelia.minimap_map(
+    fasta=assembly_file,
+    fastq=reads_file,
+    mapping_type="map-hifi",
+    threads=4,
+    output_format="bam",
+    sorted=true,
+    quiet=false
+)
+run(map_result.cmd)
+bam_file = map_result.outfile
+
+flagstat_file = Mycelia.run_samtools_flagstat(bam_file)
+flagstat_lines = readlines(flagstat_file)
+total_reads = isempty(flagstat_lines) ? 0 : parse(Int, split(flagstat_lines[1])[1])
+mapped_line_idx = findfirst(line -> occursin(" mapped", line), flagstat_lines)
+mapped_reads = mapped_line_idx === nothing ? 0 : parse(Int, split(flagstat_lines[mapped_line_idx])[1])
+mapped_percent = total_reads == 0 ? 0.0 : mapped_reads / total_reads * 100
+
+mosdepth_outputs = Mycelia.run_mosdepth(bam_file; thresholds="1,10,30", no_per_base=true)
+dist_df = Mycelia.parse_mosdepth_distribution(mosdepth_outputs.global_dist)
+summary_df = Mycelia.parse_mosdepth_summary(mosdepth_outputs.summary)
+coverage_qc = Mycelia.summarize_mosdepth_qc(dist_df; thresholds=[1, 10, 30])
+coverage_total = DataFrames.subset(coverage_qc, :chromosome => x -> x .== "total")
+fraction_1x = DataFrames.nrow(coverage_total) == 0 ? missing : coverage_total[1, :coverage_1X]
+fraction_10x = DataFrames.nrow(coverage_total) == 0 ? missing : coverage_total[1, :coverage_10X]
+zero_cov_fraction = ismissing(fraction_1x) ? missing : 1 - fraction_1x
+
+chrom_col = names(summary_df)[1]
+mean_col = names(summary_df)[4]
+total_rows = summary_df[summary_df[!, chrom_col] .== "total", :]
+mean_coverage = DataFrames.nrow(total_rows) == 0 ? missing : total_rows[1, mean_col]
+
+qualimap_outputs = Mycelia.run_qualimap_bamqc(
+    bam=bam_file,
+    outdir=joinpath(output_dir, "qualimap")
+)
+contig_cov = Mycelia.parse_qualimap_contig_coverage(qualimap_outputs.report_txt)
+coverage_ratios = contig_cov[!, "Standard Deviation"] ./ contig_cov[!, "Mean coverage"]
+coverage_ratios = filter(isfinite, coverage_ratios)
+coverage_cv = isempty(coverage_ratios) ? missing : Statistics.mean(coverage_ratios)
 
 mapping_stats = Dict(
-    "mapped_reads" => 95.4,       ## Percentage of reads mapped
-    "properly_paired" => 92.1,    ## Percentage of properly paired reads
-    "mean_coverage" => 24.8,      ## Average coverage depth
-    "coverage_uniformity" => 0.85, # Coefficient of variation
-    "unmapped_regions" => 147     ## Number of unmapped regions
+    "mapped_reads_percent" => mapped_percent,
+    "mean_coverage" => mean_coverage,
+    "coverage_uniformity_cv" => coverage_cv,
+    "zero_coverage_fraction" => zero_cov_fraction
 )
 
 println("Read Mapping Statistics:")
@@ -200,11 +270,20 @@ end
 
 println("--- Internal Consistency ---")
 
-# TODO: Implement internal consistency checks
-# - Check for overlapping contigs
-# - Validate contig connections
-# - Identify potential misassemblies
-# - Assess gap consistency
+contig_strings = [String(FASTX.FASTA.sequence(contig)) for contig in assembly_contigs]
+contig_names = [String(FASTX.FASTA.identifier(contig)) for contig in assembly_contigs]
+rhizomorph_result = Mycelia.Rhizomorph.AssemblyResult(contig_strings, contig_names)
+structure_report = Mycelia.Rhizomorph.validate_assembly_structure(rhizomorph_result)
+basic_report = Mycelia.Rhizomorph.validate_assembly(rhizomorph_result)
+
+println("Rhizomorph structure report:")
+println("  valid: $(structure_report["valid"])")
+println("  issues: $(length(structure_report["issues"]))")
+println("  warnings: $(length(structure_report["warnings"]))")
+println("Rhizomorph summary metrics:")
+for (metric, value) in basic_report
+    println("  $metric: $value")
+end
 
 # ## Part 4: Functional Validation
 #
@@ -218,18 +297,22 @@ println("\n=== Functional Validation ===")
 
 println("--- BUSCO Analysis ---")
 
-# TODO: Implement BUSCO analysis
-# - Run BUSCO on assembly
-# - Calculate completeness scores
-# - Identify missing genes
-# - Compare with related species
-
-busco_results = Dict(
-    "complete_single_copy" => 92.4,
-    "complete_duplicated" => 3.2,
-    "fragmented" => 2.8,
-    "missing" => 1.6,
-    "total_buscos" => 1440
+busco_dir = Mycelia.run_busco(
+    assembly_file;
+    outdir=joinpath(output_dir, "busco"),
+    auto_lineage=true
+)
+busco_summary_files = filter(file -> occursin("short_summary", file), readdir(busco_dir; join=true))
+busco_summary_file = isempty(busco_summary_files) ? "" : first(busco_summary_files)
+busco_text = isempty(busco_summary_file) ? "" : read(busco_summary_file, String)
+busco_match = match(r"C:(\d+\.?\d*)%\[S:(\d+\.?\d*)%,D:(\d+\.?\d*)%\],F:(\d+\.?\d*)%,M:(\d+\.?\d*)%,n:(\d+)", busco_text)
+busco_results = busco_match === nothing ? Dict("summary_file" => busco_summary_file) : Dict(
+    "complete" => parse(Float64, busco_match.captures[1]),
+    "complete_single_copy" => parse(Float64, busco_match.captures[2]),
+    "complete_duplicated" => parse(Float64, busco_match.captures[3]),
+    "fragmented" => parse(Float64, busco_match.captures[4]),
+    "missing" => parse(Float64, busco_match.captures[5]),
+    "total_buscos" => parse(Int, busco_match.captures[6])
 )
 
 println("BUSCO Results:")
@@ -243,11 +326,37 @@ end
 
 println("--- Gene Annotation Quality ---")
 
-# TODO: Implement annotation quality assessment
-# - Predict genes in assembly
-# - Compare with known gene sets
-# - Assess annotation consistency
-# - Validate gene structures
+pyrodigal_assembly = Mycelia.run_pyrodigal(
+    fasta_file=assembly_file,
+    out_dir=joinpath(output_dir, "pyrodigal_assembly")
+)
+pyrodigal_reference = Mycelia.run_pyrodigal(
+    fasta_file=reference_file,
+    out_dir=joinpath(output_dir, "pyrodigal_reference")
+)
+
+assembly_gff = CSV.read(pyrodigal_assembly.gff, DataFrames.DataFrame; delim='\t', comment="#", header=false)
+DataFrames.rename!(assembly_gff, [:seqid, :source, :feature, :start, :stop, :score, :strand, :phase, :attributes])
+reference_gff = CSV.read(pyrodigal_reference.gff, DataFrames.DataFrame; delim='\t', comment="#", header=false)
+DataFrames.rename!(reference_gff, [:seqid, :source, :feature, :start, :stop, :score, :strand, :phase, :attributes])
+
+assembly_gene_lengths = abs.(assembly_gff.start .- assembly_gff.stop) .+ 1
+reference_gene_lengths = abs.(reference_gff.start .- reference_gff.stop) .+ 1
+frame_consistency = isempty(assembly_gene_lengths) ? missing : Statistics.mean(assembly_gene_lengths .% 3 .== 0)
+
+annotation_stats = Dict(
+    "assembly_gene_count" => DataFrames.nrow(assembly_gff),
+    "reference_gene_count" => DataFrames.nrow(reference_gff),
+    "assembly_mean_gene_length" => isempty(assembly_gene_lengths) ? missing : Statistics.mean(assembly_gene_lengths),
+    "reference_mean_gene_length" => isempty(reference_gene_lengths) ? missing : Statistics.mean(reference_gene_lengths),
+    "frame_consistency_fraction" => frame_consistency
+)
+
+println("Annotation quality summary:")
+for (metric, value) in annotation_stats
+    printable = value isa Number ? round(value, digits=3) : value
+    println("  $metric: $(printable)")
+end
 
 # ## Part 5: Comparative Validation
 #
@@ -261,26 +370,45 @@ println("\n=== Comparative Validation ===")
 
 println("--- Multi-Assembly Comparison ---")
 
-# TODO: Implement multi-assembly comparison
-# - Compare multiple assemblies
-# - Identify consistent regions
-# - Assess tool-specific biases
-# - Generate consensus assessments
+alt_contig_1 = FASTX.FASTA.Record("alt1_contig_1", reference_seq[1:30000])
+alt_contig_2 = FASTX.FASTA.Record("alt1_contig_2", reference_seq[30001:60000])
+alt_contig_3 = FASTX.FASTA.Record("alt1_contig_3", reference_seq[60001:90000])
+alt_contig_4 = FASTX.FASTA.Record("alt1_contig_4", reference_seq[90001:100000])
+assembly_alt1 = joinpath(output_dir, "assembly_alt1.fasta")
+Mycelia.write_fasta(outfile=assembly_alt1, records=[alt_contig_1, alt_contig_2, alt_contig_3, alt_contig_4])
 
-# Simulate comparison results
-assembly_comparison = Dict(
-    "hifiasm" => Dict("n50" => 25000, "busco" => 94.2, "qv" => 35.8),
-    "canu" => Dict("n50" => 18000, "busco" => 91.5, "qv" => 33.1),
-    "flye" => Dict("n50" => 22000, "busco" => 92.8, "qv" => 34.5)
+alt2_seq, _ = Mycelia.observe(reference_seq; error_rate=0.01)
+assembly_alt2 = joinpath(output_dir, "assembly_alt2.fasta")
+Mycelia.write_fasta(outfile=assembly_alt2, records=[FASTX.FASTA.Record("alt2_contig_1", alt2_seq)])
+
+assemblies = [assembly_file, assembly_alt1, assembly_alt2]
+quast_multi_dir = Mycelia.run_quast(
+    assemblies;
+    reference=reference_file,
+    outdir=joinpath(output_dir, "quast_multi")
 )
+quast_multi_report = CSV.read(joinpath(quast_multi_dir, "report.tsv"), DataFrames.DataFrame; delim='\t')
+metric_col_multi = names(quast_multi_report)[1]
+assembly_cols = names(quast_multi_report)[2:end]
 
-println("Assembly Comparison:")
-for (assembler, metrics) in assembly_comparison
-    println("  $assembler:")
-    for (metric, value) in metrics
-        println("    $metric: $value")
-    end
+comparison_table = DataFrames.DataFrame(
+    assembly=String[],
+    n50=Union{Float64, Missing}[],
+    genome_fraction=Union{Float64, Missing}[],
+    misassemblies=Union{Float64, Missing}[]
+)
+for col in assembly_cols
+    n50_idx = findfirst(==("N50"), quast_multi_report[!, metric_col_multi])
+    genome_idx = findfirst(==("Genome fraction (%)"), quast_multi_report[!, metric_col_multi])
+    mis_idx = findfirst(==("Misassemblies"), quast_multi_report[!, metric_col_multi])
+    n50_val = n50_idx === nothing ? missing : quast_multi_report[n50_idx, col]
+    genome_val = genome_idx === nothing ? missing : quast_multi_report[genome_idx, col]
+    mis_val = mis_idx === nothing ? missing : quast_multi_report[mis_idx, col]
+    push!(comparison_table, (assembly=String(col), n50=n50_val, genome_fraction=genome_val, misassemblies=mis_val))
 end
+
+println("Assembly Comparison (QUAST):")
+println(comparison_table)
 
 # ### Statistical Validation
 #
@@ -288,11 +416,37 @@ end
 
 println("--- Statistical Validation ---")
 
-# TODO: Implement statistical validation
-# - Bootstrap confidence intervals
-# - Significance testing
-# - Multiple testing correction
-# - Effect size estimation
+contig_lengths = [length(FASTX.FASTA.sequence(contig)) for contig in assembly_contigs]
+bootstrap_n50 = Float64[]
+for _ in 1:200
+    resampled = rand(contig_lengths, length(contig_lengths))
+    sorted_lengths = sort(resampled, rev=true)
+    cumulative = cumsum(sorted_lengths)
+    target = sum(sorted_lengths) / 2
+    idx = findfirst(x -> x >= target, cumulative)
+    push!(bootstrap_n50, sorted_lengths[idx])
+end
+ci_low, ci_high = Statistics.quantile(bootstrap_n50, [0.025, 0.975])
+
+qv_alt1 = Mycelia.assess_assembly_quality(assembly=assembly_alt1, observations=[reads_file], ks=[17, 21])
+observed_diff = Statistics.mean(qv_results.qv) - Statistics.mean(qv_alt1.qv)
+combined_qv = vcat(qv_results.qv, qv_alt1.qv)
+n1 = length(qv_results.qv)
+perm_diffs = Float64[]
+for _ in 1:1000
+    permuted = Random.shuffle(combined_qv)
+    diff = Statistics.mean(permuted[1:n1]) - Statistics.mean(permuted[n1+1:end])
+    push!(perm_diffs, diff)
+end
+p_value = Statistics.mean(abs.(perm_diffs) .>= abs(observed_diff))
+bonferroni_p = min(p_value * 2, 1.0)
+effect_size = observed_diff / Statistics.std(combined_qv)
+
+println("Bootstrap N50 CI: ($(round(ci_low, digits=2)), $(round(ci_high, digits=2)))")
+println("QV mean difference (assembly vs alt1): $(round(observed_diff, digits=3))")
+println("Permutation p-value: $(round(p_value, digits=4))")
+println("Bonferroni-adjusted p-value: $(round(bonferroni_p, digits=4))")
+println("Effect size (Cohen's d): $(round(effect_size, digits=3))")
 
 # ## Part 6: Validation Metrics Integration
 #
@@ -306,17 +460,33 @@ println("\n=== Integrated Validation ===")
 
 println("--- Composite Quality Scores ---")
 
-# TODO: Implement composite scoring
-# - Weight different validation metrics
-# - Generate overall quality scores
-# - Rank assemblies by quality
-# - Provide confidence intervals
+n_contigs, total_length, n50, l50 = Mycelia.assess_assembly_quality(assembly_file)
+busco_complete = get(busco_results, "complete", missing)
+busco_norm = busco_complete isa Number ? busco_complete / 100 : 0.0
+qv_norm = merqury_results["best_qv"] / 60
+contiguity_norm = n50 / reference_size
+
+weights = Dict("contiguity" => 0.4, "accuracy" => 0.35, "completeness" => 0.25)
+overall_quality = 10 * (
+    weights["contiguity"] * contiguity_norm +
+    weights["accuracy"] * qv_norm +
+    weights["completeness"] * busco_norm
+)
+composite_samples = [
+    10 * (
+        weights["contiguity"] * (n50_sample / reference_size) +
+        weights["accuracy"] * qv_norm +
+        weights["completeness"] * busco_norm
+    )
+    for n50_sample in bootstrap_n50
+]
+quality_ci = Statistics.quantile(composite_samples, [0.025, 0.975])
 
 composite_score = Dict(
-    "overall_quality" => 8.7,     ## Scale 0-10
-    "confidence_interval" => (8.2, 9.1),
-    "primary_strengths" => ["High contiguity", "Good gene completeness"],
-    "primary_weaknesses" => ["Some structural variants", "Coverage gaps"]
+    "overall_quality" => overall_quality,
+    "confidence_interval" => (quality_ci[1], quality_ci[2]),
+    "primary_strengths" => ["Contiguity", "K-mer accuracy"],
+    "primary_weaknesses" => ["BUSCO completeness sensitivity"]
 )
 
 println("Composite Quality Assessment:")
@@ -330,11 +500,29 @@ end
 
 println("--- Validation Report ---")
 
-# TODO: Implement report generation
-# - Generate HTML/PDF reports
-# - Include visualizations
-# - Provide recommendations
-# - Export results to standard formats
+report_rows = DataFrames.DataFrame(metric=String[], value=String[])
+for (metric, value) in alignment_stats
+    push!(report_rows, (metric="alignment_$(metric)", value=string(value)))
+end
+for (metric, value) in merqury_results
+    push!(report_rows, (metric="merqury_$(metric)", value=string(value)))
+end
+for (metric, value) in mapping_stats
+    push!(report_rows, (metric="mapping_$(metric)", value=string(value)))
+end
+for (metric, value) in busco_results
+    push!(report_rows, (metric="busco_$(metric)", value=string(value)))
+end
+for (metric, value) in annotation_stats
+    push!(report_rows, (metric="annotation_$(metric)", value=string(value)))
+end
+for (metric, value) in composite_score
+    push!(report_rows, (metric="composite_$(metric)", value=string(value)))
+end
+
+report_tsv = joinpath(output_dir, "assembly_validation_report.tsv")
+CSV.write(report_tsv, report_rows; delim='\t')
+println("Saved validation report: $(report_tsv)")
 
 # ## Part 7: Validation Visualization
 #
@@ -348,11 +536,47 @@ println("\n=== Validation Visualization ===")
 
 println("--- Quality Metric Plots ---")
 
-# TODO: Implement validation visualization
-# - Quality score distributions
-# - Metric correlation plots
-# - Validation timeline plots
-# - Comparative assembly plots
+contig_lengths_plot = Plots.histogram(
+    contig_lengths;
+    bins=10,
+    xlabel="Contig length (bp)",
+    ylabel="Count",
+    title="Contig Length Distribution"
+)
+contig_lengths_path = joinpath(output_dir, "contig_lengths.png")
+Plots.savefig(contig_lengths_plot, contig_lengths_path)
+
+qv_alt2 = Mycelia.assess_assembly_quality(assembly=assembly_alt2, observations=[reads_file], ks=[17, 21])
+qv_results[!, :assembler] .= "assembly"
+qv_alt1[!, :assembler] .= "alt1"
+qv_alt2[!, :assembler] .= "alt2"
+qv_all = vcat(qv_results, qv_alt1, qv_alt2)
+qv_heatmap = Mycelia.generate_qv_heatmap(qv_all; assembler_column="assembler")
+qv_heatmap_path = joinpath(output_dir, "qv_heatmap.png")
+Plots.savefig(qv_heatmap, qv_heatmap_path)
+
+_, _, n50_alt1, _ = Mycelia.assess_assembly_quality(assembly_alt1)
+_, _, n50_alt2, _ = Mycelia.assess_assembly_quality(assembly_alt2)
+mean_qv_table = DataFrames.DataFrame(
+    assembly=["assembly", "alt1", "alt2"],
+    n50=[n50, n50_alt1, n50_alt2],
+    mean_qv=[Statistics.mean(qv_results.qv), Statistics.mean(qv_alt1.qv), Statistics.mean(qv_alt2.qv)]
+)
+metric_scatter = Plots.scatter(
+    mean_qv_table.n50,
+    mean_qv_table.mean_qv;
+    xlabel="N50 (bp)",
+    ylabel="Mean QV",
+    title="Contiguity vs Accuracy",
+    series_annotations=mean_qv_table.assembly
+)
+metric_scatter_path = joinpath(output_dir, "n50_vs_qv.png")
+Plots.savefig(metric_scatter, metric_scatter_path)
+
+println("Saved plots:")
+println("  Contig lengths: $(contig_lengths_path)")
+println("  QV heatmap: $(qv_heatmap_path)")
+println("  N50 vs QV: $(metric_scatter_path)")
 
 # ### Genome Browser Integration
 #
@@ -360,11 +584,15 @@ println("--- Quality Metric Plots ---")
 
 println("--- Genome Browser Integration ---")
 
-# TODO: Implement genome browser integration
-# - Generate browser tracks
-# - Highlight validation issues
-# - Interactive exploration
-# - Export visualization formats
+browser_tracks = Mycelia.run_mosdepth(
+    bam_file;
+    prefix=joinpath(output_dir, "assembly_coverage"),
+    thresholds="1,10,30"
+)
+println("Genome browser tracks:")
+println("  Per-base coverage: $(browser_tracks.per_base)")
+println("  Thresholds BED: $(browser_tracks.thresholds_file)")
+println("  Load these files into IGV or JBrowse for interactive inspection.")
 
 # ## Part 8: Validation Best Practices
 #
@@ -448,14 +676,7 @@ println("✓ Statistical validation and confidence assessment")
 println("✓ Integrated quality scoring and reporting")
 println("✓ Troubleshooting common assembly issues")
 
-# Cleanup
-cleanup_files = [reference_file, assembly_file]
-for file in cleanup_files
-    if isfile(file)
-        rm(file, force=true)
-    end
-end
-
+println("Results saved in: $(output_dir)")
 println("\nNext: Tutorial 6 - Gene Annotation")
 
 nothing

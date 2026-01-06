@@ -14,6 +14,7 @@ Tutorials are organized following the standard bioinformatics workflow:
 6. **Gene Annotation** - Identifying and annotating genomic features
 7. **Comparative Genomics** - Pangenome and phylogenetic analysis
 8. **Tool Integration** - Working with external bioinformatics tools
+9. **Binning & Post-binning** - MAG binning and dereplication workflows
 
 ## Usage
 

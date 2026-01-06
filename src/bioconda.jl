@@ -165,6 +165,40 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Create a Conda environment from a YAML file.
+
+# Arguments
+- `yaml_file::AbstractString`: Path to the environment.yml file
+- `env_name::AbstractString`: Name of the environment to create
+
+# Keywords
+- `force::Bool=false`: If true, remove existing environment before creation
+"""
+function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::AbstractString; force::Bool=false)
+    if !isfile(yaml_file)
+        throw(ArgumentError("YAML file does not exist: $(yaml_file)"))
+    end
+
+    if check_bioconda_env_is_installed(env_name)
+        if force
+            @info "Removing existing environment '$env_name'..."
+            run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
+        else
+            @info "Environment '$env_name' already exists. Use force=true to recreate."
+            return env_name
+        end
+    end
+
+    @info "Creating environment '$env_name' from $(yaml_file)..."
+    run(`$(CONDA_RUNNER) env create -f $(yaml_file) -n $(env_name)`)
+    run(`$(CONDA_RUNNER) clean --all -y`)
+
+    return env_name
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Create a new Conda environment with a specified Bioconda package.
 
 # Arguments
@@ -278,8 +312,10 @@ end
 #             "gatk4",
 #             # "gffread",
 #             "htslib",
+#             "augustus",
 #             "megahit",
 #             "medaka",
+#             "metaeuk",
 #             "minimap2",
 #             "mmseqs2",
 #             "nanocaller",
@@ -292,6 +328,7 @@ end
 #             "picard",
 #             # "polypolish",
 #             "prodigal",
+#             "prodigal-gv",
 #             "raven-assembler",
 #             "rtg-tools",
 #             "samtools",

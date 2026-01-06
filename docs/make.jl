@@ -87,15 +87,16 @@ tutorial_pages = []
 # Add tutorials in logical order
 tutorial_order = [
     # Main tutorial series (01-08) - temporarily only including these to test build
-    ("1. Data Acquisition", "01_data_acquisition.md"),
-    ("2. Quality Control", "02_quality_control.md"),
-    ("3. K-mer Analysis", "03_kmer_analysis.md"),
-    ("4. Genome Assembly", "04_genome_assembly.md"),
+    ("Step 1: Data Acquisition", "01_data_acquisition.md"),
+    ("Step 2: Quality Control", "02_quality_control.md"),
+    ("Step 3: K-mer Analysis", "03_kmer_analysis.md"),
+    ("Step 4: Genome Assembly", "04_genome_assembly.md"),
     # ("4b. Graph Type Tutorials", "04_graph_type_tutorials.md"),  # TODO: Fix execution errors
-    ("5. Assembly Validation", "05_assembly_validation.md"),
-    ("6. Gene Annotation", "06_gene_annotation.md"),
-    ("7. Comparative Genomics", "07_comparative_genomics.md"),
-    ("8. Tool Integration", "08_tool_integration.md"),
+    ("Step 5: Assembly Validation", "05_assembly_validation.md"),
+    ("Step 6: Gene Annotation", "06_gene_annotation.md"),
+    ("Step 7: Comparative Genomics", "07_comparative_genomics.md"),
+    ("Step 8: Tool Integration", "08_tool_integration.md"),
+    ("Step 9: Binning Workflow", "14_binning_workflow.md"),
     
     # Round-trip tutorial series (09) - temporarily disabled due to execution errors
     # TODO: Re-enable once example execution issues are resolved
@@ -151,40 +152,21 @@ makedocs(
     warnonly = [:cross_references, :example_block, :missing_docs],
     pages = [
         "Home" => "index.md",
-        "Installation" => "installation.md",
         "Getting Started" => "getting-started.md",
+        "Installation" => "installation.md",
         "Concepts" => "concepts.md",
-        "Probabilistic Assembly" => "probabilistic-assembly-hub.md",
-        "Tutorials" => "tutorials.md",
-        "Documentation" => [
-            "Architecture Overview" => "architecture.md",
-            "Assembly Method Selection" => "assembly-method-selection.md",
-            "Workflow & Tool Map" => "workflow-map.md",
-            "Metagenomic Workflow" => "metagenomic-workflow.md",
-            "Function Coverage Audit" => "api/function-coverage.md",
-            "Performance Guide" => "performance.md",
-            "FAQ" => "faq.md"
-        ],
+        "Workflow Map" => "workflow-map.md",
+        "Metagenomic Workflow" => "metagenomic-workflow.md",
+        "Tutorials" => vcat(
+            ["Overview" => "tutorials.md"],
+            tutorial_pages,
+        ),
         "API Reference" => [
-            "Complete API Reference" => "api-reference.md",
             "Complete API Surface" => "api/all-functions.md",
-            "Workflows" => [
-                "Assembly Suite" => "api/workflows/assembly-suite.md",
-                "Data Acquisition" => "api/workflows/data-acquisition.md",
-                "Quality Control" => "api/workflows/quality-control.md",
-                "Sequence Analysis" => "api/workflows/sequence-analysis.md"
-            ],
-            "Quick Reference" => [
-                "Function Index" => "api/quick-reference/function-index.md",
-                "Parameter Guide" => "api/quick-reference/parameter-guide.md"
-            ],
-            "Examples" => [
-                "Basic Workflows" => "api/examples/basic-workflows.md"
-            ],
-            "Legacy API Documentation" => "api.md",
-            "Related Projects" => "related-projects.md"
         ],
-        # "Visualization Gallery" => "visualization-gallery.md"  # Has broken refs
+        "Benchmarks" => "benchmarks.md",
+        "Contributing" => "contributing.md",
+        "Related Projects" => "related-projects.md",
     ]
 )
 

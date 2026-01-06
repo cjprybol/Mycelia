@@ -259,7 +259,7 @@ Test.@testset "KmerVertexData - Critical Anti-Patterns" begin
 
         # Should NOT have a flat coverage vector
         Test.@test !hasfield(typeof(vertex_data), :coverage) ||
-                   (typeof(vertex_data.coverage) != Vector{Tuple{Int, Int, Mycelia.StrandOrientation}})
+                   (typeof(vertex_data.coverage) != Vector{Tuple{Int, Int, Mycelia.Rhizomorph.StrandOrientation}})
 
         # Should have nested evidence dict
         Test.@test hasfield(typeof(vertex_data), :evidence)

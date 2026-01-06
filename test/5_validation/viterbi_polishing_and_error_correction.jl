@@ -6,80 +6,225 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
-import Graphs
-import MetaGraphs
+import MetaGraphsNext
 
-Test.@testset "Viterbi Polishing and Error Correction Tests" begin
-    Test.@testset "Viterbi Maximum Likelihood Traversals" begin
-        # Create a simple test k-mer graph
-        test_records = [
-            FASTX.FASTA.Record("seq1", "ATCGATCGATCG"),
-            FASTX.FASTA.Record("seq2", "ATCGATCGATCG"),  # Same sequence for higher coverage
-            FASTX.FASTA.Record("seq3", "ATCGATCGATCC")   # Similar with one difference
-        ]
-        
-        kmer_type = BioSequences.DNAMer{4}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
-        
-        # Test with default parameters
-        result = Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            verbosity="dataset"
+Test.@testset "Rhizomorph Traversal and Polishing Tests" begin
+    Test.@testset "Traversal Variants Across Graph Types" begin
+        dna_records = [FASTX.FASTA.Record("dna1", "ATCGATCGATCG")]
+        for mode in (:singlestrand, :doublestrand, :canonical)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(dna_records, 4; dataset_id="dna", mode=mode)
+            weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+            start = first(MetaGraphsNext.labels(weighted))
+            prob_path = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start, 4; seed=1)
+            greedy_path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted, start, 4)
+            Test.@test prob_path isa Mycelia.Rhizomorph.GraphPath
+            Test.@test greedy_path isa Mycelia.Rhizomorph.GraphPath
+        end
+
+        rna_records = [FASTX.FASTA.Record("rna1", "AUCGAUCGAUCG")]
+        for mode in (:singlestrand, :doublestrand, :canonical)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(rna_records, 4; dataset_id="rna", mode=mode)
+            weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+            start = first(MetaGraphsNext.labels(weighted))
+            prob_path = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start, 4; seed=2)
+            greedy_path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted, start, 4)
+            Test.@test prob_path isa Mycelia.Rhizomorph.GraphPath
+            Test.@test greedy_path isa Mycelia.Rhizomorph.GraphPath
+        end
+
+        aa_records = [FASTX.FASTA.Record("aa1", "ACDEFGHIK")]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(aa_records, 3; dataset_id="aa", mode=:singlestrand)
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+        start = first(MetaGraphsNext.labels(weighted))
+        prob_path = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start, 3; seed=3)
+        greedy_path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted, start, 3)
+        Test.@test prob_path isa Mycelia.Rhizomorph.GraphPath
+        Test.@test greedy_path isa Mycelia.Rhizomorph.GraphPath
+
+        strings = ["ABCD", "BCDA", "CDAB"]
+        graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 3; dataset_id="strings")
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+        start = first(MetaGraphsNext.labels(weighted))
+        prob_path = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start, 3; seed=4)
+        greedy_path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted, start, 3)
+        Test.@test prob_path isa Mycelia.Rhizomorph.GraphPath
+        Test.@test greedy_path isa Mycelia.Rhizomorph.GraphPath
+    end
+
+    Test.@testset "Quality-weighted Traversal" begin
+        fastq_records = [FASTX.FASTQ.Record("read1", "ATCGATCG", "IIIIIIII")]
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_records, 4; dataset_id="qual", mode=:singlestrand)
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+            graph;
+            edge_weight=Mycelia.Rhizomorph.edge_quality_weight
         )
-        
-        Test.@test result isa NamedTuple
-        Test.@test haskey(result, :viterbi_ml_corrected_paths) || haskey(result, :paths)
-        
-        # Test with custom error rate
-        custom_result = Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            error_rate=0.1,
-            verbosity="dataset"
+        start = first(MetaGraphsNext.labels(weighted))
+        path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted, start, 3)
+        Test.@test path isa Mycelia.Rhizomorph.GraphPath
+    end
+
+    Test.@testset "K-mer Graph Properties and Coverage" begin
+        test_sequence = "ATCGATCGATCGATCG"
+        for k in (3, 4, 5, 6)
+            records = [FASTX.FASTA.Record("seq", test_sequence)]
+            graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; dataset_id="props", mode=:singlestrand)
+            labels = collect(MetaGraphsNext.labels(graph))
+            Test.@test !isempty(labels)
+            Test.@test Mycelia.Kmers.ksize(typeof(first(labels))) == k
+        end
+
+        high_records = [FASTX.FASTA.Record("seq$(i)", "ATCGATCG") for i in 1:6]
+        low_records = [FASTX.FASTA.Record("seq1", "ATCGATCG")]
+        high_graph = Mycelia.Rhizomorph.build_kmer_graph(high_records, 3; dataset_id="high", mode=:singlestrand)
+        low_graph = Mycelia.Rhizomorph.build_kmer_graph(low_records, 3; dataset_id="low", mode=:singlestrand)
+
+        high_weights = Dict{Tuple{Any,Any}, Float64}()
+        for (src, dst) in MetaGraphsNext.edge_labels(high_graph)
+            high_weights[(src, dst)] = Mycelia.Rhizomorph.compute_edge_weight(high_graph[src, dst])
+        end
+
+        low_weights = Dict{Tuple{Any,Any}, Float64}()
+        for (src, dst) in MetaGraphsNext.edge_labels(low_graph)
+            low_weights[(src, dst)] = Mycelia.Rhizomorph.compute_edge_weight(low_graph[src, dst])
+        end
+
+        Test.@test !isempty(high_weights)
+        for (edge, low_weight) in low_weights
+            Test.@test haskey(high_weights, edge)
+            Test.@test high_weights[edge] > low_weight
+        end
+    end
+
+    Test.@testset "Traversal Parameter Effects" begin
+        records = [FASTX.FASTA.Record("seq", "ATCGATCGATCG")]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id="seeded", mode=:singlestrand)
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+        start = first(MetaGraphsNext.labels(weighted))
+
+        path_a = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start, 4; seed=42)
+        path_b = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start, 4; seed=42)
+        seq_a = Mycelia.Rhizomorph.path_to_sequence(path_a, weighted)
+        seq_b = Mycelia.Rhizomorph.path_to_sequence(path_b, weighted)
+        Test.@test seq_a == seq_b
+
+        custom_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+            graph;
+            edge_weight=edge_data -> 42.0
         )
-        
-        Test.@test custom_result isa NamedTuple
-        
-        # Test error rate validation
-        Test.@test_throws ErrorException Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            error_rate=0.6,  # > 0.5 should error
-            verbosity="dataset"
+        edge = first(MetaGraphsNext.edge_labels(custom_weighted))
+        Test.@test custom_weighted[edge...].weight == 42.0
+    end
+
+    Test.@testset "Traversal Error Handling" begin
+        records = [FASTX.FASTA.Record("seq", "ATCGATCGATCG")]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id="errors", mode=:singlestrand)
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.probabilistic_walk_next(
+            weighted,
+            "missing",
+            3;
+            seed=1
         )
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.maximum_weight_walk_next(
+            weighted,
+            "missing",
+            3
+        )
+    end
+
+    Test.@testset "Graph Construction Edge Cases" begin
+        Test.@test_throws ArgumentError Mycelia.Rhizomorph.build_kmer_graph(
+            FASTX.FASTA.Record[],
+            3;
+            dataset_id="empty",
+            mode=:singlestrand
+        )
+
+        short_records = [FASTX.FASTA.Record("short", "ATC")]
+        short_graph = Mycelia.Rhizomorph.build_kmer_graph(short_records, 4; dataset_id="short", mode=:singlestrand)
+        Test.@test isempty(MetaGraphsNext.labels(short_graph))
+
+        weighted_short = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(short_graph)
+        short_fastq = FASTX.FASTQ.Record("short_read", "ATC", "III")
+        short_result = Mycelia.process_fastq_record(
+            record=short_fastq,
+            graph=short_graph,
+            weighted_graph=weighted_short,
+            traversal=:greedy
+        )
+        Test.@test short_result.status == :empty_graph
+        Test.@test FASTX.sequence(short_result.polished_record) == FASTX.sequence(short_fastq)
     end
 
     Test.@testset "FASTQ Record Processing" begin
-        # Create a test FASTQ record
         test_record = FASTX.FASTQ.Record("test_read", "ATCGATCG", "IIIIIIII")
-        
-        # Create a simple k-mer graph
         fasta_records = [FASTX.FASTA.Record("ref", "ATCGATCGATCG")]
-        kmer_type = BioSequences.DNAMer{4}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, fasta_records)
-        
-        # Create mock k-shortest paths data
-        # In practice, this would come from a proper shortest paths algorithm
-        mock_paths = Dict(
-            "test_read" => [
-                ([1, 2, 3], 0.8),  # (path, weight)
-                ([1, 2, 4], 0.6),
-                ([1, 3, 4], 0.4)
-            ]
-        )
-        
-        # Test record processing
+        graph = Mycelia.Rhizomorph.build_kmer_graph(fasta_records, 4; dataset_id="ref", mode=:singlestrand)
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+
         result = Mycelia.process_fastq_record(
             record=test_record,
-            kmer_graph=graph,
-            yen_k_shortest_paths_and_weights=mock_paths,
-            yen_k=3
+            graph=graph,
+            weighted_graph=weighted,
+            traversal=:greedy
         )
-        
+
         Test.@test result isa NamedTuple
-        Test.@test haskey(result, :polished_record) || haskey(result, :record)
+        Test.@test haskey(result, :polished_record)
     end
 
-    Test.@testset "FASTQ Polishing Pipeline" begin
-        # Create a test FASTQ file
+    Test.@testset "FASTQ Record Edge Cases" begin
+        fasta_records = [FASTX.FASTA.Record("ref", "ATCGATCGATCG")]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(fasta_records, 4; dataset_id="ref", mode=:singlestrand)
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+
+        short_record = FASTX.FASTQ.Record("short_read", "ATC", "III")
+        short_result = Mycelia.process_fastq_record(
+            record=short_record,
+            graph=graph,
+            weighted_graph=weighted,
+            traversal=:greedy
+        )
+        Test.@test short_result.status == :short_record
+        Test.@test FASTX.sequence(short_result.polished_record) == FASTX.sequence(short_record)
+
+        test_record = FASTX.FASTQ.Record("test_read", "ATCGATCG", "IIIIIIII")
+        Test.@test_throws ArgumentError Mycelia.process_fastq_record(
+            record=test_record,
+            graph=graph,
+            weighted_graph=weighted,
+            traversal=:unknown
+        )
+
+        truncated = Mycelia.process_fastq_record(
+            record=test_record,
+            graph=graph,
+            weighted_graph=weighted,
+            traversal=:greedy,
+            max_steps=0
+        )
+        Test.@test length(FASTX.sequence(truncated.polished_record)) == 4
+        Test.@test length(collect(FASTX.quality_scores(truncated.polished_record))) == 4
+    end
+
+    Test.@testset "Quality-weighted Evidence" begin
+        high_records = [FASTX.FASTQ.Record("hq", "ATCGATCG", "IIIIIIII")]
+        low_records = [FASTX.FASTQ.Record("lq", "ATCGATCG", "!!!!!!!!")]
+
+        high_graph = Mycelia.Rhizomorph.build_qualmer_graph(high_records, 4; dataset_id="hq", mode=:singlestrand)
+        low_graph = Mycelia.Rhizomorph.build_qualmer_graph(low_records, 4; dataset_id="lq", mode=:singlestrand)
+
+        high_edge = first(MetaGraphsNext.edge_labels(high_graph))
+        low_edge = first(MetaGraphsNext.edge_labels(low_graph))
+
+        high_weight = Mycelia.Rhizomorph.edge_quality_weight(high_graph[high_edge...])
+        low_weight = Mycelia.Rhizomorph.edge_quality_weight(low_graph[low_edge...])
+
+        Test.@test high_weight > low_weight
+    end
+
+    Test.@testset "Polish FASTQ Pipeline" begin
         temp_fastq = tempname() * ".fastq"
         fastq_content = """@read1
 ATCGATCGATCG
@@ -91,19 +236,48 @@ GCTAGCTAGCTA
 IIIIIIIIIIII
 """
         write(temp_fastq, fastq_content)
-        
-        # Test polishing with k=4
-        result = Mycelia.polish_fastq(fastq=temp_fastq, k=4)
-        
+
+        result = Mycelia.polish_fastq(
+            fastq=temp_fastq,
+            k=4,
+            traversal=:probabilistic,
+            weighting=:quality
+        )
+
         Test.@test result isa NamedTuple
-        Test.@test haskey(result, :polished_fastq) || haskey(result, :output_file)
-        
-        # Cleanup
+        Test.@test haskey(result, :fastq)
+        Test.@test isfile(result.fastq)
+
         rm(temp_fastq, force=true)
+        rm(result.fastq, force=true)
+    end
+
+    Test.@testset "Polish FASTQ Error Handling" begin
+        Test.@test_throws ErrorException Mycelia.polish_fastq(
+            fastq="does_not_exist.fastq",
+            k=3
+        )
+
+        empty_fastq = tempname() * ".fastq"
+        write(empty_fastq, "")
+        Test.@test_throws ErrorException Mycelia.polish_fastq(
+            fastq=empty_fastq,
+            k=3
+        )
+
+        temp_fasta = tempname() * ".fasta"
+        write(temp_fasta, ">read1\nATCG\n")
+        Test.@test_throws ErrorException Mycelia.polish_fastq(
+            fastq=temp_fasta,
+            k=3,
+            weighting=:quality
+        )
+
+        rm(empty_fastq, force=true)
+        rm(temp_fasta, force=true)
     end
 
     Test.@testset "Iterative Polishing" begin
-        # Create a test FASTQ file for iterative polishing
         temp_fastq = tempname() * ".fastq"
         fastq_content = """@read1
 ATCGATCGATCGATCGATCG
@@ -115,207 +289,50 @@ ATCGATCGATCGATCGATCG
 IIIIIIIIIIIIIIIIIIII
 """
         write(temp_fastq, fastq_content)
-        
-        # Test iterative polishing with small max_k for faster testing
-        result = Mycelia.iterative_polishing(temp_fastq, max_k=9, plot=false)
-        
-        Test.@test result isa NamedTuple
-        # Result should contain information about polishing iterations
-        
-        # Cleanup
+
+        result = Mycelia.iterative_polishing(
+            temp_fastq,
+            13;
+            traversal=:greedy,
+            weighting=:evidence
+        )
+
+        Test.@test result isa Vector
+        Test.@test !isempty(result)
+
+        for entry in result
+            if entry.k isa Int && isfile(entry.fastq)
+                rm(entry.fastq, force=true)
+            end
+        end
         rm(temp_fastq, force=true)
     end
 
-    Test.@testset "Error Rate Validation" begin
-        # Create minimal graph for testing
-        test_records = [FASTX.FASTA.Record("seq", "ATCGATCG")]
-        kmer_type = BioSequences.DNAMer{3}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
-        
-        # Test valid error rates
-        valid_rates = [0.01, 0.05, 0.1, 0.2, 0.4, 0.49]
-        for rate in valid_rates
-            Test.@test_nowarn Mycelia.viterbi_maximum_likelihood_traversals(
-                graph,
-                error_rate=rate,
-                verbosity="dataset"
-            )
-        end
-        
-        # Test invalid error rates
-        invalid_rates = [0.5, 0.6, 0.8, 1.0]
-        for rate in invalid_rates
-            Test.@test_throws ErrorException Mycelia.viterbi_maximum_likelihood_traversals(
-                graph,
-                error_rate=rate,
-                verbosity="dataset"
-            )
-        end
-    end
+    Test.@testset "Parameter Validation" begin
+        temp_fastq = tempname() * ".fastq"
+        fastq_content = """@read1
+ATCGATCG
++
+IIIIIIII
+"""
+        write(temp_fastq, fastq_content)
 
-    Test.@testset "Verbosity Levels" begin
-        # Create test graph
-        test_records = [FASTX.FASTA.Record("seq", "ATCGATCG")]
-        kmer_type = BioSequences.DNAMer{3}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
-        
-        # Test different verbosity levels
-        verbosity_levels = ["debug", "reads", "dataset"]
-        for level in verbosity_levels
-            Test.@test_nowarn Mycelia.viterbi_maximum_likelihood_traversals(
-                graph,
-                verbosity=level
-            )
-        end
-        
-        # Test invalid verbosity level
-        Test.@test_throws AssertionError Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            verbosity="invalid"
+        Test.@test_throws ArgumentError Mycelia.polish_fastq(
+            fastq=temp_fastq,
+            k=3,
+            traversal=:unknown
         )
-    end
+        Test.@test_throws ArgumentError Mycelia.polish_fastq(
+            fastq=temp_fastq,
+            k=3,
+            weighting=:unknown
+        )
+        Test.@test_throws ArgumentError Mycelia.polish_fastq(
+            fastq=temp_fastq,
+            k=3,
+            graph_mode=:unknown
+        )
 
-    Test.@testset "K-mer Graph Properties" begin
-        # Test that the algorithm can handle graphs with different k values
-        test_sequence = "ATCGATCGATCGATCG"
-        
-        for k in [3, 4, 5, 6]
-            if length(test_sequence) >= k
-                records = [FASTX.FASTA.Record("seq", test_sequence)]
-                kmer_type = BioSequences.DNAMer{k}
-                graph = Mycelia.build_stranded_kmer_graph(kmer_type, records)
-                
-                Test.@test graph.gprops[:k] == k
-                
-                # Test that viterbi can process this graph
-                Test.@test_nowarn Mycelia.viterbi_maximum_likelihood_traversals(
-                    graph,
-                    verbosity="dataset"
-                )
-            end
-        end
-    end
-
-    Test.@testset "Coverage and Likelihood Calculations" begin
-        # Create graph with varying coverage
-        high_coverage_records = [
-            FASTX.FASTA.Record("seq$i", "ATCGATCG") for i in 1:10
-        ]
-        
-        kmer_type = BioSequences.DNAMer{3}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, high_coverage_records)
-        
-        # Test that coverage affects likelihood calculations
-        result = Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            verbosity="dataset"
-        )
-        
-        Test.@test result isa NamedTuple
-        
-        # Compare with low coverage
-        low_coverage_records = [FASTX.FASTA.Record("seq1", "ATCGATCG")]
-        low_graph = Mycelia.build_stranded_kmer_graph(kmer_type, low_coverage_records)
-        
-        low_result = Mycelia.viterbi_maximum_likelihood_traversals(
-            low_graph,
-            verbosity="dataset"
-        )
-        
-        Test.@test low_result isa NamedTuple
-    end
-
-    Test.@testset "Edge Cases and Error Handling" begin
-        # Test with empty graph (minimal case)
-        empty_records = FASTX.FASTA.Record[]
-        kmer_type = BioSequences.DNAMer{3}
-        empty_graph = Mycelia.build_stranded_kmer_graph(kmer_type, empty_records)
-        
-        # This might error or handle gracefully depending on implementation
-        Test.@test_nowarn Mycelia.viterbi_maximum_likelihood_traversals(
-            empty_graph,
-            verbosity="dataset"
-        ) || Test.@test_throws Exception Mycelia.viterbi_maximum_likelihood_traversals(
-            empty_graph,
-            verbosity="dataset"
-        )
-        
-        # Test with very short sequences
-        short_records = [FASTX.FASTA.Record("short", "AT")]
-        short_graph = Mycelia.build_stranded_kmer_graph(kmer_type, short_records)
-        
-        Test.@test_nowarn Mycelia.viterbi_maximum_likelihood_traversals(
-            short_graph,
-            verbosity="dataset"
-        )
-        
-        # Test with non-existent files
-        Test.@test_throws Exception Mycelia.polish_fastq(
-            fastq="nonexistent.fastq",
-            k=4
-        )
-    end
-
-    Test.@testset "Quality Score Integration" begin
-        # Test that quality scores are properly handled
-        high_quality_record = FASTX.FASTQ.Record("hq", "ATCGATCG", "IIIIIIII")
-        low_quality_record = FASTX.FASTQ.Record("lq", "ATCGATCG", "!!!!!!!")
-        
-        # Test records have different quality scores
-        hq_qualities = FASTX.FASTQ.quality(high_quality_record)
-        lq_qualities = FASTX.FASTQ.quality(low_quality_record)
-        
-        Test.@test all(hq_qualities .> lq_qualities)
-        
-        # Create graph for testing
-        ref_records = [FASTX.FASTA.Record("ref", "ATCGATCGATCG")]
-        kmer_type = BioSequences.DNAMer{4}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, ref_records)
-        
-        # Mock paths for testing
-        mock_paths = Dict(
-            "hq" => [([1, 2], 0.9)],
-            "lq" => [([1, 2], 0.9)]
-        )
-        
-        # Test that both can be processed
-        Test.@test_nowarn Mycelia.process_fastq_record(
-            record=high_quality_record,
-            kmer_graph=graph,
-            yen_k_shortest_paths_and_weights=mock_paths,
-            yen_k=1
-        )
-        
-        Test.@test_nowarn Mycelia.process_fastq_record(
-            record=low_quality_record,
-            kmer_graph=graph,
-            yen_k_shortest_paths_and_weights=mock_paths,
-            yen_k=1
-        )
-    end
-
-    Test.@testset "Algorithm Parameter Effects" begin
-        # Create test data
-        test_records = [FASTX.FASTA.Record("seq", "ATCGATCGATCG")]
-        kmer_type = BioSequences.DNAMer{4}
-        graph = Mycelia.build_stranded_kmer_graph(kmer_type, test_records)
-        
-        # Test different error rates and compare results
-        low_error = Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            error_rate=0.01,
-            verbosity="dataset"
-        )
-        
-        high_error = Mycelia.viterbi_maximum_likelihood_traversals(
-            graph,
-            error_rate=0.2,
-            verbosity="dataset"
-        )
-        
-        Test.@test low_error isa NamedTuple
-        Test.@test high_error isa NamedTuple
-        
-        # Results should be different (though we can't easily test specifics without implementation details)
+        rm(temp_fastq, force=true)
     end
 end

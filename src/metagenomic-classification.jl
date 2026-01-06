@@ -577,7 +577,7 @@ end
 """
     run_metabuli_classify(reads1::AbstractString;
                           reads2::Union{Nothing,AbstractString}=nothing,
-                          dbdir::AbstractString,
+                          dbdir::Union{Nothing,AbstractString}=nothing,
                           outdir::AbstractString,
                           jobid::AbstractString,
                           read_platform::Symbol=:illumina,
@@ -591,10 +591,14 @@ Run Metabuli `classify` on short or long reads (or contigs) and return parsed re
 
 Creates `jobid_*` outputs under `outdir`, skipping execution when outputs already
 exist unless `force=true`.
+
+When `dbdir` is not provided, uses `METABULI_DB`/`METABULI_DB_PATH` or auto-downloads
+the configured database under `METABULI_DB_ROOT` (default: `$(Mycelia.DEFAULT_METABULI_DB_PATH)`).
+Set `METABULI_DB_NAME` to choose a named download (default: `$(Mycelia.DEFAULT_METABULI_DB_NAME)`).
 """
 function run_metabuli_classify(reads1::AbstractString;
         reads2::Union{Nothing,AbstractString}=nothing,
-        dbdir::AbstractString,
+        dbdir::Union{Nothing,AbstractString}=nothing,
         outdir::AbstractString,
         jobid::AbstractString,
         read_platform::Symbol=:illumina,
@@ -603,6 +607,10 @@ function run_metabuli_classify(reads1::AbstractString;
         max_ram_gb::Int=128,
         additional_args::Vector{String}=String[],
         force::Bool=false)
+
+    if dbdir === nothing || isempty(dbdir)
+        dbdir = Mycelia.get_metabuli_db_path()
+    end
 
     input_files = isnothing(reads2) ? (reads1,) : (reads1, reads2)
     for file in input_files
@@ -679,6 +687,7 @@ end
                   sample_name::AbstractString,
                   outdir::AbstractString,
                   db_dir::Union{Nothing,String}=nothing,
+                  db_index::Union{Nothing,String}=nothing,
                   bowtie2db::Union{Nothing,String}=nothing,
                   input_type::Symbol=:fastq,
                   long_reads::Bool=false,
@@ -691,12 +700,17 @@ Run MetaPhlAn 4.2+ for marker-based profiling on short or long reads.
 
 Uses comma-joined input lists when multiple files are provided and reuses
 existing outputs unless `force=true`.
+
+`db_index` selects a specific MetaPhlAn database when provided or when
+METAPHLAN_DB_INDEX is set. If not set, MetaPhlAn will download its default
+database. `bowtie2db` is deprecated; prefer `db_dir`.
 """
 function run_metaphlan(reads1::Union{String,Vector{String}};
         reads2::Union{Nothing,String,Vector{String}}=nothing,
         sample_name::AbstractString,
         outdir::AbstractString,
         db_dir::Union{Nothing,String}=nothing,
+        db_index::Union{Nothing,String}=nothing,
         bowtie2db::Union{Nothing,String}=nothing,
         input_type::Symbol=:fastq,
         long_reads::Bool=false,
@@ -721,6 +735,15 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
 
     valid_inputs = (:fastq, :fasta, :sam, :bam)
     input_type in valid_inputs || error("input_type must be one of $(valid_inputs)")
+
+    if !isnothing(bowtie2db) && (db_dir === nothing || isempty(db_dir))
+        @warn "bowtie2db is deprecated; use db_dir instead."
+        db_dir = bowtie2db
+    end
+    db_index_val, index_explicit = Mycelia.resolve_metaphlan_db_index(db_index=db_index)
+    if db_dir === nothing || isempty(db_dir)
+        db_dir = Mycelia.get_metaphlan_db_path(db_index=db_index_val)
+    end
 
     mkpath(outdir)
     base = joinpath(outdir, sample_name)
@@ -750,8 +773,8 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     if !isnothing(db_dir)
         append!(cmd_args, ["--db_dir", db_dir])
     end
-    if !isnothing(bowtie2db)
-        append!(cmd_args, ["--bowtie2db", bowtie2db])
+    if index_explicit
+        append!(cmd_args, ["--index", db_index_val])
     end
 
     push!(cmd_args, "-o", profile_tsv)
