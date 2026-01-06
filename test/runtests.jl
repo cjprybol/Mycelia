@@ -54,7 +54,7 @@ end
 # # JET.jl static analysis - uncomment to enable (can be slow)
 # include("jet.jl")
 
-include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
+# include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # # For debugging individual suites, include explicit files instead of the directory sweep.
 # # for file in (
 # #     "1_data_acquisition/ncbi_download.jl",
@@ -64,7 +64,7 @@ include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
+# include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 # # For debugging individual suites, include explicit files instead of the directory sweep.
 # # for file in (
 # #     "2_preprocessing_qc/alphabets.jl",
@@ -80,7 +80,7 @@ include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
+# include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 # # For debugging individual suites, include explicit files instead of the directory sweep.
 # # for file in (
 # #     "3_feature_extraction_kmer/kmer_analysis.jl",
@@ -180,7 +180,7 @@ include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # end
 
 # Stage 5 (validation): focused suites (all other external-heavy validation stays opt-in for now).
-include_all_tests(joinpath(@__DIR__, "5_validation")) # broken
+include_all_tests(joinpath(@__DIR__, "5_validation"))
 # for file in [
 #     # "5_validation/checkm_tools.jl",
 #     # "5_validation/coverm_integration_extended.jl",

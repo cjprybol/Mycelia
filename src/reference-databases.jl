@@ -1481,7 +1481,7 @@ function download_un_parallel_corpus(;
     outdir::String=pwd(),
     subsets::Vector{String}=["all"],
     formats::Vector{String}=["txt"],
-    base_url::String="https://conferences.unite.un.org/UNCorpus/download",
+    base_url::String="https://www.un.org/dgacm/sites/www.un.org.dgacm/files/files/UNCORPUS",
     force::Bool=false
 )
     archives = _resolve_un_archives(subsets, formats)

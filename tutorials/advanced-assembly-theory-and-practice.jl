@@ -18,10 +18,10 @@ using Mycelia
 # Mycelia's k-mer selection is based on rigorous mathematical principles derived
 # from extensive research on error rate relationships and genomic properties.
 
-## ### Error Rate-Based K-mer Selection
-##
-## The fundamental relationship between error rate and optimal k-mer size:
-## lower_bound_k = max(3, floor(1/error_rate - 1))
+# ### Error Rate-Based K-mer Selection
+#
+# The fundamental relationship between error rate and optimal k-mer size:
+# lower_bound_k = max(3, floor(1/error_rate - 1))
 
 function demonstrate_error_rate_kmer_selection()
     println("Error Rate-Based K-mer Size Selection")

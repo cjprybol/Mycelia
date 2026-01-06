@@ -103,6 +103,79 @@ end
 # ============================================================================
 
 """
+    build_token_graph(token_sequences; dataset_id="dataset_01")
+
+Build a token adjacency graph from tokenized sequences.
+
+Vertices are unique token strings; edges connect adjacent tokens observed in each
+sequence. This is analogous to n-gram graphs, but uses external tokenization
+(e.g., SentencePiece) instead of fixed-length character windows.
+
+# Arguments
+- `token_sequences::Vector{Vector{String}}`: Tokenized sequences (one vector per observation)
+- `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: Directed graph with token vertices and adjacency edges
+
+# Examples
+```julia
+tokens = [
+    ["The", "cat", "sat"],
+    ["The", "dog", "sat"]
+]
+graph = build_token_graph(tokens; dataset_id="tokens_en")
+stats = get_graph_statistics(graph)
+println(stats)
+```
+"""
+function build_token_graph(
+    token_sequences::Vector{Vector{String}};
+    dataset_id::String="dataset_01"
+)
+    if isempty(token_sequences)
+        error("Cannot build token graph from empty token sequence vector")
+    end
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type=String,
+        vertex_data_type=StringVertexData,
+        edge_data_type=StringEdgeData,
+        weight_function=compute_edge_weight
+    )
+
+    for (sequence_idx, tokens) in enumerate(token_sequences)
+        if isempty(tokens)
+            continue
+        end
+        observation_id = "sequence_$(lpad(sequence_idx, 6, '0'))"
+
+        for (position, token) in enumerate(tokens)
+            if !haskey(graph, token)
+                graph[token] = StringVertexData(token)
+            end
+            vertex_data = graph[token]
+            add_evidence!(vertex_data, dataset_id, observation_id,
+                          EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(tokens) - 1)
+            src_token = tokens[i]
+            dst_token = tokens[i + 1]
+            if !haskey(graph, src_token, dst_token)
+                graph[src_token, dst_token] = StringEdgeData(0)
+            end
+            edge_data = graph[src_token, dst_token]
+            add_evidence!(edge_data, dataset_id, observation_id,
+                          EdgeEvidenceEntry(i, i + 1, Forward))
+        end
+    end
+
+    return graph
+end
+
+"""
     build_string_graph_from_file(filepath; dataset_id=nothing, min_overlap=3)
 
 Build variable-length string graph from a text file.

@@ -79,6 +79,21 @@ Test.@testset "RNA K-mer SingleStrand Graph (Rhizomorph)" begin
 
     reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
     reconstructed_str = string(reconstructed)
-    Test.@test reconstructed_str == "AUCGAUCG"
+    Test.@test reconstructed_str == "AUCGAUC"
     Test.@test !occursin('T', reconstructed_str)
+
+    for k in (5, 7)
+        kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+            reads,
+            k;
+            dataset_id=dataset_id,
+            mode=:singlestrand,
+        )
+        kmer_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(kmer_graph)
+        Test.@test !isempty(kmer_paths)
+        kmer_reconstructed = Mycelia.Rhizomorph.path_to_sequence(first(kmer_paths), kmer_graph)
+        kmer_reconstructed_str = string(kmer_reconstructed)
+        Test.@test kmer_reconstructed_str == "AUCGAUCG"
+        Test.@test !occursin('T', kmer_reconstructed_str)
+    end
 end

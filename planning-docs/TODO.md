@@ -158,6 +158,13 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - [ ] Test simulation functions
    - [ ] Test quality control functions
 
+### 📚 UN Corpus Graph Tutorial + Token/Annotation Graphs (Planned)
+- [ ] Draft UN Parallel Corpus tutorial (Literate) comparing character n-gram graphs vs token graphs (SentencePiece).
+- [ ] Add token-graph builder for adjacency graphs from token streams (supports String, AA, DNA, RNA).
+- [ ] Extend token graphs for DNA/RNA strand modes: singlestrand, doublestrand, canonical (match Rhizomorph conventions).
+- [ ] Add annotation-path graph builder for ordered protein annotations (e.g., UniRef chains).
+- [ ] Provide graph statistics/topology comparisons for n-gram vs token graphs (leveraging `get_graph_statistics`/TDA).
+
 2. **Test and Uncomment High-Value Code**:
    - [ ] Create tests for intelligent-assembly.jl (964 lines)
    - [ ] If tests pass, uncomment in src/Mycelia.jl:120

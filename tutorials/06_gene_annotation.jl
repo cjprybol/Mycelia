@@ -453,14 +453,12 @@ println("--- GFF3 Format ---")
 # - Merge annotation files
 
 # Generate example GFF3 content
-gff3_content = """
-##gff-version 3
-##sequence-region test_genome 1 50000
-test_genome\tprodigal\tgene\t1000\t2500\t0.95\t+\t.\tID=gene_1;Name=gene_1
-test_genome\tprodigal\tCDS\t1000\t2500\t0.95\t+\t0\tID=cds_1;Parent=gene_1
-test_genome\tprodigal\tgene\t3000\t4200\t0.88\t-\t.\tID=gene_2;Name=gene_2
-test_genome\tprodigal\tCDS\t3000\t4200\t0.88\t-\t0\tID=cds_2;Parent=gene_2
-"""
+gff3_content = "##gff-version 3\n" *
+    "##sequence-region test_genome 1 50000\n" *
+    "test_genome\tprodigal\tgene\t1000\t2500\t0.95\t+\t.\tID=gene_1;Name=gene_1\n" *
+    "test_genome\tprodigal\tCDS\t1000\t2500\t0.95\t+\t0\tID=cds_1;Parent=gene_1\n" *
+    "test_genome\tprodigal\tgene\t3000\t4200\t0.88\t-\t.\tID=gene_2;Name=gene_2\n" *
+    "test_genome\tprodigal\tCDS\t3000\t4200\t0.88\t-\t0\tID=cds_2;Parent=gene_2\n"
 
 gff3_file = "annotations.gff3"
 open(gff3_file, "w") do io
