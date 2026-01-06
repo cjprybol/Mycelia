@@ -7,6 +7,15 @@ const NCBI_SUPERKINGDOMS = Dict(
     "Unclassified (N/A)" => 12908
 )
 
+const UN_LANGUAGES = ["ar", "zh", "en", "fr", "ru", "es"]
+const UN_PAIRS = [
+    "ar-en", "ar-es", "ar-fr", "ar-ru", "ar-zh",
+    "en-es", "en-fr", "en-ru", "en-zh",
+    "es-fr", "es-ru", "es-zh",
+    "fr-ru", "fr-zh",
+    "ru-zh"
+]
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1197,6 +1206,296 @@ function fasterq_dump_parallel(srr_identifiers::Vector{String}; outdir::String=p
     @info "FASTQ conversion completed: $(successful)/$(length(srr_identifiers)) successful"
     
     return results
+end
+
+function _un_part_exists(url::AbstractString)
+    response = HTTP.request("HEAD", url; status_exception=false)
+    if response.status == 404
+        return false
+    elseif 200 <= response.status < 300
+        return true
+    elseif response.status == 405
+        response = HTTP.request(
+            "GET",
+            url;
+            headers=Dict("Range" => "bytes=0-0"),
+            status_exception=false
+        )
+        if response.status == 404
+            return false
+        elseif response.status == 200 || response.status == 206
+            return true
+        end
+    end
+
+    error("Unexpected HTTP status $(response.status) for $(url)")
+end
+
+function _merge_un_archive_parts(parts::Vector{String}, merged_archive::AbstractString)
+    open(merged_archive, "w") do out_io
+        buffer = Vector{UInt8}(undef, 1024 * 1024)
+        for part in parts
+            open(part, "r") do in_io
+                while !eof(in_io)
+                    n = readbytes!(in_io, buffer)
+                    if n == 0
+                        break
+                    end
+                    write(out_io, view(buffer, 1:n))
+                end
+            end
+        end
+    end
+    return merged_archive
+end
+
+function _download_and_extract_split_archive(
+    base_name::AbstractString,
+    url_base::AbstractString,
+    outdir::AbstractString;
+    force::Bool=false
+)
+    mkpath(outdir)
+    merged_archive = joinpath(outdir, base_name)
+
+    if isfile(merged_archive) && !force
+        @info "Using existing merged archive: $(merged_archive)"
+        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir)
+        return outdir
+    end
+
+    parts = String[]
+    index = 0
+
+    while true
+        suffix = lpad(string(index), 2, '0')
+        filename = "$(base_name).$(suffix)"
+        url = "$(url_base)/$(filename)"
+
+        if !_un_part_exists(url)
+            break
+        end
+
+        outfile = joinpath(outdir, filename)
+        if force || !isfile(outfile)
+            @info "Downloading $(url)"
+            Downloads.download(url, outfile)
+        else
+            @info "Using existing part: $(outfile)"
+        end
+        push!(parts, outfile)
+        index += 1
+    end
+
+    if isempty(parts)
+        direct_url = "$(url_base)/$(base_name)"
+        if _un_part_exists(direct_url)
+            outfile = joinpath(outdir, base_name)
+            if force || !isfile(outfile)
+                @info "Downloading $(direct_url)"
+                Downloads.download(direct_url, outfile)
+            else
+                @info "Using existing archive: $(outfile)"
+            end
+
+            extracted = false
+            try
+                Mycelia.tar_extract(tarchive=outfile, directory=outdir)
+                extracted = true
+            finally
+                if extracted
+                    isfile(outfile) && rm(outfile; force=true)
+                else
+                    @warn "Extraction failed; keeping downloaded archive for inspection."
+                end
+            end
+            return outdir
+        end
+
+        error("No archive parts found for $(base_name) at $(url_base)")
+    end
+
+    extracted = false
+    try
+        @info "Merging $(length(parts)) archive parts into $(merged_archive)"
+        _merge_un_archive_parts(parts, merged_archive)
+        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir)
+        extracted = true
+    finally
+        if extracted
+            for part in parts
+                isfile(part) && rm(part; force=true)
+            end
+            isfile(merged_archive) && rm(merged_archive; force=true)
+        else
+            @warn "Extraction failed; keeping downloaded archive parts for inspection."
+        end
+    end
+
+    return outdir
+end
+
+function _resolve_un_archives(subsets::Vector{String}, formats::Vector{String})
+    if isempty(subsets)
+        error("subsets cannot be empty")
+    end
+    if isempty(formats)
+        error("formats cannot be empty")
+    end
+
+    normalized_formats = unique([lowercase(strip(f)) for f in formats if !isempty(strip(f))])
+    allowed_formats = Set(["txt", "xml"])
+    if isempty(normalized_formats)
+        error("formats cannot be empty")
+    end
+    for fmt in normalized_formats
+        if !(fmt in allowed_formats)
+            error("Unsupported format: $(fmt). Use \"txt\" or \"xml\".")
+        end
+    end
+
+    allowed_langs = Set(UN_LANGUAGES)
+    allowed_pairs = Set(UN_PAIRS)
+    normalized_subsets = unique([lowercase(strip(s)) for s in subsets if !isempty(strip(s))])
+    if isempty(normalized_subsets)
+        error("subsets cannot be empty")
+    end
+
+    subset_tokens = String[]
+    explicit_tokens = String[]
+    pairs = String[]
+    all_requested = false
+
+    for token in normalized_subsets
+        if token == "6-way"
+            token = "6way"
+        end
+
+        if token in ("all", "bitext", "tei", "6way")
+            if token == "all"
+                all_requested = true
+            else
+                push!(subset_tokens, token)
+                push!(explicit_tokens, token)
+            end
+            continue
+        end
+
+        if occursin(r"^[a-z]{2}-[a-z]{2}$", token)
+            langs = split(token, "-")
+            if !all(in(allowed_langs), langs)
+                error("Unsupported language pair: $(token). Allowed languages: $(join(UN_LANGUAGES, ", ")).")
+            end
+            pair = join(sort(langs), "-")
+            if !(pair in allowed_pairs)
+                error("Unsupported language pair: $(token).")
+            end
+            push!(pairs, pair)
+            continue
+        end
+
+        error("Unsupported subset: $(token). Use \"all\", \"bitext\", \"tei\", \"6way\", or a pair like \"en-fr\".")
+    end
+
+    pairs = unique(pairs)
+    subset_tokens = unique(subset_tokens)
+    explicit_tokens = unique(explicit_tokens)
+
+    if all_requested
+        subset_tokens = unique(vcat(subset_tokens, ["bitext", "tei", "6way"]))
+    end
+
+    want_txt = all_requested ? true : ("txt" in normalized_formats)
+    want_xml = all_requested ? true : ("xml" in normalized_formats)
+
+    if !all_requested
+        if (("bitext" in explicit_tokens) || ("6way" in explicit_tokens) || !isempty(pairs)) && !want_txt
+            error("Bitext/6-way downloads require formats to include \"txt\".")
+        end
+        if ("tei" in explicit_tokens) && !want_xml
+            error("TEI downloads require formats to include \"xml\".")
+        end
+    end
+
+    archives = String[]
+    if ("bitext" in subset_tokens) && want_txt
+        append!(archives, ["UNv1.0.$(pair).tar.gz" for pair in UN_PAIRS])
+    end
+    if !isempty(pairs)
+        append!(archives, ["UNv1.0.$(pair).tar.gz" for pair in pairs])
+    end
+    if ("6way" in subset_tokens) && want_txt
+        push!(archives, "UNv1.0.6way.tar.gz")
+    end
+    if ("tei" in subset_tokens) && want_xml
+        append!(archives, ["UNv1.0-TEI.$(lang).tar.gz" for lang in UN_LANGUAGES])
+    end
+
+    archives = unique(archives)
+    if isempty(archives)
+        error("No archives selected. Check subsets and formats.")
+    end
+
+    return archives
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Download and extract the United Nations Parallel Corpus v1.0.
+
+# Arguments
+- `outdir::String`: Output directory (default: current directory). Files are extracted into
+  `joinpath(outdir, "un_corpus")`.
+- `subsets::Vector{String}`: List of subsets to download. Options:
+  - `"all"`: All subsets and formats (ignores `formats`)
+  - `"bitext"`: All pairwise plain-text files
+  - `"tei"`: All XML/TEI files
+  - `"6way"`: The fully aligned 6-way subcorpus
+  - Specific pairs: e.g., `"en-fr"`, `"ru-zh"` (order-insensitive)
+- `formats::Vector{String}`: Formats to download. `"txt"` covers bitext and 6-way; `"xml"` covers TEI.
+- `base_url::String`: Base URL for downloads.
+- `force::Bool`: Re-download archive parts even if they already exist.
+
+# Details
+Handles the split archive format (`.tar.gz.00`, `.tar.gz.01`, ...) by downloading all parts,
+concatenating them, and extracting the merged archive.
+If `"all"` is included in `subsets`, all formats are downloaded regardless of `formats`.
+
+# Returns
+- `String`: Path to the corpus directory.
+
+# Example
+```julia
+# Download English-French bitexts
+Mycelia.download_un_parallel_corpus(outdir="./data", subsets=["en-fr"])
+
+# Download TEI/XML for all languages
+Mycelia.download_un_parallel_corpus(outdir="./data", subsets=["tei"], formats=["xml"])
+
+# Download all subsets and formats
+Mycelia.download_un_parallel_corpus(outdir="./data", subsets=["all"], formats=["txt", "xml"])
+```
+"""
+function download_un_parallel_corpus(;
+    outdir::String=pwd(),
+    subsets::Vector{String}=["all"],
+    formats::Vector{String}=["txt"],
+    base_url::String="https://conferences.unite.un.org/UNCorpus/download",
+    force::Bool=false
+)
+    archives = _resolve_un_archives(subsets, formats)
+
+    corpus_dir = joinpath(outdir, "un_corpus")
+    mkpath(corpus_dir)
+    url_base = rstrip(base_url, '/')
+
+    for archive in archives
+        @info "Downloading UN Parallel Corpus archive: $(archive)"
+        _download_and_extract_split_archive(archive, url_base, corpus_dir; force=force)
+    end
+
+    return corpus_dir
 end
 
 """
