@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction · Mycelia</title><meta name="title" content="Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction · Mycelia"/><meta property="og:title" content="Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction · Mycelia"/><meta property="twitter:title" content="Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../probabilistic-assembly-hub/">Probabilistic Assembly</a></li><li><a class="tocitem" href="../../../tutorials/">Tutorials</a></li><li><span class="tocitem">Documentation</span><ul><li><a class="tocitem" href="../../../architecture/">Architecture Overview</a></li><li><a class="tocitem" href="../../../assembly-method-selection/">Assembly Method Selection</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow &amp; Tool Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><a class="tocitem" href="../../../api/function-coverage/">Function Coverage Audit</a></li><li><a class="tocitem" href="../../../performance/">Performance Guide</a></li><li><a class="tocitem" href="../../../faq/">FAQ</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api-reference/">Complete API Reference</a></li><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li><li><input class="collapse-toggle" id="menuitem-8-3" type="checkbox"/><label class="tocitem" for="menuitem-8-3"><span class="docs-label">Workflows</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/workflows/assembly-suite/">Assembly Suite</a></li><li><a class="tocitem" href="../../../api/workflows/data-acquisition/">Data Acquisition</a></li><li><a class="tocitem" href="../../../api/workflows/quality-control/">Quality Control</a></li><li><a class="tocitem" href="../../../api/workflows/sequence-analysis/">Sequence Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-8-4" type="checkbox"/><label class="tocitem" for="menuitem-8-4"><span class="docs-label">Quick Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/quick-reference/function-index/">Function Index</a></li><li><a class="tocitem" href="../../../api/quick-reference/parameter-guide/">Parameter Guide</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-8-5" type="checkbox"/><label class="tocitem" for="menuitem-8-5"><span class="docs-label">Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../../api/examples/basic-workflows/">Basic Workflows</a></li></ul></li><li><a class="tocitem" href="../../../api/">Legacy API Documentation</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/09_round_trip_02_ngram_to_string.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction"><a class="docs-heading-anchor" href="#Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction">Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction</a><a id="Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction-1"></a><a class="docs-heading-anchor-permalink" href="#Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction" title="Permalink"></a></h1><p>This tutorial demonstrates the hierarchical graph conversion workflow in Mycelia, showing how fixed-length N-gram graphs can be simplified into variable-length String graphs. This represents the fundamental pattern of graph hierarchy used throughout the Mycelia system.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will:</p><ol><li>Understand the hierarchical relationship between N-gram and String graphs</li><li>Learn to convert fixed-length graphs to variable-length representations</li><li>Perform graph simplification and path collapse operations</li><li>Compare reconstruction quality across graph representations</li><li>Analyze the trade-offs between graph complexity and assembly accuracy</li></ol><pre><code class="language-julia hljs">import Mycelia
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Round Trip 02 Ngram To String · Mycelia</title><meta name="title" content="Round Trip 02 Ngram To String · Mycelia"/><meta property="og:title" content="Round Trip 02 Ngram To String · Mycelia"/><meta property="twitter:title" content="Round Trip 02 Ngram To String · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 9: Binning Workflow</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Graph Type Tutorials</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round Trip 01 String Graphs</a></li><li class="is-active"><a class="tocitem" href>Round Trip 02 Ngram To String</a><ul class="internal"><li><a class="tocitem" href="#Learning-Objectives"><span>Learning Objectives</span></a></li><li><a class="tocitem" href="#Understanding-Graph-Hierarchy"><span>Understanding Graph Hierarchy</span></a></li><li><a class="tocitem" href="#Data-Preparation-with-Hierarchical-Complexity"><span>Data Preparation with Hierarchical Complexity</span></a></li><li><a class="tocitem" href="#Phase-1:-N-gram-Graph-Construction"><span>Phase 1: N-gram Graph Construction</span></a></li><li><a class="tocitem" href="#Phase-2:-Graph-Analysis-and-Path-Detection"><span>Phase 2: Graph Analysis and Path Detection</span></a></li><li><a class="tocitem" href="#Phase-3:-String-Graph-Conversion-(Rhizomorph)"><span>Phase 3: String Graph Conversion (Rhizomorph)</span></a></li><li><a class="tocitem" href="#Phase-4:-Reconstruction-and-Round-Trip-Validation"><span>Phase 4: Reconstruction and Round-Trip Validation</span></a></li><li><a class="tocitem" href="#Performance-and-Complexity-Analysis"><span>Performance and Complexity Analysis</span></a></li><li><a class="tocitem" href="#Real-World-Application:-Multi-Scale-Text-Analysis"><span>Real-World Application: Multi-Scale Text Analysis</span></a></li><li><a class="tocitem" href="#Tutorial-Summary-and-Best-Practices"><span>Tutorial Summary and Best Practices</span></a></li></ul></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round Trip 03 Fasta Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round Trip 04 Kmer To Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round Trip 05 Fastq Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round Trip 06 Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Coverm Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_mash_classification/">Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Round Trip Benchmarking</a></li><li><a class="tocitem" href="../advanced-assembly-theory-and-practice/">Advanced-Assembly-Theory-And-Practice</a></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Round Trip 02 Ngram To String</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Round Trip 02 Ngram To String</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/09_round_trip_02_ngram_to_string.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction"><a class="docs-heading-anchor" href="#Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction">Round-Trip Tutorial 2: String Data → N-gram Graphs → String Graphs → Reconstruction</a><a id="Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction-1"></a><a class="docs-heading-anchor-permalink" href="#Round-Trip-Tutorial-2:-String-Data-N-gram-Graphs-String-Graphs-Reconstruction" title="Permalink"></a></h1><p>This tutorial demonstrates the hierarchical graph conversion workflow in Mycelia, showing how fixed-length N-gram graphs can be simplified into variable-length String graphs. This represents the fundamental pattern of graph hierarchy used throughout the Mycelia system.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will:</p><ol><li>Understand the hierarchical relationship between N-gram and String graphs</li><li>Learn to convert fixed-length graphs to variable-length representations</li><li>Perform graph simplification and path collapse operations</li><li>Compare reconstruction quality across graph representations</li><li>Analyze the trade-offs between graph complexity and assembly accuracy</li></ol><pre><code class="language-julia hljs">import Mycelia
 import Statistics
 import Random</code></pre><h2 id="Understanding-Graph-Hierarchy"><a class="docs-heading-anchor" href="#Understanding-Graph-Hierarchy">Understanding Graph Hierarchy</a><a id="Understanding-Graph-Hierarchy-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Graph-Hierarchy" title="Permalink"></a></h2><p>The Mycelia system implements a hierarchical graph structure where fixed-length graphs serve as the foundation for variable-length simplified graphs.</p><pre><code class="language-julia hljs">println(&quot;=&quot;^80)
 println(&quot;ROUND-TRIP TUTORIAL 2: N-GRAM TO STRING GRAPH HIERARCHY&quot;)
@@ -64,11 +64,11 @@ for n in [3, 4, 5]
     for (i, dataset) in enumerate(test_datasets)
         if length(dataset.text) &gt;= n
             try
-                # Build N-gram graph
-                graph = Mycelia.string_to_ngram_graph(s=dataset.text, n=n)
+                # Build N-gram graph (Rhizomorph)
+                graph = Mycelia.Rhizomorph.build_ngram_graph([dataset.text], n; dataset_id=&quot;$(replace(dataset.name, &quot; &quot; =&gt; &quot;_&quot;))_n$(n)&quot;)
 
                 # Extract statistics
-                vertices = collect(values(graph.vertex_labels))
+                vertices = collect(Mycelia.MetaGraphsNext.labels(graph))
                 num_vertices = length(vertices)
                 expected_ngrams = length(dataset.text) - n + 1
 
@@ -108,7 +108,7 @@ println(&quot;-&quot;^50)
 function analyze_ngram_graph_structure(graph, description)
     &quot;&quot;&quot;Analyze structural properties of an N-gram graph.&quot;&quot;&quot;
 
-    vertices = collect(values(graph.vertex_labels))
+    vertices = collect(Mycelia.MetaGraphsNext.labels(graph))
     num_vertices = length(vertices)
 
     if num_vertices == 0
@@ -165,80 +165,74 @@ for n in [3, 4]
             analyze_ngram_graph_structure(result.graph, &quot;$(dataset.name) $(n)-gram&quot;)
         end
     end
-end</code></pre><h2 id="Phase-3:-String-Graph-Conversion-(Theoretical)"><a class="docs-heading-anchor" href="#Phase-3:-String-Graph-Conversion-(Theoretical)">Phase 3: String Graph Conversion (Theoretical)</a><a id="Phase-3:-String-Graph-Conversion-(Theoretical)-1"></a><a class="docs-heading-anchor-permalink" href="#Phase-3:-String-Graph-Conversion-(Theoretical)" title="Permalink"></a></h2><p>Demonstrate the concept of converting N-gram graphs to String graphs. Note: Full implementation may require additional graph traversal algorithms.</p><pre><code class="language-julia hljs">println(&quot;\n4. PHASE 3: STRING GRAPH CONVERSION (CONCEPTUAL)&quot;)
+end</code></pre><h2 id="Phase-3:-String-Graph-Conversion-(Rhizomorph)"><a class="docs-heading-anchor" href="#Phase-3:-String-Graph-Conversion-(Rhizomorph)">Phase 3: String Graph Conversion (Rhizomorph)</a><a id="Phase-3:-String-Graph-Conversion-(Rhizomorph)-1"></a><a class="docs-heading-anchor-permalink" href="#Phase-3:-String-Graph-Conversion-(Rhizomorph)" title="Permalink"></a></h2><p>Convert N-gram graphs to variable-length String graphs using Rhizomorph contigs.</p><pre><code class="language-julia hljs">println(&quot;\n4. PHASE 3: STRING GRAPH CONVERSION (CONCEPTUAL)&quot;)
 println(&quot;-&quot;^50)
 
-function simulate_string_graph_conversion(ngram_result)
-    &quot;&quot;&quot;Simulate the conversion from N-gram graph to String graph.&quot;&quot;&quot;
-
-    vertices = ngram_result.vertices
-    n = ngram_result.n
-    original_text = ngram_result.dataset.text
-
-    # Simplified simulation of path collapse
-    # In a full implementation, this would involve:
-    # 1. Finding linear paths through the graph
-    # 2. Collapsing unbranching paths into single vertices
-    # 3. Preserving branching structure
-
-    # For simulation, we&#39;ll estimate the result
-    estimated_strings = []
-
-    if ngram_result.compression_ratio &lt; 0.5  ## High compression suggests repetition
-        # High repetition might collapse to fewer, longer strings
-        estimated_count = max(1, ngram_result.num_vertices ÷ 3)
-        estimated_avg_length = length(original_text) ÷ estimated_count
-
-        for i in 1:estimated_count
-            # Create simulated string
-            start_pos = ((i-1) * estimated_avg_length) + 1
-            end_pos = min(start_pos + estimated_avg_length - 1, length(original_text))
-            if start_pos &lt;= length(original_text)
-                simulated_string = original_text[start_pos:end_pos]
-                push!(estimated_strings, simulated_string)
-            end
-        end
-    else
-        # Low compression might result in strings similar to original n-grams
-        # but with some linear paths collapsed
-        for vertex in vertices[1:min(5, length(vertices))]  ## Limit for simulation
-            push!(estimated_strings, vertex)
-        end
+function convert_ngram_to_string_graph(ngram_result)
+    &quot;&quot;&quot;Convert N-gram graph to variable-length String graph using Rhizomorph contigs.&quot;&quot;&quot;
+    contigs = Mycelia.Rhizomorph.find_contigs_next(ngram_result.graph; min_contig_length=1)
+    contig_strings = [string(contig.sequence) for contig in contigs]
+    if isempty(contig_strings)
+        contig_strings = [string(label) for label in ngram_result.vertices]
     end
-
-    return estimated_strings
+    dataset_label = replace(ngram_result.dataset.name, &quot; &quot; =&gt; &quot;_&quot;)
+    min_overlap = max(1, ngram_result.n - 1)
+    string_graph = Mycelia.Rhizomorph.build_string_graph(
+        contig_strings;
+        dataset_id=&quot;$(dataset_label)_n$(ngram_result.n)&quot;,
+        min_overlap=min_overlap
+    )
+    string_vertices = collect(Mycelia.MetaGraphsNext.labels(string_graph))
+    return (
+        graph = string_graph,
+        vertices = string_vertices,
+        contig_strings = contig_strings,
+        min_overlap = min_overlap
+    )
 end
 
 string_conversion_results = Dict()
 
-println(&quot;Simulating N-gram to String graph conversions:&quot;)
+println(&quot;Converting N-gram graphs to String graphs:&quot;)
 for (key, result) in ngram_results
-    estimated_strings = simulate_string_graph_conversion(result)
+    conversion = convert_ngram_to_string_graph(result)
 
     string_conversion_results[key] = (
         original_ngram_result = result,
-        estimated_strings = estimated_strings,
-        conversion_ratio = length(estimated_strings) / result.num_vertices
+        string_graph = conversion.graph,
+        string_vertices = conversion.vertices,
+        contig_strings = conversion.contig_strings,
+        conversion_ratio = length(conversion.vertices) / max(1, result.num_vertices)
     )
 
     println(&quot;  $(key):&quot;)
     println(&quot;    N-gram vertices: $(result.num_vertices)&quot;)
-    println(&quot;    Estimated string vertices: $(length(estimated_strings))&quot;)
-    println(&quot;    Conversion ratio: $(round(length(estimated_strings) / result.num_vertices, digits=3))&quot;)
+    println(&quot;    String vertices: $(length(conversion.vertices))&quot;)
+    println(&quot;    Conversion ratio: $(round(length(conversion.vertices) / max(1, result.num_vertices), digits=3))&quot;)
 
-    if !isempty(estimated_strings)
-        example_count = min(2, length(estimated_strings))
-        println(&quot;    Example strings: $(estimated_strings[1:example_count])&quot;)
+    if !isempty(conversion.vertices)
+        example_count = min(2, length(conversion.vertices))
+        println(&quot;    Example strings: $(conversion.vertices[1:example_count])&quot;)
     end
 end</code></pre><h2 id="Phase-4:-Reconstruction-and-Round-Trip-Validation"><a class="docs-heading-anchor" href="#Phase-4:-Reconstruction-and-Round-Trip-Validation">Phase 4: Reconstruction and Round-Trip Validation</a><a id="Phase-4:-Reconstruction-and-Round-Trip-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Phase-4:-Reconstruction-and-Round-Trip-Validation" title="Permalink"></a></h2><p>Validate the complete round-trip workflow through both graph representations.</p><pre><code class="language-julia hljs">println(&quot;\n5. PHASE 4: RECONSTRUCTION AND ROUND-TRIP VALIDATION&quot;)
 println(&quot;-&quot;^50)
 
-function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
+function validate_round_trip(original_text, ngram_graph, string_graph, n)
     &quot;&quot;&quot;Validate the round-trip reconstruction quality.&quot;&quot;&quot;
 
     # Method 1: Direct N-gram assembly
     try
-        ngram_assembly = Mycelia.assemble_strings(ngram_graph)
+        ngram_assembly = String[]
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(ngram_graph)
+        for path in paths
+            if !isempty(path)
+                push!(ngram_assembly, string(Mycelia.Rhizomorph.path_to_sequence(path, ngram_graph)))
+            end
+        end
+        if isempty(ngram_assembly)
+            contigs = Mycelia.Rhizomorph.find_contigs_next(ngram_graph; min_contig_length=1)
+            ngram_assembly = [string(contig.sequence) for contig in contigs]
+        end
         ngram_success = !isempty(ngram_assembly)
 
         # Find best N-gram reconstruction
@@ -261,16 +255,20 @@ function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
     end
 
     # Method 2: String graph simulation
-    string_success = !isempty(estimated_strings)
-
-    # For string graphs, we&#39;ll simulate a simple concatenation approach
-    if string_success
-        # Try different string combinations
-        string_reconstruction = join(estimated_strings, &quot;&quot;)
-        string_similarity = calculate_similarity(original_text, string_reconstruction)
-    else
-        string_similarity = 0.0
-        string_reconstruction = &quot;&quot;
+    string_contigs = Mycelia.Rhizomorph.find_contigs_next(string_graph; min_contig_length=1)
+    string_reconstructions = [string(contig.sequence) for contig in string_contigs]
+    if isempty(string_reconstructions)
+        string_reconstructions = [string(label) for label in Mycelia.MetaGraphsNext.labels(string_graph)]
+    end
+    string_success = !isempty(string_reconstructions)
+    best_string_similarity = 0.0
+    best_string_reconstruction = &quot;&quot;
+    for reconstruction in string_reconstructions
+        similarity = calculate_similarity(original_text, reconstruction)
+        if similarity &gt; best_string_similarity
+            best_string_similarity = similarity
+            best_string_reconstruction = reconstruction
+        end
     end
 
     return (
@@ -278,9 +276,9 @@ function validate_round_trip(original_text, ngram_graph, estimated_strings, n)
         ngram_similarity = best_ngram_similarity,
         ngram_reconstruction = best_ngram_reconstruction,
         string_success = string_success,
-        string_similarity = string_similarity,
-        string_reconstruction = string_reconstruction,
-        comparison = best_ngram_similarity &gt; string_similarity ? &quot;N-gram better&quot; : &quot;String better&quot;
+        string_similarity = best_string_similarity,
+        string_reconstruction = best_string_reconstruction,
+        comparison = best_ngram_similarity &gt; best_string_similarity ? &quot;N-gram better&quot; : &quot;String better&quot;
     )
 end
 
@@ -308,12 +306,12 @@ validation_results = Dict()
 println(&quot;Validating round-trip reconstructions:&quot;)
 for (key, conversion_result) in string_conversion_results
     ngram_result = conversion_result.original_ngram_result
-    estimated_strings = conversion_result.estimated_strings
+    string_graph = conversion_result.string_graph
 
     validation = validate_round_trip(
         ngram_result.dataset.text,
         ngram_result.graph,
-        estimated_strings,
+        string_graph,
         ngram_result.n
     )
 
@@ -349,7 +347,7 @@ function analyze_graph_efficiency(ngram_results, string_results)
             string_result = string_results[key]
 
             total_ngram_vertices += ngram_result.num_vertices
-            total_string_vertices += length(string_result.estimated_strings)
+            total_string_vertices += length(string_result.string_vertices)
             total_original_length += length(ngram_result.dataset.text)
         end
     end
@@ -391,8 +389,8 @@ scales = [
 println(&quot;\\nBuilding multi-scale representations:&quot;)
 for scale in scales
     if length(complex_text) &gt;= scale.n
-        ngram_graph = Mycelia.string_to_ngram_graph(s=complex_text, n=scale.n)
-        ngram_vertices = length(ngram_graph.vertex_labels)
+        ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([complex_text], scale.n; dataset_id=&quot;multiscale_n$(scale.n)&quot;)
+        ngram_vertices = length(Mycelia.MetaGraphsNext.labels(ngram_graph))
         compression = ngram_vertices / (length(complex_text) - scale.n + 1)
 
         println(&quot;  $(scale.description) (n=$(scale.n)):&quot;)
@@ -475,4 +473,4 @@ println(&quot;  • Protein sequences: Fixed amino acid k-mers → Domain sequen
 println(&quot;\\n&quot; * &quot;=&quot;^80)
 println(&quot;Hierarchical graph conversion workflow mastered!&quot;)
 println(&quot;Ready for biological sequence applications in Tutorial 3!&quot;)
-println(&quot;=&quot;^80)</code></pre></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Tuesday 23 December 2025 20:36">Tuesday 23 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+println(&quot;=&quot;^80)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../09_round_trip_01_string_graphs/">« Round Trip 01 String Graphs</a><a class="docs-footer-nextpage" href="../09_round_trip_03_fasta_sequences/">Round Trip 03 Fasta Sequences »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Tuesday 6 January 2026 14:01">Tuesday 6 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
