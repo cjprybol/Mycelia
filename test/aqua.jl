@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/aqua.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/aqua.jl", "test", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("..")
+## end
+## using Revise
+
 # Aqua.jl - Auto QUality Assurance for Julia packages
 # https://juliatesting.github.io/Aqua.jl/stable/
 

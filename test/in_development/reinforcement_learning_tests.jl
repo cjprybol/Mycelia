@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/in_development/reinforcement_learning_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/in_development/reinforcement_learning_tests.jl", "test/in_development", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
 # Reinforcement Learning Framework Tests
 # Tests for the RL-based assembly optimization system
 

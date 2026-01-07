@@ -1,20 +1,24 @@
-# Pangenome construction tests using simple DNA sequences
-
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
-# julia --project=test -e 'include("test/7_comparative_pangenomics/pangenome.jl")'
+# julia --project=. -e 'include("test/7_comparative_pangenomics/pangenome.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
 # ```bash
-# julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/pangenome.jl", "test/7_comparative_pangenomics", execute=false)'
-# ````
-# import Pkg
-# if isinteractive()
-#     Pkg.activate("..")
-# end
+# julia --project=. -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/pangenome.jl", "test/7_comparative_pangenomics", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
+# Pangenome construction tests using simple DNA sequences
 # import Revise
+
 import Test
 import Mycelia
 import FASTX

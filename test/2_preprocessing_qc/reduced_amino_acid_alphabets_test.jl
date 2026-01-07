@@ -1,5 +1,5 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
 # julia --project=. -e 'include("test/2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl")'
 # ```

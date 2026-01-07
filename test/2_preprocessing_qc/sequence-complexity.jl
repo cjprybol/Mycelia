@@ -1,5 +1,5 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
 # julia --project=. -e 'include("test/2_preprocessing_qc/sequence-complexity.jl")'
 # ```
@@ -15,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import BioSequences
 import Mycelia

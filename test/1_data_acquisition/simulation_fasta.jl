@@ -1,8 +1,10 @@
+# From the Mycelia base directory, run the tests with:
+#
 # ```bash
-# julia --project=. --color=yes -e 'include("test/1_data_acquisition/simulation_fasta.jl")'
+# julia --project=. -e 'include("test/1_data_acquisition/simulation_fasta.jl")'
 # ```
 #
-# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# And to turn this file into a jupyter notebook, run:
 # ```bash
 # julia --project=. -e 'import Literate; Literate.notebook("test/1_data_acquisition/simulation_fasta.jl", "test/1_data_acquisition", execute=false)'
 # ```
@@ -13,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import FASTX

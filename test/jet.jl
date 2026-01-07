@@ -1,14 +1,26 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/jet.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/jet.jl", "test", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("..")
+## end
+## using Revise
+
 ## JET.jl Static Analysis Tests
-##
 ## This file runs JET.jl static analysis on the Mycelia package.
 ## JET is a test-only dependency - it is not loaded when using Mycelia normally.
-##
 ## Run via Pkg.test() (when uncommented in runtests.jl):
-##   julia --project=. -e 'import Pkg; Pkg.test()'
-##
 ## Or run standalone (requires test dependencies):
-##   julia --project=. -e 'import Pkg; Pkg.test()' -- test/jet.jl
-##   julia --project=. -e 'include("test/jet.jl")'
 
 import Test
 import JET

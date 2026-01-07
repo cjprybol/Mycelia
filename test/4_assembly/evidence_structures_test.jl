@@ -1,11 +1,25 @@
-# Evidence Structures Test
+# From the Mycelia base directory, run the tests with:
 #
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/evidence_structures_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/evidence_structures_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
+# Evidence Structures Test
 # Tests for the fundamental evidence tracking data structures defined in the
 # rhizomorph graph ecosystem planning document.
-#
 # These tests define the CORRECT behavior before implementation.
-#
-# Run with: julia --project=. test/4_assembly/evidence_structures_test.jl
 
 import Test
 import Mycelia

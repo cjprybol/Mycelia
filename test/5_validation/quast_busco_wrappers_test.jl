@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/5_validation/quast_busco_wrappers_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/5_validation/quast_busco_wrappers_test.jl", "test/5_validation", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
 import Test
 import Mycelia
 

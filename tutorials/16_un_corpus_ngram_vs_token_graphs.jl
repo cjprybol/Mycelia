@@ -72,45 +72,7 @@ end
 #
 # Map each language to its raw text files in the extracted UN corpus.
 
-function collect_un_language_files(corpus_root::String; subsets::Vector{String})
-    language_files = Dict{String, Vector{String}}()
-    use_all = "all" in subsets
-    for (root, _dirs, files) in walkdir(corpus_root)
-        for filename in files
-            filepath = joinpath(root, filename)
-            if endswith(filename, ".xml") || endswith(filename, ".gz") || endswith(filename, ".tar")
-                continue
-            end
-            if !occursin("UNv1.0", filename)
-                continue
-            end
-            if !occursin("-", filename) && !occursin("6way", filename)
-                continue
-            end
-            parts = split(filename, '.')
-            if length(parts) < 2
-                continue
-            end
-            lang = parts[end]
-            if length(lang) > 3
-                continue
-            end
-            if !all(isletter, lang)
-                continue
-            end
-            if !use_all
-                matches_subset = any(subset -> occursin(subset, filename), subsets)
-                if !matches_subset
-                    continue
-                end
-            end
-            push!(get!(Vector{String}, language_files, lang), filepath)
-        end
-    end
-    return language_files
-end
-
-language_files = collect_un_language_files(corpus_dir; subsets=UN_SUBSETS)
+language_files = Mycelia.collect_un_language_files(corpus_dir; subsets=UN_SUBSETS)
 if isempty(language_files)
     error("No language files found. Verify UN corpus extraction in $(corpus_dir).")
 end

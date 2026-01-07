@@ -1,12 +1,12 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
-# julia --project=. -e 'include("test/4_assembly/cross_validation_tests.jl")'
+# julia --project=. -e 'include("test/in_development/cross_validation_tests.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
 # ```bash
-# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/cross_validation_tests.jl", "test/4_assembly", execute=false)'
+# julia --project=. -e 'import Literate; Literate.notebook("test/in_development/cross_validation_tests.jl", "test/in_development", execute=false)'
 # ```
 
 ## If running Literate notebook, ensure the package is activated:
@@ -15,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import BioSequences

@@ -1,12 +1,12 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
 # julia --project=. -e 'include("test/3_feature_extraction_kmer/qualmer-analysis.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
 # ```bash
-# julia --project=. -e 'import Literate; Literate.notebook("test/3_feature_extraction_kmer/qualmer-analysis.jl", "test/3_feature_extraction_kmer/", execute=false)'
+# julia --project=. -e 'import Literate; Literate.notebook("test/3_feature_extraction_kmer/qualmer-analysis.jl", "test/3_feature_extraction_kmer", execute=false)'
 # ```
 
 ## If running Literate notebook, ensure the package is activated:
@@ -15,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import BioSequences

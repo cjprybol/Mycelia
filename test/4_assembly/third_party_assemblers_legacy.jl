@@ -1,15 +1,5 @@
-# NOTE: Legacy notebook-style file.
-# The lightweight test-suite entrypoint is `test/4_assembly/third_party_assemblers.jl`
-# (which now includes smaller group files).
+# From the Mycelia base directory, run the tests with:
 #
-# From the Mycelia base directory:
-#
-# Lightweight external suite:
-# ```bash
-# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/4_assembly/third_party_assemblers.jl")'
-# ```
-#
-# Legacy (heavier) workflows in this file:
 # ```bash
 # julia --project=. -e 'include("test/4_assembly/third_party_assemblers_legacy.jl")'
 # ```
@@ -25,6 +15,13 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
+# NOTE: Legacy notebook-style file.
+# The lightweight test-suite entrypoint is `test/4_assembly/third_party_assemblers.jl`
+# (which now includes smaller group files).
+# Lightweight external suite:
+# Legacy (heavier) workflows in this file:
+
 import Test
 import Mycelia
 import Graphs

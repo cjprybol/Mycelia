@@ -1,12 +1,26 @@
-# Graph Query and Traversal Functions Test
+# From the Mycelia base directory, run the tests with:
 #
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/graph_query_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/graph_query_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
+# Graph Query and Traversal Functions Test
 # Tests for graph query and traversal helper functions as specified
 # in the rhizomorph graph ecosystem planning document.
-#
 # These functions provide efficient querying of graph properties
 # and traversal of paths through the graph.
-#
-# Run with: julia --project=. test/4_assembly/graph_query_test.jl
 
 import Test
 import Mycelia

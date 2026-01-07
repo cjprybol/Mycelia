@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
-# julia --project=. -e 'include("test/8_tool_integration/xam.jl")'
+# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/xam.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -15,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import XAM

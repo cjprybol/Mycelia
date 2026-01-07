@@ -1,15 +1,23 @@
-# Classification Tools Integration Tests
-#
 # From the Mycelia base directory, run the tests with:
 #
 # ```bash
-# julia --project=. -e 'include("test/8_tool_integration/classification_tools.jl")'
-# ```
-#
-# To run with external tool execution (requires conda/network):
-# ```bash
 # MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/classification_tools.jl")'
 # ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/8_tool_integration/classification_tools.jl", "test/8_tool_integration", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
+# Classification Tools Integration Tests
+# To run with external tool execution (requires conda/network):
 
 import Test
 import Mycelia

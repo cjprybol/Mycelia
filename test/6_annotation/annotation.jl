@@ -1,10 +1,10 @@
-# Annotation & feature extraction tests
-# 
+# From the Mycelia base directory, run the tests with:
+#
 # ```bash
-# julia --project=. --color=yes -e 'include("test/6_annotation/annotation.jl")'
+# julia --project=. -e 'include("test/6_annotation/annotation.jl")'
 # ```
 #
-# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# And to turn this file into a jupyter notebook, run:
 # ```bash
 # julia --project=. -e 'import Literate; Literate.notebook("test/6_annotation/annotation.jl", "test/6_annotation", execute=false)'
 # ```
@@ -15,6 +15,9 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
+# Annotation & feature extraction tests
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

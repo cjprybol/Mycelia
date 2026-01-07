@@ -1,9 +1,22 @@
-# Comprehensive tests for graph simplification algorithms
-#
 # From the Mycelia base directory, run the tests with:
+#
 # ```bash
 # julia --project=. -e 'include("test/4_assembly/simplification_test.jl")'
 # ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/simplification_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate("../..")
+## end
+## using Revise
+
+# Comprehensive tests for graph simplification algorithms
 
 import Test
 import Mycelia

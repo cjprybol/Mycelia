@@ -1,13 +1,13 @@
-## From the Mycelia base directory, run the tests with:
-## 
-## ```bash
-## julia --project=. -e 'include("test/4_assembly/basic_graph_tests.jl")'
-## ```
-##
-## And to turn this file into a jupyter notebook, run:
-## ```bash
-## julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/basic_graph_tests.jl", "test/4_assembly", execute=false)'
-## ```
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/basic_graph_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/basic_graph_tests.jl", "test/4_assembly", execute=false)'
+# ```
 
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
@@ -15,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import FASTX

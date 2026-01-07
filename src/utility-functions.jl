@@ -1924,12 +1924,17 @@ Extract contents of a gzipped tar archive file to a specified directory.
 # Arguments
 - `tarchive::AbstractString`: Path to the .tar.gz file to extract
 - `directory::AbstractString=dirname(tarchive)`: Target directory for extraction (defaults to the archive's directory)
+- `verbose::Bool=false`: Whether to print the full file listing during extraction
 
 # Returns
 - `AbstractString`: Path to the directory where contents were extracted
 """
-function tar_extract(;tarchive, directory=dirname(tarchive))
-    run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+function tar_extract(;tarchive, directory=dirname(tarchive), verbose::Bool=false)
+    if verbose
+        run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+    else
+        run(`tar --extract --gzip --file=$(tarchive) --directory=$(directory)`)
+    end
     return directory
 end
 

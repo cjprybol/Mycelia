@@ -1,9 +1,10 @@
-# 
+# From the Mycelia base directory, run the tests with:
+#
 # ```bash
-# julia --project=. --color=yes -e 'include("test/4_assembly/string-graph-helpers.jl")'
+# julia --project=. -e 'include("test/4_assembly/string-graph-helpers.jl")'
 # ```
 #
-# And to turn this file into a jupyter notebook, run from the Mycelia base directory:
+# And to turn this file into a jupyter notebook, run:
 # ```bash
 # julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/string-graph-helpers.jl", "test/4_assembly", execute=false)'
 # ```
@@ -14,6 +15,7 @@
 ##     Pkg.activate("../..")
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import Graphs
