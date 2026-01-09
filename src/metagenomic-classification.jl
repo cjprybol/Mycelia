@@ -664,7 +664,7 @@ function run_metabuli_classify(reads1::AbstractString;
         end
     end
 
-    append!(cmd_args, ["--threads", string(threads), "--max-ram", string(max_ram_gb) * "G"])
+    append!(cmd_args, ["--threads", string(threads), "--max-ram", string(max_ram_gb)])
     append!(cmd_args, additional_args)
 
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli $cmd_args`
@@ -744,6 +744,51 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     if db_dir === nothing || isempty(db_dir)
         db_dir = Mycelia.get_metaphlan_db_path(db_index=db_index_val)
     end
+    if long_reads && db_dir !== nothing && !isempty(db_dir)
+        function resolve_db_index_name(db_dir::String, db_index_val::Union{Nothing,String}, index_explicit::Bool)
+            if index_explicit && db_index_val !== nothing && !isempty(db_index_val)
+                return db_index_val
+            end
+            latest_path = joinpath(db_dir, "mpa_latest")
+            if isfile(latest_path)
+                latest = strip(read(latest_path, String))
+                if !isempty(latest)
+                    return latest
+                end
+            end
+            pkl = first(filter(name -> endswith(name, ".pkl"), readdir(db_dir)), nothing)
+            return pkl === nothing ? nothing : replace(pkl, ".pkl" => "")
+        end
+
+        if isdir(db_dir)
+            index_name = resolve_db_index_name(db_dir, db_index_val, index_explicit)
+            if index_name !== nothing
+                fna_path = joinpath(db_dir, "$(index_name).fna")
+                if !isfile(fna_path)
+                    candidate = joinpath(db_dir, "$(index_name)_SGB.fna")
+                    if !isfile(candidate)
+                        candidate = joinpath(db_dir, "$(index_name)_VSG.fna")
+                    end
+                    if isfile(candidate)
+                        temp_db = mktempdir()
+                        for entry in readdir(db_dir; join=true)
+                            if startswith(basename(entry), index_name)
+                                symlink(entry, joinpath(temp_db, basename(entry)))
+                            end
+                        end
+                        symlink(candidate, joinpath(temp_db, "$(index_name).fna"))
+                        db_dir = temp_db
+                        db_index_val = index_name
+                        index_explicit = true
+                    else
+                        @warn "MetaPhlAn long-read database not found in $(db_dir); using MetaPhlAn default database location."
+                        db_dir = nothing
+                        index_explicit = false
+                    end
+                end
+            end
+        end
+    end
 
     mkpath(outdir)
     base = joinpath(outdir, sample_name)
@@ -756,16 +801,17 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     end
 
     if !force && all(isfile.(expected)) && all(filesize.(expected) .> 0)
-        table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment='#')
+        table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment="#")
         return MetaPhlAnResult(profile_tsv, mapout_path, table)
     end
 
     Mycelia.add_bioconda_env("metaphlan")
 
     cmd_args = String[]
-    push!(cmd_args, normalize_reads(reads1))
-    if !isnothing(reads2)
-        push!(cmd_args, normalize_reads(reads2))
+    if isnothing(reads2)
+        push!(cmd_args, normalize_reads(reads1))
+    else
+        append!(cmd_args, ["-1", normalize_reads(reads1), "-2", normalize_reads(reads2)])
     end
 
     push!(cmd_args, "--input_type", String(input_type))
@@ -780,15 +826,18 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     push!(cmd_args, "-o", profile_tsv)
 
     if mapout_path !== nothing
-        if long_reads
-            append!(cmd_args, ["--mapout", mapout_path])
-        else
-            append!(cmd_args, ["--bowtie2out", mapout_path])
-        end
+        append!(cmd_args, ["--mapout", mapout_path])
     end
 
     if long_reads
         push!(cmd_args, "--long_reads")
+    end
+
+    if !isnothing(reads2)
+        has_subsampling_paired = any(arg -> startswith(arg, "--subsampling_paired"), additional_args)
+        if !has_subsampling_paired
+            append!(cmd_args, ["--subsampling_paired", "10000"])
+        end
     end
 
     append!(cmd_args, ["--nproc", string(threads)])
@@ -797,7 +846,7 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan metaphlan $cmd_args`
     run(cmd)
 
-    table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment='#')
+    table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment="#")
     return MetaPhlAnResult(profile_tsv, mapout_path, table)
 end
 

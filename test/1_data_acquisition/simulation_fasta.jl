@@ -12,7 +12,7 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
 

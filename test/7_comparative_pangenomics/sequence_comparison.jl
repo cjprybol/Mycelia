@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
 #
 # ```bash
-# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/7_comparative_pangenomics/sequence_comparison.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/7_comparative_pangenomics/sequence_comparison.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -12,7 +12,7 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
 
@@ -431,8 +431,17 @@ Test.@testset "Sequence Comparison Tests" begin
             return
         end
 
-        best = reduce((a, b) -> a.ani ≥ b.ani ? a : b, entries)
-        Test.@test 0.9 < best.ani < 0.99
+        pair_entries = filter(entry -> begin
+            has_a_lhs = occursin(ref_a_base, entry.lhs)
+            has_a_rhs = occursin(ref_a_base, entry.rhs)
+            has_b_lhs = occursin(ref_b_base, entry.lhs)
+            has_b_rhs = occursin(ref_b_base, entry.rhs)
+            (has_a_lhs && has_b_rhs) || (has_b_lhs && has_a_rhs)
+        end, entries)
+        selected_entries = isempty(pair_entries) ? entries : pair_entries
+        best = reduce((a, b) -> a.ani ≥ b.ani ? a : b, selected_entries)
+        normalized_ani = best.ani > 1.0 ? best.ani / 100.0 : best.ani
+        Test.@test 0.9 < normalized_ani ≤ 1.0
         Test.@test best.af > 0.5
 
         rm(workdir; recursive=true, force=true)

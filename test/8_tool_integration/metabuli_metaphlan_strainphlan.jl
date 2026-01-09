@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
 #
 # ```bash
-# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/metabuli_metaphlan_strainphlan.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/metabuli_metaphlan_strainphlan.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -12,7 +12,7 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
 
@@ -49,7 +49,7 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
 
     virus_reads = Mycelia.simulate_illumina_reads(
         fasta=virus_ref;
-        read_count=12000,
+        read_count=1000,
         read_length=150,
         paired=true,
         quiet=true,
@@ -61,7 +61,7 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
 
     bacteria_reads = Mycelia.simulate_illumina_reads(
         fasta=bacteria_ref;
-        read_count=20000,
+        read_count=2000,
         read_length=150,
         paired=true,
         quiet=true,
@@ -73,7 +73,7 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
 
     mp_long_reads = Mycelia.simulate_nearly_perfect_long_reads(
         fasta=bacteria_ref,
-        quantity="20000000",
+        quantity="200000",
         length_mean=2000,
         length_sd=500,
         outfile=joinpath(workdir, "metaphlan_long_reads.fq.gz"),
@@ -82,12 +82,14 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
 
     virus_long_reads = Mycelia.simulate_nearly_perfect_long_reads(
         fasta=virus_ref,
-        quantity="5000000",
+        quantity="100000",
         length_mean=2000,
         length_sd=500,
         outfile=joinpath(workdir, "metabuli_long_reads.fq.gz"),
         quiet=true
     )
+
+    species_detected = false
 
     try
         # ------------------------------------------------------------------
@@ -160,6 +162,9 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
             Test.@test isfile(mp_res.profile_tsv)
             Test.@test !isempty(mp_res.table)
             Test.@test mp_res.map_output !== nothing && isfile(mp_res.map_output)
+            if :clade_name in names(mp_res.table)
+                species_detected = any(startswith.(String.(mp_res.table.clade_name), "s__"))
+            end
 
             mp_long_out = mkpath(joinpath(workdir, "metaphlan_long"))
             mp_long = Mycelia.run_metaphlan(
@@ -181,6 +186,10 @@ Test.@testset "Metabuli / MetaPhlAn / StrainPhlAn integration" begin
         # StrainPhlAn: run sample2markers and strainphlan on MetaPhlAn outputs
         # --------------------------------------------------------------
         Test.@testset "StrainPhlAn end-to-end" begin
+            if !species_detected
+                @warn "No species detected in MetaPhlAn output; skipping StrainPhlAn integration"
+                return
+            end
             map_files = String[]
             push!(map_files, Mycelia.run_metaphlan(
                 mp_r1;

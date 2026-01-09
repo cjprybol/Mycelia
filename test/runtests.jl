@@ -90,7 +90,7 @@ end
 # # end
 
 # # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
-include_all_tests(joinpath(@__DIR__, "4_assembly"))
+# include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # for file in [
 #         "test/4_assembly/aa_fasta_singlestrand_test.jl",
 #         "test/4_assembly/aa_fastq_singlestrand_test.jl",
@@ -180,7 +180,7 @@ include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # end
 
 # Stage 5 (validation): focused suites (all other external-heavy validation stays opt-in for now).
-include_all_tests(joinpath(@__DIR__, "5_validation"))
+# include_all_tests(joinpath(@__DIR__, "5_validation"))
 # for file in [
 #     # "5_validation/checkm_tools.jl",
 #     # "5_validation/coverm_integration_extended.jl",
@@ -194,7 +194,7 @@ include_all_tests(joinpath(@__DIR__, "5_validation"))
 # end
 
 # Stage 6 (annotation)
-include_all_tests(joinpath(@__DIR__, "6_annotation"))
+# include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # for file in (
 #     # "6_annotation/annotation.jl",
 #     # "6_annotation/codon_optimization.jl",

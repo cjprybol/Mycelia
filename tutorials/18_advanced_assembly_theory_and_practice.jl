@@ -1,4 +1,4 @@
-# # Advanced Assembly Theory and Practice in Mycelia
+# # Tutorial 18: Advanced Assembly Theory and Practice
 #
 # This tutorial demonstrates the theoretical foundations and practical implementation
 # of Mycelia's advanced assembly algorithms, based on research from Mycelia-Dev.
@@ -11,7 +11,20 @@
 # - Use statistical graph cleanup methods
 # - Apply metagenomic classification with MAPQ-aware techniques
 
-using Mycelia
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/18_advanced_assembly_theory_and_practice.jl", "tutorials/notebooks", execute=false)'
+# ```
+
+# ## Setup
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+
+import Mycelia
+import Primes
 
 # ## 1. Mathematical Foundations of K-mer Selection
 #

@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
 #
 # ```bash
-# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/foldseek.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/foldseek.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -12,12 +12,13 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
 
 import Test
 import Mycelia
+import Printf
 
 Test.@testset "Foldseek Tool Integration" begin
     Test.@testset "Function Availability" begin
@@ -43,15 +44,36 @@ Test.@testset "Foldseek Tool Integration" begin
                     mkpath(query_dir)
                     mkpath(target_dir)
 
-                    pdb_content = join([
-                        "HEADER    TEST STRUCTURE",
-                        "ATOM      1  N   MET A   1      11.104  13.207   8.276  1.00 20.00           N",
-                        "ATOM      2  CA  MET A   1      12.560  13.105   8.556  1.00 20.00           C",
-                        "ATOM      3  C   MET A   1      13.047  11.651   8.835  1.00 20.00           C",
-                        "ATOM      4  O   MET A   1      12.396  10.679   8.505  1.00 20.00           O",
-                        "TER",
-                        "END",
-                    ], "\n")
+                    lines = ["HEADER    TEST STRUCTURE"]
+                    atom_id = 1
+                    for residue_id in 1:20
+                        x = 10.0 + residue_id
+                        y = 10.0
+                        z = 10.0
+                        push!(lines, Printf.@sprintf(
+                            "ATOM  %5d  N   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           N",
+                            atom_id, residue_id, x, y, z,
+                        ))
+                        atom_id += 1
+                        push!(lines, Printf.@sprintf(
+                            "ATOM  %5d  CA  GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           C",
+                            atom_id, residue_id, x + 0.6, y + 0.2, z + 0.1,
+                        ))
+                        atom_id += 1
+                        push!(lines, Printf.@sprintf(
+                            "ATOM  %5d  C   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           C",
+                            atom_id, residue_id, x + 1.2, y + 0.4, z + 0.2,
+                        ))
+                        atom_id += 1
+                        push!(lines, Printf.@sprintf(
+                            "ATOM  %5d  O   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           O",
+                            atom_id, residue_id, x + 1.8, y + 0.6, z + 0.3,
+                        ))
+                        atom_id += 1
+                    end
+                    push!(lines, "TER")
+                    push!(lines, "END")
+                    pdb_content = join(lines, "\n")
 
                     query_pdb = joinpath(query_dir, "query.pdb")
                     target_pdb = joinpath(target_dir, "target.pdb")

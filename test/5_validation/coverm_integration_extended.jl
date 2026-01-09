@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
 #
 # ```bash
-# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/5_validation/coverm_integration_extended.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/5_validation/coverm_integration_extended.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -12,7 +12,7 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
 

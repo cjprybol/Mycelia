@@ -14,6 +14,12 @@
 # - Best practices for different organism types
 
 # ## Setup
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/06_gene_annotation.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

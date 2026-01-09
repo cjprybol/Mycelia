@@ -4,6 +4,12 @@
 # download a viroid reference database, build taxonomy, simulate reads, and
 # screen with sketch tools. Heavy steps are gated behind `MYCELIA_RUN_EXTERNAL=true`.
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/15_round_trip_benchmarking.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

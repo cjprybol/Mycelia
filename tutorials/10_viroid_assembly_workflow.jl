@@ -22,6 +22,12 @@
 # Mycelia's Qualmer approach maintains and improves quality through consensus calculation,
 # resulting in more accurate and informative assemblies.
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/10_viroid_assembly_workflow.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 using Pkg
 Pkg.activate(".")
 

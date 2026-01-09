@@ -13,6 +13,12 @@
 # 4. Compare reconstruction quality across graph representations
 # 5. Analyze the trade-offs between graph complexity and assembly accuracy
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/09_round_trip_02_ngram_to_string.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Mycelia
 import Statistics
 import Random

@@ -15,6 +15,12 @@
 # 5. Compare assembly accuracy and computational efficiency across representations
 # 6. Apply k-mer workflows to realistic genomic assembly challenges
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/09_round_trip_04_kmer_to_sequence.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Mycelia
 import FASTX
 import BioSequences

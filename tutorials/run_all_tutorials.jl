@@ -2,6 +2,7 @@
 #
 # This script executes all Mycelia tutorials in sequence.
 # Use with caution - may take significant time and resources.
+# External tool steps are gated by `MYCELIA_RUN_EXTERNAL=true`.
 #
 # ## Usage
 #
@@ -30,12 +31,27 @@ TUTORIALS = [
     "02_quality_control.jl",
     "03_kmer_analysis.jl",
     "04_genome_assembly.jl",
+    "04_graph_type_tutorials.jl",
     "05_assembly_validation.jl",
     "06_gene_annotation.jl",
     "07_comparative_genomics.jl",
     "08_tool_integration.jl",
+    "09_round_trip_01_string_graphs.jl",
+    "09_round_trip_02_ngram_to_string.jl",
+    "09_round_trip_03_fasta_sequences.jl",
+    "09_round_trip_04_kmer_to_sequence.jl",
+    "09_round_trip_05_fastq_graphs.jl",
+    "09_round_trip_06_qualmer_graphs.jl",
+    "10_viroid_assembly_workflow.jl",
+    "11_reduced_amino_acid_alphabets.jl",
     "12_coverm_coverage.jl",
+    "13_rhizomorph_assembly.jl",
     "14_binning_workflow.jl",
+    "14_mash_classification.jl",
+    "15_round_trip_benchmarking.jl",
+    "16_un_corpus_ngram_vs_token_graphs.jl",
+    "17_viroid_sketch_round_trip.jl",
+    "18_advanced_assembly_theory_and_practice.jl",
 ]
 
 """
