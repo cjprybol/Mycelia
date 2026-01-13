@@ -223,7 +223,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                         Mycelia.write_fastq(records=synthetic_records, filename=synthetic_fastq)
 
                         # Test with single-end reads (forward + synthetic)
-                        combined_fastq = joinpath(workdir, "combined_reads.fq.gz")
+                        combined_fastq = joinpath(workdir, "combined_reads.fq")
                         Mycelia.concatenate_fastx([forward_reads, synthetic_fastq], output_path=combined_fastq)
 
                         result = Mycelia.run_metaphlan(
@@ -369,7 +369,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                             database_path=db_path,
                             outdir=joinpath(workdir, "metabuli_output"),
                             seq_mode="1",
-                            threads=2
+                            threads=1
                         )
 
                         Test.@test isdir(result.outdir)

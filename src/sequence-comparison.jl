@@ -924,6 +924,189 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Fragment a genome FASTA into consecutive fixed-size chunks.
+
+# Arguments
+- `fasta_path::String`: Path to input FASTA file.
+- `fragment_size::Int`: Fragment length in bases (default: 1020).
+- `out_path::String`: Output FASTA path for fragments.
+
+# Returns
+- `String`: Path to the fragment FASTA file.
+"""
+function fragment_genome(fasta_path::String, fragment_size::Int=1020; out_path::String)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    @assert fragment_size > 0 "fragment_size must be positive: $(fragment_size)"
+    @assert !isempty(out_path) "out_path must be a non-empty string"
+    mkpath(dirname(out_path))
+
+    open(FASTX.FASTA.Writer, out_path) do writer
+        open(fasta_path) do in_io
+            reader = FASTX.FASTA.Reader(in_io)
+            for record in reader
+                seq = FASTX.sequence(record)
+                seq_id = FASTX.identifier(record)
+                seq_len = length(seq)
+                num_fragments = cld(seq_len, fragment_size)
+
+                for i in 1:num_fragments
+                    start_pos = (i - 1) * fragment_size + 1
+                    end_pos = min(i * fragment_size, seq_len)
+                    frag_seq = seq[start_pos:end_pos]
+                    frag_id = "$(seq_id)_frag_$(i)"
+                    frag_rec = FASTX.FASTA.Record(frag_id, frag_seq)
+                    write(writer, frag_rec)
+                end
+            end
+        end
+    end
+
+    return out_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Average Nucleotide Identity (ANI) using the standard fragmentation + BLASTN method.
+
+# Arguments
+- `query::String`: Path to query genome FASTA.
+- `reference::String`: Path to reference genome FASTA (used to build BLAST db).
+- `outdir::String`: Output directory (default: temporary directory).
+- `threads::Int`: Number of BLAST threads.
+- `fragment_size::Int`: Query fragment length (default: 1020).
+- `min_coverage_pct::Float64`: Minimum alignment coverage of the query fragment.
+- `min_identity_pct::Float64`: Minimum percent identity threshold.
+- `task::String`: BLASTN task (default: "blastn").
+- `evalue::Float64`: BLAST E-value threshold.
+- `force::Bool`: Force recomputation of fragments and BLAST results.
+
+# Returns
+- `Float64`: The ANI value (0.0 - 100.0).
+- `DataFrame`: The filtered BLAST results used for the calculation.
+"""
+function calculate_gold_standard_ani(;
+    query::String,
+    reference::String,
+    outdir::String = mktempdir(),
+    threads::Int = get_default_threads(),
+    fragment_size::Int = 1020,
+    min_coverage_pct::Float64 = 70.0,
+    min_identity_pct::Float64 = 30.0,
+    task::String = "blastn",
+    evalue::Float64 = 0.001,
+    force::Bool = false
+)
+    @assert isfile(query) "Query file does not exist: $(query)"
+    @assert isfile(reference) "Reference file does not exist: $(reference)"
+    mkpath(outdir)
+
+    fragmented_query = joinpath(outdir, "query_fragments.fasta")
+    if force || !isfile(fragmented_query) || filesize(fragmented_query) == 0
+        fragment_genome(query, fragment_size; out_path=fragmented_query)
+    end
+
+    db_prefix = Mycelia.ensure_blast_db(fasta=reference, dbtype="nucl")
+    blast_report_path = Mycelia.run_blastn(
+        outdir=outdir,
+        fasta=fragmented_query,
+        blastdb=db_prefix,
+        threads=threads,
+        task=task,
+        force=force,
+        max_target_seqs=1,
+        evalue=evalue
+    )
+
+    df = Mycelia.parse_blast_report(blast_report_path)
+    if DataFrames.nrow(df) == 0
+        @warn "No BLAST hits found."
+        return 0.0, df
+    end
+
+    df[!, :query_coverage] = (df[!, Symbol("alignment length")] ./ df[!, Symbol("query length")]) .* 100
+    filtered_df = DataFrames.filter(row ->
+        row[:query_coverage] >= min_coverage_pct &&
+        row[Symbol("% identity")] >= min_identity_pct,
+        df
+    )
+
+    if DataFrames.nrow(filtered_df) == 0
+        return 0.0, filtered_df
+    end
+
+    ani = Statistics.mean(filtered_df[!, Symbol("% identity")])
+    return ani, filtered_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Average Amino Acid Identity (AAI) using BLASTP best-hit filtering.
+
+# Arguments
+- `query_proteins::String`: Path to query protein FASTA.
+- `reference_proteins::String`: Path to reference protein FASTA.
+- `outdir::String`: Output directory (default: temporary directory).
+- `threads::Int`: Number of BLAST threads.
+- `min_coverage_pct::Float64`: Minimum alignment coverage of the query protein.
+- `min_identity_pct::Float64`: Minimum percent identity threshold.
+- `evalue::Float64`: BLAST E-value threshold.
+- `max_target_seqs::Int`: Maximum target sequences per query (default: 1).
+- `force::Bool`: Force recomputation of BLAST results.
+
+# Returns
+- `Float64`: The AAI value (0.0 - 100.0).
+- `DataFrame`: The filtered BLAST results used for the calculation.
+"""
+function calculate_gold_standard_aai(;
+    query_proteins::String,
+    reference_proteins::String,
+    outdir::String = mktempdir(),
+    threads::Int = get_default_threads(),
+    min_coverage_pct::Float64 = 70.0,
+    min_identity_pct::Float64 = 30.0,
+    evalue::Float64 = 1e-3,
+    max_target_seqs::Int = 1,
+    force::Bool = false
+)
+    @assert isfile(query_proteins) "Query protein file does not exist: $(query_proteins)"
+    @assert isfile(reference_proteins) "Reference protein file does not exist: $(reference_proteins)"
+    mkpath(outdir)
+
+    blast_report_path = Mycelia.run_blastp_search(
+        query_fasta=query_proteins,
+        reference_fasta=reference_proteins,
+        output_dir=outdir,
+        threads=threads,
+        evalue=evalue,
+        max_target_seqs=max_target_seqs
+    )
+
+    df = Mycelia.parse_blast_report(blast_report_path)
+    if DataFrames.nrow(df) == 0
+        @warn "No BLASTP hits found."
+        return 0.0, df
+    end
+
+    df[!, :query_coverage] = (df[!, Symbol("alignment length")] ./ df[!, Symbol("query length")]) .* 100
+    filtered_df = DataFrames.filter(row ->
+        row[:query_coverage] >= min_coverage_pct &&
+        row[Symbol("% identity")] >= min_identity_pct,
+        df
+    )
+
+    if DataFrames.nrow(filtered_df) == 0
+        return 0.0, filtered_df
+    end
+
+    aai = Statistics.mean(filtered_df[!, Symbol("% identity")])
+    return aai, filtered_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Run fastani with a query and reference list
 
 Calculate Average Nucleotide Identity (ANI) between genome sequences using FastANI.
