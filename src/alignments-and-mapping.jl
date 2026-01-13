@@ -105,6 +105,60 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Run DIAMOND BLASTP and keep only the best hit per query.
+"""
+function run_diamond_besthits(;
+    query_fasta::String,
+    reference_fasta::String,
+    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_besthits",
+    threads::Int = get_default_threads(),
+    evalue::Float64 = 1e-10,
+    block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8),
+    sensitivity::String = "--sensitive",
+    max_target_seqs::Int = 1,
+    force::Bool = false
+)
+    @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
+    @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
+    @assert threads > 0 "Thread count must be positive: $(threads)"
+    @assert evalue > 0 "E-value must be positive: $(evalue)"
+    @assert block_size > 0 "Block size must be positive: $(block_size)"
+    @assert max_target_seqs > 0 "max_target_seqs must be positive: $(max_target_seqs)"
+
+    mkpath(output_dir)
+    diamond_db = joinpath(output_dir, "diamond_db.dmnd")
+    results_file = joinpath(
+        output_dir,
+        replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" *
+        replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_besthits.tsv"
+    )
+
+    if !force && isfile(results_file) && filesize(results_file) > 0
+        return results_file
+    end
+
+    Mycelia.add_bioconda_env("diamond")
+
+    try
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond makedb --in $(reference_fasta) --db $(diamond_db)`)
+        @assert isfile(diamond_db) "DIAMOND database creation failed: $(diamond_db)"
+
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp --query $(query_fasta) --db $(diamond_db) --out $(results_file) --evalue $(evalue) --threads $(threads) --block-size $(block_size) $(sensitivity) --max-target-seqs $(max_target_seqs) --outfmt 6 qseqid sseqid pident length qlen slen evalue bitscore`)
+
+        @assert isfile(results_file) "DIAMOND results file was not created: $(results_file)"
+        @assert filesize(results_file) > 0 "DIAMOND results file is empty"
+        return results_file
+    catch e
+        @error "DIAMOND best-hit execution failed" exception=e
+        rethrow(e)
+    finally
+        rm(diamond_db, force=true)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Perform BLASTP search between query and reference protein FASTA files.
 
 # Arguments

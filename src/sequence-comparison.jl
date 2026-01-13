@@ -921,6 +921,282 @@ function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
+const DNA_COMPLEMENT_TABLE = let table = Vector{UInt8}(undef, 256)
+    for i in 0:255
+        table[i + 1] = UInt8(i)
+    end
+    complements = Dict(
+        'A' => 'T',
+        'T' => 'A',
+        'C' => 'G',
+        'G' => 'C',
+        'U' => 'A',
+        'R' => 'Y',
+        'Y' => 'R',
+        'S' => 'S',
+        'W' => 'W',
+        'K' => 'M',
+        'M' => 'K',
+        'B' => 'V',
+        'D' => 'H',
+        'H' => 'D',
+        'V' => 'B',
+        'N' => 'N'
+    )
+    for (base, comp) in complements
+        table[Int(UInt8(base)) + 1] = UInt8(comp)
+    end
+    table
+end
+
+function genome_pair_id(reference::AbstractString, query::AbstractString)
+    ref_abs = abspath(reference)
+    query_abs = abspath(query)
+    ref_stat = stat(ref_abs)
+    query_stat = stat(query_abs)
+    payload = join([
+        ref_abs,
+        string(ref_stat.size),
+        string(ref_stat.mtime),
+        query_abs,
+        string(query_stat.size),
+        string(query_stat.mtime)
+    ], "|")
+    return SHA.bytes2hex(SHA.sha256(payload))
+end
+
+function count_fasta_records(fasta_path::AbstractString)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    count = 0
+    open(fasta_path) do io
+        reader = FASTX.FASTA.Reader(io)
+        for _ in reader
+            count += 1
+        end
+    end
+    return count
+end
+
+function reverse_complement_ascii(seq::AbstractString)
+    bytes = Vector{UInt8}(codeunits(seq))
+    n = length(bytes)
+    out = Vector{UInt8}(undef, n)
+    for i in 1:n
+        out[i] = DNA_COMPLEMENT_TABLE[bytes[n - i + 1] + 1]
+    end
+    return String(out)
+end
+
+function booth_min_rotation_index(seq_bytes::Vector{UInt8})
+    n = length(seq_bytes)
+    if n == 0
+        return 1
+    end
+    doubled = Vector{UInt8}(undef, 2 * n)
+    copyto!(doubled, 1, seq_bytes, 1, n)
+    copyto!(doubled, n + 1, seq_bytes, 1, n)
+
+    i = 1
+    j = 2
+    k = 0
+    while i <= n && j <= n && k < n
+        a = doubled[i + k]
+        b = doubled[j + k]
+        if a == b
+            k += 1
+        elseif a < b
+            j = j + k + 1
+            if j == i
+                j += 1
+            end
+            k = 0
+        else
+            i = i + k + 1
+            if i == j
+                i += 1
+            end
+            k = 0
+        end
+    end
+    return min(i, j)
+end
+
+function rotate_bytes(seq_bytes::Vector{UInt8}, start_index::Int)
+    n = length(seq_bytes)
+    if n == 0
+        return ""
+    end
+    start_index = ((start_index - 1) % n) + 1
+    if start_index == 1
+        return String(seq_bytes)
+    end
+    rotated = Vector{UInt8}(undef, n)
+    tail_len = n - start_index + 1
+    copyto!(rotated, 1, seq_bytes, start_index, tail_len)
+    copyto!(rotated, tail_len + 1, seq_bytes, 1, start_index - 1)
+    return String(rotated)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return a canonical linear representation of a circular sequence.
+
+Selects the lexicographically minimal rotation across the forward strand and its
+reverse complement, returning the canonical sequence and the chosen orientation.
+"""
+function canonical_circular_sequence(seq::AbstractString)
+    seq_upper = uppercase(seq)
+    forward_bytes = Vector{UInt8}(codeunits(seq_upper))
+    forward_start = booth_min_rotation_index(forward_bytes)
+    forward_rot = rotate_bytes(forward_bytes, forward_start)
+
+    reverse_seq = reverse_complement_ascii(seq_upper)
+    reverse_bytes = Vector{UInt8}(codeunits(reverse_seq))
+    reverse_start = booth_min_rotation_index(reverse_bytes)
+    reverse_rot = rotate_bytes(reverse_bytes, reverse_start)
+
+    if reverse_rot < forward_rot
+        return reverse_rot, :reverse, reverse_start
+    end
+    return forward_rot, :forward, forward_start
+end
+
+function header_says_circular(header::AbstractString)
+    return occursin("circular", lowercase(header))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a FASTA file by uppercasing sequences and optionally sorting records.
+"""
+function normalize_fasta(fasta_path::AbstractString; out_path::AbstractString, sort_records::Bool=false, force::Bool=false)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    @assert !isempty(out_path) "out_path must be a non-empty string"
+    mkpath(dirname(out_path))
+
+    if !force && isfile(out_path) && filesize(out_path) > 0
+        return out_path
+    end
+
+    records = FASTX.FASTA.Record[]
+    open(fasta_path) do io
+        reader = FASTX.FASTA.Reader(io)
+        for record in reader
+            push!(records, record)
+        end
+    end
+
+    if sort_records
+        sort!(records, by=FASTX.identifier)
+    end
+
+    open(FASTX.FASTA.Writer, out_path) do writer
+        for record in records
+            identifier = String(FASTX.identifier(record))
+            description = FASTX.description(record)
+            seq = String(FASTX.sequence(record))
+            seq = uppercase(seq)
+            fasta_record = isnothing(description) || isempty(description) ?
+                           FASTX.FASTA.Record(identifier, seq) :
+                           FASTX.FASTA.Record(identifier, description, seq)
+            write(writer, fasta_record)
+        end
+    end
+
+    return out_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Canonicalize a single-contig circular FASTA by rotating to a canonical start and strand.
+"""
+function canonicalize_circular_fasta(fasta_path::AbstractString; out_path::AbstractString, force::Bool=false)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    @assert !isempty(out_path) "out_path must be a non-empty string"
+    mkpath(dirname(out_path))
+
+    if !force && isfile(out_path) && filesize(out_path) > 0
+        return out_path
+    end
+
+    record = nothing
+    record_count = 0
+    open(fasta_path) do io
+        reader = FASTX.FASTA.Reader(io)
+        for rec in reader
+            record_count += 1
+            if record_count == 1
+                record = rec
+            else
+                break
+            end
+        end
+    end
+
+    @assert record_count == 1 "Circular canonicalization expects a single-contig FASTA: $(fasta_path)"
+    identifier = String(FASTX.identifier(record))
+    description = FASTX.description(record)
+    seq = String(FASTX.sequence(record))
+    canonical_seq, _, _ = canonical_circular_sequence(seq)
+    fasta_record = isnothing(description) || isempty(description) ?
+                   FASTX.FASTA.Record(identifier, canonical_seq) :
+                   FASTX.FASTA.Record(identifier, description, canonical_seq)
+
+    open(FASTX.FASTA.Writer, out_path) do writer
+        write(writer, fasta_record)
+    end
+
+    return out_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Prepare a genome FASTA for alignment-based comparison with optional circular normalization.
+"""
+function prepare_genome_for_comparison(fasta_path::AbstractString;
+        outdir::AbstractString,
+        circular::Union{Bool,Symbol}=:auto,
+        sort_records::Bool=false,
+        force::Bool=false)
+    @assert circular in (true, false, :auto) "circular must be true, false, or :auto"
+    mkpath(outdir)
+    normalized = joinpath(outdir, "normalized.fna")
+    normalize_fasta(fasta_path; out_path=normalized, sort_records=sort_records, force=force)
+
+    if circular == false
+        return normalized
+    end
+
+    record_count = 0
+    header = ""
+    open(normalized) do io
+        reader = FASTX.FASTA.Reader(io)
+        for record in reader
+            record_count += 1
+            if record_count == 1
+                description = FASTX.description(record)
+                header = isnothing(description) || isempty(description) ?
+                         String(FASTX.identifier(record)) :
+                         string(FASTX.identifier(record), " ", description)
+            else
+                break
+            end
+        end
+    end
+
+    should_canonicalize = circular == true || (circular == :auto && record_count == 1 && header_says_circular(header))
+    if !should_canonicalize
+        return normalized
+    end
+
+    canonical = joinpath(outdir, "canonical.fna")
+    return canonicalize_circular_fasta(normalized; out_path=canonical, force=force)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1104,6 +1380,433 @@ function calculate_gold_standard_aai(;
     return aai, filtered_df
 end
 
+function empty_hits_table()
+    return DataFrames.DataFrame(
+        query_id=String[],
+        subject_id=String[],
+        pident=Float64[],
+        alignment_length=Int[],
+        query_length=Int[],
+        subject_length=Int[],
+        evalue=Float64[],
+        bitscore=Float64[]
+    )
+end
+
+function standardize_blast_hits(blast_report::AbstractString)
+    df = Mycelia.parse_blast_report(blast_report)
+    if DataFrames.nrow(df) == 0
+        return empty_hits_table()
+    end
+    rename_map = Dict(
+        Symbol("query id") => :query_id,
+        Symbol("subject id") => :subject_id,
+        Symbol("alignment length") => :alignment_length,
+        Symbol("% identity") => :pident,
+        Symbol("query length") => :query_length,
+        Symbol("subject length") => :subject_length,
+        Symbol("evalue") => :evalue,
+        Symbol("bit score") => :bitscore
+    )
+    available = Dict{Symbol, Symbol}()
+    for (old_name, new_name) in rename_map
+        if old_name in names(df)
+            available[old_name] = new_name
+        end
+    end
+    DataFrames.rename!(df, available)
+    return df
+end
+
+function read_diamond_hits(results_file::AbstractString)
+    if !isfile(results_file) || filesize(results_file) == 0
+        return empty_hits_table()
+    end
+    header = ["query_id", "subject_id", "pident", "alignment_length",
+              "query_length", "subject_length", "evalue", "bitscore"]
+    return CSV.read(results_file, DataFrames.DataFrame; delim='\t', header=header, normalizenames=true)
+end
+
+function best_hits_by_query(df::DataFrames.DataFrame; query_col::Symbol=:query_id,
+        bitscore_col::Symbol=:bitscore, evalue_col::Symbol=:evalue)
+    if DataFrames.nrow(df) == 0
+        return df
+    end
+    sorted = DataFrames.sort(df, [query_col, bitscore_col, evalue_col], rev=[false, true, false])
+    grouped = DataFrames.groupby(sorted, query_col)
+    return DataFrames.combine(grouped) do subdf
+        subdf[1, :]
+    end
+end
+
+function filter_hits_by_threshold(df::DataFrames.DataFrame; min_id::Float64,
+        min_aln_frac::Float64, use_shorter::Bool=false, evalue_max::Union{Nothing,Float64}=nothing)
+    if DataFrames.nrow(df) == 0
+        return df
+    end
+    denom = use_shorter ? min.(df.query_length, df.subject_length) : df.query_length
+    coverage = df.alignment_length ./ denom
+    mask = coverage .>= min_aln_frac .& df.pident .>= min_id
+    if !isnothing(evalue_max)
+        mask .&= df.evalue .<= evalue_max
+    end
+    return df[mask, :]
+end
+
+function compute_directional_ani(hits_df::DataFrames.DataFrame, total_fragments::Int;
+        min_id::Float64, min_aln_frac::Float64)
+    if total_fragments == 0
+        return (;ani=missing, af=missing, hits=DataFrames.DataFrame())
+    end
+    best_hits = best_hits_by_query(hits_df)
+    filtered = filter_hits_by_threshold(best_hits; min_id=min_id, min_aln_frac=min_aln_frac, use_shorter=false)
+    if DataFrames.nrow(filtered) == 0
+        return (;ani=missing, af=0.0, hits=filtered)
+    end
+    ani = Statistics.mean(filtered.pident)
+    af = DataFrames.nrow(filtered) / total_fragments
+    return (;ani, af, hits=filtered)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute ANIm-style ANI using MUMmer `dnadiff`.
+"""
+function ani_mummer(reference::AbstractString, query::AbstractString;
+        outdir::AbstractString="ani_mummer",
+        prefix::String="dnadiff",
+        force::Bool=false,
+        dnadiff_args::Vector{String}=String[])
+    mkpath(outdir)
+    dnadiff_outputs = Mycelia.run_dnadiff(
+        reference=reference,
+        query=query,
+        outdir=outdir,
+        prefix=prefix,
+        force=force,
+        additional_args=dnadiff_args
+    )
+    parsed = Mycelia.parse_dnadiff_report(dnadiff_outputs.report)
+    sections = parsed.raw_sections
+    one_to_one = get(sections, Symbol("1_to_1"), Dict{Symbol, Any}())
+    many_to_many = get(sections, :m_to_m, Dict{Symbol, Any}())
+
+    function aligned_fraction(metrics::Dict{Symbol, Any}, which::Symbol)
+        pct_key = which == :ref ? :aligned_pct_ref : :aligned_pct_query
+        if haskey(metrics, pct_key)
+            return metrics[pct_key] / 100.0
+        end
+        aligned_key = which == :ref ? :aligned_bases_ref : :aligned_bases_query
+        total_key = which == :ref ? :total_bases_ref : :total_bases_query
+        if haskey(metrics, aligned_key) && haskey(metrics, total_key) && metrics[total_key] > 0
+            return metrics[aligned_key] / metrics[total_key]
+        end
+        return missing
+    end
+
+    return (;
+        method=:ANIm,
+        ani_1to1=get(one_to_one, :avg_identity, missing),
+        ani_m2m=get(many_to_many, :avg_identity, missing),
+        af_ref_1to1=aligned_fraction(one_to_one, :ref),
+        af_query_1to1=aligned_fraction(one_to_one, :query),
+        af_ref_m2m=aligned_fraction(many_to_many, :ref),
+        af_query_m2m=aligned_fraction(many_to_many, :query),
+        aligned_bases_ref=get(one_to_one, :aligned_bases_ref, missing),
+        aligned_bases_query=get(one_to_one, :aligned_bases_query, missing),
+        total_bases_ref=get(one_to_one, :total_bases_ref, missing),
+        total_bases_query=get(one_to_one, :total_bases_query, missing),
+        report_path=dnadiff_outputs.report,
+        parsed_report=parsed
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute ANIb-style ANI using BLASTn on fixed-length fragments in both directions.
+"""
+function ani_blast(reference::AbstractString, query::AbstractString;
+        outdir::AbstractString="ani_blast",
+        fragment_size::Int=1000,
+        min_id::Float64=70.0,
+        min_aln_frac::Float64=0.7,
+        threads::Int=get_default_threads(),
+        task::String="blastn",
+        evalue::Float64=0.001,
+        force::Bool=false)
+    @assert fragment_size > 0 "fragment_size must be positive"
+    mkpath(outdir)
+
+    ref_fragments = joinpath(outdir, "reference_fragments.fna")
+    query_fragments = joinpath(outdir, "query_fragments.fna")
+    if force || !isfile(ref_fragments) || filesize(ref_fragments) == 0
+        fragment_genome(reference, fragment_size; out_path=ref_fragments)
+    end
+    if force || !isfile(query_fragments) || filesize(query_fragments) == 0
+        fragment_genome(query, fragment_size; out_path=query_fragments)
+    end
+
+    ref_db = Mycelia.ensure_blast_db(fasta=reference, dbtype="nucl", db_prefix=joinpath(outdir, "reference_db"), force=force)
+    query_db = Mycelia.ensure_blast_db(fasta=query, dbtype="nucl", db_prefix=joinpath(outdir, "query_db"), force=force)
+
+    query_vs_ref = Mycelia.run_blastn(
+        outdir=outdir,
+        fasta=query_fragments,
+        blastdb=ref_db,
+        threads=threads,
+        task=task,
+        force=force,
+        max_target_seqs=1,
+        evalue=evalue
+    )
+    ref_vs_query = Mycelia.run_blastn(
+        outdir=outdir,
+        fasta=ref_fragments,
+        blastdb=query_db,
+        threads=threads,
+        task=task,
+        force=force,
+        max_target_seqs=1,
+        evalue=evalue
+    )
+
+    query_hits = standardize_blast_hits(query_vs_ref)
+    ref_hits = standardize_blast_hits(ref_vs_query)
+
+    query_frag_count = count_fasta_records(query_fragments)
+    ref_frag_count = count_fasta_records(ref_fragments)
+
+    query_summary = compute_directional_ani(query_hits, query_frag_count;
+        min_id=min_id, min_aln_frac=min_aln_frac)
+    ref_summary = compute_directional_ani(ref_hits, ref_frag_count;
+        min_id=min_id, min_aln_frac=min_aln_frac)
+
+    ani_values = skipmissing([query_summary.ani, ref_summary.ani])
+    ani = isempty(ani_values) ? missing : Statistics.mean(collect(ani_values))
+
+    return (;
+        method=:ANIb,
+        ani=ani,
+        ani_query_vs_ref=query_summary.ani,
+        ani_ref_vs_query=ref_summary.ani,
+        af_query_vs_ref=query_summary.af,
+        af_ref_vs_query=ref_summary.af,
+        query_fragments=query_fragments,
+        reference_fragments=ref_fragments,
+        hits_query_vs_ref=query_summary.hits,
+        hits_ref_vs_query=ref_summary.hits,
+        raw_query_hits=query_hits,
+        raw_ref_hits=ref_hits
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute AAI using reciprocal best hits (RBH) between predicted or provided proteins.
+"""
+function aai_rbh(genome_a::AbstractString, genome_b::AbstractString;
+        proteins_a::Union{Nothing,AbstractString}=nothing,
+        proteins_b::Union{Nothing,AbstractString}=nothing,
+        tool::Symbol=:diamond,
+        min_id::Float64=30.0,
+        min_len_frac::Float64=0.7,
+        evalue::Float64=1e-10,
+        threads::Int=get_default_threads(),
+        outdir::AbstractString="aai_rbh",
+        translation_table::Union{Nothing,Int}=nothing,
+        force::Bool=false)
+    mkpath(outdir)
+
+    prot_a = isnothing(proteins_a) ? Mycelia.run_pyrodigal(
+        fasta_file=genome_a,
+        out_dir=joinpath(outdir, "proteins_a"),
+        translation_table=translation_table
+    ).faa : String(proteins_a)
+    prot_b = isnothing(proteins_b) ? Mycelia.run_pyrodigal(
+        fasta_file=genome_b,
+        out_dir=joinpath(outdir, "proteins_b"),
+        translation_table=translation_table
+    ).faa : String(proteins_b)
+
+    hits_ab_path = ""
+    hits_ba_path = ""
+    if tool == :diamond
+        hits_ab_path = Mycelia.run_diamond_besthits(
+            query_fasta=prot_a,
+            reference_fasta=prot_b,
+            output_dir=joinpath(outdir, "diamond_ab"),
+            threads=threads,
+            evalue=evalue,
+            force=force
+        )
+        hits_ba_path = Mycelia.run_diamond_besthits(
+            query_fasta=prot_b,
+            reference_fasta=prot_a,
+            output_dir=joinpath(outdir, "diamond_ba"),
+            threads=threads,
+            evalue=evalue,
+            force=force
+        )
+    elseif tool == :blastp
+        hits_ab_path = Mycelia.run_blastp_search(
+            query_fasta=prot_a,
+            reference_fasta=prot_b,
+            output_dir=joinpath(outdir, "blastp_ab"),
+            threads=threads,
+            evalue=evalue,
+            max_target_seqs=1
+        )
+        hits_ba_path = Mycelia.run_blastp_search(
+            query_fasta=prot_b,
+            reference_fasta=prot_a,
+            output_dir=joinpath(outdir, "blastp_ba"),
+            threads=threads,
+            evalue=evalue,
+            max_target_seqs=1
+        )
+    else
+        error("tool must be :diamond or :blastp")
+    end
+
+    hits_ab = tool == :diamond ? read_diamond_hits(hits_ab_path) : standardize_blast_hits(hits_ab_path)
+    hits_ba = tool == :diamond ? read_diamond_hits(hits_ba_path) : standardize_blast_hits(hits_ba_path)
+
+    best_ab = best_hits_by_query(hits_ab)
+    best_ba = best_hits_by_query(hits_ba)
+
+    filtered_ab = filter_hits_by_threshold(best_ab; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=true, evalue_max=evalue)
+    filtered_ba = filter_hits_by_threshold(best_ba; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=true, evalue_max=evalue)
+
+    renamed_ab = DataFrames.rename(filtered_ab, Dict(
+        :query_id => :query_a,
+        :subject_id => :subject_b,
+        :pident => :pident_ab
+    ))
+    renamed_ba = DataFrames.rename(filtered_ba, Dict(
+        :query_id => :query_b,
+        :subject_id => :subject_a,
+        :pident => :pident_ba
+    ))
+    rbh_table = DataFrames.innerjoin(
+        renamed_ab,
+        renamed_ba,
+        on=[:query_a => :subject_a, :subject_b => :query_b]
+    )
+
+    n_rbh = DataFrames.nrow(rbh_table)
+    n_a = count_fasta_records(prot_a)
+    n_b = count_fasta_records(prot_b)
+    ortholog_fraction = min(n_a, n_b) == 0 ? missing : n_rbh / min(n_a, n_b)
+    aai = n_rbh == 0 ? missing : Statistics.mean((rbh_table.pident_ab .+ rbh_table.pident_ba) ./ 2)
+
+    return (;
+        method=:AAI_RBH,
+        aai=aai,
+        ortholog_fraction=ortholog_fraction,
+        n_rbh=n_rbh,
+        n_proteins_a=n_a,
+        n_proteins_b=n_b,
+        hits_ab=hits_ab_path,
+        hits_ba=hits_ba_path,
+        rbh_table=rbh_table
+    )
+end
+
+function flatten_gold_comparison(results::Dict{Symbol, Any})
+    fields = Dict{Symbol, Any}()
+    if haskey(results, :ANIm)
+        anim = results[:ANIm]
+        fields[:anim_ani_1to1] = anim.ani_1to1
+        fields[:anim_ani_m2m] = anim.ani_m2m
+        fields[:anim_af_ref_1to1] = anim.af_ref_1to1
+        fields[:anim_af_query_1to1] = anim.af_query_1to1
+        fields[:anim_af_ref_m2m] = anim.af_ref_m2m
+        fields[:anim_af_query_m2m] = anim.af_query_m2m
+    end
+    if haskey(results, :ANIb)
+        anib = results[:ANIb]
+        fields[:anib_ani] = anib.ani
+        fields[:anib_ani_query_vs_ref] = anib.ani_query_vs_ref
+        fields[:anib_ani_ref_vs_query] = anib.ani_ref_vs_query
+        fields[:anib_af_query_vs_ref] = anib.af_query_vs_ref
+        fields[:anib_af_ref_vs_query] = anib.af_ref_vs_query
+    end
+    if haskey(results, :AAI)
+        aai = results[:AAI]
+        fields[:aai_rbh] = aai.aai
+        fields[:ortholog_fraction] = aai.ortholog_fraction
+        fields[:aai_rbh_n] = aai.n_rbh
+    end
+    return (; (k => fields[k] for k in sort(collect(keys(fields))))...)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run gold-standard genome comparison methods and return a consolidated summary.
+"""
+function compare_genomes_gold(reference::AbstractString, query::AbstractString;
+        circular::Union{Bool,Symbol}=:auto,
+        methods=Symbol[:ANIm, :ANIb, :AAI],
+        outdir::AbstractString="genome_compare",
+        threads::Int=get_default_threads(),
+        fragment_size::Int=1000,
+        min_ani_id::Float64=70.0,
+        min_ani_aln_frac::Float64=0.7,
+        aai_tool::Symbol=:diamond,
+        min_aai_id::Float64=30.0,
+        min_aai_len_frac::Float64=0.7,
+        evalue::Float64=1e-10,
+        translation_table::Union{Nothing,Int}=nothing,
+        force::Bool=false)
+    pair_id = genome_pair_id(reference, query)
+    prep_dir = joinpath(outdir, "prep", pair_id)
+    ref_prepped = prepare_genome_for_comparison(reference; outdir=joinpath(prep_dir, "reference"), circular=circular, force=force)
+    query_prepped = prepare_genome_for_comparison(query; outdir=joinpath(prep_dir, "query"), circular=circular, force=force)
+
+    results = Dict{Symbol, Any}()
+    if :ANIm in methods
+        results[:ANIm] = ani_mummer(
+            ref_prepped,
+            query_prepped;
+            outdir=joinpath(outdir, "anim", pair_id),
+            force=force
+        )
+    end
+    if :ANIb in methods
+        results[:ANIb] = ani_blast(
+            ref_prepped,
+            query_prepped;
+            outdir=joinpath(outdir, "anib", pair_id),
+            fragment_size=fragment_size,
+            min_id=min_ani_id,
+            min_aln_frac=min_ani_aln_frac,
+            threads=threads,
+            force=force
+        )
+    end
+    if :AAI in methods
+        results[:AAI] = aai_rbh(
+            ref_prepped,
+            query_prepped;
+            tool=aai_tool,
+            min_id=min_aai_id,
+            min_len_frac=min_aai_len_frac,
+            evalue=evalue,
+            threads=threads,
+            outdir=joinpath(outdir, "aai", pair_id),
+            translation_table=translation_table,
+            force=force
+        )
+    end
+
+    summary = flatten_gold_comparison(results)
+    return (;pair_id, reference=ref_prepped, query=query_prepped, summary, details=results)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1172,4 +1875,158 @@ function fastani_pair(;query="", reference="", outfile="", force=false)
             )
         )
     end
+end
+
+function _conda_env_exec_ok(env_name::String, exec_parts::Vector{String})
+    cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], exec_parts))
+    return Base.success(pipeline(cmd, stdout=Base.devnull, stderr=Base.devnull))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Ensure the PyOrthoANI conda environment is available with BLAST+.
+"""
+function ensure_pyorthoani_env(; force::Bool=false, quiet::Bool=false)
+    env_name = "pyorthoani"
+    base_packages = ["python=3.11", "pip", "blast"]
+
+    if force && Mycelia.check_bioconda_env_is_installed(env_name)
+        run(`$(Mycelia.CONDA_RUNNER) env remove -n $(env_name) -y`)
+    end
+
+    if !Mycelia.check_bioconda_env_is_installed(env_name) || force
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "create",
+            "-c", "conda-forge", "-c", "bioconda", "-c", "defaults",
+            "--strict-channel-priority",
+            "-n", env_name
+        ]
+        append!(cmd_parts, base_packages)
+        push!(cmd_parts, "-y")
+        if quiet
+            push!(cmd_parts, "--quiet")
+        end
+        run(Cmd(cmd_parts))
+
+        pip_parts = [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name, "python", "-m", "pip", "install", "pyorthoani"]
+        if quiet
+            push!(pip_parts, "-q")
+        end
+        run(Cmd(pip_parts))
+
+        clean_parts = [Mycelia.CONDA_RUNNER, "clean", "--all", "-y"]
+        if quiet
+            push!(clean_parts, "--quiet")
+        end
+        run(Cmd(clean_parts))
+        return env_name
+    end
+
+    missing = String[]
+    if !_conda_env_exec_ok(env_name, ["blastn", "-version"])
+        push!(missing, "blast")
+    end
+    if !_conda_env_exec_ok(env_name, ["python", "-m", "pip", "--version"])
+        push!(missing, "pip")
+    end
+
+    if !isempty(missing)
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "install",
+            "-c", "conda-forge", "-c", "bioconda", "-c", "defaults",
+            "--strict-channel-priority",
+            "-n", env_name
+        ]
+        append!(cmd_parts, missing)
+        push!(cmd_parts, "-y")
+        if quiet
+            push!(cmd_parts, "--quiet")
+        end
+        run(Cmd(cmd_parts))
+
+        clean_parts = [Mycelia.CONDA_RUNNER, "clean", "--all", "-y"]
+        if quiet
+            push!(clean_parts, "--quiet")
+        end
+        run(Cmd(clean_parts))
+    end
+
+    if !_conda_env_exec_ok(env_name, ["python", "-c", "import pyorthoani"])
+        pip_parts = [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name, "python", "-m", "pip", "install", "pyorthoani"]
+        if quiet
+            push!(pip_parts, "-q")
+        end
+        run(Cmd(pip_parts))
+    end
+
+    return env_name
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse the ANI value from PyOrthoANI output.
+"""
+function parse_pyorthoani_output(output::AbstractString)
+    cleaned = strip(output)
+    if isempty(cleaned)
+        error("PyOrthoANI output was empty.")
+    end
+    number_match = match(r"[-+]?[0-9]*\.?[0-9]+", cleaned)
+    if number_match === nothing
+        error("No ANI value found in PyOrthoANI output: $(cleaned)")
+    end
+    return parse(Float64, number_match.match)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run PyOrthoANI on a query/reference pair and return the ANI value.
+
+# Arguments
+- `query::String`: Query FASTA path.
+- `reference::String`: Reference FASTA path.
+- `outdir::String`: Output directory for stored results.
+- `outfile::String`: Optional explicit output file path.
+- `force::Bool=false`: Rerun PyOrthoANI if the output file exists.
+- `force_env::Bool=false`: Recreate the PyOrthoANI environment.
+- `additional_args::Vector{String}`: Extra CLI args passed to `pyorthoani`.
+- `quiet::Bool=false`: Reduce conda output during environment setup.
+
+# Returns
+`NamedTuple` with `ani`, `output_path`, and `raw_output`.
+"""
+function run_pyorthoani(;
+        query::String,
+        reference::String,
+        outdir::String=mktempdir(),
+        outfile::String="",
+        force::Bool=false,
+        force_env::Bool=false,
+        additional_args::Vector{String}=String[],
+        quiet::Bool=false)
+    @assert isfile(query) "Query FASTA not found: $(query)"
+    @assert isfile(reference) "Reference FASTA not found: $(reference)"
+
+    ensure_pyorthoani_env(force=force_env, quiet=quiet)
+
+    outdir = mkpath(outdir)
+    output_path = isempty(outfile) ? joinpath(
+        outdir,
+        "pyorthoani_$(basename(query))_vs_$(basename(reference)).txt"
+    ) : outfile
+
+    if force || !isfile(output_path) || filesize(output_path) == 0
+        cmd_parts = ["pyorthoani", "-q", query, "-r", reference]
+        append!(cmd_parts, additional_args)
+        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani"], cmd_parts))
+        output = read(cmd, String)
+        write(output_path, output)
+    end
+
+    output = read(output_path, String)
+    ani = parse_pyorthoani_output(output)
+    return (;ani, output_path, raw_output=output)
 end

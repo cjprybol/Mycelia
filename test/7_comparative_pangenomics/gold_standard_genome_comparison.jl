@@ -71,6 +71,23 @@ Indels  5  20
         rm(temp_dir; recursive=true, force=true)
     end
 
+    Test.@testset "Circular Canonicalization" begin
+        seq = "ATGCCGTA"
+        rotated = seq[5:end] * seq[1:4]
+
+        canonical_a, orientation_a, _ = Mycelia.canonical_circular_sequence(seq)
+        canonical_b, orientation_b, _ = Mycelia.canonical_circular_sequence(rotated)
+
+        Test.@test canonical_a == canonical_b
+        Test.@test orientation_a in (:forward, :reverse)
+        Test.@test orientation_b in (:forward, :reverse)
+    end
+
+    Test.@testset "PyOrthoANI Output Parsing" begin
+        Test.@test Mycelia.parse_pyorthoani_output("57.25\n") ≈ 57.25
+        Test.@test Mycelia.parse_pyorthoani_output("ANI: 99.95") ≈ 99.95
+    end
+
     run_all = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
     run_external = run_all || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
     conda_available = haskey(ENV, "CONDA_PREFIX") || isfile(Mycelia.CONDA_RUNNER)
@@ -172,6 +189,53 @@ Indels  5  20
             Test.@test aai >= 90.0
             Test.@test aai <= 100.0
             Test.@test DataFrames.nrow(df) >= 2
+
+            rm(temp_dir; recursive=true, force=true)
+        end
+    end
+
+    Test.@testset "PyOrthoANI (external)" begin
+        if !(run_external && conda_available)
+            Test.@test_skip "PyOrthoANI requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
+        else
+            rng = StableRNGs.StableRNG(202)
+            dna_alphabet = ['A', 'C', 'G', 'T']
+
+            random_dna = len -> String(rand(rng, dna_alphabet, len))
+            function mutate_dna(seq::AbstractString, mutation_rate::Float64)
+                seq_chars = collect(seq)
+                for i in eachindex(seq_chars)
+                    if rand(rng) < mutation_rate
+                        original = seq_chars[i]
+                        candidates = filter(base -> base != original, dna_alphabet)
+                        seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
+                    end
+                end
+                return String(seq_chars)
+            end
+
+            temp_dir = mktempdir()
+            query_fasta = joinpath(temp_dir, "query.fasta")
+            reference_fasta = joinpath(temp_dir, "reference.fasta")
+
+            ref_seq1 = random_dna(6000)
+            ref_seq2 = random_dna(4000)
+            query_seq1 = mutate_dna(ref_seq1, 0.01)
+            query_seq2 = mutate_dna(ref_seq2, 0.01)
+
+            write(reference_fasta, ">reference_1\n$(ref_seq1)\n>reference_2\n$(ref_seq2)\n")
+            write(query_fasta, ">query_1\n$(query_seq1)\n>query_2\n$(query_seq2)\n")
+
+            results = Mycelia.run_pyorthoani(
+                query=query_fasta,
+                reference=reference_fasta,
+                outdir=joinpath(temp_dir, "pyorthoani"),
+                force=true
+            )
+
+            Test.@test isfile(results.output_path)
+            Test.@test results.ani >= 95.0
+            Test.@test results.ani <= 100.0
 
             rm(temp_dir; recursive=true, force=true)
         end
