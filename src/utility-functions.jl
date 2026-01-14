@@ -1065,6 +1065,27 @@ function dataframe_convert_dicts_to_json(df)
 end
 
 """
+    normalize_json_value(value)
+
+Normalize values for JSON output by converting missing to nothing, symbols to
+strings, and recursively handling arrays, dictionaries, and named tuples.
+"""
+function normalize_json_value(value)
+    if value === missing
+        return nothing
+    elseif value isa Symbol
+        return String(value)
+    elseif value isa AbstractVector
+        return [normalize_json_value(v) for v in value]
+    elseif value isa Dict
+        return Dict(string(k) => normalize_json_value(v) for (k, v) in value)
+    elseif value isa NamedTuple
+        return Dict(string(k) => normalize_json_value(v) for (k, v) in pairs(value))
+    end
+    return value
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Return a string representation of the vector `v` with each element on a new line,

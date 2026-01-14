@@ -491,8 +491,10 @@ function parse_dnadiff_report(report_file::String)
             line = strip(raw_line)
             isempty(line) && continue
 
-            if occursin(r"^[A-Za-z0-9]+-to-[A-Za-z0-9]+$", line)
-                current_section = Symbol(replace(lowercase(line), "-" => "_"))
+            first_token = first(split(line))
+            if occursin(r"^[A-Za-z0-9]+-to-[A-Za-z0-9]+$", line) ||
+               lowercase(first_token) in ("1-to-1", "m-to-m")
+                current_section = Symbol(replace(lowercase(first_token), "-" => "_"))
                 continue
             end
 
@@ -2618,7 +2620,12 @@ Ensure a BLAST database exists for the given FASTA file.
 # Arguments
 - `fasta::String`: Input FASTA file to index.
 - `dbtype::String`: `"nucl"` or `"prot"`.
-- `db_prefix::String`: Output database prefix (default: `fasta`).
+- `db_prefix::Union{String,Nothing}`: Output database prefix. If `nothing`, it is derived from
+  `output_dir`/`db_name` or defaults to `fasta`.
+- `output_dir::Union{String,Nothing}`: Optional directory to store the database.
+- `db_name::Union{String,Nothing}`: Optional name for the database (used in path and title).
+- `title::Union{String,Nothing}`: Optional BLAST DB title.
+- `parse_seqids::Bool`: Whether to enable `-parse_seqids` during `makeblastdb`.
 - `force::Bool`: If true, rebuild the database even if it exists.
 
 # Returns
@@ -2627,23 +2634,56 @@ Ensure a BLAST database exists for the given FASTA file.
 function ensure_blast_db(;
     fasta::String,
     dbtype::String = "nucl",
-    db_prefix::String = fasta,
+    db_prefix::Union{String,Nothing} = nothing,
+    output_dir::Union{String,Nothing} = nothing,
+    db_name::Union{String,Nothing} = nothing,
+    title::Union{String,Nothing} = nothing,
+    parse_seqids::Bool = false,
     force::Bool = false
 )
     @assert isfile(fasta) "FASTA file does not exist: $(fasta)"
     @assert dbtype in ("nucl", "prot") "dbtype must be \"nucl\" or \"prot\""
 
+    resolved_prefix = if db_prefix !== nothing
+        db_prefix
+    else
+        if output_dir === nothing && db_name === nothing
+            fasta
+        else
+            base_name = db_name === nothing ? replace(basename(fasta), Mycelia.FASTA_REGEX => "") : db_name
+            base_dir = output_dir === nothing ? dirname(fasta) : output_dir
+            joinpath(base_dir, base_name, base_name)
+        end
+    end
+
+    resolved_title = title === nothing ? db_name : title
+    mkpath(dirname(resolved_prefix))
+
     extensions = dbtype == "nucl" ? [".nhr", ".nin", ".nsq"] : [".phr", ".pin", ".psq"]
-    db_files = [db_prefix * ext for ext in extensions]
-    db_ready = all(isfile, db_files)
+    db_ready = all(ext -> isfile(resolved_prefix * ext) || isfile(resolved_prefix * ".00" * ext), extensions)
 
     if force || !db_ready
         Mycelia.add_bioconda_env("blast")
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(fasta) -dbtype $(dbtype) -out $(db_prefix)`)
+        cmd_parts = [
+            "makeblastdb",
+            "-in",
+            fasta,
+            "-dbtype",
+            dbtype,
+            "-out",
+            resolved_prefix,
+        ]
+        if resolved_title !== nothing
+            push!(cmd_parts, "-title", resolved_title)
+        end
+        if parse_seqids
+            push!(cmd_parts, "-parse_seqids")
+        end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast $cmd_parts`)
     end
 
-    @assert all(isfile, db_files) "BLAST database creation failed for: $(db_prefix)"
-    return db_prefix
+    @assert all(ext -> isfile(resolved_prefix * ext) || isfile(resolved_prefix * ".00" * ext), extensions) "BLAST database creation failed for: $(resolved_prefix)"
+    return resolved_prefix
 end
 
 """

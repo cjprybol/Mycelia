@@ -134,6 +134,26 @@ function _check_conda_env_exists(env_name::AbstractString)
 end
 
 """
+    conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
+
+Return the first line of a tool version string from a conda environment, or
+missing when the tool or environment is unavailable.
+"""
+function conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
+    if !isfile(Mycelia.CONDA_RUNNER)
+        return missing
+    end
+    try
+        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], cmd_parts))
+        output = read(cmd, String)
+        line = strip(first(split(output, '\n')))
+        return isempty(line) ? missing : line
+    catch
+        return missing
+    end
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Check whether a named Bioconda environment already exists.
