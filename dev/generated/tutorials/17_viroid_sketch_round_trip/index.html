@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Step 17: Viroid Sketch Round Trip · Mycelia</title><meta name="title" content="Step 17: Viroid Sketch Round Trip · Mycelia"/><meta property="og:title" content="Step 17: Viroid Sketch Round Trip · Mycelia"/><meta property="twitter:title" content="Step 17: Viroid Sketch Round Trip · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Step 4b: Graph Type Tutorials</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs</a></li><li><a class="tocitem" href="../09_round_trip_02_ngram_to_string/">Round-Trip 02: N-gram to String</a></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round-Trip 03: FASTA Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round-Trip 04: K-mer to Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round-Trip 05: FASTQ Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round-Trip 06: Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Step 10: Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Step 11: Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Step 12: CoverM Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Step 13: Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 14a: Binning Workflow</a></li><li><a class="tocitem" href="../14_mash_classification/">Step 14b: Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Step 15: Round Trip Benchmarking</a></li><li><a class="tocitem" href="../16_un_corpus_ngram_vs_token_graphs/">Step 16: UN Corpus Ngram vs Token Graphs</a></li><li class="is-active"><a class="tocitem" href>Step 17: Viroid Sketch Round Trip</a><ul class="internal"><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Step-1:-Download-the-viroid-BLAST-database"><span>Step 1: Download the viroid BLAST database</span></a></li><li><a class="tocitem" href="#Step-2:-Export-to-FASTA-build-reference-table"><span>Step 2: Export to FASTA + build reference table</span></a></li><li><a class="tocitem" href="#Step-3:-Build-reference-indices-for-mash-sourmash"><span>Step 3: Build reference indices for mash + sourmash</span></a></li><li><a class="tocitem" href="#Step-4:-Simulate-reads-from-a-known-subset"><span>Step 4: Simulate reads from a known subset</span></a></li><li><a class="tocitem" href="#Step-5:-Screen-reads-with-mash,-sourmash,-and-Sylph"><span>Step 5: Screen reads with mash, sourmash, and Sylph</span></a></li><li><a class="tocitem" href="#Step-6:-Assert-expected-matches"><span>Step 6: Assert expected matches</span></a></li></ul></li><li><a class="tocitem" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice</a></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Step 17: Viroid Sketch Round Trip</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Step 17: Viroid Sketch Round Trip</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/17_viroid_sketch_round_trip.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-17:-Viroid-Sketch-Round-Trip-(Mash-sourmash-Sylph)"><a class="docs-heading-anchor" href="#Tutorial-17:-Viroid-Sketch-Round-Trip-(Mash-sourmash-Sylph)">Tutorial 17: Viroid Sketch Round Trip (Mash + sourmash + Sylph)</a><a id="Tutorial-17:-Viroid-Sketch-Round-Trip-(Mash-sourmash-Sylph)-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-17:-Viroid-Sketch-Round-Trip-(Mash-sourmash-Sylph)" title="Permalink"></a></h1><p>This tutorial demonstrates a full, reproducible round-trip workflow: download a BLAST database, export it to FASTA, index with sketch tools, simulate reads from a known subset, and assert expected matches. Heavy steps are gated behind <code>MYCELIA_RUN_EXTERNAL=true</code>.</p><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><p>From the Mycelia base directory, convert this tutorial to a notebook:</p><pre><code class="language-bash hljs">julia --project=. -e &#39;import Literate; Literate.notebook(&quot;tutorials/17_viroid_sketch_round_trip.jl&quot;, &quot;tutorials/notebooks&quot;, execute=false)&#39;</code></pre><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import Mycelia
+import DataFrames
+import CSV
+import StableRNGs
+import StatsBase
+import Test
+
+run_external = get(ENV, &quot;MYCELIA_RUN_EXTERNAL&quot;, &quot;false&quot;) == &quot;true&quot;
+if !run_external
+    println(&quot;Set MYCELIA_RUN_EXTERNAL=true to download references and run external tools.&quot;)
+end
+
+base_outdir = &quot;results/viroid_sketch_round_trip&quot;
+reference_dir = joinpath(base_outdir, &quot;reference&quot;)
+mkpath(reference_dir)
+
+reference_db = &quot;ref_viroids_rep_genomes&quot;
+reference_fasta = joinpath(reference_dir, &quot;$(reference_db).fna.gz&quot;)
+reference_table_csv = joinpath(reference_dir, &quot;viroids_reference_table.csv&quot;)
+reference_genomes_dir = joinpath(reference_dir, &quot;genomes&quot;)</code></pre><h2 id="Step-1:-Download-the-viroid-BLAST-database"><a class="docs-heading-anchor" href="#Step-1:-Download-the-viroid-BLAST-database">Step 1: Download the viroid BLAST database</a><a id="Step-1:-Download-the-viroid-BLAST-database-1"></a><a class="docs-heading-anchor-permalink" href="#Step-1:-Download-the-viroid-BLAST-database" title="Permalink"></a></h2><pre><code class="language-julia hljs">reference_table = DataFrames.DataFrame()
+if run_external
+    db_path = Mycelia.download_blast_db(db=reference_db, dbdir=Mycelia.DEFAULT_BLASTDB_PATH)
+    Test.@test !isempty(db_path)</code></pre><h2 id="Step-2:-Export-to-FASTA-build-reference-table"><a class="docs-heading-anchor" href="#Step-2:-Export-to-FASTA-build-reference-table">Step 2: Export to FASTA + build reference table</a><a id="Step-2:-Export-to-FASTA-build-reference-table-1"></a><a class="docs-heading-anchor-permalink" href="#Step-2:-Export-to-FASTA-build-reference-table" title="Permalink"></a></h2><pre><code class="language-julia hljs">    reference_table = Mycelia.prepare_blast_reference_table(
+        blastdb=db_path,
+        blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH,
+        download_if_missing=false,
+        reference_fasta=reference_fasta,
+        taxonomy_map_out=joinpath(reference_dir, &quot;$(reference_db).seqid2taxid.txt.gz&quot;),
+        table_out=reference_table_csv,
+        force=false
+    )
+    Test.@test isfile(reference_fasta)
+    Test.@test !isempty(reference_table)
+end</code></pre><h2 id="Step-3:-Build-reference-indices-for-mash-sourmash"><a class="docs-heading-anchor" href="#Step-3:-Build-reference-indices-for-mash-sourmash">Step 3: Build reference indices for mash + sourmash</a><a id="Step-3:-Build-reference-indices-for-mash-sourmash-1"></a><a class="docs-heading-anchor-permalink" href="#Step-3:-Build-reference-indices-for-mash-sourmash" title="Permalink"></a></h2><pre><code class="language-julia hljs">reference_sourmash_sig = &quot;&quot;
+reference_mash_db = &quot;&quot;
+reference_id_map = Dict{String,String}()
+reference_genomes = String[]
+
+if run_external &amp;&amp; !isempty(reference_table)
+    reference_id_map = Mycelia.split_fasta_by_record(
+        fasta_in=reference_fasta,
+        outdir=reference_genomes_dir,
+        gzip=false,
+        force=false
+    )
+    reference_genomes = Mycelia.find_fasta_files(reference_genomes_dir)
+    Test.@test !isempty(reference_genomes)
+
+    reference_sourmash_dir = joinpath(reference_dir, &quot;sourmash&quot;)
+    reference_mash_dir = joinpath(reference_dir, &quot;mash&quot;)
+    mkpath.(String[reference_sourmash_dir, reference_mash_dir])
+
+    sourmash_ref = Mycelia.run_sourmash_sketch(
+        input_files=[reference_fasta],
+        outdir=reference_sourmash_dir,
+        k_sizes=[31],
+        scaled=1000,
+        singleton=true
+    )
+    Test.@test !isempty(sourmash_ref.signatures)
+    reference_sourmash_sig = sourmash_ref.signatures[1]
+
+    mash_result = Mycelia.run_mash_sketch(
+        input_files=reference_genomes,
+        outdir=reference_mash_dir,
+        k=21,
+        s=10000,
+        r=false
+    )
+    Test.@test !isempty(mash_result.sketches)
+    reference_mash_db = Mycelia.run_mash_paste(
+        out_file=joinpath(reference_mash_dir, &quot;$(reference_db).msh&quot;),
+        in_files=mash_result.sketches
+    )
+end</code></pre><h2 id="Step-4:-Simulate-reads-from-a-known-subset"><a class="docs-heading-anchor" href="#Step-4:-Simulate-reads-from-a-known-subset">Step 4: Simulate reads from a known subset</a><a id="Step-4:-Simulate-reads-from-a-known-subset-1"></a><a class="docs-heading-anchor-permalink" href="#Step-4:-Simulate-reads-from-a-known-subset" title="Permalink"></a></h2><pre><code class="language-julia hljs">depth_target = 20
+n_organisms = 1
+readset = :illumina_pe150
+replicate = 1
+rng = StableRNGs.StableRNG(1234)
+
+sim = nothing
+selected_ids = String[]
+scenario_dir = joinpath(base_outdir, &quot;depth$(depth_target)_div$(n_organisms)&quot;)
+
+if run_external &amp;&amp; !isempty(reference_table)
+    available_ids = unique(String.(reference_table.sequence_id))
+    selected_ids = StatsBase.sample(rng, available_ids, n_organisms; replace=false)
+    weights = fill(1.0, n_organisms)
+
+    sim = Mycelia.simulate_metagenome_community(
+        reference_fasta=reference_fasta,
+        reference_table=reference_table,
+        n_organisms=n_organisms,
+        depth_target=depth_target,
+        abundance_profile=:custom,
+        readset=readset,
+        outdir=scenario_dir,
+        selected_ids=selected_ids,
+        weights=weights,
+        rng=rng,
+        replicate=replicate,
+        run_simulation=true,
+        emit_truth_reads=true
+    )
+    CSV.write(joinpath(scenario_dir, &quot;truth_table.csv&quot;), sim.truth_table)
+end</code></pre><h2 id="Step-5:-Screen-reads-with-mash,-sourmash,-and-Sylph"><a class="docs-heading-anchor" href="#Step-5:-Screen-reads-with-mash,-sourmash,-and-Sylph">Step 5: Screen reads with mash, sourmash, and Sylph</a><a id="Step-5:-Screen-reads-with-mash,-sourmash,-and-Sylph-1"></a><a class="docs-heading-anchor-permalink" href="#Step-5:-Screen-reads-with-mash,-sourmash,-and-Sylph" title="Permalink"></a></h2><pre><code class="language-julia hljs">if run_external &amp;&amp; !isnothing(sim)
+    reads_forward = sim.reads.forward
+    reads_reverse = sim.reads.reverse
+    Test.@test !isnothing(reads_forward)
+
+    merged_reads = reads_forward
+    if !isnothing(reads_reverse)
+        merged_reads = joinpath(scenario_dir, &quot;reads_merged.fq.gz&quot;)
+        Mycelia.concatenate_fastq_files(
+            fastq_files=[reads_forward, reads_reverse],
+            output_fastq=merged_reads,
+            gzip=true,
+            force=true
+        )
+    end
+
+    sourmash_outdir = joinpath(scenario_dir, &quot;sourmash&quot;)
+    mash_outdir = joinpath(scenario_dir, &quot;mash&quot;)
+    sylph_outdir = joinpath(scenario_dir, &quot;sylph&quot;)
+    mkpath.(String[sourmash_outdir, mash_outdir, sylph_outdir])
+
+    query_sig = Mycelia.run_sourmash_sketch(
+        input_files=[merged_reads],
+        outdir=sourmash_outdir,
+        k_sizes=[31],
+        scaled=1000
+    ).signatures[1]
+    sourmash_gather = Mycelia.run_sourmash_gather(
+        query_sig=query_sig,
+        database_sig=reference_sourmash_sig,
+        outdir=sourmash_outdir,
+        k_size=31
+    )
+    sourmash_df = CSV.read(sourmash_gather.results_csv, DataFrames.DataFrame)
+
+    mash_screen = Mycelia.run_mash_screen(
+        reference=reference_mash_db,
+        query=merged_reads,
+        outdir=mash_outdir,
+        winner_takes_all=true
+    )
+    mash_df = Mycelia.parse_mash_screen_output(mash_screen.results_tsv)
+
+    sylph_result = if isnothing(reads_reverse)
+        Mycelia.run_sylph_profile(
+            reference_fastas=reference_genomes,
+            sample_reads=[reads_forward],
+            outdir=sylph_outdir
+        )
+    else
+        Mycelia.run_sylph_profile(
+            reference_fastas=reference_genomes,
+            first_pairs=[reads_forward],
+            second_pairs=[reads_reverse],
+            outdir=sylph_outdir
+        )
+    end</code></pre><h2 id="Step-6:-Assert-expected-matches"><a class="docs-heading-anchor" href="#Step-6:-Assert-expected-matches">Step 6: Assert expected matches</a><a id="Step-6:-Assert-expected-matches-1"></a><a class="docs-heading-anchor-permalink" href="#Step-6:-Assert-expected-matches" title="Permalink"></a></h2><p>We expect the selected reference(s) to appear in the top hits.</p><pre><code class="language-julia hljs">    truth_ids = String.(selected_ids)
+
+    Test.@test !isempty(mash_df)
+    mash_preds = [Mycelia.normalize_reference_label(x, reference_id_map) for x in mash_df.reference]
+    Test.@test truth_ids[1] in mash_preds
+
+    Test.@test !isempty(sourmash_df)
+    name_col = if &quot;name&quot; in DataFrames.names(sourmash_df)
+        &quot;name&quot;
+    elseif &quot;match_name&quot; in DataFrames.names(sourmash_df)
+        &quot;match_name&quot;
+    else
+        &quot;&quot;
+    end
+    Test.@test !isempty(name_col)
+    sourmash_preds = [Mycelia.normalize_reference_label(x, reference_id_map) for x in sourmash_df[!, name_col]]
+    Test.@test truth_ids[1] in sourmash_preds
+
+    Test.@test !isempty(sylph_result.table)
+    sylph_col = first(filter(col -&gt; col in DataFrames.names(sylph_result.table), [&quot;genome&quot;, &quot;reference&quot;, &quot;ref&quot;, &quot;name&quot;]), &quot;&quot;)
+    Test.@test !isempty(sylph_col)
+    sylph_preds = [Mycelia.normalize_reference_label(x, reference_id_map) for x in sylph_result.table[!, sylph_col]]
+    Test.@test truth_ids[1] in sylph_preds
+end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../16_un_corpus_ngram_vs_token_graphs/">« Step 16: UN Corpus Ngram vs Token Graphs</a><a class="docs-footer-nextpage" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 15 January 2026 19:51">Thursday 15 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
