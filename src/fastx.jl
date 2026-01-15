@@ -2054,6 +2054,33 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Return an alphabet hint from a FASTA/FASTQ filepath extension.
+
+Recognizes `.fna` → `:DNA`, `.frn` → `:RNA`, `.faa` → `:AA`.
+Returns `nothing` for ambiguous extensions like `.fa`/`.fasta` or unknown suffixes.
+If the path ends with `.gz`, the hint is derived from the underlying filename.
+"""
+function alphabet_hint_from_path(path::AbstractString)
+    path_base = basename(path)
+    if endswith(lowercase(path_base), ".gz")
+        path_base = replace(path_base, ".gz" => "")
+    end
+
+    path_base = lowercase(path_base)
+    if endswith(path_base, ".fna")
+        return :DNA
+    elseif endswith(path_base, ".frn")
+        return :RNA
+    elseif endswith(path_base, ".faa")
+        return :AA
+    end
+
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Detect sequence type from input and suggest appropriate file extension.
 
 # Arguments

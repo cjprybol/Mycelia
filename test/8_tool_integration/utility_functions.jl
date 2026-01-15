@@ -164,6 +164,8 @@ Test.@testset "system overview reflects slurm allocations" begin
         "SLURM_CPUS_PER_TASK" => nothing,
         "SLURM_TASKS_PER_NODE" => nothing,
         "SLURM_MEM_PER_CPU" => string(mem_per_cpu),
+        "SLURM_MEM_PER_NODE" => nothing,
+        "SLURM_MEM_PER_GPU" => nothing,
         "SLURM_GPUS_ON_NODE" => string(gpu_allocation),
         "SLURM_GPUS" => nothing,
         "SLURM_GPUS_PER_TASK" => nothing,

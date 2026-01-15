@@ -19,7 +19,8 @@
 # ============================================================================
 
 """
-    build_qualmer_graph(records, k; dataset_id="dataset_01", mode=:singlestrand)
+    build_qualmer_graph(records, k; dataset_id="dataset_01", mode=:singlestrand,
+                        type_hint=nothing, ambiguous_action=:dna)
 
 Build a quality-aware k-mer de Bruijn graph from FASTQ records.
 
@@ -31,6 +32,8 @@ Preserves per-base quality scores for quality-aware assembly algorithms.
 - `k::Int`: K-mer size
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph with Phred scores
@@ -83,14 +86,34 @@ function build_qualmer_graph(
     records::Vector{FASTX.FASTQ.Record},
     k::Int;
     dataset_id::String="dataset_01",
-    mode::Symbol=:singlestrand
+    mode::Symbol=:singlestrand,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if mode == :singlestrand
-        return build_qualmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+        return build_qualmer_graph_singlestrand(
+            records,
+            k;
+            dataset_id=dataset_id,
+            type_hint=type_hint,
+            ambiguous_action=ambiguous_action
+        )
     elseif mode == :doublestrand
-        return build_qualmer_graph_doublestrand(records, k; dataset_id=dataset_id)
+        return build_qualmer_graph_doublestrand(
+            records,
+            k;
+            dataset_id=dataset_id,
+            type_hint=type_hint,
+            ambiguous_action=ambiguous_action
+        )
     elseif mode == :canonical
-        return build_qualmer_graph_canonical(records, k; dataset_id=dataset_id)
+        return build_qualmer_graph_canonical(
+            records,
+            k;
+            dataset_id=dataset_id,
+            type_hint=type_hint,
+            ambiguous_action=ambiguous_action
+        )
     else
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
@@ -105,7 +128,8 @@ end
 # ============================================================================
 
 """
-    build_qualmer_graph_from_file(filepath, k; dataset_id=nothing, mode=:singlestrand)
+    build_qualmer_graph_from_file(filepath, k; dataset_id=nothing, mode=:singlestrand,
+                                  type_hint=nothing, ambiguous_action=:dna)
 
 Build qualmer graph directly from a FASTQ file.
 
@@ -117,6 +141,8 @@ dataset_id if not specified.
 - `k::Int`: K-mer size
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename without extension)
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph
@@ -138,7 +164,9 @@ function build_qualmer_graph_from_file(
     filepath::String,
     k::Int;
     dataset_id::Union{String,Nothing}=nothing,
-    mode::Symbol=:singlestrand
+    mode::Symbol=:singlestrand,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -161,11 +189,19 @@ function build_qualmer_graph_from_file(
         error("Qualmer graphs require FASTQ input. File appears to be FASTA: $filepath")
     end
 
-    return build_qualmer_graph(records, k; dataset_id=dataset_id, mode=mode)
+    return build_qualmer_graph(
+        records,
+        k;
+        dataset_id=dataset_id,
+        mode=mode,
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 end
 
 """
-    build_qualmer_graph_from_files(filepaths, k; mode=:singlestrand)
+    build_qualmer_graph_from_files(filepaths, k; mode=:singlestrand,
+                                   type_hint=nothing, ambiguous_action=:dna)
 
 Build qualmer graph from multiple FASTQ files.
 
@@ -176,6 +212,8 @@ Handles compressed files automatically.
 - `filepaths::Vector{String}`: List of FASTQ files (compressed or uncompressed)
 - `k::Int`: K-mer size
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Quality-aware k-mer de Bruijn graph with evidence from all files
@@ -194,7 +232,9 @@ dataset_ids = get_all_dataset_ids(graph[first(labels(graph))])
 function build_qualmer_graph_from_files(
     filepaths::Vector{String},
     k::Int;
-    mode::Symbol=:singlestrand
+    mode::Symbol=:singlestrand,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(filepaths)
         error("No files provided")
@@ -205,7 +245,13 @@ function build_qualmer_graph_from_files(
     end
 
     # Build graph from first file (strand-specific) and convert later if needed
-    graph = build_qualmer_graph_from_file(filepaths[1], k; mode=:singlestrand)
+    graph = build_qualmer_graph_from_file(
+        filepaths[1],
+        k;
+        mode=:singlestrand,
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
     # Get Mycelia module for open_fastx
     Mycelia_module = parentmodule(Rhizomorph)

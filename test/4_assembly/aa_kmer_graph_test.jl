@@ -100,7 +100,12 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
             FASTX.FASTA.Record("protein_001", "MKV"),
             FASTX.FASTA.Record("protein_002", "VKM")  # Different sequence, not RC
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
+            records,
+            3;
+            dataset_id="test",
+            type_hint=:AA
+        )
 
         # Should have 2 separate vertices
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2

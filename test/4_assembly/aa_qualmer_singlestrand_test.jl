@@ -34,7 +34,13 @@ Test.@testset "AA Qualmer SingleStrand Graph" begin
     reads = [fastq_record]
 
     # Build qualmer graph
-    graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        reads,
+        3;
+        dataset_id="test",
+        mode=:singlestrand,
+        type_hint=:AA
+    )
 
     # Structure validation
     vertices = collect(MetaGraphsNext.labels(graph))

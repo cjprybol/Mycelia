@@ -35,6 +35,7 @@ Test.@testset "AA K-mer SingleStrand Graph (Rhizomorph)" begin
         3;
         dataset_id=dataset_id,
         mode=:singlestrand,
+        type_hint=:AA,
     )
 
     vertices = collect(MetaGraphsNext.labels(graph))

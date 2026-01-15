@@ -35,6 +35,10 @@ The order of checking is:
 If a sequence fits multiple alphabets (e.g., "ACGU" is valid RNA and AA), it is
 classified as the first one matched in the hierarchy (RNA in this case). If the
 sequence does not fit any of the defined alphabets or is empty, an `ArgumentError` is thrown.
+
+Warning: This is a fast single-sequence heuristic and can misclassify short or
+ambiguous reads (for example, short amino-acid sequences composed only of A/C/G/T).
+Prefer multi-read inference or explicit hints when the input alphabet is ambiguous.
 """
 function detect_alphabet(seq::AbstractString)::Symbol
     if isempty(seq)

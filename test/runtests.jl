@@ -40,6 +40,9 @@ function include_all_tests(dir)
         end
         for file in sort(files)
             if endswith(file, ".jl")
+                if !MYCELIA_RUN_EXTERNAL && occursin("third_party_assemblers", file)
+                    continue
+                end
                 include(joinpath(root, file))
                 test_count += 1
             end
@@ -89,8 +92,8 @@ end
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-# # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
-# include_all_tests(joinpath(@__DIR__, "4_assembly"))
+# Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
+include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # for file in [
 #         "test/4_assembly/aa_fasta_singlestrand_test.jl",
 #         "test/4_assembly/aa_fastq_singlestrand_test.jl",
@@ -180,7 +183,7 @@ end
 # end
 
 # Stage 5 (validation): focused suites (all other external-heavy validation stays opt-in for now).
-# include_all_tests(joinpath(@__DIR__, "5_validation"))
+include_all_tests(joinpath(@__DIR__, "5_validation"))
 # for file in [
 #     # "5_validation/checkm_tools.jl",
 #     # "5_validation/coverm_integration_extended.jl",
@@ -194,7 +197,7 @@ end
 # end
 
 # Stage 6 (annotation)
-# include_all_tests(joinpath(@__DIR__, "6_annotation"))
+include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # for file in (
 #     # "6_annotation/annotation.jl",
 #     # "6_annotation/codon_optimization.jl",
@@ -207,7 +210,7 @@ end
 
 
 
-# # # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
+# Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
 include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # for file in (
 #     "7_comparative_pangenomics/blastdb_integration.jl",

@@ -15,6 +15,153 @@
 # K-mer Graph Construction (Quality-unaware)
 # ============================================================================
 
+function _normalize_alphabet_symbol(value::Symbol)
+    return Symbol(uppercase(String(value)))
+end
+
+function _normalize_ambiguous_action(value::Symbol)
+    return Symbol(lowercase(String(value)))
+end
+
+function _possible_alphabets(seq_str::AbstractString)
+    if isempty(seq_str)
+        throw(ArgumentError("Input sequence cannot be empty."))
+    end
+
+    seq_chars = Set(seq_str)
+    possible = Set{Symbol}()
+    unambiguous = Set{Symbol}()
+
+    if issubset(seq_chars, parentmodule(Rhizomorph).UNAMBIGUOUS_DNA_CHARSET)
+        push!(possible, :DNA)
+        push!(unambiguous, :DNA)
+    end
+    if issubset(seq_chars, parentmodule(Rhizomorph).UNAMBIGUOUS_RNA_CHARSET)
+        push!(possible, :RNA)
+        push!(unambiguous, :RNA)
+    end
+    if issubset(seq_chars, parentmodule(Rhizomorph).UNAMBIGUOUS_AA_CHARSET)
+        push!(possible, :AA)
+        push!(unambiguous, :AA)
+    end
+
+    if issubset(seq_chars, parentmodule(Rhizomorph).AMBIGUOUS_DNA_CHARSET)
+        push!(possible, :DNA)
+    end
+    if issubset(seq_chars, parentmodule(Rhizomorph).AMBIGUOUS_RNA_CHARSET)
+        push!(possible, :RNA)
+    end
+    if issubset(seq_chars, parentmodule(Rhizomorph).AMBIGUOUS_AA_CHARSET)
+        push!(possible, :AA)
+    end
+
+    if isempty(possible)
+        all_chars = union(
+            parentmodule(Rhizomorph).AMBIGUOUS_DNA_CHARSET,
+            parentmodule(Rhizomorph).AMBIGUOUS_RNA_CHARSET,
+            parentmodule(Rhizomorph).AMBIGUOUS_AA_CHARSET
+        )
+        unmatched_chars = setdiff(seq_chars, all_chars)
+        throw(ArgumentError("Sequence contains characters that do not belong to any known alphabet: $(join(unmatched_chars, ", "))"))
+    end
+
+    return (unambiguous=unambiguous, possible=possible)
+end
+
+function _resolve_ambiguous_alphabet(possible_alphabets::Set{Symbol}, ambiguous_action::Symbol)
+    if isempty(possible_alphabets)
+        error("Mixed sequence types detected. Cannot build graph from heterogeneous input.")
+    end
+
+    if length(possible_alphabets) == 1
+        return first(possible_alphabets)
+    end
+
+    action = _normalize_ambiguous_action(ambiguous_action)
+    if action == :error
+        throw(ArgumentError("Ambiguous sequence type. Candidates: $(sort!(collect(possible_alphabets)))."))
+    end
+
+    preference = if action == :dna
+        (:DNA, :RNA, :AA)
+    elseif action == :rna
+        (:RNA, :DNA, :AA)
+    elseif action == :aa
+        (:AA, :DNA, :RNA)
+    else
+        error("Invalid ambiguous_action: $ambiguous_action. Expected :dna, :rna, :aa, or :error.")
+    end
+
+    for candidate in preference
+        if candidate in possible_alphabets
+            return candidate
+        end
+    end
+
+    throw(ArgumentError("Ambiguous sequence type. Candidates: $(sort!(collect(possible_alphabets)))."))
+end
+
+function _resolve_sequence_alphabet(
+    possible_alphabets::Set{Symbol},
+    unambiguous_alphabets::Set{Symbol};
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
+)
+    if !isnothing(type_hint)
+        hint = _normalize_alphabet_symbol(type_hint)
+        if !(hint in (:DNA, :RNA, :AA))
+            error("Invalid type hint: $type_hint. Expected :DNA, :RNA, or :AA.")
+        end
+        if hint in possible_alphabets
+            return hint
+        end
+        error("Type hint $hint is incompatible with inferred alphabets $(sort!(collect(possible_alphabets))).")
+    end
+
+    # If ambiguous characters expand the candidate alphabets, honor the preference order.
+    if !isempty(unambiguous_alphabets) && unambiguous_alphabets == possible_alphabets
+        return _resolve_ambiguous_alphabet(unambiguous_alphabets, ambiguous_action)
+    end
+
+    return _resolve_ambiguous_alphabet(possible_alphabets, ambiguous_action)
+end
+
+function _infer_sequence_alphabet(
+    records::Vector{<:FASTX.Record};
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot infer sequence type from empty record set"))
+    end
+
+    inferred_alphabet = nothing
+    unambiguous_alphabet = nothing
+    for record in records
+        seq_str = String(FASTX.sequence(record))
+
+        record_alphabets = _possible_alphabets(seq_str)
+        if isnothing(inferred_alphabet)
+            inferred_alphabet = record_alphabets.possible
+            unambiguous_alphabet = record_alphabets.unambiguous
+        else
+            inferred_alphabet = intersect(inferred_alphabet, record_alphabets.possible)
+            unambiguous_alphabet = intersect(unambiguous_alphabet, record_alphabets.unambiguous)
+        end
+
+        if isempty(inferred_alphabet)
+            error("Mixed sequence types detected. Cannot build graph from heterogeneous input.")
+        end
+    end
+
+    return _resolve_sequence_alphabet(
+        inferred_alphabet,
+        unambiguous_alphabet;
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
+end
+
 """
 Build strand-specific k-mer de Bruijn graph from FASTA/FASTQ records.
 
@@ -30,6 +177,8 @@ This is the PRIMARY graph construction function. Constructs a graph where:
 - `records::Vector{<:FASTX.Record}`: Input FASTA or FASTQ records
 - `k::Int`: K-mer size
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Strand-specific k-mer graph with evidence
@@ -37,7 +186,9 @@ This is the PRIMARY graph construction function. Constructs a graph where:
 function build_kmer_graph_singlestrand(
     records::Vector{<:FASTX.Record},
     k::Int;
-    dataset_id::String="dataset_01"
+    dataset_id::String="dataset_01",
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -53,28 +204,29 @@ function build_kmer_graph_singlestrand(
         records
     end
 
-    # Detect sequence type from first record
-    first_seq = FASTX.sequence(fasta_records[1])
-    biosequence = parentmodule(Rhizomorph).convert_sequence(String(first_seq))
+    sequence_alphabet = _infer_sequence_alphabet(
+        fasta_records;
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
-    # Validate all records are same type
-    for record in fasta_records[2:min(10, length(fasta_records))]
-        seq = FASTX.sequence(record)
-        test_biosequence = parentmodule(Rhizomorph).convert_sequence(String(seq))
-        if typeof(test_biosequence) != typeof(biosequence)
+    # Validate all records are compatible with the dataset alphabet.
+    for record in fasta_records[1:min(10, length(fasta_records))]
+        seq_str = String(FASTX.sequence(record))
+        if !parentmodule(Rhizomorph).validate_alphabet(seq_str, sequence_alphabet)
             error("Mixed sequence types detected. Cannot build graph from heterogeneous input.")
         end
     end
 
     # Dispatch to type-stable core function
-    if biosequence isa BioSequences.LongDNA
+    if sequence_alphabet == :DNA
         return _build_kmer_graph_core(fasta_records, Val(k), Kmers.DNAKmer{k}, dataset_id)
-    elseif biosequence isa BioSequences.LongRNA
+    elseif sequence_alphabet == :RNA
         return _build_kmer_graph_core(fasta_records, Val(k), Kmers.RNAKmer{k}, dataset_id)
-    elseif biosequence isa BioSequences.LongAA
+    elseif sequence_alphabet == :AA
         return _build_kmer_graph_core(fasta_records, Val(k), Kmers.AAKmer{k}, dataset_id)
     else
-        error("Unsupported sequence type for k-mer graph: $(typeof(biosequence))")
+        error("Unsupported sequence type for k-mer graph: $sequence_alphabet")
     end
 end
 
@@ -217,14 +369,22 @@ graph = build_kmer_graph_doublestrand(records, 3)
 function build_kmer_graph_doublestrand(
     records::Vector{<:FASTX.Record},
     k::Int;
-    dataset_id::String="dataset_01"
+    dataset_id::String="dataset_01",
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # First build singlestrand graph
-    singlestrand_graph = build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+    singlestrand_graph = build_kmer_graph_singlestrand(
+        records,
+        k;
+        dataset_id=dataset_id,
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
     # Convert to doublestrand representation (replicate vertices/edges)
     return convert_to_doublestrand(singlestrand_graph)
@@ -246,6 +406,8 @@ alongside k-mer observations.
 - `records::Vector{FASTX.FASTQ.Record}`: Input FASTQ records (MUST be FASTQ for quality)
 - `k::Int`: K-mer size
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Strand-specific qualmer graph with quality-aware evidence
@@ -253,34 +415,37 @@ alongside k-mer observations.
 function build_qualmer_graph_singlestrand(
     records::Vector{FASTX.FASTQ.Record},
     k::Int;
-    dataset_id::String="dataset_01"
+    dataset_id::String="dataset_01",
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    # Detect sequence type from first record
-    first_seq = FASTX.sequence(records[1])
-    biosequence = parentmodule(Rhizomorph).convert_sequence(String(first_seq))
+    sequence_alphabet = _infer_sequence_alphabet(
+        records;
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
-    # Validate all records are same type
-    for record in records[2:min(10, length(records))]
-        seq = FASTX.sequence(record)
-        test_biosequence = parentmodule(Rhizomorph).convert_sequence(String(seq))
-        if typeof(test_biosequence) != typeof(biosequence)
+    # Validate all records are compatible with the dataset alphabet.
+    for record in records[1:min(10, length(records))]
+        seq_str = String(FASTX.sequence(record))
+        if !parentmodule(Rhizomorph).validate_alphabet(seq_str, sequence_alphabet)
             error("Mixed sequence types detected. Cannot build graph from heterogeneous input.")
         end
     end
 
     # Dispatch to type-stable core function
-    if biosequence isa BioSequences.LongDNA
+    if sequence_alphabet == :DNA
         return _build_qualmer_graph_core(records, Val(k), Kmers.DNAKmer{k}, dataset_id)
-    elseif biosequence isa BioSequences.LongRNA
+    elseif sequence_alphabet == :RNA
         return _build_qualmer_graph_core(records, Val(k), Kmers.RNAKmer{k}, dataset_id)
-    elseif biosequence isa BioSequences.LongAA
+    elseif sequence_alphabet == :AA
         return _build_qualmer_graph_core(records, Val(k), Kmers.AAKmer{k}, dataset_id)
     else
-        error("Unsupported sequence type for qualmer graph: $(typeof(biosequence))")
+        error("Unsupported sequence type for qualmer graph: $sequence_alphabet")
     end
 end
 
@@ -416,14 +581,22 @@ RC are added with properly oriented evidence and quality scores.
 function build_qualmer_graph_doublestrand(
     records::Vector{FASTX.FASTQ.Record},
     k::Int;
-    dataset_id::String="dataset_01"
+    dataset_id::String="dataset_01",
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # First build singlestrand qualmer graph
-    singlestrand_graph = build_qualmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+    singlestrand_graph = build_qualmer_graph_singlestrand(
+        records,
+        k;
+        dataset_id=dataset_id,
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
     # Convert to doublestrand representation (replicate vertices/edges)
     return convert_to_doublestrand(singlestrand_graph)
@@ -611,6 +784,10 @@ function get_dataset_id_from_file(filepath::String)
     return splitext(basename(filepath))[1]
 end
 
+function _alphabet_hint_from_path(filepath::String)
+    return parentmodule(Rhizomorph).alphabet_hint_from_path(filepath)
+end
+
 # ============================================================================
 # Canonical Graph Construction (Undirected, Merged RC Pairs)
 # ============================================================================
@@ -643,14 +820,22 @@ graph = build_kmer_graph_canonical(records, 3)
 function build_kmer_graph_canonical(
     records::Vector{<:FASTX.Record},
     k::Int;
-    dataset_id::String="dataset_01"
+    dataset_id::String="dataset_01",
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # First build singlestrand graph
-    singlestrand_graph = build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+    singlestrand_graph = build_kmer_graph_singlestrand(
+        records,
+        k;
+        dataset_id=dataset_id,
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
     # Convert to canonical representation
     return convert_to_canonical(singlestrand_graph)
@@ -672,14 +857,22 @@ Similar to `build_kmer_graph_canonical` but preserves quality information.
 function build_qualmer_graph_canonical(
     records::Vector{FASTX.FASTQ.Record},
     k::Int;
-    dataset_id::String="dataset_01"
+    dataset_id::String="dataset_01",
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
     # First build singlestrand qualmer graph
-    singlestrand_graph = build_qualmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+    singlestrand_graph = build_qualmer_graph_singlestrand(
+        records,
+        k;
+        dataset_id=dataset_id,
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
     # Convert to canonical representation
     return convert_to_canonical(singlestrand_graph)
@@ -1354,6 +1547,8 @@ unambiguous overlap resolution and prevents issues with even-length palindromes.
 - `strings::Vector{String}`: Input strings (complete sequences)
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 - `min_overlap::Int=3`: Minimum overlap length (odd-length overlaps only; even values are rounded up)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: Variable-length string graph with overlap evidence
@@ -1535,7 +1730,9 @@ end
 function build_fasta_graph_olc(
     records::Vector{FASTX.FASTA.Record};
     dataset_id::String="dataset_01",
-    min_overlap::Int=3
+    min_overlap::Int=3,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -1543,28 +1740,28 @@ function build_fasta_graph_olc(
 
     min_overlap = _normalize_min_overlap(min_overlap)
 
-    # Detect sequence type from first record
-    first_seq_str = String(FASTX.sequence(records[1]))
-    biosequence = parentmodule(Rhizomorph).convert_sequence(first_seq_str)
+    sequence_alphabet = _infer_sequence_alphabet(
+        records;
+        type_hint=type_hint,
+        ambiguous_action=ambiguous_action
+    )
 
-    # Validate all records are same type
-    for record in records[2:min(10, length(records))]
+    for record in records[1:min(10, length(records))]
         seq_str = String(FASTX.sequence(record))
-        test_biosequence = parentmodule(Rhizomorph).convert_sequence(seq_str)
-        if typeof(test_biosequence) != typeof(biosequence)
+        if !parentmodule(Rhizomorph).validate_alphabet(seq_str, sequence_alphabet)
             error("Mixed sequence types detected. Cannot build graph from heterogeneous input.")
         end
     end
 
     # Dispatch to type-specific core function
-    if biosequence isa BioSequences.LongDNA
+    if sequence_alphabet == :DNA
         return _build_fasta_graph_olc_core(records, BioSequences.LongDNA{4}, dataset_id, min_overlap)
-    elseif biosequence isa BioSequences.LongRNA
+    elseif sequence_alphabet == :RNA
         return _build_fasta_graph_olc_core(records, BioSequences.LongRNA{4}, dataset_id, min_overlap)
-    elseif biosequence isa BioSequences.LongAA
+    elseif sequence_alphabet == :AA
         return _build_fasta_graph_olc_core(records, BioSequences.LongAA, dataset_id, min_overlap)
     else
-        error("Unsupported sequence type for FASTA graph: $(typeof(biosequence))")
+        error("Unsupported sequence type for FASTA graph: $sequence_alphabet")
     end
 end
 

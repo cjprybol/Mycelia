@@ -277,7 +277,12 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.DNAKmer{5}
-                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:singlestrand
+                        )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -303,7 +308,12 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:singlestrand
+                        )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
@@ -344,7 +354,13 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.RNAKmer{5}
-                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:singlestrand,
+                            type_hint=:RNA
+                        )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -378,7 +394,13 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:singlestrand,
+                            type_hint=:RNA
+                        )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
@@ -499,7 +521,12 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in DoubleStrand mode
                         kmer_type = Kmers.DNAKmer{5}
-                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:doublestrand
+                        )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -535,7 +562,12 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:doublestrand
+                        )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
@@ -576,7 +608,13 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in DoubleStrand mode
                         kmer_type = Kmers.RNAKmer{5}
-                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:doublestrand,
+                            type_hint=:RNA
+                        )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -609,7 +647,13 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                            reads,
+                            5;
+                            dataset_id="test",
+                            mode=:doublestrand,
+                            type_hint=:RNA
+                        )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph

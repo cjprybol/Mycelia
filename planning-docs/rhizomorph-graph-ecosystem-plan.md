@@ -2667,6 +2667,7 @@ end
 1. Move all variable-length BioSequence graph construction
 2. Implement proper alignment-based edge detection using exact matching, alignemnts with BioAlignments, and external tools (e.g. minimap2)
 3. Implement evidence tracking with double-nested dictionary structure for variable-length vertices
+4. Consider extending extension-based alphabet hints (`.fna`, `.frn`, `.faa`) to additional FASTA entry points package-wide using the shared `alphabet_hint_from_path` helper, while keeping `.fa`/`.fasta` ambiguous unless the caller opts in.
 
 #### 3.2 Consolidate FASTQ Graphs (`src/rhizomorph/variable-length/fastq-graphs.jl`)
 
