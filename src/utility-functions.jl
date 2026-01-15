@@ -1065,6 +1065,27 @@ function dataframe_convert_dicts_to_json(df)
 end
 
 """
+    normalize_json_value(value)
+
+Normalize values for JSON output by converting missing to nothing, symbols to
+strings, and recursively handling arrays, dictionaries, and named tuples.
+"""
+function normalize_json_value(value)
+    if value === missing
+        return nothing
+    elseif value isa Symbol
+        return String(value)
+    elseif value isa AbstractVector
+        return [normalize_json_value(v) for v in value]
+    elseif value isa Dict
+        return Dict(string(k) => normalize_json_value(v) for (k, v) in value)
+    elseif value isa NamedTuple
+        return Dict(string(k) => normalize_json_value(v) for (k, v) in pairs(value))
+    end
+    return value
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Return a string representation of the vector `v` with each element on a new line,
@@ -1924,12 +1945,17 @@ Extract contents of a gzipped tar archive file to a specified directory.
 # Arguments
 - `tarchive::AbstractString`: Path to the .tar.gz file to extract
 - `directory::AbstractString=dirname(tarchive)`: Target directory for extraction (defaults to the archive's directory)
+- `verbose::Bool=false`: Whether to print the full file listing during extraction
 
 # Returns
 - `AbstractString`: Path to the directory where contents were extracted
 """
-function tar_extract(;tarchive, directory=dirname(tarchive))
-    run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+function tar_extract(;tarchive, directory=dirname(tarchive), verbose::Bool=false)
+    if verbose
+        run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
+    else
+        run(`tar --extract --gzip --file=$(tarchive) --directory=$(directory)`)
+    end
     return directory
 end
 

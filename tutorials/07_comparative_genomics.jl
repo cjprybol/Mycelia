@@ -14,6 +14,12 @@
 # - Graph-based genome representation
 
 # ## Setup
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/07_comparative_genomics.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")
@@ -161,6 +167,28 @@ for i in 1:n_genomes
         print("$(round(js_matrix.distance_matrix[i,j], digits=3)) ")
     end
     println()
+end
+
+# ## Part 3b: Gold-Standard Whole-Genome Comparison
+#
+# Run alignment-based ANI/AAI/POCP metrics on a genome pair (external tools required).
+
+println("\n=== Gold-Standard Whole-Genome Comparison ===")
+
+run_external = lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+if run_external
+    gold_result = Mycelia.compare_genomes_gold(
+        genome_files[1],
+        genome_files[2];
+        methods=Symbol[:ANIm, :ANIb, :AAI, :POCP, :PyOrthoANI],
+        outdir="gold_compare_demo",
+        force=true
+    )
+
+    println("Gold-standard summary:")
+    println(gold_result.summary)
+else
+    println("Skipping gold-standard comparison (set MYCELIA_RUN_EXTERNAL=true).")
 end
 
 # ## Part 4: Pangenome Construction

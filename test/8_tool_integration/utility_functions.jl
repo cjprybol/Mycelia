@@ -1,5 +1,5 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
 # julia --project=. -e 'include("test/8_tool_integration/utility_functions.jl")'
 # ```
@@ -12,9 +12,10 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import Random
@@ -163,6 +164,8 @@ Test.@testset "system overview reflects slurm allocations" begin
         "SLURM_CPUS_PER_TASK" => nothing,
         "SLURM_TASKS_PER_NODE" => nothing,
         "SLURM_MEM_PER_CPU" => string(mem_per_cpu),
+        "SLURM_MEM_PER_NODE" => nothing,
+        "SLURM_MEM_PER_GPU" => nothing,
         "SLURM_GPUS_ON_NODE" => string(gpu_allocation),
         "SLURM_GPUS" => nothing,
         "SLURM_GPUS_PER_TASK" => nothing,

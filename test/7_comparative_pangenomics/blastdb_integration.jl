@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
-# julia --project=. -e 'include("test/7_comparative_pangenomics/blastdb_integration.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/7_comparative_pangenomics/blastdb_integration.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -12,9 +12,10 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import Arrow

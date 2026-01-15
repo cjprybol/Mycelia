@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/run_integration_tests.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/run_integration_tests.jl", "test", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, ".."))
+## end
+## using Revise
+
 #!/usr/bin/env julia
 # Integration Test Runner for Mycelia
 # This runs the full test suite including bioconda-dependent tests

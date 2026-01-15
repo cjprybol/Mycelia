@@ -15,6 +15,8 @@ const UN_PAIRS = [
     "fr-ru", "fr-zh",
     "ru-zh"
 ]
+const UN_CORPUS_BASE_URL = "https://www.un.org/dgacm/sites/www.un.org.dgacm/files/files/UNCORPUS"
+const UN_CORPUS_USER_AGENT = "Mycelia/UNCorpus"
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1208,27 +1210,50 @@ function fasterq_dump_parallel(srr_identifiers::Vector{String}; outdir::String=p
     return results
 end
 
+function _un_request(url::AbstractString, method::AbstractString;
+    headers::Dict{String,String}=Dict{String,String}(),
+    max_redirects::Int=5
+)
+    response = HTTP.request(method, url; headers=headers, status_exception=false)
+    if response.status in (301, 302, 303, 307, 308)
+        max_redirects > 0 || error("Too many redirects for $(url)")
+        location = HTTP.header(response, "Location")
+        location === nothing && error("Redirect without Location for $(url)")
+        return _un_request(location, method; headers=headers, max_redirects=max_redirects - 1)
+    end
+    return response
+end
+
 function _un_part_exists(url::AbstractString)
-    response = HTTP.request("HEAD", url; status_exception=false)
+    base_headers = Dict("User-Agent" => UN_CORPUS_USER_AGENT)
+    response = _un_request(url, "HEAD"; headers=base_headers)
     if response.status == 404
         return false
     elseif 200 <= response.status < 300
         return true
-    elseif response.status == 405
-        response = HTTP.request(
-            "GET",
-            url;
-            headers=Dict("Range" => "bytes=0-0"),
-            status_exception=false
+    elseif response.status == 405 || response.status == 403
+        response = _un_request(
+            url,
+            "GET";
+            headers=merge(base_headers, Dict("Range" => "bytes=0-0"))
         )
         if response.status == 404
             return false
         elseif response.status == 200 || response.status == 206
             return true
+        elseif response.status == 403
+            return true
         end
     end
 
     error("Unexpected HTTP status $(response.status) for $(url)")
+end
+
+function _un_download(url::AbstractString, outfile::AbstractString)
+    with_retry() do
+        Downloads.download(url, outfile; headers=Dict("User-Agent" => UN_CORPUS_USER_AGENT))
+    end
+    return outfile
 end
 
 function _merge_un_archive_parts(parts::Vector{String}, merged_archive::AbstractString)
@@ -1253,14 +1278,15 @@ function _download_and_extract_split_archive(
     base_name::AbstractString,
     url_base::AbstractString,
     outdir::AbstractString;
-    force::Bool=false
+    force::Bool=false,
+    verbose_extract::Bool=false
 )
     mkpath(outdir)
     merged_archive = joinpath(outdir, base_name)
 
     if isfile(merged_archive) && !force
         @info "Using existing merged archive: $(merged_archive)"
-        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir)
+        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir, verbose=verbose_extract)
         return outdir
     end
 
@@ -1279,7 +1305,7 @@ function _download_and_extract_split_archive(
         outfile = joinpath(outdir, filename)
         if force || !isfile(outfile)
             @info "Downloading $(url)"
-            Downloads.download(url, outfile)
+            _un_download(url, outfile)
         else
             @info "Using existing part: $(outfile)"
         end
@@ -1293,14 +1319,14 @@ function _download_and_extract_split_archive(
             outfile = joinpath(outdir, base_name)
             if force || !isfile(outfile)
                 @info "Downloading $(direct_url)"
-                Downloads.download(direct_url, outfile)
+                _un_download(direct_url, outfile)
             else
                 @info "Using existing archive: $(outfile)"
             end
 
             extracted = false
             try
-                Mycelia.tar_extract(tarchive=outfile, directory=outdir)
+                Mycelia.tar_extract(tarchive=outfile, directory=outdir, verbose=verbose_extract)
                 extracted = true
             finally
                 if extracted
@@ -1319,7 +1345,7 @@ function _download_and_extract_split_archive(
     try
         @info "Merging $(length(parts)) archive parts into $(merged_archive)"
         _merge_un_archive_parts(parts, merged_archive)
-        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir)
+        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir, verbose=verbose_extract)
         extracted = true
     finally
         if extracted
@@ -1481,8 +1507,9 @@ function download_un_parallel_corpus(;
     outdir::String=pwd(),
     subsets::Vector{String}=["all"],
     formats::Vector{String}=["txt"],
-    base_url::String="https://conferences.unite.un.org/UNCorpus/download",
-    force::Bool=false
+    base_url::String=UN_CORPUS_BASE_URL,
+    force::Bool=false,
+    verbose_extract::Bool=false
 )
     archives = _resolve_un_archives(subsets, formats)
 
@@ -1492,10 +1519,100 @@ function download_un_parallel_corpus(;
 
     for archive in archives
         @info "Downloading UN Parallel Corpus archive: $(archive)"
-        _download_and_extract_split_archive(archive, url_base, corpus_dir; force=force)
+        _download_and_extract_split_archive(
+            archive,
+            url_base,
+            corpus_dir;
+            force=force,
+            verbose_extract=verbose_extract
+        )
     end
 
     return corpus_dir
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Download and extract the United Nations Parallel Corpus v1.0 test sets.
+
+# Arguments
+- `outdir::String`: Output directory (default: current directory). Files are extracted into
+  `joinpath(outdir, "un_corpus_testsets")`.
+- `base_url::String`: Base URL for downloads.
+- `force::Bool`: Re-download archive even if it already exists.
+
+# Returns
+- `String`: Path to the test set directory.
+"""
+function download_un_parallel_corpus_testset(;
+    outdir::String=pwd(),
+    base_url::String=UN_CORPUS_BASE_URL,
+    force::Bool=false,
+    verbose_extract::Bool=false
+)
+    testset_dir = joinpath(outdir, "un_corpus_testsets")
+    mkpath(testset_dir)
+    url_base = rstrip(base_url, '/')
+    archive = "UNv1.0.testsets.tar.gz"
+    _download_and_extract_split_archive(
+        archive,
+        url_base,
+        testset_dir;
+        force=force,
+        verbose_extract=verbose_extract
+    )
+    return testset_dir
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Collect UN Parallel Corpus plain-text files by language.
+
+# Arguments
+- `corpus_root::String`: Root directory containing extracted UN corpus files.
+- `subsets::Vector{String}`: Subset filters (e.g. `["all"]`, `["en-fr"]`, `["6way"]`).
+
+# Returns
+- `Dict{String, Vector{String}}`: Map of language code to file paths.
+"""
+function collect_un_language_files(corpus_root::String; subsets::Vector{String})
+    language_files = Dict{String, Vector{String}}()
+    use_all = "all" in subsets
+    for (root, _dirs, files) in walkdir(corpus_root)
+        for filename in files
+            filepath = joinpath(root, filename)
+            if endswith(filename, ".xml") || endswith(filename, ".gz") || endswith(filename, ".tar")
+                continue
+            end
+            if !occursin("UNv1.0", filename)
+                continue
+            end
+            if !occursin("-", filename) && !occursin("6way", filename)
+                continue
+            end
+            parts = split(filename, '.')
+            if length(parts) < 2
+                continue
+            end
+            lang = parts[end]
+            if length(lang) > 3
+                continue
+            end
+            if !all(isletter, lang)
+                continue
+            end
+            if !use_all
+                matches_subset = any(subset -> occursin(subset, filename), subsets)
+                if !matches_subset
+                    continue
+                end
+            end
+            push!(get!(Vector{String}, language_files, lang), filepath)
+        end
+    end
+    return language_files
 end
 
 """

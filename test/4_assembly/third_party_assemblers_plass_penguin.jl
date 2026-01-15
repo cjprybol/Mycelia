@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/third_party_assemblers_plass_penguin.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/third_party_assemblers_plass_penguin.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
 import Test
 import Mycelia
 import StableRNGs
@@ -129,4 +147,3 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
         end
     end
 end
-

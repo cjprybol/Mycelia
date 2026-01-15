@@ -14,6 +14,12 @@
 # - Reproducible research practices
 
 # ## Setup
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/08_tool_integration.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

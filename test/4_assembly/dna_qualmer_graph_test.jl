@@ -1,9 +1,24 @@
-# DNA Qualmer Graph Construction Test
+# From the Mycelia base directory, run the tests with:
 #
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/dna_qualmer_graph_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/dna_qualmer_graph_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
+# DNA Qualmer Graph Construction Test
 # Tests for DNA qualmer (quality-aware k-mer) graph construction in singlestrand mode.
 # Validates that DNA sequences with quality scores are properly processed.
-#
-# Run with: julia --project=. test/4_assembly/dna_qualmer_graph_test.jl
 
 import Test
 import Mycelia

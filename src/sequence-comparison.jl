@@ -921,6 +921,1444 @@ function seq2sha256(seq::BioSequences.BioSequence)
     return seq2sha256(string(seq))
 end
 
+const DNA_COMPLEMENT_TABLE = let table = Vector{UInt8}(undef, 256)
+    for i in 0:255
+        table[i + 1] = UInt8(i)
+    end
+    complements = Dict(
+        'A' => 'T',
+        'T' => 'A',
+        'C' => 'G',
+        'G' => 'C',
+        'U' => 'A',
+        'R' => 'Y',
+        'Y' => 'R',
+        'S' => 'S',
+        'W' => 'W',
+        'K' => 'M',
+        'M' => 'K',
+        'B' => 'V',
+        'D' => 'H',
+        'H' => 'D',
+        'V' => 'B',
+        'N' => 'N'
+    )
+    for (base, comp) in complements
+        table[Int(UInt8(base)) + 1] = UInt8(comp)
+    end
+    table
+end
+
+function genome_pair_id(reference::AbstractString, query::AbstractString)
+    ref_abs = abspath(reference)
+    query_abs = abspath(query)
+    ref_stat = stat(ref_abs)
+    query_stat = stat(query_abs)
+    payload = join([
+        ref_abs,
+        string(ref_stat.size),
+        string(ref_stat.mtime),
+        query_abs,
+        string(query_stat.size),
+        string(query_stat.mtime)
+    ], "|")
+    return SHA.bytes2hex(SHA.sha256(payload))
+end
+
+function count_fasta_records(fasta_path::AbstractString)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    count = 0
+    open(fasta_path) do io
+        reader = FASTX.FASTA.Reader(io)
+        for _ in reader
+            count += 1
+        end
+    end
+    return count
+end
+
+function reverse_complement_ascii(seq::AbstractString)
+    bytes = Vector{UInt8}(codeunits(seq))
+    n = length(bytes)
+    out = Vector{UInt8}(undef, n)
+    for i in 1:n
+        out[i] = DNA_COMPLEMENT_TABLE[bytes[n - i + 1] + 1]
+    end
+    return String(out)
+end
+
+function booth_min_rotation_index(seq_bytes::Vector{UInt8})
+    n = length(seq_bytes)
+    if n == 0
+        return 1
+    end
+    doubled = Vector{UInt8}(undef, 2 * n)
+    copyto!(doubled, 1, seq_bytes, 1, n)
+    copyto!(doubled, n + 1, seq_bytes, 1, n)
+
+    i = 1
+    j = 2
+    k = 0
+    while i <= n && j <= n && k < n
+        a = doubled[i + k]
+        b = doubled[j + k]
+        if a == b
+            k += 1
+        elseif a < b
+            j = j + k + 1
+            if j == i
+                j += 1
+            end
+            k = 0
+        else
+            i = i + k + 1
+            if i == j
+                i += 1
+            end
+            k = 0
+        end
+    end
+    return min(i, j)
+end
+
+function rotate_bytes(seq_bytes::Vector{UInt8}, start_index::Int)
+    n = length(seq_bytes)
+    if n == 0
+        return ""
+    end
+    start_index = ((start_index - 1) % n) + 1
+    if start_index == 1
+        return String(seq_bytes)
+    end
+    rotated = Vector{UInt8}(undef, n)
+    tail_len = n - start_index + 1
+    copyto!(rotated, 1, seq_bytes, start_index, tail_len)
+    copyto!(rotated, tail_len + 1, seq_bytes, 1, start_index - 1)
+    return String(rotated)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Return a canonical linear representation of a circular sequence.
+
+Selects the lexicographically minimal rotation across the forward strand and its
+reverse complement, returning the canonical sequence and the chosen orientation.
+"""
+function canonical_circular_sequence(seq::AbstractString)
+    seq_upper = uppercase(seq)
+    forward_bytes = Vector{UInt8}(codeunits(seq_upper))
+    forward_start = booth_min_rotation_index(forward_bytes)
+    forward_rot = rotate_bytes(forward_bytes, forward_start)
+
+    reverse_seq = reverse_complement_ascii(seq_upper)
+    reverse_bytes = Vector{UInt8}(codeunits(reverse_seq))
+    reverse_start = booth_min_rotation_index(reverse_bytes)
+    reverse_rot = rotate_bytes(reverse_bytes, reverse_start)
+
+    if reverse_rot < forward_rot
+        return reverse_rot, :reverse, reverse_start
+    end
+    return forward_rot, :forward, forward_start
+end
+
+function header_says_circular(header::AbstractString)
+    return occursin("circular", lowercase(header))
+end
+
+function has_terminal_overlap(seq::AbstractString; overlap_bp::Int=200)
+    if overlap_bp <= 0
+        return false
+    end
+    seq_len = length(seq)
+    if seq_len < 2 * overlap_bp
+        return false
+    end
+    return seq[1:overlap_bp] == seq[end - overlap_bp + 1:end]
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Normalize a FASTA file by uppercasing sequences and optionally sorting records.
+"""
+function normalize_fasta(fasta_path::AbstractString; out_path::AbstractString, sort_records::Bool=false, force::Bool=false)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    @assert !isempty(out_path) "out_path must be a non-empty string"
+    mkpath(dirname(out_path))
+
+    if !force && isfile(out_path) && filesize(out_path) > 0
+        return out_path
+    end
+
+    records = FASTX.FASTA.Record[]
+    open(fasta_path) do io
+        reader = FASTX.FASTA.Reader(io)
+        for record in reader
+            push!(records, record)
+        end
+    end
+
+    if sort_records
+        sort!(records, by=FASTX.identifier)
+    end
+
+    open(FASTX.FASTA.Writer, out_path) do writer
+        for record in records
+            description = FASTX.description(record)
+            seq = String(FASTX.sequence(record))
+            seq = uppercase(seq)
+            header = isnothing(description) || isempty(description) ?
+                     String(FASTX.identifier(record)) :
+                     String(description)
+            fasta_record = FASTX.FASTA.Record(header, seq)
+            write(writer, fasta_record)
+        end
+    end
+
+    return out_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Canonicalize a single-contig circular FASTA by rotating to a canonical start and strand.
+"""
+function canonicalize_circular_fasta(fasta_path::AbstractString; out_path::AbstractString, force::Bool=false)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    @assert !isempty(out_path) "out_path must be a non-empty string"
+    mkpath(dirname(out_path))
+
+    if !force && isfile(out_path) && filesize(out_path) > 0
+        return out_path
+    end
+
+    record = nothing
+    record_count = 0
+    open(fasta_path) do io
+        reader = FASTX.FASTA.Reader(io)
+        for rec in reader
+            record_count += 1
+            if record_count == 1
+                record = rec
+            else
+                break
+            end
+        end
+    end
+
+    @assert record_count == 1 "Circular canonicalization expects a single-contig FASTA: $(fasta_path)"
+    description = FASTX.description(record)
+    seq = String(FASTX.sequence(record))
+    canonical_seq, _, _ = canonical_circular_sequence(seq)
+    header = isnothing(description) || isempty(description) ?
+             String(FASTX.identifier(record)) :
+             String(description)
+    fasta_record = FASTX.FASTA.Record(header, canonical_seq)
+
+    open(FASTX.FASTA.Writer, out_path) do writer
+        write(writer, fasta_record)
+    end
+
+    return out_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Prepare a genome FASTA for alignment-based comparison with optional circular normalization.
+"""
+function prepare_genome_for_comparison(fasta_path::AbstractString;
+        outdir::AbstractString,
+        circular::Union{Bool,Symbol}=:auto,
+        sort_records::Bool=false,
+        circular_heuristic::Bool=false,
+        circular_overlap_bp::Int=200,
+        force::Bool=false)
+    @assert circular in (true, false, :auto) "circular must be true, false, or :auto"
+    if circular_heuristic
+        @assert circular_overlap_bp > 0 "circular_overlap_bp must be positive"
+    end
+    mkpath(outdir)
+    normalized = joinpath(outdir, "normalized.fna")
+    normalize_fasta(fasta_path; out_path=normalized, sort_records=sort_records, force=force)
+
+    if circular == false
+        return normalized
+    end
+
+    record_count = 0
+    header = ""
+    seq = ""
+    open(normalized) do io
+        reader = FASTX.FASTA.Reader(io)
+        for record in reader
+            record_count += 1
+            if record_count == 1
+                description = FASTX.description(record)
+                header = isnothing(description) || isempty(description) ?
+                         String(FASTX.identifier(record)) :
+                         string(FASTX.identifier(record), " ", description)
+                seq = String(FASTX.sequence(record))
+            else
+                break
+            end
+        end
+    end
+
+    heuristic_hit = circular_heuristic && has_terminal_overlap(seq; overlap_bp=circular_overlap_bp)
+    should_canonicalize = circular == true ||
+        (circular == :auto && record_count == 1 && (header_says_circular(header) || heuristic_hit))
+    if !should_canonicalize
+        return normalized
+    end
+
+    canonical = joinpath(outdir, "canonical.fna")
+    return canonicalize_circular_fasta(normalized; out_path=canonical, force=force)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Fragment a genome FASTA into consecutive fixed-size chunks.
+
+# Arguments
+- `fasta_path::String`: Path to input FASTA file.
+- `fragment_size::Int`: Fragment length in bases (default: 1020).
+- `out_path::String`: Output FASTA path for fragments.
+- `discard_tail::Bool`: If true, drop trailing fragments shorter than `fragment_size`.
+
+# Returns
+- `String`: Path to the fragment FASTA file.
+"""
+function fragment_genome(fasta_path::String, fragment_size::Int=1020;
+        out_path::String, discard_tail::Bool=true)
+    @assert isfile(fasta_path) "FASTA file does not exist: $(fasta_path)"
+    @assert fragment_size > 0 "fragment_size must be positive: $(fragment_size)"
+    @assert !isempty(out_path) "out_path must be a non-empty string"
+    mkpath(dirname(out_path))
+
+    open(FASTX.FASTA.Writer, out_path) do writer
+        open(fasta_path) do in_io
+            reader = FASTX.FASTA.Reader(in_io)
+            for record in reader
+                seq = FASTX.sequence(record)
+                seq_id = FASTX.identifier(record)
+                seq_len = length(seq)
+                num_fragments = discard_tail ? div(seq_len, fragment_size) : cld(seq_len, fragment_size)
+
+                for i in 1:num_fragments
+                    start_pos = (i - 1) * fragment_size + 1
+                    end_pos = discard_tail ? start_pos + fragment_size - 1 : min(i * fragment_size, seq_len)
+                    frag_seq = seq[start_pos:end_pos]
+                    frag_id = "$(seq_id)_frag_$(i)"
+                    frag_rec = FASTX.FASTA.Record(frag_id, frag_seq)
+                    write(writer, frag_rec)
+                end
+            end
+        end
+    end
+
+    return out_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Average Nucleotide Identity (ANI) using the standard fragmentation + BLASTN method.
+
+# Arguments
+- `query::String`: Path to query genome FASTA.
+- `reference::String`: Path to reference genome FASTA (used to build BLAST db).
+- `outdir::String`: Output directory (default: temporary directory).
+- `threads::Int`: Number of BLAST threads.
+- `fragment_size::Int`: Query fragment length (default: 1020).
+- `min_coverage_pct::Float64`: Minimum alignment coverage of the query fragment.
+- `min_identity_pct::Float64`: Minimum percent identity threshold.
+- `task::String`: BLASTN task (default: "blastn").
+- `evalue::Float64`: BLAST E-value threshold.
+- `discard_tail::Bool`: Drop trailing fragments shorter than `fragment_size`.
+- `coverage_mode::Symbol`: Coverage calculation (`:alignment` or `:qspan`).
+- `force::Bool`: Force recomputation of fragments and BLAST results.
+
+# Returns
+- `Float64`: The ANI value (0.0 - 100.0).
+- `DataFrame`: The filtered BLAST results used for the calculation.
+"""
+function calculate_gold_standard_ani(;
+    query::String,
+    reference::String,
+    outdir::String = mktempdir(),
+    threads::Int = get_default_threads(),
+    fragment_size::Int = 1020,
+    min_coverage_pct::Float64 = 70.0,
+    min_identity_pct::Float64 = 30.0,
+    task::String = "blastn",
+    evalue::Float64 = 1e-15,
+    discard_tail::Bool = true,
+    coverage_mode::Symbol = :alignment,
+    force::Bool = false
+)
+    @assert isfile(query) "Query file does not exist: $(query)"
+    @assert isfile(reference) "Reference file does not exist: $(reference)"
+    mkpath(outdir)
+
+    fragmented_query = joinpath(outdir, "query_fragments.fasta")
+    if force || !isfile(fragmented_query) || filesize(fragmented_query) == 0
+        fragment_genome(query, fragment_size; out_path=fragmented_query, discard_tail=discard_tail)
+    end
+
+    db_prefix = Mycelia.ensure_blast_db(fasta=reference, dbtype="nucl")
+    blast_report_path = Mycelia.run_blastn(
+        outdir=outdir,
+        fasta=fragmented_query,
+        blastdb=db_prefix,
+        threads=threads,
+        task=task,
+        force=force,
+        max_target_seqs=1,
+        evalue=evalue
+    )
+
+    df = standardize_blast_hits(blast_report_path)
+    if DataFrames.nrow(df) == 0
+        @warn "No BLAST hits found."
+        return 0.0, df
+    end
+
+    df[!, :query_coverage] = coverage_fraction(df; coverage_mode=coverage_mode) .* 100
+    filtered_df = DataFrames.filter(row ->
+        row[:query_coverage] >= min_coverage_pct &&
+        row[:pident] >= min_identity_pct,
+        df
+    )
+
+    if DataFrames.nrow(filtered_df) == 0
+        return 0.0, filtered_df
+    end
+
+    ani = Statistics.mean(filtered_df.pident)
+    return ani, filtered_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Average Amino Acid Identity (AAI) using BLASTP best-hit filtering.
+
+# Arguments
+- `query_proteins::String`: Path to query protein FASTA.
+- `reference_proteins::String`: Path to reference protein FASTA.
+- `outdir::String`: Output directory (default: temporary directory).
+- `threads::Int`: Number of BLAST threads.
+- `min_coverage_pct::Float64`: Minimum alignment coverage of the query protein.
+- `min_identity_pct::Float64`: Minimum percent identity threshold.
+- `evalue::Float64`: BLAST E-value threshold.
+- `max_target_seqs::Int`: Maximum target sequences per query (default: 1).
+- `force::Bool`: Force recomputation of BLAST results.
+
+# Returns
+- `Float64`: The AAI value (0.0 - 100.0).
+- `DataFrame`: The filtered BLAST results used for the calculation.
+"""
+function calculate_gold_standard_aai(;
+    query_proteins::String,
+    reference_proteins::String,
+    outdir::String = mktempdir(),
+    threads::Int = get_default_threads(),
+    min_coverage_pct::Float64 = 70.0,
+    min_identity_pct::Float64 = 30.0,
+    evalue::Float64 = 1e-5,
+    max_target_seqs::Int = 1,
+    force::Bool = false
+)
+    @assert isfile(query_proteins) "Query protein file does not exist: $(query_proteins)"
+    @assert isfile(reference_proteins) "Reference protein file does not exist: $(reference_proteins)"
+    mkpath(outdir)
+
+    blast_report_path = Mycelia.run_blastp_search(
+        query_fasta=query_proteins,
+        reference_fasta=reference_proteins,
+        output_dir=outdir,
+        threads=threads,
+        evalue=evalue,
+        max_target_seqs=max_target_seqs
+    )
+
+    df = Mycelia.parse_blast_report(blast_report_path)
+    if DataFrames.nrow(df) == 0
+        @warn "No BLASTP hits found."
+        return 0.0, df
+    end
+
+    df[!, :query_coverage] = (df[!, Symbol("alignment length")] ./ df[!, Symbol("query length")]) .* 100
+    filtered_df = DataFrames.filter(row ->
+        row[:query_coverage] >= min_coverage_pct &&
+        row[Symbol("% identity")] >= min_identity_pct,
+        df
+    )
+
+    if DataFrames.nrow(filtered_df) == 0
+        return 0.0, filtered_df
+    end
+
+    aai = Statistics.mean(filtered_df[!, Symbol("% identity")])
+    return aai, filtered_df
+end
+
+function empty_hits_table()
+    return DataFrames.DataFrame(
+        query_id=String[],
+        subject_id=String[],
+        pident=Float64[],
+        alignment_length=Int[],
+        query_length=Int[],
+        subject_length=Int[],
+        evalue=Float64[],
+        bitscore=Float64[]
+    )
+end
+
+function standardize_blast_hits(blast_report::AbstractString)
+    df = Mycelia.parse_blast_report(blast_report)
+    if DataFrames.nrow(df) == 0
+        return empty_hits_table()
+    end
+    current_names = names(df)
+    if any(name -> name isa AbstractString, current_names)
+        DataFrames.rename!(df, current_names .=> Symbol.(current_names))
+    end
+    rename_map = Dict(
+        Symbol("query id") => :query_id,
+        Symbol("qseqid") => :query_id,
+        Symbol("subject id") => :subject_id,
+        Symbol("sseqid") => :subject_id,
+        Symbol("alignment length") => :alignment_length,
+        Symbol("length") => :alignment_length,
+        Symbol("% identity") => :pident,
+        Symbol("pident") => :pident,
+        Symbol("query length") => :query_length,
+        Symbol("qlen") => :query_length,
+        Symbol("subject length") => :subject_length,
+        Symbol("slen") => :subject_length,
+        Symbol("q. start") => :query_start,
+        Symbol("qstart") => :query_start,
+        Symbol("q. end") => :query_end,
+        Symbol("qend") => :query_end,
+        Symbol("s. start") => :subject_start,
+        Symbol("sstart") => :subject_start,
+        Symbol("s. end") => :subject_end,
+        Symbol("send") => :subject_end,
+        Symbol("evalue") => :evalue,
+        Symbol("bit score") => :bitscore,
+        Symbol("bitscore") => :bitscore
+    )
+    for (old_name, new_name) in rename_map
+        if old_name in names(df)
+            DataFrames.rename!(df, old_name => new_name)
+        elseif String(old_name) in names(df)
+            DataFrames.rename!(df, String(old_name) => new_name)
+        end
+    end
+    return df
+end
+
+function read_diamond_hits(results_file::AbstractString)
+    if !isfile(results_file) || filesize(results_file) == 0
+        return empty_hits_table()
+    end
+    header = ["query_id", "subject_id", "pident", "alignment_length",
+              "query_length", "subject_length", "evalue", "bitscore"]
+    return CSV.read(results_file, DataFrames.DataFrame; delim='\t', header=header, normalizenames=true)
+end
+
+function best_hits_by_query(df::DataFrames.DataFrame; query_col::Symbol=:query_id,
+        bitscore_col::Symbol=:bitscore, evalue_col::Symbol=:evalue)
+    if DataFrames.nrow(df) == 0
+        return df
+    end
+    sorted = DataFrames.sort(df, [query_col, bitscore_col, evalue_col], rev=[false, true, false])
+    grouped = DataFrames.groupby(sorted, query_col)
+    return DataFrames.combine(grouped) do subdf
+        subdf[1, :]
+    end
+end
+
+function filter_hits_by_threshold(df::DataFrames.DataFrame; min_id::Float64,
+        min_aln_frac::Float64, use_shorter::Bool=false, evalue_max::Union{Nothing,Float64}=nothing)
+    if DataFrames.nrow(df) == 0
+        return df
+    end
+    denom = use_shorter ? min.(df.query_length, df.subject_length) : df.query_length
+    coverage = df.alignment_length ./ denom
+    coverage_ok = coverage .>= min_aln_frac
+    pident_ok = df.pident .>= min_id
+    mask = coalesce.(coverage_ok, false) .& coalesce.(pident_ok, false)
+    if !isnothing(evalue_max)
+        evalue_ok = df.evalue .<= evalue_max
+        mask .&= coalesce.(evalue_ok, false)
+    end
+    return df[mask, :]
+end
+
+function coverage_fraction(df::DataFrames.DataFrame; coverage_mode::Symbol=:alignment)
+    @assert coverage_mode in (:alignment, :qspan) "coverage_mode must be :alignment or :qspan"
+    if DataFrames.nrow(df) == 0
+        return Float64[]
+    end
+    if coverage_mode == :alignment
+        return df.alignment_length ./ df.query_length
+    end
+    required = (:query_start in names(df)) && (:query_end in names(df))
+    @assert required "coverage_mode=:qspan requires query_start and query_end columns"
+    return (abs.(df.query_end .- df.query_start) .+ 1) ./ df.query_length
+end
+
+function compute_directional_ani(hits_df::DataFrames.DataFrame, total_fragments::Int;
+        min_id::Float64, min_aln_frac::Float64, coverage_mode::Symbol=:alignment)
+    if total_fragments == 0
+        return (;ani=missing, af=missing, hits=DataFrames.DataFrame())
+    end
+    best_hits = best_hits_by_query(hits_df)
+    coverage = coalesce.(coverage_fraction(best_hits; coverage_mode=coverage_mode), 0.0)
+    pident = coalesce.(best_hits.pident, -Inf)
+    mask = (coverage .>= min_aln_frac) .& (pident .>= min_id)
+    filtered = best_hits[mask, :]
+    if DataFrames.nrow(filtered) == 0
+        return (;ani=missing, af=0.0, hits=filtered)
+    end
+    ani = Statistics.mean(filtered.pident)
+    af = DataFrames.nrow(filtered) / total_fragments
+    return (;ani, af, hits=filtered)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute ANIm-style ANI using MUMmer `dnadiff`.
+"""
+function ani_mummer(reference::AbstractString, query::AbstractString;
+        outdir::AbstractString="ani_mummer",
+        prefix::String="dnadiff",
+        force::Bool=false,
+        dnadiff_args::Vector{String}=String[])
+    mkpath(outdir)
+    dnadiff_outputs = Mycelia.run_dnadiff(
+        reference=reference,
+        query=query,
+        outdir=outdir,
+        prefix=prefix,
+        force=force,
+        additional_args=dnadiff_args
+    )
+    parsed = Mycelia.parse_dnadiff_report(dnadiff_outputs.report)
+    sections = parsed.raw_sections
+    one_to_one = get(sections, Symbol("1_to_1"), Dict{Symbol, Any}())
+    many_to_many = get(sections, :m_to_m, Dict{Symbol, Any}())
+    summary = parsed.summary
+
+    function aligned_fraction(metrics::AbstractDict{Symbol, T}, which::Symbol) where {T}
+        pct_key = which == :ref ? :aligned_pct_ref : :aligned_pct_query
+        if haskey(metrics, pct_key)
+            return metrics[pct_key] / 100.0
+        end
+        aligned_key = which == :ref ? :aligned_bases_ref : :aligned_bases_query
+        total_key = which == :ref ? :total_bases_ref : :total_bases_query
+        if haskey(metrics, aligned_key) && haskey(metrics, total_key) && metrics[total_key] > 0
+            return metrics[aligned_key] / metrics[total_key]
+        end
+        return missing
+    end
+
+    summary_dict = Dict(pairs(summary))
+    fallback_ref = aligned_fraction(summary_dict, :ref)
+    fallback_query = aligned_fraction(summary_dict, :query)
+
+    return (;
+        method=:ANIm,
+        ani_1to1=get(one_to_one, :avg_identity, get(summary, :avg_identity, missing)),
+        ani_m2m=get(many_to_many, :avg_identity, missing),
+        af_ref_1to1=aligned_fraction(one_to_one, :ref) === missing ? fallback_ref : aligned_fraction(one_to_one, :ref),
+        af_query_1to1=aligned_fraction(one_to_one, :query) === missing ? fallback_query : aligned_fraction(one_to_one, :query),
+        af_ref_m2m=aligned_fraction(many_to_many, :ref),
+        af_query_m2m=aligned_fraction(many_to_many, :query),
+        aligned_bases_ref=get(one_to_one, :aligned_bases_ref, get(summary, :aligned_bases_ref, missing)),
+        aligned_bases_query=get(one_to_one, :aligned_bases_query, get(summary, :aligned_bases_query, missing)),
+        total_bases_ref=get(one_to_one, :total_bases_ref, get(summary, :total_bases_ref, missing)),
+        total_bases_query=get(one_to_one, :total_bases_query, get(summary, :total_bases_query, missing)),
+        report_path=dnadiff_outputs.report,
+        parsed_report=parsed
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute ANIb-style ANI using BLASTn on fixed-length fragments in both directions.
+
+Defaults are set by `mode`: `:strict` (1020 bp, 30% id, evalue 1e-15, tail-discard)
+or `:modern` (1000 bp, 70% id, evalue 1e-3).
+"""
+function ani_blast(reference::AbstractString, query::AbstractString;
+        outdir::AbstractString="ani_blast",
+        mode::Symbol=:strict,
+        fragment_size::Union{Nothing,Int}=nothing,
+        discard_tail::Union{Nothing,Bool}=nothing,
+        min_id::Union{Nothing,Float64}=nothing,
+        min_aln_frac::Union{Nothing,Float64}=nothing,
+        coverage_mode::Symbol=:alignment,
+        threads::Int=get_default_threads(),
+        task::String="blastn",
+        evalue::Union{Nothing,Float64}=nothing,
+        force::Bool=false)
+    @assert mode in (:strict, :modern) "mode must be :strict or :modern"
+    default_fragment_size = mode == :strict ? 1020 : 1000
+    default_min_id = mode == :strict ? 30.0 : 70.0
+    default_min_aln_frac = 0.7
+    default_evalue = mode == :strict ? 1e-15 : 1e-3
+
+    fragment_size = isnothing(fragment_size) ? default_fragment_size : fragment_size
+    min_id = isnothing(min_id) ? default_min_id : min_id
+    min_aln_frac = isnothing(min_aln_frac) ? default_min_aln_frac : min_aln_frac
+    evalue = isnothing(evalue) ? default_evalue : evalue
+    discard_tail = isnothing(discard_tail) ? (mode == :strict) : discard_tail
+
+    @assert fragment_size > 0 "fragment_size must be positive"
+    @assert min_aln_frac > 0 "min_aln_frac must be positive"
+    mkpath(outdir)
+
+    ref_fragments = joinpath(outdir, "reference_fragments.fna")
+    query_fragments = joinpath(outdir, "query_fragments.fna")
+    if force || !isfile(ref_fragments) || filesize(ref_fragments) == 0
+        fragment_genome(reference, fragment_size; out_path=ref_fragments, discard_tail=discard_tail)
+    end
+    if force || !isfile(query_fragments) || filesize(query_fragments) == 0
+        fragment_genome(query, fragment_size; out_path=query_fragments, discard_tail=discard_tail)
+    end
+
+    ref_db = Mycelia.ensure_blast_db(fasta=reference, dbtype="nucl", db_prefix=joinpath(outdir, "reference_db"), force=force)
+    query_db = Mycelia.ensure_blast_db(fasta=query, dbtype="nucl", db_prefix=joinpath(outdir, "query_db"), force=force)
+
+    query_vs_ref = Mycelia.run_blastn(
+        outdir=outdir,
+        fasta=query_fragments,
+        blastdb=ref_db,
+        threads=threads,
+        task=task,
+        force=force,
+        max_target_seqs=1,
+        evalue=evalue
+    )
+    ref_vs_query = Mycelia.run_blastn(
+        outdir=outdir,
+        fasta=ref_fragments,
+        blastdb=query_db,
+        threads=threads,
+        task=task,
+        force=force,
+        max_target_seqs=1,
+        evalue=evalue
+    )
+
+    query_hits = standardize_blast_hits(query_vs_ref)
+    ref_hits = standardize_blast_hits(ref_vs_query)
+
+    query_frag_count = count_fasta_records(query_fragments)
+    ref_frag_count = count_fasta_records(ref_fragments)
+
+    query_summary = compute_directional_ani(query_hits, query_frag_count;
+        min_id=min_id, min_aln_frac=min_aln_frac, coverage_mode=coverage_mode)
+    ref_summary = compute_directional_ani(ref_hits, ref_frag_count;
+        min_id=min_id, min_aln_frac=min_aln_frac, coverage_mode=coverage_mode)
+
+    ani_values = skipmissing([query_summary.ani, ref_summary.ani])
+    ani = isempty(ani_values) ? missing : Statistics.mean(collect(ani_values))
+
+    return (;
+        method=:ANIb,
+        ani=ani,
+        ani_query_vs_ref=query_summary.ani,
+        ani_ref_vs_query=ref_summary.ani,
+        af_query_vs_ref=query_summary.af,
+        af_ref_vs_query=ref_summary.af,
+        n_query_fragments=query_frag_count,
+        n_reference_fragments=ref_frag_count,
+        params=(; mode, fragment_size, min_id, min_aln_frac, coverage_mode, evalue, discard_tail),
+        query_fragments=query_fragments,
+        reference_fragments=ref_fragments,
+        hits_query_vs_ref=query_summary.hits,
+        hits_ref_vs_query=ref_summary.hits,
+        raw_query_hits=query_hits,
+        raw_ref_hits=ref_hits
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute AAI using reciprocal best hits (RBH) between predicted or provided proteins.
+
+If `tool=:auto`, DIAMOND is used when available, otherwise BLASTP.
+"""
+function aai_rbh(genome_a::AbstractString, genome_b::AbstractString;
+        proteins_a::Union{Nothing,AbstractString}=nothing,
+        proteins_b::Union{Nothing,AbstractString}=nothing,
+        tool::Symbol=:auto,
+        min_id::Float64=30.0,
+        min_len_frac::Float64=0.7,
+        evalue::Float64=1e-5,
+        coverage_denom::Symbol=:shorter,
+        threads::Int=get_default_threads(),
+        outdir::AbstractString="aai_rbh",
+        translation_table::Union{Nothing,Int}=nothing,
+        force::Bool=false)
+    mkpath(outdir)
+    @assert coverage_denom in (:shorter, :query) "coverage_denom must be :shorter or :query"
+
+    prot_a = isnothing(proteins_a) ? Mycelia.run_pyrodigal(
+        fasta_file=genome_a,
+        out_dir=joinpath(outdir, "proteins_a"),
+        translation_table=translation_table
+    ).faa : String(proteins_a)
+    prot_b = isnothing(proteins_b) ? Mycelia.run_pyrodigal(
+        fasta_file=genome_b,
+        out_dir=joinpath(outdir, "proteins_b"),
+        translation_table=translation_table
+    ).faa : String(proteins_b)
+
+    resolved_tool = tool == :auto ? :diamond : tool
+
+    hits_ab_path = ""
+    hits_ba_path = ""
+    if resolved_tool == :diamond
+        try
+            hits_ab_path = Mycelia.run_diamond_besthits(
+                query_fasta=prot_a,
+                reference_fasta=prot_b,
+                output_dir=joinpath(outdir, "diamond_ab"),
+                threads=threads,
+                evalue=evalue,
+                force=force
+            )
+            hits_ba_path = Mycelia.run_diamond_besthits(
+                query_fasta=prot_b,
+                reference_fasta=prot_a,
+                output_dir=joinpath(outdir, "diamond_ba"),
+                threads=threads,
+                evalue=evalue,
+                force=force
+            )
+        catch e
+            if tool == :auto
+                @warn "DIAMOND failed for AAI; falling back to BLASTP" exception=e
+                resolved_tool = :blastp
+            else
+                rethrow(e)
+            end
+        end
+    end
+    if resolved_tool == :blastp
+        hits_ab_path = Mycelia.run_blastp_search(
+            query_fasta=prot_a,
+            reference_fasta=prot_b,
+            output_dir=joinpath(outdir, "blastp_ab"),
+            threads=threads,
+            evalue=evalue,
+            max_target_seqs=1
+        )
+        hits_ba_path = Mycelia.run_blastp_search(
+            query_fasta=prot_b,
+            reference_fasta=prot_a,
+            output_dir=joinpath(outdir, "blastp_ba"),
+            threads=threads,
+            evalue=evalue,
+            max_target_seqs=1
+        )
+    elseif resolved_tool != :diamond
+        error("tool must be :auto, :diamond, or :blastp")
+    end
+
+    hits_ab = resolved_tool == :diamond ? read_diamond_hits(hits_ab_path) : standardize_blast_hits(hits_ab_path)
+    hits_ba = resolved_tool == :diamond ? read_diamond_hits(hits_ba_path) : standardize_blast_hits(hits_ba_path)
+
+    best_ab = best_hits_by_query(hits_ab)
+    best_ba = best_hits_by_query(hits_ba)
+
+    use_shorter = coverage_denom == :shorter
+    filtered_ab = filter_hits_by_threshold(best_ab; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=use_shorter, evalue_max=evalue)
+    filtered_ba = filter_hits_by_threshold(best_ba; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=use_shorter, evalue_max=evalue)
+
+    renamed_ab = DataFrames.rename(filtered_ab, Dict(
+        :query_id => :query_a,
+        :subject_id => :subject_b,
+        :pident => :pident_ab
+    ))
+    renamed_ba = DataFrames.rename(filtered_ba, Dict(
+        :query_id => :query_b,
+        :subject_id => :subject_a,
+        :pident => :pident_ba
+    ))
+    rbh_table = DataFrames.innerjoin(
+        DataFrames.select(renamed_ab, [:query_a, :subject_b, :pident_ab]),
+        DataFrames.select(renamed_ba, [:query_b, :subject_a, :pident_ba]),
+        on=[:query_a => :subject_a, :subject_b => :query_b]
+    )
+
+    n_rbh = DataFrames.nrow(rbh_table)
+    n_a = count_fasta_records(prot_a)
+    n_b = count_fasta_records(prot_b)
+    ortholog_fraction = min(n_a, n_b) == 0 ? missing : n_rbh / min(n_a, n_b)
+    aai = n_rbh == 0 ? missing : Statistics.mean((rbh_table.pident_ab .+ rbh_table.pident_ba) ./ 2)
+
+    return (;
+        method=:AAI_RBH,
+        aai=aai,
+        ortholog_fraction=ortholog_fraction,
+        n_rbh=n_rbh,
+        n_proteins_a=n_a,
+        n_proteins_b=n_b,
+        params=(; tool=resolved_tool, min_id, min_len_frac, evalue, coverage_denom),
+        hits_ab=hits_ab_path,
+        hits_ba=hits_ba_path,
+        rbh_table=rbh_table
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute Percentage of Conserved Proteins (POCP) between two genomes.
+
+Returns classic POCP (any qualifying hit), plus POCPu variants based on
+best-hit uniqueness and reciprocal best hits.
+"""
+function pocp(genome_a::AbstractString, genome_b::AbstractString;
+        proteins_a::Union{Nothing,AbstractString}=nothing,
+        proteins_b::Union{Nothing,AbstractString}=nothing,
+        tool::Symbol=:auto,
+        min_id::Float64=40.0,
+        min_len_frac::Float64=0.5,
+        evalue::Float64=1e-5,
+        coverage_denom::Symbol=:query,
+        max_target_seqs::Int=500,
+        threads::Int=get_default_threads(),
+        outdir::AbstractString="pocp",
+        translation_table::Union{Nothing,Int}=nothing,
+        force::Bool=false)
+    @assert coverage_denom in (:shorter, :query) "coverage_denom must be :shorter or :query"
+    mkpath(outdir)
+
+    prot_a = isnothing(proteins_a) ? Mycelia.run_pyrodigal(
+        fasta_file=genome_a,
+        out_dir=joinpath(outdir, "proteins_a"),
+        translation_table=translation_table
+    ).faa : String(proteins_a)
+    prot_b = isnothing(proteins_b) ? Mycelia.run_pyrodigal(
+        fasta_file=genome_b,
+        out_dir=joinpath(outdir, "proteins_b"),
+        translation_table=translation_table
+    ).faa : String(proteins_b)
+
+    resolved_tool = tool == :auto ? :diamond : tool
+    hits_ab_path = ""
+    hits_ba_path = ""
+    if resolved_tool == :diamond
+        try
+            hits_ab_path = Mycelia.run_diamond_besthits(
+                query_fasta=prot_a,
+                reference_fasta=prot_b,
+                output_dir=joinpath(outdir, "diamond_ab"),
+                threads=threads,
+                evalue=evalue,
+                max_target_seqs=max_target_seqs,
+                force=force
+            )
+            hits_ba_path = Mycelia.run_diamond_besthits(
+                query_fasta=prot_b,
+                reference_fasta=prot_a,
+                output_dir=joinpath(outdir, "diamond_ba"),
+                threads=threads,
+                evalue=evalue,
+                max_target_seqs=max_target_seqs,
+                force=force
+            )
+        catch e
+            if tool == :auto
+                @warn "DIAMOND failed for POCP; falling back to BLASTP" exception=e
+                resolved_tool = :blastp
+            else
+                rethrow(e)
+            end
+        end
+    end
+    if resolved_tool == :blastp
+        hits_ab_path = Mycelia.run_blastp_search(
+            query_fasta=prot_a,
+            reference_fasta=prot_b,
+            output_dir=joinpath(outdir, "blastp_ab"),
+            threads=threads,
+            evalue=evalue,
+            max_target_seqs=max_target_seqs
+        )
+        hits_ba_path = Mycelia.run_blastp_search(
+            query_fasta=prot_b,
+            reference_fasta=prot_a,
+            output_dir=joinpath(outdir, "blastp_ba"),
+            threads=threads,
+            evalue=evalue,
+            max_target_seqs=max_target_seqs
+        )
+    elseif resolved_tool != :diamond
+        error("tool must be :auto, :diamond, or :blastp")
+    end
+
+    hits_ab = resolved_tool == :diamond ? read_diamond_hits(hits_ab_path) : standardize_blast_hits(hits_ab_path)
+    hits_ba = resolved_tool == :diamond ? read_diamond_hits(hits_ba_path) : standardize_blast_hits(hits_ba_path)
+
+    n_a = count_fasta_records(prot_a)
+    n_b = count_fasta_records(prot_b)
+    total_proteins = n_a + n_b
+    if total_proteins == 0
+        return (;
+            method=:POCP,
+            pocp=missing,
+            pocpu_besthit=missing,
+            pocpu_rbh=missing,
+            c1=0,
+            c2=0,
+            c1_besthit=0,
+            c2_besthit=0,
+            n_rbh=0,
+            n_proteins_a=n_a,
+            n_proteins_b=n_b,
+            params=(; tool=resolved_tool, min_id, min_len_frac, evalue, coverage_denom, max_target_seqs),
+            hits_ab=hits_ab_path,
+            hits_ba=hits_ba_path,
+            rbh_table=DataFrames.DataFrame()
+        )
+    end
+
+    use_shorter = coverage_denom == :shorter
+    filtered_ab_any = filter_hits_by_threshold(hits_ab; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=use_shorter, evalue_max=evalue)
+    filtered_ba_any = filter_hits_by_threshold(hits_ba; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=use_shorter, evalue_max=evalue)
+    c1 = length(unique(filtered_ab_any.query_id))
+    c2 = length(unique(filtered_ba_any.query_id))
+    pocp_value = ((c1 + c2) / total_proteins) * 100
+
+    best_ab = best_hits_by_query(hits_ab)
+    best_ba = best_hits_by_query(hits_ba)
+    filtered_ab_best = filter_hits_by_threshold(best_ab; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=use_shorter, evalue_max=evalue)
+    filtered_ba_best = filter_hits_by_threshold(best_ba; min_id=min_id, min_aln_frac=min_len_frac, use_shorter=use_shorter, evalue_max=evalue)
+    filtered_ab_best = filtered_ab_best[:, [:query_id, :subject_id, :pident]]
+    filtered_ba_best = filtered_ba_best[:, [:query_id, :subject_id, :pident]]
+    c1_best = length(unique(filtered_ab_best.query_id))
+    c2_best = length(unique(filtered_ba_best.query_id))
+    pocpu_besthit = ((c1_best + c2_best) / total_proteins) * 100
+
+    renamed_ab = DataFrames.rename(filtered_ab_best, Dict(
+        :query_id => :query_a,
+        :subject_id => :subject_b,
+        :pident => :pident_ab
+    ))
+    renamed_ba = DataFrames.rename(filtered_ba_best, Dict(
+        :query_id => :query_b,
+        :subject_id => :subject_a,
+        :pident => :pident_ba
+    ))
+    rbh_table = DataFrames.innerjoin(
+        renamed_ab,
+        renamed_ba,
+        on=[:query_a => :subject_a, :subject_b => :query_b]
+    )
+    n_rbh = DataFrames.nrow(rbh_table)
+    pocpu_rbh = ((2 * n_rbh) / total_proteins) * 100
+
+    return (;
+        method=:POCP,
+        pocp=pocp_value,
+        pocpu_besthit=pocpu_besthit,
+        pocpu_rbh=pocpu_rbh,
+        c1=c1,
+        c2=c2,
+        c1_besthit=c1_best,
+        c2_besthit=c2_best,
+        n_rbh=n_rbh,
+        n_proteins_a=n_a,
+        n_proteins_b=n_b,
+        params=(; tool=resolved_tool, min_id, min_len_frac, evalue, coverage_denom, max_target_seqs),
+        hits_ab=hits_ab_path,
+        hits_ba=hits_ba_path,
+        rbh_table=rbh_table
+    )
+end
+
+function flatten_gold_comparison(results::Dict{Symbol, Any})
+    fields = Dict{Symbol, Any}()
+    if haskey(results, :ANIm)
+        anim = results[:ANIm]
+        fields[:anim_ani_1to1] = anim.ani_1to1
+        fields[:anim_ani_m2m] = anim.ani_m2m
+        fields[:anim_af_ref_1to1] = anim.af_ref_1to1
+        fields[:anim_af_query_1to1] = anim.af_query_1to1
+        fields[:anim_af_ref_m2m] = anim.af_ref_m2m
+        fields[:anim_af_query_m2m] = anim.af_query_m2m
+    end
+    if haskey(results, :ANIb)
+        anib = results[:ANIb]
+        fields[:anib_ani] = anib.ani
+        fields[:anib_ani_query_vs_ref] = anib.ani_query_vs_ref
+        fields[:anib_ani_ref_vs_query] = anib.ani_ref_vs_query
+        fields[:anib_af_query_vs_ref] = anib.af_query_vs_ref
+        fields[:anib_af_ref_vs_query] = anib.af_ref_vs_query
+    end
+    if haskey(results, :AAI)
+        aai = results[:AAI]
+        fields[:aai_rbh] = aai.aai
+        fields[:ortholog_fraction] = aai.ortholog_fraction
+        fields[:aai_rbh_n] = aai.n_rbh
+    end
+    if haskey(results, :POCP)
+        pocp = results[:POCP]
+        fields[:pocp] = pocp.pocp
+        fields[:pocpu_besthit] = pocp.pocpu_besthit
+        fields[:pocpu_rbh] = pocp.pocpu_rbh
+        fields[:pocp_c1] = pocp.c1
+        fields[:pocp_c2] = pocp.c2
+        fields[:pocp_t1] = pocp.n_proteins_a
+        fields[:pocp_t2] = pocp.n_proteins_b
+        fields[:pocpu_rbh_n] = pocp.n_rbh
+    end
+    if haskey(results, :PyOrthoANI)
+        orthoani = results[:PyOrthoANI]
+        fields[:pyorthoani_ani] = orthoani.ani
+    end
+    return (; (k => fields[k] for k in sort(collect(keys(fields))))...)
+end
+
+function gold_comparison_tool_versions(methods::Vector{Symbol};
+        aai_tool::Symbol,
+        pocp_tool::Symbol)
+    versions = Dict{Symbol, Any}()
+    if :ANIb in methods || :AAI in methods || :POCP in methods
+        Mycelia.add_bioconda_env("blast")
+        versions[:blast] = conda_tool_version("blast", ["blastn", "-version"])
+    end
+    if (:AAI in methods && aai_tool == :diamond) || (:POCP in methods && pocp_tool == :diamond)
+        Mycelia.add_bioconda_env("diamond")
+        versions[:diamond] = conda_tool_version("diamond", ["diamond", "version"])
+    end
+    if :ANIm in methods
+        Mycelia.add_bioconda_env("mummer")
+        versions[:mummer] = conda_tool_version("mummer", ["nucmer", "--version"])
+    end
+    if :PyOrthoANI in methods
+        ensure_pyorthoani_env(quiet=true)
+        versions[:pyorthoani] = conda_tool_version(
+            "pyorthoani",
+            ["python", "-c", "import pyorthoani; print(pyorthoani.__version__)"]
+        )
+    end
+    return versions
+end
+
+function gold_comparison_cache_key(pair_id::AbstractString;
+        methods::Vector{Symbol},
+        params::NamedTuple,
+        tool_versions::Dict{Symbol, Any})
+    parts = String[]
+    push!(parts, "pair_id=$(pair_id)")
+    push!(parts, "methods=$(join(sort(string.(methods)), ","))")
+    for (key, value) in sort(collect(pairs(params)); by=first)
+        push!(parts, "$(key)=$(string(value))")
+    end
+    for (key, value) in sort(collect(pairs(tool_versions)); by=first)
+        push!(parts, "$(key)=$(string(value))")
+    end
+    return SHA.bytes2hex(SHA.sha256(join(parts, "|")))
+end
+
+function write_gold_comparison_report(report_dir::AbstractString;
+        pair_id::AbstractString,
+        reference_prepped::AbstractString,
+        query_prepped::AbstractString,
+        methods::Vector{Symbol},
+        params::NamedTuple,
+        tool_versions::Dict{Symbol, Any},
+        cache_key::AbstractString,
+        summary::NamedTuple)
+    mkpath(report_dir)
+    summary_json = joinpath(report_dir, "summary.json")
+    summary_tsv = joinpath(report_dir, "summary.tsv")
+    metadata_json = joinpath(report_dir, "metadata.json")
+
+    summary_dict = Dict(string(k) => normalize_json_value(v) for (k, v) in pairs(summary))
+    open(summary_json, "w") do io
+        JSON.print(io, summary_dict, 2)
+    end
+
+    open(summary_tsv, "w") do io
+        write(io, "metric\tvalue\n")
+        for key in sort(collect(keys(summary_dict)))
+            value = summary_dict[key]
+            value_str = value === nothing ? "NA" : string(value)
+            write(io, "$(key)\t$(value_str)\n")
+        end
+    end
+
+    metadata = Dict(
+        "pair_id" => pair_id,
+        "cache_key" => cache_key,
+        "created_at_unix" => time(),
+        "methods" => sort(string.(methods)),
+        "params" => normalize_json_value(params),
+        "tool_versions" => normalize_json_value(tool_versions),
+        "reference_prepped" => reference_prepped,
+        "query_prepped" => query_prepped
+    )
+    open(metadata_json, "w") do io
+        JSON.print(io, metadata, 2)
+    end
+
+    return (;summary_json, summary_tsv, metadata_json)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run gold-standard genome comparison methods and return a consolidated summary.
+
+Available methods include `:ANIm`, `:ANIb`, `:AAI`, `:POCP`, and `:PyOrthoANI`.
+"""
+function compare_genomes_gold(reference::AbstractString, query::AbstractString;
+        circular::Union{Bool,Symbol}=:auto,
+        circular_heuristic::Bool=false,
+        circular_overlap_bp::Int=200,
+        methods=Symbol[:ANIm, :ANIb, :AAI, :POCP, :PyOrthoANI],
+        outdir::AbstractString="genome_compare",
+        threads::Int=get_default_threads(),
+        use_cache::Bool=true,
+        ani_mode::Symbol=:strict,
+        fragment_size::Union{Nothing,Int}=nothing,
+        min_ani_id::Union{Nothing,Float64}=nothing,
+        min_ani_aln_frac::Union{Nothing,Float64}=nothing,
+        ani_coverage_mode::Symbol=:alignment,
+        ani_discard_tail::Union{Nothing,Bool}=nothing,
+        ani_evalue::Union{Nothing,Float64}=nothing,
+        aai_tool::Symbol=:auto,
+        min_aai_id::Float64=30.0,
+        min_aai_len_frac::Float64=0.7,
+        aai_coverage_denom::Symbol=:shorter,
+        aai_evalue::Float64=1e-5,
+        pocp_tool::Symbol=:auto,
+        pocp_min_id::Float64=40.0,
+        pocp_min_len_frac::Float64=0.5,
+        pocp_coverage_denom::Symbol=:query,
+        pocp_evalue::Float64=1e-5,
+        pocp_max_target_seqs::Int=500,
+        pyorthoani_force_env::Bool=false,
+        pyorthoani_args::Vector{String}=String[],
+        pyorthoani_quiet::Bool=false,
+        translation_table::Union{Nothing,Int}=nothing,
+        force::Bool=false)
+    pair_id = genome_pair_id(reference, query)
+    methods = sort(unique(Symbol.(methods)))
+    report_dir = joinpath(outdir, "report", pair_id)
+    summary_json = joinpath(report_dir, "summary.json")
+    metadata_json = joinpath(report_dir, "metadata.json")
+
+    resolved_aai_tool = aai_tool
+    if :AAI in methods && aai_tool == :auto
+        Mycelia.add_bioconda_env("diamond")
+        resolved_aai_tool = _conda_env_exec_ok("diamond", ["diamond", "version"]) ? :diamond : :blastp
+    end
+    resolved_pocp_tool = pocp_tool
+    if :POCP in methods && pocp_tool == :auto
+        Mycelia.add_bioconda_env("diamond")
+        resolved_pocp_tool = _conda_env_exec_ok("diamond", ["diamond", "version"]) ? :diamond : :blastp
+    end
+    pre_params = (;
+        circular,
+        circular_heuristic,
+        circular_overlap_bp,
+        ani_mode,
+        fragment_size,
+        min_ani_id,
+        min_ani_aln_frac,
+        ani_coverage_mode,
+        ani_discard_tail,
+        ani_evalue,
+        aai_tool=resolved_aai_tool,
+        min_aai_id,
+        min_aai_len_frac,
+        aai_coverage_denom,
+        aai_evalue,
+        pocp_tool=resolved_pocp_tool,
+        pocp_min_id,
+        pocp_min_len_frac,
+        pocp_coverage_denom,
+        pocp_evalue,
+        pocp_max_target_seqs,
+        pyorthoani_force_env,
+        pyorthoani_args,
+        pyorthoani_quiet,
+        translation_table
+    )
+    pre_versions = gold_comparison_tool_versions(methods;
+        aai_tool=resolved_aai_tool,
+        pocp_tool=resolved_pocp_tool)
+    pre_cache_key = gold_comparison_cache_key(pair_id;
+        methods=methods,
+        params=pre_params,
+        tool_versions=pre_versions)
+
+    if use_cache && !force && isfile(summary_json) && isfile(metadata_json)
+        cached_meta = JSON.parsefile(metadata_json)
+        if get(cached_meta, "cache_key", "") == pre_cache_key
+            cached_summary = JSON.parsefile(summary_json)
+            summary = (; (Symbol(k) => v for (k, v) in cached_summary)...)
+            reference_prepped = get(cached_meta, "reference_prepped", reference)
+            query_prepped = get(cached_meta, "query_prepped", query)
+            return (;pair_id, reference=reference_prepped, query=query_prepped, summary,
+                details=Dict{Symbol, Any}(), cache_hit=true, report_dir, cache_key=pre_cache_key)
+        end
+    end
+    prep_dir = joinpath(outdir, "prep", pair_id)
+    ref_prepped = prepare_genome_for_comparison(
+        reference;
+        outdir=joinpath(prep_dir, "reference"),
+        circular=circular,
+        circular_heuristic=circular_heuristic,
+        circular_overlap_bp=circular_overlap_bp,
+        force=force
+    )
+    query_prepped = prepare_genome_for_comparison(
+        query;
+        outdir=joinpath(prep_dir, "query"),
+        circular=circular,
+        circular_heuristic=circular_heuristic,
+        circular_overlap_bp=circular_overlap_bp,
+        force=force
+    )
+
+    results = Dict{Symbol, Any}()
+    if :ANIm in methods
+        results[:ANIm] = ani_mummer(
+            ref_prepped,
+            query_prepped;
+            outdir=joinpath(outdir, "anim", pair_id),
+            force=force
+        )
+    end
+    if :ANIb in methods
+        results[:ANIb] = ani_blast(
+            ref_prepped,
+            query_prepped;
+            outdir=joinpath(outdir, "anib", pair_id),
+            mode=ani_mode,
+            fragment_size=fragment_size,
+            discard_tail=ani_discard_tail,
+            min_id=min_ani_id,
+            min_aln_frac=min_ani_aln_frac,
+            coverage_mode=ani_coverage_mode,
+            evalue=ani_evalue,
+            threads=threads,
+            force=force
+        )
+    end
+    if :AAI in methods
+        results[:AAI] = aai_rbh(
+            ref_prepped,
+            query_prepped;
+            tool=aai_tool,
+            min_id=min_aai_id,
+            min_len_frac=min_aai_len_frac,
+            evalue=aai_evalue,
+            coverage_denom=aai_coverage_denom,
+            threads=threads,
+            outdir=joinpath(outdir, "aai", pair_id),
+            translation_table=translation_table,
+            force=force
+        )
+    end
+    if :POCP in methods
+        results[:POCP] = pocp(
+            ref_prepped,
+            query_prepped;
+            tool=pocp_tool,
+            min_id=pocp_min_id,
+            min_len_frac=pocp_min_len_frac,
+            evalue=pocp_evalue,
+            coverage_denom=pocp_coverage_denom,
+            max_target_seqs=pocp_max_target_seqs,
+            threads=threads,
+            outdir=joinpath(outdir, "pocp", pair_id),
+            translation_table=translation_table,
+            force=force
+        )
+    end
+    if :PyOrthoANI in methods
+        results[:PyOrthoANI] = run_pyorthoani(
+            query=query_prepped,
+            reference=ref_prepped,
+            outdir=joinpath(outdir, "pyorthoani", pair_id),
+            force=force,
+            force_env=pyorthoani_force_env,
+            additional_args=pyorthoani_args,
+            quiet=pyorthoani_quiet
+        )
+    end
+
+    summary = flatten_gold_comparison(results)
+    aai_tool_used = haskey(results, :AAI) ? results[:AAI].params.tool : resolved_aai_tool
+    pocp_tool_used = haskey(results, :POCP) ? results[:POCP].params.tool : resolved_pocp_tool
+    final_params = (;
+        circular,
+        circular_heuristic,
+        circular_overlap_bp,
+        ani_mode,
+        fragment_size,
+        min_ani_id,
+        min_ani_aln_frac,
+        ani_coverage_mode,
+        ani_discard_tail,
+        ani_evalue,
+        aai_tool=aai_tool_used,
+        min_aai_id,
+        min_aai_len_frac,
+        aai_coverage_denom,
+        aai_evalue,
+        pocp_tool=pocp_tool_used,
+        pocp_min_id,
+        pocp_min_len_frac,
+        pocp_coverage_denom,
+        pocp_evalue,
+        pocp_max_target_seqs,
+        pyorthoani_force_env,
+        pyorthoani_args,
+        pyorthoani_quiet,
+        translation_table
+    )
+    tool_versions = gold_comparison_tool_versions(methods;
+        aai_tool=aai_tool_used,
+        pocp_tool=pocp_tool_used)
+    cache_key = gold_comparison_cache_key(pair_id;
+        methods=methods,
+        params=final_params,
+        tool_versions=tool_versions)
+    write_gold_comparison_report(report_dir;
+        pair_id=pair_id,
+        reference_prepped=ref_prepped,
+        query_prepped=query_prepped,
+        methods=methods,
+        params=final_params,
+        tool_versions=tool_versions,
+        cache_key=cache_key,
+        summary=summary)
+
+    return (;pair_id, reference=ref_prepped, query=query_prepped, summary, details=results,
+        cache_hit=false, report_dir, cache_key)
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -989,4 +2427,158 @@ function fastani_pair(;query="", reference="", outfile="", force=false)
             )
         )
     end
+end
+
+function _conda_env_exec_ok(env_name::String, exec_parts::Vector{String})
+    cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], exec_parts))
+    return Base.success(pipeline(cmd, stdout=Base.devnull, stderr=Base.devnull))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Ensure the PyOrthoANI conda environment is available with BLAST+.
+"""
+function ensure_pyorthoani_env(; force::Bool=false, quiet::Bool=false)
+    env_name = "pyorthoani"
+    base_packages = ["python=3.11", "pip", "blast"]
+
+    if force && Mycelia.check_bioconda_env_is_installed(env_name)
+        run(`$(Mycelia.CONDA_RUNNER) env remove -n $(env_name) -y`)
+    end
+
+    if !Mycelia.check_bioconda_env_is_installed(env_name) || force
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "create",
+            "-c", "conda-forge", "-c", "bioconda", "-c", "defaults",
+            "--strict-channel-priority",
+            "-n", env_name
+        ]
+        append!(cmd_parts, base_packages)
+        push!(cmd_parts, "-y")
+        if quiet
+            push!(cmd_parts, "--quiet")
+        end
+        run(Cmd(cmd_parts))
+
+        pip_parts = [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name, "python", "-m", "pip", "install", "pyorthoani"]
+        if quiet
+            push!(pip_parts, "-q")
+        end
+        run(Cmd(pip_parts))
+
+        clean_parts = [Mycelia.CONDA_RUNNER, "clean", "--all", "-y"]
+        if quiet
+            push!(clean_parts, "--quiet")
+        end
+        run(Cmd(clean_parts))
+        return env_name
+    end
+
+    missing = String[]
+    if !_conda_env_exec_ok(env_name, ["blastn", "-version"])
+        push!(missing, "blast")
+    end
+    if !_conda_env_exec_ok(env_name, ["python", "-m", "pip", "--version"])
+        push!(missing, "pip")
+    end
+
+    if !isempty(missing)
+        cmd_parts = [
+            Mycelia.CONDA_RUNNER, "install",
+            "-c", "conda-forge", "-c", "bioconda", "-c", "defaults",
+            "--strict-channel-priority",
+            "-n", env_name
+        ]
+        append!(cmd_parts, missing)
+        push!(cmd_parts, "-y")
+        if quiet
+            push!(cmd_parts, "--quiet")
+        end
+        run(Cmd(cmd_parts))
+
+        clean_parts = [Mycelia.CONDA_RUNNER, "clean", "--all", "-y"]
+        if quiet
+            push!(clean_parts, "--quiet")
+        end
+        run(Cmd(clean_parts))
+    end
+
+    if !_conda_env_exec_ok(env_name, ["python", "-c", "import pyorthoani"])
+        pip_parts = [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name, "python", "-m", "pip", "install", "pyorthoani"]
+        if quiet
+            push!(pip_parts, "-q")
+        end
+        run(Cmd(pip_parts))
+    end
+
+    return env_name
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse the ANI value from PyOrthoANI output.
+"""
+function parse_pyorthoani_output(output::AbstractString)
+    cleaned = strip(output)
+    if isempty(cleaned)
+        error("PyOrthoANI output was empty.")
+    end
+    number_match = match(r"[-+]?[0-9]*\.?[0-9]+", cleaned)
+    if number_match === nothing
+        error("No ANI value found in PyOrthoANI output: $(cleaned)")
+    end
+    return parse(Float64, number_match.match)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run PyOrthoANI on a query/reference pair and return the ANI value.
+
+# Arguments
+- `query::String`: Query FASTA path.
+- `reference::String`: Reference FASTA path.
+- `outdir::String`: Output directory for stored results.
+- `outfile::String`: Optional explicit output file path.
+- `force::Bool=false`: Rerun PyOrthoANI if the output file exists.
+- `force_env::Bool=false`: Recreate the PyOrthoANI environment.
+- `additional_args::Vector{String}`: Extra CLI args passed to `pyorthoani`.
+- `quiet::Bool=false`: Reduce conda output during environment setup.
+
+# Returns
+`NamedTuple` with `ani`, `output_path`, and `raw_output`.
+"""
+function run_pyorthoani(;
+        query::String,
+        reference::String,
+        outdir::String=mktempdir(),
+        outfile::String="",
+        force::Bool=false,
+        force_env::Bool=false,
+        additional_args::Vector{String}=String[],
+        quiet::Bool=false)
+    @assert isfile(query) "Query FASTA not found: $(query)"
+    @assert isfile(reference) "Reference FASTA not found: $(reference)"
+
+    ensure_pyorthoani_env(force=force_env, quiet=quiet)
+
+    outdir = mkpath(outdir)
+    output_path = isempty(outfile) ? joinpath(
+        outdir,
+        "pyorthoani_$(basename(query))_vs_$(basename(reference)).txt"
+    ) : outfile
+
+    if force || !isfile(output_path) || filesize(output_path) == 0
+        cmd_parts = ["pyorthoani", "-q", query, "-r", reference]
+        append!(cmd_parts, additional_args)
+        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani"], cmd_parts))
+        output = read(cmd, String)
+        write(output_path, output)
+    end
+
+    output = read(output_path, String)
+    ani = parse_pyorthoani_output(output)
+    return (;ani, output_path, raw_output=output)
 end

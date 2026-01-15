@@ -1,11 +1,25 @@
-# Evidence Helper Functions Test
+# From the Mycelia base directory, run the tests with:
 #
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/evidence_functions_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/evidence_functions_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
+# Evidence Helper Functions Test
 # Tests for evidence manipulation and query helper functions as specified
 # in the rhizomorph graph ecosystem planning document section 1.3.1.
-#
 # These functions provide efficient evidence queries and manipulation.
-#
-# Run with: julia --project=. test/4_assembly/evidence_functions_test.jl
 
 import Test
 import Mycelia

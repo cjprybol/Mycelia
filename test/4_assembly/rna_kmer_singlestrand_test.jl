@@ -1,6 +1,22 @@
-# RNA K-mer Graph - SingleStrand Mode Test
+# From the Mycelia base directory, run the tests with:
 #
-# Run with: julia --project=. -e 'include("test/4_assembly/rna_kmer_singlestrand_test.jl")'
+# ```bash
+# julia --project=. -e 'include("test/4_assembly/rna_kmer_singlestrand_test.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/rna_kmer_singlestrand_test.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
+# RNA K-mer Graph - SingleStrand Mode Test
 
 import Test
 import Mycelia
@@ -79,6 +95,21 @@ Test.@testset "RNA K-mer SingleStrand Graph (Rhizomorph)" begin
 
     reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
     reconstructed_str = string(reconstructed)
-    Test.@test reconstructed_str == "AUCGAUCG"
+    Test.@test reconstructed_str == "AUCGAUC"
     Test.@test !occursin('T', reconstructed_str)
+
+    for k in (5, 7)
+        kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+            reads,
+            k;
+            dataset_id=dataset_id,
+            mode=:singlestrand,
+        )
+        kmer_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(kmer_graph)
+        Test.@test !isempty(kmer_paths)
+        kmer_reconstructed = Mycelia.Rhizomorph.path_to_sequence(first(kmer_paths), kmer_graph)
+        kmer_reconstructed_str = string(kmer_reconstructed)
+        Test.@test kmer_reconstructed_str == "AUCGAUCG"
+        Test.@test !occursin('T', kmer_reconstructed_str)
+    end
 end

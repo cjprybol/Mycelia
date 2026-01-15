@@ -1,7 +1,7 @@
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
-# julia --project=. -e 'include("test/8_tool_integration/xam.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/xam.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
@@ -12,9 +12,10 @@
 ## If running Literate notebook, ensure the package is activated:
 ## import Pkg
 ## if isinteractive()
-##     Pkg.activate("../..")
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
 ## end
 ## using Revise
+
 import Test
 import Mycelia
 import XAM
@@ -32,16 +33,29 @@ Test.@testset "Quick XAM Verification" begin
     write(writer, ref_record)
     close(writer)
 
-    fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
+    sim_start = Base.time_ns()
+    fastq_files = Mycelia.simulate_illumina_reads(
+        fasta=ref_fasta,
+        read_count=2,
+        rndSeed=rand(rng, 0:typemax(Int)),
+    )
+    sim_elapsed_s = (Base.time_ns() - sim_start) / 1e9
+    Base.println("Quick XAM: simulate_illumina_reads took $(round(sim_elapsed_s; digits=2))s")
 
     Test.@testset "Basic Functionality" begin
         ## Test BAM output (default)
         map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr")
+        map_start = Base.time_ns()
         run(map_result.cmd)
+        map_elapsed_s = (Base.time_ns() - map_start) / 1e9
+        Base.println("Quick XAM: minimap_map BAM took $(round(map_elapsed_s; digits=2))s")
         bam_file = map_result.outfile
 
         ## Test auto parser
+        parse_start = Base.time_ns()
         df = Mycelia.xam_to_dataframe(bam_file)
+        parse_elapsed_s = (Base.time_ns() - parse_start) / 1e9
+        Base.println("Quick XAM: xam_to_dataframe BAM took $(round(parse_elapsed_s; digits=2))s")
         Test.@test df isa DataFrames.DataFrame
         Test.@test DataFrames.nrow(df) == 2
         Test.@test all(df.ismapped)
@@ -52,7 +66,10 @@ Test.@testset "Quick XAM Verification" begin
     Test.@testset "Format Options" begin
         ## Test SAM output
         map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        map_start = Base.time_ns()
         run(map_result.cmd)
+        map_elapsed_s = (Base.time_ns() - map_start) / 1e9
+        Base.println("Quick XAM: minimap_map SAM took $(round(map_elapsed_s; digits=2))s")
         sam_file = map_result.outfile
 
         Test.@test endswith(sam_file, ".sam")
@@ -63,7 +80,10 @@ Test.@testset "Quick XAM Verification" begin
         Test.@test detected == :sam
 
         ## Test parsing
+        parse_start = Base.time_ns()
         df = Mycelia.xam_to_dataframe(sam_file)
+        parse_elapsed_s = (Base.time_ns() - parse_start) / 1e9
+        Base.println("Quick XAM: xam_to_dataframe SAM took $(round(parse_elapsed_s; digits=2))s")
         Test.@test DataFrames.nrow(df) == 2
 
         rm(sam_file, force=true)
@@ -72,7 +92,10 @@ Test.@testset "Quick XAM Verification" begin
     Test.@testset "Parser Selection" begin
         ## Create BAM file
         map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="bam")
+        map_start = Base.time_ns()
         run(map_result.cmd)
+        map_elapsed_s = (Base.time_ns() - map_start) / 1e9
+        Base.println("Quick XAM: minimap_map BAM (parser selection) took $(round(map_elapsed_s; digits=2))s")
         bam_file = map_result.outfile
 
         ## Test different parsers
@@ -88,11 +111,21 @@ Test.@testset "Quick XAM Verification" begin
     end
 
     ## Cleanup
-    rm(ref_fasta, force=true)
-    rm(fastq_files.forward_reads, force=true)
-    rm(fastq_files.reverse_reads, force=true)
-    rm(fastq_files.sam, force=true)
-    rm(fastq_files.error_free_sam, force=true)
+    if ref_fasta !== nothing && isfile(ref_fasta)
+        rm(ref_fasta, force=true)
+    end
+    if fastq_files.forward_reads !== nothing && isfile(fastq_files.forward_reads)
+        rm(fastq_files.forward_reads, force=true)
+    end
+    if fastq_files.reverse_reads !== nothing && isfile(fastq_files.reverse_reads)
+        rm(fastq_files.reverse_reads, force=true)
+    end
+    if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+        rm(fastq_files.sam, force=true)
+    end
+    if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+        rm(fastq_files.error_free_sam, force=true)
+    end
 end
 
 Test.@testset "XAM File Processing Tests" begin
@@ -123,8 +156,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
         rm(sam_file, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
     
 
@@ -161,8 +198,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
         rm(sam_file, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "XAM to DataFrame Conversion - File Path Input" begin
@@ -188,8 +229,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
         rm(sam_file, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
 
@@ -223,8 +268,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(temp_sam, force=true)
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "Samtools Flagstat Integration" begin
@@ -264,8 +313,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
         rm(temp_sam, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "Mapping Statistics" begin
@@ -296,8 +349,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(temp_sam, force=true)
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
@@ -326,8 +383,12 @@ Test.@testset "XAM File Processing Tests" begin
             rm(fastq_files.forward_reads, force=true)
             rm(fastq_files.reverse_reads, force=true)
             rm(bam_file, force=true)
-            rm(fastq_files.sam, force=true)
-            rm(fastq_files.error_free_sam, force=true)
+            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+                rm(fastq_files.sam, force=true)
+            end
+            if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+                rm(fastq_files.error_free_sam, force=true)
+            end
         end
     else
         @info "Skipping Coverage Determination tests; bedtools execution is opt-in via MYCELIA_RUN_EXTERNAL=true"
@@ -359,8 +420,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
         rm(bam_file, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
         rm(expected_fastq, force=true)
     end
 
@@ -388,8 +453,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(temp_sam, force=true)
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "Error Handling" begin
@@ -447,8 +516,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(temp_sam, force=true)
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "Large File Handling" begin
@@ -478,8 +551,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(temp_sam, force=true)
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "Comprehensive Parser Testing" begin
@@ -883,8 +960,12 @@ Test.@testset "XAM File Processing Tests" begin
         rm(ref_fasta, force=true)
         rm(fastq_files.forward_reads, force=true)
         rm(fastq_files.reverse_reads, force=true)
-        rm(fastq_files.sam, force=true)
-        rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+            rm(fastq_files.sam, force=true)
+        end
+        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force=true)
+        end
     end
 
     Test.@testset "Error Handling and Edge Cases" begin
@@ -929,8 +1010,12 @@ Test.@testset "XAM File Processing Tests" begin
             rm(fastq_files.forward_reads, force=true)
             rm(fastq_files.reverse_reads, force=true)
             rm(test_file, force=true)
-            rm(fastq_files.sam, force=true)
-            rm(fastq_files.error_free_sam, force=true)
+            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+                rm(fastq_files.sam, force=true)
+            end
+            if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+                rm(fastq_files.error_free_sam, force=true)
+            end
         end
 
         ## Test with malformed file content (modify valid data to create invalid variants)
@@ -967,8 +1052,12 @@ Test.@testset "XAM File Processing Tests" begin
             rm(fastq_files.reverse_reads, force=true)
             rm(valid_sam, force=true)
             rm(malformed_sam, force=true)
-            rm(fastq_files.sam, force=true)
-            rm(fastq_files.error_free_sam, force=true)
+            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
+                rm(fastq_files.sam, force=true)
+            end
+            if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+                rm(fastq_files.error_free_sam, force=true)
+            end
         end
     end
 end

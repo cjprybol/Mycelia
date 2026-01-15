@@ -15,6 +15,12 @@
 # 5. Apply sequence graphs to real genomic assembly problems
 # 6. Compare performance across different biological alphabets (DNA, RNA, protein)
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/09_round_trip_03_fasta_sequences.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Mycelia
 import FASTX
 import BioSequences

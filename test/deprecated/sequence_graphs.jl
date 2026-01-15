@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/deprecated/sequence_graphs.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/deprecated/sequence_graphs.jl", "test/deprecated", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

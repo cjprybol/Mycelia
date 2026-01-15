@@ -1,15 +1,23 @@
-# Classification Tools Integration Tests
-#
 # From the Mycelia base directory, run the tests with:
 #
 # ```bash
-# julia --project=. -e 'include("test/8_tool_integration/classification_tools.jl")'
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/classification_tools.jl")'
 # ```
 #
-# To run with external tool execution (requires conda/network):
+# And to turn this file into a jupyter notebook, run:
 # ```bash
-# MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/8_tool_integration/classification_tools.jl")'
+# julia --project=. -e 'import Literate; Literate.notebook("test/8_tool_integration/classification_tools.jl", "test/8_tool_integration", execute=false)'
 # ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
+# Classification Tools Integration Tests
+# To run with external tool execution (requires conda/network):
 
 import Test
 import Mycelia
@@ -215,7 +223,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                         Mycelia.write_fastq(records=synthetic_records, filename=synthetic_fastq)
 
                         # Test with single-end reads (forward + synthetic)
-                        combined_fastq = joinpath(workdir, "combined_reads.fq.gz")
+                        combined_fastq = joinpath(workdir, "combined_reads.fq")
                         Mycelia.concatenate_fastx([forward_reads, synthetic_fastq], output_path=combined_fastq)
 
                         result = Mycelia.run_metaphlan(
@@ -361,7 +369,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                             database_path=db_path,
                             outdir=joinpath(workdir, "metabuli_output"),
                             seq_mode="1",
-                            threads=2
+                            threads=1
                         )
 
                         Test.@test isdir(result.outdir)

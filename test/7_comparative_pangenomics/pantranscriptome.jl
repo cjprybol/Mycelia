@@ -1,21 +1,24 @@
-# Pantranscriptome construction tests with RNA sequences
-
 # From the Mycelia base directory, run the tests with:
-# 
+#
 # ```bash
-# julia --project=test -e 'include("test/7_comparative_pangenomics/pantranscriptome.jl")'
+# julia --project=. -e 'include("test/7_comparative_pangenomics/pantranscriptome.jl")'
 # ```
 #
 # And to turn this file into a jupyter notebook, run:
 # ```bash
-# julia --project=test -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/pantranscriptome.jl", "test/7_comparative_pangenomics", execute=false)'
-# ````
+# julia --project=. -e 'import Literate; Literate.notebook("test/7_comparative_pangenomics/pantranscriptome.jl", "test/7_comparative_pangenomics", execute=false)'
+# ```
 
-# import Pkg
-# if isinteractive()
-#     Pkg.activate("..")
-# end
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
+# Pantranscriptome construction tests with RNA sequences
 # import Revise
+
 import Test
 import Mycelia
 import FASTX

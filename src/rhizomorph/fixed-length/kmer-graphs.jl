@@ -18,7 +18,8 @@
 # ============================================================================
 
 """
-    build_kmer_graph(records, k; dataset_id="dataset_01", mode=:singlestrand)
+    build_kmer_graph(records, k; dataset_id="dataset_01", mode=:singlestrand,
+                     type_hint=nothing, ambiguous_action=:dna)
 
 Build a k-mer de Bruijn graph from FASTA or FASTQ records.
 
@@ -29,6 +30,8 @@ This is the main user-facing function for k-mer graph construction.
 - `k::Int`: K-mer size
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph with evidence
@@ -71,14 +74,34 @@ function build_kmer_graph(
     records::Vector{<:FASTX.Record},
     k::Int;
     dataset_id::String="dataset_01",
-    mode::Symbol=:singlestrand
+    mode::Symbol=:singlestrand,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if mode == :singlestrand
-        return build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+        return build_kmer_graph_singlestrand(
+            records,
+            k;
+            dataset_id=dataset_id,
+            type_hint=type_hint,
+            ambiguous_action=ambiguous_action
+        )
     elseif mode == :doublestrand
-        return build_kmer_graph_doublestrand(records, k; dataset_id=dataset_id)
+        return build_kmer_graph_doublestrand(
+            records,
+            k;
+            dataset_id=dataset_id,
+            type_hint=type_hint,
+            ambiguous_action=ambiguous_action
+        )
     elseif mode == :canonical
-        singlestrand_graph = build_kmer_graph_singlestrand(records, k; dataset_id=dataset_id)
+        singlestrand_graph = build_kmer_graph_singlestrand(
+            records,
+            k;
+            dataset_id=dataset_id,
+            type_hint=type_hint,
+            ambiguous_action=ambiguous_action
+        )
         return convert_to_canonical(singlestrand_graph)
     else
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
@@ -94,18 +117,22 @@ end
 # ============================================================================
 
 """
-    build_kmer_graph_from_file(filepath, k; dataset_id=nothing, mode=:singlestrand)
+    build_kmer_graph_from_file(filepath, k; dataset_id=nothing, mode=:singlestrand,
+                               type_hint=nothing, ambiguous_action=:dna)
 
 Build k-mer graph directly from a FASTA or FASTQ file.
 
 Automatically handles compressed files (.gz, .bz2, .xz) and uses filename as
-dataset_id if not specified.
+dataset_id if not specified. If the filepath ends with `.fna`, `.frn`, or `.faa`
+and `type_hint` is not provided, the extension is used as the alphabet hint.
 
 # Arguments
 - `filepath::String`: Path to FASTA or FASTQ file (compressed or uncompressed)
 - `k::Int`: K-mer size
 - `dataset_id::String=nothing`: Dataset identifier (defaults to filename without extension)
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph
@@ -127,7 +154,9 @@ function build_kmer_graph_from_file(
     filepath::String,
     k::Int;
     dataset_id::Union{String,Nothing}=nothing,
-    mode::Symbol=:singlestrand
+    mode::Symbol=:singlestrand,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -142,21 +171,36 @@ function build_kmer_graph_from_file(
     Mycelia_module = parentmodule(Rhizomorph)
     records = collect(Mycelia_module.open_fastx(filepath))
 
-    return build_kmer_graph(records, k; dataset_id=dataset_id, mode=mode)
+    file_hint = _alphabet_hint_from_path(filepath)
+    final_hint = isnothing(type_hint) ? file_hint : type_hint
+
+    return build_kmer_graph(
+        records,
+        k;
+        dataset_id=dataset_id,
+        mode=mode,
+        type_hint=final_hint,
+        ambiguous_action=ambiguous_action
+    )
 end
 
 """
-    build_kmer_graph_from_files(filepaths, k; mode=:singlestrand)
+    build_kmer_graph_from_files(filepaths, k; mode=:singlestrand,
+                                type_hint=nothing, ambiguous_action=:dna)
 
 Build k-mer graph from multiple FASTA/FASTQ files.
 
 Each file is treated as a separate dataset, using the filename as dataset_id.
-Handles compressed files automatically.
+Handles compressed files automatically. If any filepath ends with `.fna`, `.frn`,
+or `.faa` and `type_hint` is not provided, the extension hint is applied for all
+files; conflicting hints raise an error.
 
 # Arguments
 - `filepaths::Vector{String}`: List of FASTA/FASTQ files (compressed or uncompressed)
 - `k::Int`: K-mer size
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
+- `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph with evidence from all files
@@ -175,7 +219,9 @@ dataset_ids = get_all_dataset_ids(graph[first(labels(graph))])
 function build_kmer_graph_from_files(
     filepaths::Vector{String},
     k::Int;
-    mode::Symbol=:singlestrand
+    mode::Symbol=:singlestrand,
+    type_hint::Union{Nothing,Symbol}=nothing,
+    ambiguous_action::Symbol=:dna
 )
     if isempty(filepaths)
         error("No files provided")
@@ -185,8 +231,36 @@ function build_kmer_graph_from_files(
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
 
+    file_hints = Set{Symbol}()
+    for filepath in filepaths
+        hint = _alphabet_hint_from_path(filepath)
+        if !isnothing(hint)
+            push!(file_hints, hint)
+        end
+    end
+
+    if length(file_hints) > 1
+        throw(ArgumentError("Conflicting alphabet hints from file extensions: $(sort!(collect(file_hints)))."))
+    end
+
+    inferred_hint = isempty(file_hints) ? nothing : first(file_hints)
+    final_hint = isnothing(type_hint) ? inferred_hint : type_hint
+
+    if !isnothing(type_hint) && !isnothing(inferred_hint)
+        normalized_hint = Symbol(uppercase(String(type_hint)))
+        if normalized_hint != inferred_hint
+            throw(ArgumentError("Provided type_hint $type_hint conflicts with file extension hint $inferred_hint."))
+        end
+    end
+
     # Build graph from first file (strand-specific) and convert later if needed
-    graph = build_kmer_graph_from_file(filepaths[1], k; mode=:singlestrand)
+    graph = build_kmer_graph_from_file(
+        filepaths[1],
+        k;
+        mode=:singlestrand,
+        type_hint=final_hint,
+        ambiguous_action=ambiguous_action
+    )
 
     # Get Mycelia module for open_fastx
     Mycelia_module = parentmodule(Rhizomorph)

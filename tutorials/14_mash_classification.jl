@@ -12,6 +12,12 @@
 # - How to interpret identity and shared-hash outputs
 
 # ## Setup
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/14_mash_classification.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")

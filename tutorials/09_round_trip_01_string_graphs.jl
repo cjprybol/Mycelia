@@ -13,6 +13,12 @@
 # 4. Analyze memory usage and computational performance
 # 5. Apply string graphs to real-world text analysis problems
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/09_round_trip_01_string_graphs.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Mycelia
 import Statistics
 import Random

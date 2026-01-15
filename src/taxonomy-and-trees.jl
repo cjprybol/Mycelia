@@ -74,6 +74,67 @@ function ensure_lineage_columns(df::DataFrames.DataFrame; ranks = default_ranks(
     return DataFrames.leftjoin(df, lineage, on = "subject tax id" => "taxid")
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Annotate BLAST hits with a `lineage` column using taxonkit.
+
+# Arguments
+- `blast_df::DataFrames.DataFrame`: BLAST hits table containing `"subject tax id"`.
+- `taxdump_dir::Union{String,Nothing}`: Optional taxonomy dump directory for taxonkit.
+
+# Returns
+- `DataFrames.DataFrame`: The input table with a new `lineage` column.
+"""
+function annotate_blast_hits_with_taxonkit(
+    blast_df::DataFrames.DataFrame;
+    taxdump_dir::Union{String,Nothing} = nothing
+)
+    if isempty(blast_df) || !hascol(blast_df, "subject tax id")
+        return blast_df
+    end
+
+    taxid_key = actual_name(blast_df, "subject tax id")
+    raw_taxids = collect(unique(skipmissing(blast_df[!, taxid_key])))
+    taxids = Int[]
+    for taxid in raw_taxids
+        if taxid isa Integer
+            push!(taxids, Int(taxid))
+        elseif taxid isa AbstractString
+            parsed = tryparse(Int, taxid)
+            parsed === nothing || push!(taxids, parsed)
+        end
+    end
+    taxids = unique(taxids)
+    if isempty(taxids)
+        return blast_df
+    end
+
+    lineage_table = Mycelia.taxids2taxonkit_full_lineage_table(taxids; taxdump_dir=taxdump_dir)
+    taxid_to_lineage = Dict{Int, String}()
+    for row in DataFrames.eachrow(lineage_table)
+        if !ismissing(row["taxid"]) && !ismissing(row["lineage"])
+            taxid_to_lineage[Int(row["taxid"])] = String(row["lineage"])
+        end
+    end
+
+    lineage_col = Vector{Union{Missing, String}}(undef, DataFrames.nrow(blast_df))
+    for (i, taxid) in enumerate(blast_df[!, taxid_key])
+        if ismissing(taxid)
+            lineage_col[i] = missing
+        elseif taxid isa Integer
+            lineage_col[i] = get(taxid_to_lineage, Int(taxid), missing)
+        elseif taxid isa AbstractString
+            parsed = tryparse(Int, taxid)
+            lineage_col[i] = parsed === nothing ? missing : get(taxid_to_lineage, parsed, missing)
+        else
+            lineage_col[i] = missing
+        end
+    end
+    blast_df[!, "lineage"] = lineage_col
+    return blast_df
+end
+
 # Core aggregator: from joined BLAST rows to normalized confidence per query and rank
 function compute_taxonomic_confidence(
     df::DataFrames.DataFrame;
@@ -1311,6 +1372,7 @@ Convert NCBI taxonomic IDs to their complete taxonomic lineage information using
 
 # Arguments
 - `taxids::AbstractVector{Int}`: Vector of NCBI taxonomy IDs
+- `taxdump_dir::Union{String,Nothing}`: Optional taxonomy dump directory for taxonkit.
 
 # Returns
 A DataFrame with columns:
@@ -1320,16 +1382,33 @@ A DataFrame with columns:
 - `lineage-ranks`: Taxonomic ranks for each level in lineage
 """
 # function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
-function taxids2taxonkit_full_lineage_table(taxids::AbstractVector{Int})
+function taxids2taxonkit_full_lineage_table(
+    taxids::AbstractVector{Int};
+    taxdump_dir::Union{String,Nothing} = nothing
+)
     Mycelia.add_bioconda_env("taxonkit")
-    setup_taxonkit_taxonomy()
+    if taxdump_dir === nothing
+        setup_taxonkit_taxonomy()
+    else
+        @assert isdir(taxdump_dir) "taxdump_dir does not exist: $(taxdump_dir)"
+    end
     f = tempname()
     open(f, "w") do io
         for taxid in taxids
             println(io, taxid)
         end
     end
-    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lineage --show-lineage-taxids --show-lineage-ranks $(f)`
+    cmd_parts = [
+        "taxonkit",
+        "lineage",
+        "--show-lineage-taxids",
+        "--show-lineage-ranks",
+    ]
+    if taxdump_dir !== nothing
+        append!(cmd_parts, ["--data-dir", taxdump_dir])
+    end
+    push!(cmd_parts, f)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit $cmd_parts`
     data, header = uCSV.read(open(pipeline(cmd)), delim='\t', header=false, typedetectrows=100)
     rm(f)
     header = ["taxid", "lineage", "lineage-taxids", "lineage-ranks"]

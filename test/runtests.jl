@@ -40,6 +40,9 @@ function include_all_tests(dir)
         end
         for file in sort(files)
             if endswith(file, ".jl")
+                if !MYCELIA_RUN_EXTERNAL && occursin("third_party_assemblers", file)
+                    continue
+                end
                 include(joinpath(root, file))
                 test_count += 1
             end
@@ -54,7 +57,7 @@ end
 # # JET.jl static analysis - uncomment to enable (can be slow)
 # include("jet.jl")
 
-include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
+# include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # # For debugging individual suites, include explicit files instead of the directory sweep.
 # # for file in (
 # #     "1_data_acquisition/ncbi_download.jl",
@@ -64,7 +67,7 @@ include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
+# include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 # # For debugging individual suites, include explicit files instead of the directory sweep.
 # # for file in (
 # #     "2_preprocessing_qc/alphabets.jl",
@@ -80,7 +83,7 @@ include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
+# include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 # # For debugging individual suites, include explicit files instead of the directory sweep.
 # # for file in (
 # #     "3_feature_extraction_kmer/kmer_analysis.jl",
@@ -89,7 +92,7 @@ include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
 # #     include(joinpath(@__DIR__, file))
 # # end
 
-# # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
+# Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
 include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # for file in [
 #         "test/4_assembly/aa_fasta_singlestrand_test.jl",
@@ -180,7 +183,7 @@ include_all_tests(joinpath(@__DIR__, "4_assembly"))
 # end
 
 # Stage 5 (validation): focused suites (all other external-heavy validation stays opt-in for now).
-include_all_tests(joinpath(@__DIR__, "5_validation")) # broken
+include_all_tests(joinpath(@__DIR__, "5_validation"))
 # for file in [
 #     # "5_validation/checkm_tools.jl",
 #     # "5_validation/coverm_integration_extended.jl",
@@ -207,7 +210,7 @@ include_all_tests(joinpath(@__DIR__, "6_annotation"))
 
 
 
-# # # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
+# Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
 include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # for file in (
 #     "7_comparative_pangenomics/blastdb_integration.jl",

@@ -1,3 +1,21 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# julia --project=. -e 'include("test/metadata/download_comebin_data.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/metadata/download_comebin_data.jl", "test/metadata", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
 import Mycelia
 
 const COMEBIN_TEST_FILE_ID = "1xWpN2z8JTaAzWW4TcOl0Lr4Y_x--Fs5s"

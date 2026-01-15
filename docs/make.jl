@@ -86,26 +86,36 @@ tutorial_pages = []
 
 # Add tutorials in logical order
 tutorial_order = [
-    # Main tutorial series (01-08) - temporarily only including these to test build
+    # Main tutorial series (01-08)
     ("Step 1: Data Acquisition", "01_data_acquisition.md"),
     ("Step 2: Quality Control", "02_quality_control.md"),
     ("Step 3: K-mer Analysis", "03_kmer_analysis.md"),
     ("Step 4: Genome Assembly", "04_genome_assembly.md"),
-    # ("4b. Graph Type Tutorials", "04_graph_type_tutorials.md"),  # TODO: Fix execution errors
+    ("Step 4b: Graph Type Tutorials", "04_graph_type_tutorials.md"),
     ("Step 5: Assembly Validation", "05_assembly_validation.md"),
     ("Step 6: Gene Annotation", "06_gene_annotation.md"),
     ("Step 7: Comparative Genomics", "07_comparative_genomics.md"),
     ("Step 8: Tool Integration", "08_tool_integration.md"),
-    ("Step 9: Binning Workflow", "14_binning_workflow.md"),
-    
-    # Round-trip tutorial series (09) - temporarily disabled due to execution errors
-    # TODO: Re-enable once example execution issues are resolved
-    # ("Round-Trip 1: String Graphs", "09_round_trip_01_string_graphs.md"),
-    # ("Round-Trip 2: N-gram to String", "09_round_trip_02_ngram_to_string.md"), 
-    # ("Round-Trip 3: FASTA Sequences", "09_round_trip_03_fasta_sequences.md"),
-    # ("Round-Trip 4: K-mer to Sequence", "09_round_trip_04_kmer_to_sequence.md"),
-    # ("Round-Trip 5: FASTQ Graphs", "09_round_trip_05_fastq_graphs.md"),
-    # ("Round-Trip 6: Qualmer Graphs", "09_round_trip_06_qualmer_graphs.md")
+
+    # Round-trip tutorial series (09)
+    ("Round-Trip 01: String Graphs", "09_round_trip_01_string_graphs.md"),
+    ("Round-Trip 02: N-gram to String", "09_round_trip_02_ngram_to_string.md"),
+    ("Round-Trip 03: FASTA Sequences", "09_round_trip_03_fasta_sequences.md"),
+    ("Round-Trip 04: K-mer to Sequence", "09_round_trip_04_kmer_to_sequence.md"),
+    ("Round-Trip 05: FASTQ Graphs", "09_round_trip_05_fastq_graphs.md"),
+    ("Round-Trip 06: Qualmer Graphs", "09_round_trip_06_qualmer_graphs.md"),
+
+    # Advanced and specialized tutorials
+    ("Step 10: Viroid Assembly Workflow", "10_viroid_assembly_workflow.md"),
+    ("Step 11: Reduced Amino Acid Alphabets", "11_reduced_amino_acid_alphabets.md"),
+    ("Step 12: CoverM Coverage", "12_coverm_coverage.md"),
+    ("Step 13: Rhizomorph Assembly", "13_rhizomorph_assembly.md"),
+    ("Step 14a: Binning Workflow", "14_binning_workflow.md"),
+    ("Step 14b: Mash Classification", "14_mash_classification.md"),
+    ("Step 15: Round Trip Benchmarking", "15_round_trip_benchmarking.md"),
+    ("Step 16: UN Corpus Ngram vs Token Graphs", "16_un_corpus_ngram_vs_token_graphs.md"),
+    ("Step 17: Viroid Sketch Round Trip", "17_viroid_sketch_round_trip.md"),
+    ("Step 18: Advanced Assembly Theory and Practice", "18_advanced_assembly_theory_and_practice.md"),
 ]
 
 # Add tutorials that exist in the specified order

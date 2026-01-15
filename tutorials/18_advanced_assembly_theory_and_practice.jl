@@ -1,4 +1,4 @@
-# # Advanced Assembly Theory and Practice in Mycelia
+# # Tutorial 18: Advanced Assembly Theory and Practice
 #
 # This tutorial demonstrates the theoretical foundations and practical implementation
 # of Mycelia's advanced assembly algorithms, based on research from Mycelia-Dev.
@@ -11,17 +11,30 @@
 # - Use statistical graph cleanup methods
 # - Apply metagenomic classification with MAPQ-aware techniques
 
-using Mycelia
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/18_advanced_assembly_theory_and_practice.jl", "tutorials/notebooks", execute=false)'
+# ```
+
+# ## Setup
+import Pkg
+if isinteractive()
+    Pkg.activate("..")
+end
+
+import Mycelia
+import Primes
 
 # ## 1. Mathematical Foundations of K-mer Selection
 #
 # Mycelia's k-mer selection is based on rigorous mathematical principles derived
 # from extensive research on error rate relationships and genomic properties.
 
-## ### Error Rate-Based K-mer Selection
-##
-## The fundamental relationship between error rate and optimal k-mer size:
-## lower_bound_k = max(3, floor(1/error_rate - 1))
+# ### Error Rate-Based K-mer Selection
+#
+# The fundamental relationship between error rate and optimal k-mer size:
+# lower_bound_k = max(3, floor(1/error_rate - 1))
 
 function demonstrate_error_rate_kmer_selection()
     println("Error Rate-Based K-mer Size Selection")

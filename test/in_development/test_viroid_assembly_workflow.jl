@@ -1,5 +1,22 @@
-# Essential Tests for Viroid Assembly Workflow
+# From the Mycelia base directory, run the tests with:
 #
+# ```bash
+# julia --project=. -e 'include("test/in_development/test_viroid_assembly_workflow.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/in_development/test_viroid_assembly_workflow.jl", "test/in_development", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
+# Essential Tests for Viroid Assembly Workflow
 # These tests validate the core functionality of the viroid assembly workflow
 # including quality propagation, FASTQ output, and multi-sequence assembly.
 

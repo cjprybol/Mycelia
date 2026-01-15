@@ -1,11 +1,25 @@
+# From the Mycelia base directory, run the tests with:
+#
+# ```bash
+# MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/4_assembly/third_party_assemblers.jl")'
+# ```
+#
+# And to turn this file into a jupyter notebook, run:
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("test/4_assembly/third_party_assemblers.jl", "test/4_assembly", execute=false)'
+# ```
+
+## If running Literate notebook, ensure the package is activated:
+## import Pkg
+## if isinteractive()
+##     Pkg.activate(joinpath(@__DIR__, "..", ".."))
+## end
+## using Revise
+
 # Lightweight third-party assembler integration tests.
-#
 # Run explicitly (requires conda + external tools):
-#   MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'include("test/4_assembly/third_party_assemblers.jl")'
-#
 # Keep resource usage modest (defaults to 2, clamped to 1–4):
 #   export MYCELIA_ASSEMBLER_TEST_THREADS=2
-#
 # Heavy workflows (Canu, hifiasm-meta, metaMDBG, STRONG/Strainy) were moved out of
 # the test suite; see:
 # - `benchmarking/third_party_assemblers_heavy_workflows.jl`

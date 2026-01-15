@@ -175,6 +175,21 @@ println("Unique k-mers: $(sum(length(v) for v in values(pangenome_result.unique_
 # Note: Gene prediction and visualization functions are planned
 ```
 
+Gold-standard whole-genome comparison (ANIb/ANIm/AAI/POCP/PyOrthoANI):
+
+```julia
+result = Mycelia.compare_genomes_gold(
+    "genome1.fasta",
+    "genome2.fasta";
+    methods=Symbol[:ANIm, :ANIb, :AAI, :POCP, :PyOrthoANI],
+    outdir="gold_compare",
+    force=true
+)
+println(result.summary)
+```
+
+Note: this invokes external tools via Conda.jl (BLAST, MUMmer, DIAMOND, PyOrthoANI).
+
 ## What's Next?
 
 Explore the available features and help improve the package:

@@ -1,3 +1,9 @@
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/04_graph_type_tutorials.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 """
 Rhizomorph Graph Type Tutorials
 

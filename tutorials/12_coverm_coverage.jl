@@ -9,6 +9,12 @@
 #
 # The workflow uses tiny synthetic data so it finishes quickly on a laptop or login node.
 
+# From the Mycelia base directory, convert this tutorial to a notebook:
+#
+# ```bash
+# julia --project=. -e 'import Literate; Literate.notebook("tutorials/12_coverm_coverage.jl", "tutorials/notebooks", execute=false)'
+# ```
+
 import Pkg
 if isinteractive()
     Pkg.activate("..")
