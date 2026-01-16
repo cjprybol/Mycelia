@@ -178,7 +178,7 @@ function hclust_to_metagraph(hcl::Clustering.Hclust)
     )
 
     # Add leaf nodes
-    for leaf_node in hcl.labels
+    for leaf_node in 1:Clustering.nnodes(hcl)
         hclust_id = string(-leaf_node)
         mg[hclust_id] = HclustVertexData(hclust_id, 0.0, 0.0, 0.0)  # x and y will be set later
     end
@@ -300,7 +300,7 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
     
     # Create figure with higher resolution
     # fig = CairoMakie.Figure(resolution = (1200, 800), fontsize = 16)
-    fig = CairoMakie.Figure(resolution = (900, 600), fontsize = 16)
+    fig = CairoMakie.Figure(size = (900, 600), fontsize = 16)
     ax = CairoMakie.Axis(
         fig[1, 1],
         xlabel = "Number of Clusters (k)",
@@ -462,7 +462,7 @@ function identify_optimal_number_of_clusters(
     hcl = heirarchically_cluster_distance_matrix(distance_matrix)
     println("Hierarchical clustering complete.")
 
-    N = length(hcl.labels)
+    N = Clustering.nnodes(hcl)
     if N != n_items
         @warn "Number of labels in Hclust object ($(N)) does not match distance matrix size ($(n_items)). Using Hclust labels count."
     end
@@ -501,7 +501,7 @@ function identify_optimal_number_of_clusters(
     avg_silhouette_scores = zeros(Float64, n_ks)
 
     # Progress meter setup
-    pm = ProgressMeter.Progress(n_ks, 1, "Calculating Avg Silhouette Scores: ", 50)
+    pm = ProgressMeter.Progress(n_ks; dt=1, desc="Calculating Avg Silhouette Scores: ", barlen=50)
 
     # Parallel computation of silhouette scores
     Threads.@threads for i in 1:n_ks

@@ -702,9 +702,9 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
         # want to read the whole file and predict how long that will take
         # n_records = reduce(sum, map(f -> Mycelia.count_records(f), fastxs))
         kmers_to_assess = max_possible_kmers
-        p = ProgressMeter.Progress(kmers_to_assess, 1)
+        p = ProgressMeter.Progress(kmers_to_assess; dt=1)
     else
-        p = ProgressMeter.Progress(kmers_to_assess, 1)
+        p = ProgressMeter.Progress(kmers_to_assess; dt=1)
     end
     
     sampling_points = Int[0]

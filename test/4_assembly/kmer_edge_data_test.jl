@@ -300,4 +300,4 @@ Test.@testset "KmerEdgeData - Weight Calculation" begin
     end
 end
 
-println("✓ KmerEdgeData tests defined (will fail until implementation)")
+println("✓ KmerEdgeData tests executed")

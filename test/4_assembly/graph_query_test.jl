@@ -502,4 +502,4 @@ Test.@testset "Graph Analysis Functions - Connected Components" begin
     end
 end
 
-println("✓ Graph query and traversal tests defined (will fail until implementation)")
+println("✓ Graph query and traversal tests executed")

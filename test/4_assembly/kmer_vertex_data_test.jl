@@ -302,4 +302,4 @@ Test.@testset "KmerVertexData - Critical Anti-Patterns" begin
     end
 end
 
-println("✓ KmerVertexData tests defined (will fail until implementation)")
+println("✓ KmerVertexData tests executed")

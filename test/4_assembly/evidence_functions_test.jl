@@ -344,4 +344,4 @@ Test.@testset "Evidence Functions - Edge Support" begin
     end
 end
 
-println("✓ Evidence helper functions tests defined (will fail until implementation)")
+println("✓ Evidence helper functions tests executed")
