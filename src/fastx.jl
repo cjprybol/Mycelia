@@ -2371,7 +2371,7 @@ function determine_read_lengths(fastq_file; total_reads = Inf)
     end
     read_lengths = zeros(Int, total_reads)
     @info "determining read lengths"
-    p = ProgressMeter.Progress(total_reads, 1)
+    p = ProgressMeter.Progress(total_reads; dt=1)
     for (i, record) in enumerate(open_fastx(fastq_file))
 #         push!(read_lengths, length(FASTX.sequence(record)))
         read_lengths[i] = length(FASTX.sequence(record))

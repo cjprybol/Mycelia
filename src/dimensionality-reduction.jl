@@ -330,6 +330,37 @@ end
 
 # ── 4. PCoA from a distance matrix ───────────────────────────────────────────
 
+struct MDSWarningFilterLogger <: Logging.AbstractLogger
+    parent::Logging.AbstractLogger
+end
+
+Logging.min_enabled_level(logger::MDSWarningFilterLogger) =
+    Logging.min_enabled_level(logger.parent)
+
+Logging.shouldlog(logger::MDSWarningFilterLogger, level, _module, group, id) =
+    Logging.shouldlog(logger.parent, level, _module, group, id)
+
+Logging.catch_exceptions(logger::MDSWarningFilterLogger) =
+    Logging.catch_exceptions(logger.parent)
+
+function Logging.handle_message(
+    logger::MDSWarningFilterLogger,
+    level,
+    message,
+    _module,
+    group,
+    id,
+    file,
+    line;
+    kwargs...
+)
+    msg = message isa AbstractString ? message : string(message)
+    if level == Logging.Warn && occursin("degenerate with", msg)
+        return
+    end
+    return Logging.handle_message(logger.parent, level, message, _module, group, id, file, line; kwargs...)
+end
+
 """
     pcoa_from_dist(D::AbstractMatrix{<:Real}; maxoutdim::Int = 2)
 
@@ -349,9 +380,11 @@ function pcoa_from_dist(
     maxoutdim::Int = 3
 )
     @assert size(D, 1) == size(D,2) "size(D,1) != size(D,2) $(size(D))"
-    model = MultivariateStats.fit(
-      MultivariateStats.MDS, D; distances=true, maxoutdim=maxoutdim
-    )
+    model = Logging.with_logger(MDSWarningFilterLogger(Logging.current_logger())) do
+        MultivariateStats.fit(
+            MultivariateStats.MDS, D; distances=true, maxoutdim=maxoutdim
+        )
+    end
     Y = MultivariateStats.predict(model)
 
     return (
@@ -391,7 +424,16 @@ function umap_embed(X::AbstractMatrix{<:Real};
         throw(ArgumentError("UMAP input contains non-finite values (NaN or Inf)."))
     end
 
-    model = UMAP.UMAP_(X, n_components, n_neighbors=n_neighbors, min_dist=min_dist)
+    if size(X, 2) < 4096
+        dist_matrix = Distances.pairwise(Distances.Euclidean(), X; dims=2)
+        model = UMAP.UMAP_(dist_matrix, n_components;
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            metric=:precomputed
+        )
+    else
+        model = UMAP.UMAP_(X, n_components, n_neighbors=n_neighbors, min_dist=min_dist)
+    end
 
     return model
 end

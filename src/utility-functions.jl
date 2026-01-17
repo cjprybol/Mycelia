@@ -2236,7 +2236,7 @@ function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
 
     # --- Set up a byte‐based progress meter ---
     total_bytes = file_stat.size
-    p = ProgressMeter.Progress(total_bytes, "Parsing JSONL (bytes): ")
+    p = ProgressMeter.Progress(total_bytes; desc="Parsing JSONL (bytes): ")
     last_pos = Int64(0)
 
     # --- Read & parse lines ---

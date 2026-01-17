@@ -5,6 +5,7 @@
 **A Julia package for bioinformatics and computational biology**
 
 [![codecov](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR)](https://codecov.io/github/cjprybol/Mycelia)
+[![HPC Coverage](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR&flag=hpc-extended)](https://codecov.io/github/cjprybol/Mycelia?flag=hpc-extended)
 [![Documentation](https://github.com/cjprybol/Mycelia/actions/workflows/documentation.yml/badge.svg)](https://cjprybol.github.io/Mycelia/dev/)
 
 ![Banner Logo](banner-logo.jpg)

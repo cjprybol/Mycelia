@@ -421,11 +421,11 @@ function build_directed_kmer_graph(;fastq, k=1, plot=false)
     MetaGraphs.set_prop!(graph, :kmer_counts, kmer_counts)
     MetaGraphs.set_prop!(graph, :total_states, total_states)
     MetaGraphs.set_prop!(graph, :ordered_kmers, ordered_kmers)
-    kmer_indices = sort(Dict(kmer => i for (i, kmer) in enumerate(keys(kmer_counts))))
+    kmer_indices = sort!(OrderedCollections.OrderedDict(kmer => i for (i, kmer) in enumerate(keys(kmer_counts))))
     MetaGraphs.set_prop!(graph, :kmer_indices, kmer_indices)
     canonical_kmer_counts = Mycelia.count_canonical_kmers(kmer_type, fastq)
     MetaGraphs.set_prop!(graph, :canonical_kmer_counts, canonical_kmer_counts)
-    canonical_kmer_indices = sort(Dict(kmer => i for (i, kmer) in enumerate(keys(canonical_kmer_counts))))
+    canonical_kmer_indices = sort!(OrderedCollections.OrderedDict(kmer => i for (i, kmer) in enumerate(keys(canonical_kmer_counts))))
     MetaGraphs.set_prop!(graph, :canonical_kmer_indices, canonical_kmer_indices)
     
     
@@ -456,11 +456,11 @@ function build_directed_kmer_graph(;fastq, k=1, plot=false)
         end
     end
     strand_normalized_quality_support
-    kmer_mean_quality = sort(Dict(kmer => strand_normalized_quality_support[kmer] ./ canonical_kmer_counts[BioSequences.canonical(kmer)] for kmer in ordered_kmers))
+    kmer_mean_quality = sort!(OrderedCollections.OrderedDict(kmer => strand_normalized_quality_support[kmer] ./ canonical_kmer_counts[BioSequences.canonical(kmer)] for kmer in ordered_kmers))
     MetaGraphs.set_prop!(graph, :kmer_mean_quality, kmer_mean_quality)
-    kmer_total_quality = sort(Dict(kmer => sum(quality_values) for (kmer, quality_values) in strand_normalized_quality_support))
+    kmer_total_quality = sort!(OrderedCollections.OrderedDict(kmer => sum(quality_values) for (kmer, quality_values) in strand_normalized_quality_support))
     MetaGraphs.set_prop!(graph, :kmer_total_quality, kmer_total_quality)
-    state_likelihoods = sort(Dict(kmer => total_quality / sum(values(kmer_total_quality)) for (kmer, total_quality) in kmer_total_quality))
+    state_likelihoods = sort!(OrderedCollections.OrderedDict(kmer => total_quality / sum(values(kmer_total_quality)) for (kmer, total_quality) in kmer_total_quality))
     MetaGraphs.set_prop!(graph, :state_likelihoods, state_likelihoods)
 
 

@@ -146,7 +146,7 @@ Test.@testset "Radial Dendrogram Visualization" begin
     points = hcat(randn(2, 20), randn(2, 20) .+ 5, randn(2, 10) .+ 10)
 
     # Compute Euclidean distance matrix
-    dist_matrix = Distances.pairwise(Distances.Euclidean(), points)
+    dist_matrix = Distances.pairwise(Distances.Euclidean(), points; dims=2)
 
     # Perform Hierarchical Clustering using Ward's linkage
     hcl = Clustering.hclust(dist_matrix, linkage=:ward)

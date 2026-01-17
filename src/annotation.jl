@@ -2491,7 +2491,7 @@ function parallel_pyrodigal(normalized_fastas::Vector{String})
     Base.println("Processing $(num_files) FASTA files using $(Threads.nthreads()) threads...")
 
     # Create a Progress object for manual updates
-    p = ProgressMeter.Progress(num_files, 1, "Running Pyrodigal: ", 50)
+    p = ProgressMeter.Progress(num_files; dt=1, desc="Running Pyrodigal: ", barlen=50)
 
     # Use Channels to collect results and failures thread-safely
     # Channel{Tuple{Filename, ResultType}} - adjust ResultType if known

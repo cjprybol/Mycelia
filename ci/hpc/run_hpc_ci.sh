@@ -15,11 +15,13 @@
 #   HPC_CODECOV_FLAG  Codecov flag (default: hpc-extended).
 #   HPC_CI_COMMIT     Commit SHA (default: git rev-parse HEAD).
 #   HPC_CI_BRANCH     Branch name (default: git rev-parse --abbrev-ref HEAD).
+#   HPC_CI_CHECKOUT   If set to 1, fetch/checkout HPC_CI_COMMIT/HPC_CI_BRANCH first.
 #   HPC_CLUSTER_NAME  Optional logical cluster name for metadata.
 #
 # CLI options:
 #   --tests-only       Run tests + coverage only.
 #   --benchmarks-only  Run extended tutorials/benchmarks only.
+#   --with-benchmarks  Run tests + extended tutorials/benchmarks.
 #   --no-codecov       Skip Codecov upload even if CODECOV_TOKEN is set.
 
 set -euo pipefail
@@ -31,6 +33,8 @@ Usage: $(basename "$0") [options]
 Options:
   --tests-only       Run tests + coverage only.
   --benchmarks-only  Run extended tutorials/benchmarks only.
+  --with-benchmarks  Run tests + extended tutorials/benchmarks.
+  --upload-only      Upload existing coverage only (no tests/benchmarks).
   --no-codecov       Skip Codecov upload even if CODECOV_TOKEN is set.
   --help             Show this help message.
 
@@ -43,10 +47,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# Default behaviour: run everything and upload to Codecov if configured
+# Optional checkout to a specific commit/branch for reproducible HPC runs
+HPC_CI_CHECKOUT="${HPC_CI_CHECKOUT:-0}"
+HPC_CI_COMMIT="${HPC_CI_COMMIT:-}"
+HPC_CI_BRANCH="${HPC_CI_BRANCH:-}"
+
+if [[ "${HPC_CI_CHECKOUT}" -eq 1 ]]; then
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Error: working tree is not clean; refusing to checkout." >&2
+    exit 1
+  fi
+
+  if [[ -n "${HPC_CI_BRANCH}" ]]; then
+    git fetch origin "${HPC_CI_BRANCH}"
+  else
+    git fetch origin
+  fi
+
+  if [[ -n "${HPC_CI_COMMIT}" ]]; then
+    git checkout "${HPC_CI_COMMIT}"
+  elif [[ -n "${HPC_CI_BRANCH}" ]]; then
+    git checkout "${HPC_CI_BRANCH}"
+  fi
+fi
+
+# Default behaviour: run tests only and upload to Codecov if configured
 RUN_TESTS=1
-RUN_BENCHMARKS=1
+RUN_BENCHMARKS=0
 UPLOAD_CODECOV=1
+RUN_UPLOAD_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +85,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --benchmarks-only)
       RUN_TESTS=0
+      RUN_BENCHMARKS=1
+      shift
+      ;;
+    --with-benchmarks)
+      RUN_BENCHMARKS=1
+      shift
+      ;;
+    --upload-only)
+      RUN_TESTS=0
+      RUN_BENCHMARKS=0
+      RUN_UPLOAD_ONLY=1
       shift
       ;;
     --no-codecov)
@@ -120,14 +160,16 @@ BENCH_EXIT=0
 # Phase 1: Pkg.test() with coverage
 ###############################################################################
 if [[ "${RUN_TESTS}" -eq 1 ]]; then
-  echo ">>> Phase 1: Running Pkg.test() with coverage"
+  echo ">>> Phase 1: Running Pkg.test() with coverage (MYCELIA_RUN_ALL=true)"
   TEST_START=$(date +%s)
 
   set +e
   # LD_LIBRARY_PATH is left as-is; clear it before invoking if cluster needs it.
   JULIA_NUM_THREADS="${JULIA_NUM_THREADS:-auto}" \
-  julia --project=. --code-coverage=user \
-        -e 'import Pkg; Pkg.test()' \
+  MYCELIA_RUN_ALL=true \
+  # Coverage needs non-precompiled code; Pkg.test inherits this flag.
+  julia --project=. --compiled-modules=no \
+        -e 'import Pkg; Pkg.test(coverage=true)' \
         2>&1 | tee "${LOG_DIR}/tests.log"
   TEST_EXIT=${PIPESTATUS[0]}
   set -e
@@ -148,19 +190,13 @@ if [[ "${RUN_TESTS}" -eq 1 ]]; then
 
   julia --project=. <<'EOF'
 import Pkg
-try
-    import Coverage
-catch
-    Pkg.add("Coverage"); import Coverage
-end
 
-try
-    import JSON
-catch
-    Pkg.add("JSON"); import JSON
-end
+temp_env = mktempdir()
+Pkg.activate(temp_env)
+Pkg.add(["Coverage", "JSON"])
 
 using Coverage
+import JSON
 
 results_dir = get(ENV, "HPC_RESULTS_DIR", "hpc-ci")
 cov_dir     = get(ENV, "HPC_COVERAGE_DIR", joinpath(results_dir, "coverage"))
@@ -182,7 +218,7 @@ summary = Dict(
 summary_path = get(ENV, "HPC_COVERAGE_SUMMARY", joinpath(cov_dir, "summary.json"))
 mkpath(dirname(summary_path))
 open(summary_path, "w") do io
-    JSON.print(io, summary; 4)
+    JSON.print(io, summary, 4)
 end
 
 println("Coverage summary:")
@@ -192,7 +228,7 @@ EOF
 fi
 
 ###############################################################################
-# Phase 2: Extended tutorials + benchmarks (no coverage requirement)
+# Phase 2: Extended tutorials + benchmarks (optional, no coverage requirement)
 ###############################################################################
 if [[ "${RUN_BENCHMARKS}" -eq 1 ]]; then
   echo
@@ -231,8 +267,25 @@ fi
 ###############################################################################
 # Phase 3: Optional Codecov upload
 ###############################################################################
-if [[ "${RUN_TESTS}" -eq 1 && "${UPLOAD_CODECOV}" -eq 1 ]]; then
+if [[ ( "${RUN_TESTS}" -eq 1 || "${RUN_UPLOAD_ONLY}" -eq 1 ) && "${UPLOAD_CODECOV}" -eq 1 ]]; then
   if [[ -n "${CODECOV_TOKEN:-}" && -f "${COVERAGE_DIR}/lcov.info" ]]; then
+    CODECOV_LOG="${LOG_DIR}/codecov.log"
+    : > "${CODECOV_LOG}"
+    {
+      echo "Codecov upload context:"
+      echo "  Coverage file: ${COVERAGE_DIR}/lcov.info"
+      echo "  Coverage size: $(wc -c < "${COVERAGE_DIR}/lcov.info") bytes"
+      echo "  Coverage lines: $(wc -l < "${COVERAGE_DIR}/lcov.info")"
+      echo "  Commit: ${HPC_CI_COMMIT}"
+      echo "  Branch: ${HPC_CI_BRANCH}"
+      echo "  Flag: ${HPC_CODECOV_FLAG}"
+    } >> "${CODECOV_LOG}"
+
+    CODECOV_BRANCH_ARGS=()
+    if [[ -n "${HPC_CI_BRANCH}" && "${HPC_CI_BRANCH}" != "HEAD" ]]; then
+      CODECOV_BRANCH_ARGS=(-B "${HPC_CI_BRANCH}")
+    fi
+
     if command -v codecov >/dev/null 2>&1; then
       echo
       echo ">>> Phase 3: Uploading coverage to Codecov (flag=${HPC_CODECOV_FLAG})"
@@ -242,14 +295,47 @@ if [[ "${RUN_TESTS}" -eq 1 && "${UPLOAD_CODECOV}" -eq 1 ]]; then
         -F "${HPC_CODECOV_FLAG}" \
         -f "${COVERAGE_DIR}/lcov.info" \
         -C "${HPC_CI_COMMIT}" \
-        -B "${HPC_CI_BRANCH}"
-      CODECOV_EXIT=$?
+        "${CODECOV_BRANCH_ARGS[@]}" \
+        2>&1 | tee -a "${CODECOV_LOG}"
+      CODECOV_EXIT=${PIPESTATUS[0]}
       set -e
       if [[ "${CODECOV_EXIT}" -ne 0 ]]; then
         echo "Warning: Codecov upload failed (non-fatal), exit code: ${CODECOV_EXIT}" >&2
       fi
     else
-      echo "Warning: 'codecov' CLI not found on PATH; skipping upload." >&2
+      echo "Info: 'codecov' CLI not found; attempting Coverage.jl upload."
+      set +e
+      julia --project=. <<'EOF' 2>&1 | tee -a "${CODECOV_LOG}"
+import Pkg
+
+temp_env = mktempdir()
+Pkg.activate(temp_env)
+Pkg.add("Coverage")
+
+import Coverage
+
+coverage = Coverage.process_folder("src")
+flag = get(ENV, "HPC_CODECOV_FLAG", "")
+
+if isempty(flag)
+    Coverage.Codecov.submit(coverage)
+else
+    try
+        Coverage.Codecov.submit(coverage; flags=flag)
+    catch err
+        if err isa MethodError
+            Coverage.Codecov.submit(coverage)
+        else
+            rethrow()
+        end
+    end
+end
+EOF
+      CODECOV_EXIT=${PIPESTATUS[0]}
+      set -e
+      if [[ "${CODECOV_EXIT}" -ne 0 ]]; then
+        echo "Warning: Coverage.jl Codecov upload failed (non-fatal), exit code: ${CODECOV_EXIT}" >&2
+      fi
     fi
   else
     echo "Info: CODECOV_TOKEN not set or coverage file missing; skipping Codecov upload." >&2
@@ -280,7 +366,12 @@ cov_summary_path = get(ENV, "HPC_COVERAGE_SUMMARY", "")
 
 coverage = nothing
 if !isempty(cov_summary_path) && isfile(cov_summary_path)
-    coverage = JSON.parsefile(cov_summary_path)
+    try
+        coverage = JSON.parsefile(cov_summary_path)
+    catch err
+        coverage = nothing
+        println(stderr, "Warning: failed to parse coverage summary at ", cov_summary_path, ": ", err)
+    end
 end
 
 hpc = Dict(
@@ -329,7 +420,7 @@ result = Dict(
 mkpath(results_dir)
 out_path = joinpath(results_dir, "hpc-results.json")
 open(out_path, "w") do io
-    JSON.print(io, result; 4)
+    JSON.print(io, result, 4)
 end
 
 println("Wrote HPC results summary to: ", out_path)

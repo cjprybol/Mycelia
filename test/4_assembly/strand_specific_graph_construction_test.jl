@@ -409,4 +409,4 @@ Test.@testset "Strand-Specific Graph Construction - Multiple Datasets" begin
     end
 end
 
-println("✓ Strand-specific graph construction tests defined (will fail until implementation)")
+println("✓ Strand-specific graph construction tests executed")

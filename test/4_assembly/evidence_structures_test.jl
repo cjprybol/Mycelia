@@ -257,4 +257,4 @@ Test.@testset "Evidence Structure Types" begin
     end
 end
 
-println("✓ Evidence structures tests defined (will fail until implementation)")
+println("✓ Evidence structures tests executed")
