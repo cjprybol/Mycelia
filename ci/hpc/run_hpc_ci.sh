@@ -34,6 +34,7 @@ Options:
   --tests-only       Run tests + coverage only.
   --benchmarks-only  Run extended tutorials/benchmarks only.
   --with-benchmarks  Run tests + extended tutorials/benchmarks.
+  --upload-only      Upload existing coverage only (no tests/benchmarks).
   --no-codecov       Skip Codecov upload even if CODECOV_TOKEN is set.
   --help             Show this help message.
 
@@ -74,6 +75,7 @@ fi
 RUN_TESTS=1
 RUN_BENCHMARKS=0
 UPLOAD_CODECOV=1
+RUN_UPLOAD_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,6 +90,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-benchmarks)
       RUN_BENCHMARKS=1
+      shift
+      ;;
+    --upload-only)
+      RUN_TESTS=0
+      RUN_BENCHMARKS=0
+      RUN_UPLOAD_ONLY=1
       shift
       ;;
     --no-codecov)
@@ -182,19 +190,13 @@ if [[ "${RUN_TESTS}" -eq 1 ]]; then
 
   julia --project=. <<'EOF'
 import Pkg
-try
-    import Coverage
-catch
-    Pkg.add("Coverage"); import Coverage
-end
 
-try
-    import JSON
-catch
-    Pkg.add("JSON"); import JSON
-end
+temp_env = mktempdir()
+Pkg.activate(temp_env)
+Pkg.add(["Coverage", "JSON"])
 
 using Coverage
+import JSON
 
 results_dir = get(ENV, "HPC_RESULTS_DIR", "hpc-ci")
 cov_dir     = get(ENV, "HPC_COVERAGE_DIR", joinpath(results_dir, "coverage"))
@@ -265,8 +267,20 @@ fi
 ###############################################################################
 # Phase 3: Optional Codecov upload
 ###############################################################################
-if [[ "${RUN_TESTS}" -eq 1 && "${UPLOAD_CODECOV}" -eq 1 ]]; then
+if [[ ( "${RUN_TESTS}" -eq 1 || "${RUN_UPLOAD_ONLY}" -eq 1 ) && "${UPLOAD_CODECOV}" -eq 1 ]]; then
   if [[ -n "${CODECOV_TOKEN:-}" && -f "${COVERAGE_DIR}/lcov.info" ]]; then
+    CODECOV_LOG="${LOG_DIR}/codecov.log"
+    : > "${CODECOV_LOG}"
+    {
+      echo "Codecov upload context:"
+      echo "  Coverage file: ${COVERAGE_DIR}/lcov.info"
+      echo "  Coverage size: $(wc -c < "${COVERAGE_DIR}/lcov.info") bytes"
+      echo "  Coverage lines: $(wc -l < "${COVERAGE_DIR}/lcov.info")"
+      echo "  Commit: ${HPC_CI_COMMIT}"
+      echo "  Branch: ${HPC_CI_BRANCH}"
+      echo "  Flag: ${HPC_CODECOV_FLAG}"
+    } >> "${CODECOV_LOG}"
+
     CODECOV_BRANCH_ARGS=()
     if [[ -n "${HPC_CI_BRANCH}" && "${HPC_CI_BRANCH}" != "HEAD" ]]; then
       CODECOV_BRANCH_ARGS=(-B "${HPC_CI_BRANCH}")
@@ -281,8 +295,9 @@ if [[ "${RUN_TESTS}" -eq 1 && "${UPLOAD_CODECOV}" -eq 1 ]]; then
         -F "${HPC_CODECOV_FLAG}" \
         -f "${COVERAGE_DIR}/lcov.info" \
         -C "${HPC_CI_COMMIT}" \
-        "${CODECOV_BRANCH_ARGS[@]}"
-      CODECOV_EXIT=$?
+        "${CODECOV_BRANCH_ARGS[@]}" \
+        2>&1 | tee -a "${CODECOV_LOG}"
+      CODECOV_EXIT=${PIPESTATUS[0]}
       set -e
       if [[ "${CODECOV_EXIT}" -ne 0 ]]; then
         echo "Warning: Codecov upload failed (non-fatal), exit code: ${CODECOV_EXIT}" >&2
@@ -290,13 +305,14 @@ if [[ "${RUN_TESTS}" -eq 1 && "${UPLOAD_CODECOV}" -eq 1 ]]; then
     else
       echo "Info: 'codecov' CLI not found; attempting Coverage.jl upload."
       set +e
-      julia --project=. <<'EOF'
+      julia --project=. <<'EOF' 2>&1 | tee -a "${CODECOV_LOG}"
 import Pkg
-try
-    import Coverage
-catch
-    Pkg.add("Coverage"); import Coverage
-end
+
+temp_env = mktempdir()
+Pkg.activate(temp_env)
+Pkg.add("Coverage")
+
+import Coverage
 
 coverage = Coverage.process_folder("src")
 flag = get(ENV, "HPC_CODECOV_FLAG", "")
@@ -315,7 +331,7 @@ else
     end
 end
 EOF
-      CODECOV_EXIT=$?
+      CODECOV_EXIT=${PIPESTATUS[0]}
       set -e
       if [[ "${CODECOV_EXIT}" -ne 0 ]]; then
         echo "Warning: Coverage.jl Codecov upload failed (non-fatal), exit code: ${CODECOV_EXIT}" >&2
