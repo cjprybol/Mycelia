@@ -99,20 +99,25 @@ function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerT
         end
     end
 
+    # Resolve a concrete k-mer type when KmerType is a UnionAll (e.g., DNAKmer{k}).
+    sample_seq = first(labels)
+    sample_kmer = KmerType(sample_seq)
+    ActualKmerType = typeof(sample_kmer)
+
     graph_type = typeof(graph.graph)
     source_is_quality = graph[first(labels)] isa QualityBioSequenceVertexData
     effective_drop_quality = drop_quality || source_is_quality
 
     new_graph = MetaGraphsNext.MetaGraph(
         graph_type();
-        label_type=KmerType,
-        vertex_data_type=KmerVertexData{KmerType},
+        label_type=ActualKmerType,
+        vertex_data_type=KmerVertexData{ActualKmerType},
         edge_data_type=KmerEdgeData,
         weight_function=compute_edge_weight
     )
 
     for seq in labels
-        kmer_label = KmerType(string(seq))
+        kmer_label = ActualKmerType(seq)
         if !haskey(new_graph, kmer_label)
             new_graph[kmer_label] = KmerVertexData(kmer_label)
         end
@@ -120,8 +125,8 @@ function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerT
     end
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
-        new_src = KmerType(string(src))
-        new_dst = KmerType(string(dst))
+        new_src = ActualKmerType(src)
+        new_dst = ActualKmerType(dst)
         edge_data = graph[src, dst]
         new_edge = KmerEdgeData()
         _copy_edge_evidence!(new_edge, edge_data; drop_quality=effective_drop_quality)

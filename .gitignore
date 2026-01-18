@@ -50,3 +50,6 @@ package.json
 *DS_Store*
 test/metadata/comebin_test_data*
 node_modules/*
+hpc-ci/coverage
+hpc-ci/logs
+hpc-ci/hpc-results.json

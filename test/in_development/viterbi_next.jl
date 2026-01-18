@@ -36,7 +36,7 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
             label_type=String,
             vertex_data_type=Mycelia.KmerVertexData,
             edge_data_type=Mycelia.KmerEdgeData,
-            weight_function=Mycelia.edge_data_weight,
+            weight_function=Mycelia.Rhizomorph.edge_data_weight,
             default_weight=0.0
         )
         
@@ -48,45 +48,45 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
         # Add edges forming a path
         # High coverage edge (3 observations)
         high_coverage = [
-            ((1, 1, Mycelia.Forward), (1, 2, Mycelia.Forward)),
-            ((2, 1, Mycelia.Forward), (2, 2, Mycelia.Forward)),
-            ((3, 1, Mycelia.Forward), (3, 2, Mycelia.Forward))
+            ((1, 1, Mycelia.Rhizomorph.Forward), (1, 2, Mycelia.Rhizomorph.Forward)),
+            ((2, 1, Mycelia.Rhizomorph.Forward), (2, 2, Mycelia.Rhizomorph.Forward)),
+            ((3, 1, Mycelia.Rhizomorph.Forward), (3, 2, Mycelia.Rhizomorph.Forward))
         ]
         graph["ATC", "TCG"] = Mycelia.KmerEdgeData(
-            high_coverage, Mycelia.Forward, Mycelia.Forward
+            high_coverage, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward
         )
         # Medium coverage edge (2 observations)
         medium_coverage = [
-            ((1, 2, Mycelia.Forward), (1, 3, Mycelia.Forward)),
-            ((2, 2, Mycelia.Forward), (2, 3, Mycelia.Forward))
+            ((1, 2, Mycelia.Rhizomorph.Forward), (1, 3, Mycelia.Rhizomorph.Forward)),
+            ((2, 2, Mycelia.Rhizomorph.Forward), (2, 3, Mycelia.Rhizomorph.Forward))
         ]
         graph["TCG", "CGA"] = Mycelia.KmerEdgeData(
-            medium_coverage, Mycelia.Forward, Mycelia.Forward
+            medium_coverage, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward
         )
         # Low coverage edge (1 observation)
         low_coverage = [
-            ((1, 3, Mycelia.Forward), (1, 4, Mycelia.Forward))
+            ((1, 3, Mycelia.Rhizomorph.Forward), (1, 4, Mycelia.Rhizomorph.Forward))
         ]
         graph["CGA", "GAT"] = Mycelia.KmerEdgeData(
-            low_coverage, Mycelia.Forward, Mycelia.Forward
+            low_coverage, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward
         )
         
         return graph
     end
     
     Test.@testset "ViterbiState Construction" begin
-        state = Mycelia.ViterbiState("ATC", Mycelia.Forward, 0.95, 1)
+        state = Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Forward, 0.95, 1)
         Test.@test state.vertex_label == "ATC"
-        Test.@test state.strand == Mycelia.Forward
+        Test.@test state.strand == Mycelia.Rhizomorph.Forward
         Test.@test state.emission_prob == 0.95
         Test.@test state.position == 1
         
         # Test invalid probability
-        Test.@test_throws AssertionError Mycelia.ViterbiState("ATC", Mycelia.Forward, 1.5, 1)
-        Test.@test_throws AssertionError Mycelia.ViterbiState("ATC", Mycelia.Forward, -0.1, 1)
+        Test.@test_throws AssertionError Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Forward, 1.5, 1)
+        Test.@test_throws AssertionError Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Forward, -0.1, 1)
         
         # Test invalid position
-        Test.@test_throws AssertionError Mycelia.ViterbiState("ATC", Mycelia.Forward, 0.95, -1)
+        Test.@test_throws AssertionError Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Forward, 0.95, -1)
     end
     
     Test.@testset "ViterbiConfig Construction and Validation" begin
@@ -138,14 +138,14 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
         # States should have correct structure
         for state in states
             Test.@test state isa Mycelia.ViterbiState
-            Test.@test state.strand in [Mycelia.Forward, Mycelia.Reverse]
+            Test.@test state.strand in [Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse]
             Test.@test !isempty(state.vertex_label)
         end
     end
     
     Test.@testset "Emission Probability Calculation" begin
         config = Mycelia.ViterbiConfig()
-        state = Mycelia.ViterbiState("ATC", Mycelia.Forward, 1.0, 1)
+        state = Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Forward, 1.0, 1)
         
         # Perfect match
         match_prob = Mycelia.calculate_emission_probability(state, "ATC", config)
@@ -161,7 +161,7 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
         Test.@test multi_mismatch_prob > 0
         
         # Test reverse complement state
-        reverse_state = Mycelia.ViterbiState("ATC", Mycelia.Reverse, 1.0, 1)
+        reverse_state = Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Reverse, 1.0, 1)
         # GAT is reverse complement of ATC
         rc_match_prob = Mycelia.calculate_emission_probability(reverse_state, "GAT", config)
         Test.@test rc_match_prob == config.match_prob
@@ -318,7 +318,7 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
         Test.@test Mycelia.reverse_complement("atc") == "gat"
         
         # Test strand-aware state
-        reverse_state = Mycelia.ViterbiState("ATC", Mycelia.Reverse, 1.0, 1)
+        reverse_state = Mycelia.ViterbiState("ATC", Mycelia.Rhizomorph.Reverse, 1.0, 1)
         config = Mycelia.ViterbiConfig()
         
         # Should match reverse complement
@@ -352,8 +352,7 @@ Test.@testset "Viterbi Next-Generation Algorithm Tests" begin
         seq2 = FASTX.FASTA.Record("test2", "TCGATCGA")
         observations = [seq1, seq2]
         
-        kmer_type = BioSequences.DNAKmer{3}
-        graph = Mycelia.build_kmer_graph_next(kmer_type, observations)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(observations, 3; dataset_id="test", mode=:singlestrand)
         
         if !isempty(MetaGraphsNext.labels(graph))
             config = Mycelia.ViterbiConfig()

@@ -51,7 +51,7 @@ Each tutorial includes:
 
 ## Requirements
 
-- Julia 1.8+
+- Julia 1.10+ (LTS recommended)
 - Mycelia package installed
 - Internet connection for data download
 - Optional: External bioinformatics tools (bioconda recommended)

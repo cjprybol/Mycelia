@@ -12,7 +12,7 @@
 #
 # Generate a notebook from this Literate script:
 # ```bash
-# julia --project=docs -e 'using Literate; Literate.notebook("tutorials/16_un_corpus_ngram_vs_token_graphs.jl", "tutorials"; execute=false)'
+# julia --project=docs -e 'import Literate; Literate.notebook("tutorials/16_un_corpus_ngram_vs_token_graphs.jl", "tutorials"; execute=false)'
 # ```
 #
 # NOTE: UN Corpus downloads and SentencePiece training are resource-intensive and opt-in.

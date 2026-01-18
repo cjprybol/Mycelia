@@ -103,22 +103,13 @@ include("fastx.jl")
 # Topological data analysis utilities (depends on Graphs)
 include("tda.jl")
 
-# Graph type definitions and enums (foundation layer)
-include("graph-core.jl")            # Shared graph enums (OLD - to be deprecated)
-
-# Rhizomorph graph ecosystem (NEW - correct implementation)
+# Rhizomorph graph ecosystem (primary implementation)
 include("rhizomorph/rhizomorph.jl")
-include("kmer-graphs.jl")           # K-mer graph construction utilities (OLD - to be replaced)
-include("sequence-graphs-next.jl")  # Higher-level graph algorithms (depends on enums & k-mer types)
-include("string-graphs.jl")         # N-gram graphs
-include("qualmer-analysis.jl")      # Qualmer types and functions
-include("qualmer-graphs.jl")        # Qualmer graph construction utilities
 
-# Variable-length graph implementations (depend on fixed-length types)
-include("fasta-graphs.jl")          # BioSequence graphs (depends on sequence-graphs-next.jl)
-include("fastq-graphs.jl")          # Quality-aware BioSequence graphs (depends on qualmer-analysis.jl)
+# Legacy qualmer utilities (still used by iterative-assembly.jl)
+include("qualmer-analysis.jl")
 
-# Assembly pipeline (depends on all graph types and GraphMode enum)
+# Assembly pipeline (depends on Rhizomorph graph ecosystem)
 include("assembly.jl")
 
 # Intelligent assembly algorithms (depends on assembly.jl and core graph types)
@@ -155,12 +146,15 @@ remaining_files = [
     "metagenomic-classification.jl",
     "clustering.jl",
     "codon-optimization.jl",
+    "coverage-clustering.jl",
     "dimensionality-reduction.jl",
     "distance-metrics.jl",
     "foldseek.jl",
     "genome-features.jl",
     "ggcat.jl",
+    "graph-cleanup.jl",
     "kmer-analysis.jl",
+    "kmer-saturation-analysis.jl",
     "neo4jl.jl",
     "pangenome-analysis.jl",
     "pantools.jl",

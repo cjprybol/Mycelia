@@ -32,7 +32,7 @@ Build a rigorous whole-genome comparison suite that:
   min identity 30, min coverage 70, evalue 1e-15, and explicit directional reporting.
 - Decide whether `calculate_gold_standard_ani`/`calculate_gold_standard_aai` remain or
   delegate to `ani_blast`/`aai_rbh` for a single canonical implementation.
-- POCP and POCPu-style unique counting (no current implementation).
+- POCP parameter provenance and reporting consistency checks (tests and docs).
 - Extend ANIm and ANIb outputs to include explicit parameter provenance and aligned counts.
 - Eukaryotic WGA (AnchorWave, LAST) and SV calling (SyRI, Assemblytics).
 - Synteny visualization (plotsr and dotplot).

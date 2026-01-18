@@ -2,7 +2,7 @@
 
 > For detailed implementation guidance, code examples, and architectural rationale, see [rhizomorph-graph-ecosystem-plan.md](rhizomorph-graph-ecosystem-plan.md).
 
-Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented). Testing gaps: variable-length and n-gram traversal coverage is still light; simplification only has bubble detection/tip pruning (no edge removal); repeat/contig utilities are still legacy-only; end-to-end suites now assert evidence positions/quality and doublestrand/canonical conversions while GFA round-trips are covered; JLD2 round-trips still missing.
+Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented). Testing gaps: variable-length and n-gram traversal coverage is still light; simplification edge-removal behavior needs broader tests; end-to-end suites assert evidence positions/quality, doublestrand/canonical conversions, and GFA/JLD2 round-trips.
 
 | Graph Type | Alphabet | Singlestrand | Doublestrand | Canonical | Notes |
 |------------|----------|--------------|--------------|-----------|-------|

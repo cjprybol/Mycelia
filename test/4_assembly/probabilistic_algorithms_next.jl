@@ -32,7 +32,7 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
             label_type=String,
             vertex_data_type=Any,
             edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
-            weight_function=Mycelia.edge_data_weight,
+            weight_function=Mycelia.Rhizomorph.edge_data_weight,
             default_weight=0.0,
         )
         
@@ -205,7 +205,7 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
             label_type=String,
             vertex_data_type=Any,
             edge_data_type=Mycelia.Rhizomorph.StrandWeightedEdgeData,
-            weight_function=Mycelia.edge_data_weight,
+            weight_function=Mycelia.Rhizomorph.edge_data_weight,
             default_weight=0.0,
         )
         

@@ -27,7 +27,7 @@ Mycelia is a research-oriented bioinformatics package that currently provides:
 
 ### Julia Installation
 
-Mycelia is tested against Julia LTS and release. Install Julia using [juliaup](https://github.com/JuliaLang/juliaup):
+Mycelia is tested against Julia LTS (1.10+) and the current release. LTS is recommended for stability. Install Julia using [juliaup](https://github.com/JuliaLang/juliaup):
 
 ```bash
 # Install juliaup
@@ -44,7 +44,7 @@ juliaup default release
 
 ### System Dependencies
 
-Mycelia integrates with external bioinformatics tools. For full functionality, you'll need conda. If no conda environment is available, Mycelia will install it's own environment using Conda.jl.
+Mycelia integrates with external bioinformatics tools. For full functionality, you'll need conda. If no conda environment is available, Mycelia will install its own environment using Conda.jl.
 
 ### HPC Environment Setup
 
@@ -108,7 +108,7 @@ Mycelia.write_fasta(outfile="test_genome.fasta", records=[test_genome])
 
 # Simulate reads from the genome
 reads_file = Mycelia.simulate_pacbio_reads(fasta="test_genome.fasta", quantity="20x")
-Mycelia.write_fastq("test_reads.fastq", reads)
+println("Simulated reads in: $(reads_file)")
 ```
 
 ### 3. Quality Control (Using External Tools)
@@ -118,8 +118,8 @@ Filter reads using integrated external tools:
 ```julia
 # Filter long reads with filtlong
 Mycelia.qc_filter_long_reads_filtlong(
-    input_file="test_reads.fastq",
-    output_file="filtered_reads.fastq",
+    input_file=reads_file,
+    output_file="filtered_reads.fastq.gz",
     min_length=1000,
     min_mean_q=7
 )
@@ -134,7 +134,7 @@ Analyze k-mer composition:
 ```julia
 # Count canonical k-mers
 import Kmers
-kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{21}, "test_reads.fastq")
+kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{21}, reads_file)
 println("Unique k-mers: $(length(kmer_counts))")
 
 # Note: K-mer spectrum analysis and plotting functions are planned
@@ -147,13 +147,13 @@ Assemble using external tools through Mycelia wrappers:
 ```julia
 # Use MEGAHIT for assembly (works with short reads)
 Mycelia.assemble_metagenome_megahit(
-    reads=["test_reads.fastq"],
+    reads=[reads_file],
     output_dir="megahit_assembly"
 )
 
 # Or use experimental graph-based assembly (research feature)
 # Note: This is experimental and may not produce optimal results
-# assembly = Mycelia.assemble_with_graph_framework("test_reads.fastq")
+# assembly = Mycelia.assemble_with_graph_framework(reads_file)
 
 # Assembly evaluation functions are planned but not yet implemented
 ```

@@ -11,6 +11,7 @@ const REPO_ROOT = normpath(joinpath(@__DIR__, ".."))
 const SRC_ROOT = joinpath(REPO_ROOT, "src")
 const MAPPING_PATH = joinpath(@__DIR__, "function-coverage-map.toml")
 const OUTPUT_PATH = joinpath(@__DIR__, "FUNCTION_COVERAGE_AUDIT.md")
+const MODULES = [Mycelia, Mycelia.Rhizomorph]
 
 function method_file_path(method::Method)::Union{Nothing, String}
     file = method.file
@@ -21,33 +22,35 @@ function method_file_path(method::Method)::Union{Nothing, String}
     return isabspath(file_str) ? normpath(file_str) : normpath(joinpath(REPO_ROOT, file_str))
 end
 
-function collect_methods_by_file()::Dict{String, Set{Symbol}}
-    methods_by_file = Dict{String, Set{Symbol}}()
-    for name in names(Mycelia; all = true, imported = false)
-        if !isdefined(Mycelia, name)
-            continue
-        end
-        obj = getfield(Mycelia, name)
-        if !(obj isa Function)
-            continue
-        end
-        for method in methods(obj)
-            file_path = method_file_path(method)
-            if file_path === nothing || !startswith(file_path, SRC_ROOT)
+function collect_methods_by_file()::Dict{String, Set{Tuple{Module, Symbol}}}
+    methods_by_file = Dict{String, Set{Tuple{Module, Symbol}}}()
+    for module_ref in MODULES
+        for name in names(module_ref; all = true, imported = false)
+            if !isdefined(module_ref, name)
                 continue
             end
-            rel_path = relpath(file_path, SRC_ROOT)
-            symbols = get!(methods_by_file, rel_path, Set{Symbol}())
-            push!(symbols, name)
+            obj = getfield(module_ref, name)
+            if !(obj isa Function)
+                continue
+            end
+            for method in methods(obj)
+                file_path = method_file_path(method)
+                if file_path === nothing || !startswith(file_path, SRC_ROOT)
+                    continue
+                end
+                rel_path = relpath(file_path, SRC_ROOT)
+                symbols = get!(methods_by_file, rel_path, Set{Tuple{Module, Symbol}}())
+                push!(symbols, (module_ref, name))
+            end
         end
     end
     return methods_by_file
 end
 
-function count_docstrings(symbols::Set{Symbol})::Int
+function count_docstrings(symbols::Set{Tuple{Module, Symbol}})::Int
     doc_count = 0
-    for symbol in symbols
-        if Base.Docs.doc(Base.Docs.Binding(Mycelia, symbol)) !== nothing
+    for (module_ref, symbol) in symbols
+        if Base.Docs.doc(Base.Docs.Binding(module_ref, symbol)) !== nothing
             doc_count += 1
         end
     end
@@ -88,8 +91,10 @@ function should_include_unmapped(file::String, settings::Dict{String, Any})::Boo
         return false
     end
     exclude_files = Set(get(settings, "exclude_files", String[]))
-    if file in exclude_files
-        return false
+    for excluded in exclude_files
+        if file == excluded || startswith(file, excluded)
+            return false
+        end
     end
     return true
 end
@@ -111,7 +116,7 @@ function render_audit()
     push!(lines, "This audit maps source modules in `src/` to documentation anchors so newly added capabilities stay discoverable.")
     push!(
         lines,
-        "Docstring coverage is counted per function symbol (not per method) and may overcount when symbols appear in multiple files."
+        "Docstring coverage is counted per function symbol (not per method) across Mycelia + Mycelia.Rhizomorph and may overcount when symbols appear in multiple files."
     )
     push!(lines, "")
     push!(lines, "## Module-Level Coverage")
@@ -125,7 +130,7 @@ function render_audit()
         path = get(module_entry, "primary_doc_path", "")
         notes = get(module_entry, "coverage_notes", "")
         push!(mapped_files, file)
-        symbols = get(methods_by_file, file, Set{Symbol}())
+        symbols = get(methods_by_file, file, Set{Tuple{Module, Symbol}}())
         total_count = length(symbols)
         doc_count = count_docstrings(symbols)
         doc_cell = build_doc_cell(label, path)
@@ -157,7 +162,7 @@ function render_audit()
             )
             push!(lines, "")
             for file in unmapped
-                symbols = get(methods_by_file, file, Set{Symbol}())
+                symbols = get(methods_by_file, file, Set{Tuple{Module, Symbol}}())
                 total_count = length(symbols)
                 doc_count = count_docstrings(symbols)
                 push!(
@@ -187,7 +192,7 @@ function render_audit()
     push!(lines, "")
     push!(lines, "## Cross-check with Complete API")
     push!(lines, "")
-    push!(lines, "Use the `docs/src/api/all-functions.md` page as a ground truth index of documented symbols:")
+    push!(lines, "Use the `docs/src/api/all-functions.md` page as a ground truth index of documented symbols (Mycelia + Mycelia.Rhizomorph):")
     push!(lines, "")
     push!(lines, "- If a function appears in the code but not in the API page, it is missing a docstring.")
     push!(lines, "- If it appears in the API page, but not in `docs/src/workflow-map.md` and any tutorial, it is likely undiscoverable and should be linked.")

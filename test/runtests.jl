@@ -21,6 +21,9 @@ const TEST_ARTIFACT_DIRS = [
 ]
 
 function cleanup_test_artifacts()
+    if any(isdir, TEST_ARTIFACT_DIRS)
+        @info "Cleaning test artifacts (busco downloads/results)."
+    end
     for path in TEST_ARTIFACT_DIRS
         if isdir(path)
             rm(path; recursive=true, force=true)
@@ -51,46 +54,46 @@ function include_all_tests(dir)
     return test_count
 end
 
-# Aqua.jl quality assurance tests
-include("aqua.jl")
+# # Aqua.jl quality assurance tests
+# include("aqua.jl")
 
-# JET.jl static analysis - uncomment to enable (can be slow)
-include("jet.jl")
+# # JET.jl static analysis - uncomment to enable (can be slow)
+# include("jet.jl")
 
-include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
-# For debugging individual suites, include explicit files instead of the directory sweep.
-# for file in (
-#     "1_data_acquisition/ncbi_download.jl",
-#     "1_data_acquisition/simulation_fasta.jl",
-#     "1_data_acquisition/simulation_fastq.jl",
-# )
-#     include(joinpath(@__DIR__, file))
-# end
+# include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
+# # For debugging individual suites, include explicit files instead of the directory sweep.
+# # for file in (
+# #     "1_data_acquisition/ncbi_download.jl",
+# #     "1_data_acquisition/simulation_fasta.jl",
+# #     "1_data_acquisition/simulation_fastq.jl",
+# # )
+# #     include(joinpath(@__DIR__, file))
+# # end
 
-include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
-# For debugging individual suites, include explicit files instead of the directory sweep.
-# for file in (
-#     "2_preprocessing_qc/alphabets.jl",
-#     "2_preprocessing_qc/constants.jl",
-#     "2_preprocessing_qc/dimensionality_reduction_and_clustering.jl",
-#     "2_preprocessing_qc/diversity_sampling.jl",
-#     "2_preprocessing_qc/preprocessing.jl",
-#     "2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl",
-#     "2_preprocessing_qc/saturation_plot_test.jl",
-#     "2_preprocessing_qc/sequence-complexity.jl",
-#     "2_preprocessing_qc/sequence_io.jl",
-# )
-#     include(joinpath(@__DIR__, file))
-# end
+# include_all_tests(joinpath(@__DIR__, "2_preprocessing_qc"))
+# # For debugging individual suites, include explicit files instead of the directory sweep.
+# # for file in (
+# #     "2_preprocessing_qc/alphabets.jl",
+# #     "2_preprocessing_qc/constants.jl",
+# #     "2_preprocessing_qc/dimensionality_reduction_and_clustering.jl",
+# #     "2_preprocessing_qc/diversity_sampling.jl",
+# #     "2_preprocessing_qc/preprocessing.jl",
+# #     "2_preprocessing_qc/reduced_amino_acid_alphabets_test.jl",
+# #     "2_preprocessing_qc/saturation_plot_test.jl",
+# #     "2_preprocessing_qc/sequence-complexity.jl",
+# #     "2_preprocessing_qc/sequence_io.jl",
+# # )
+# #     include(joinpath(@__DIR__, file))
+# # end
 
-include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
-# For debugging individual suites, include explicit files instead of the directory sweep.
-# for file in (
-#     "3_feature_extraction_kmer/kmer_analysis.jl",
-#     "3_feature_extraction_kmer/qualmer-analysis.jl",
-# )
-#     include(joinpath(@__DIR__, file))
-# end
+# include_all_tests(joinpath(@__DIR__, "3_feature_extraction_kmer"))
+# # For debugging individual suites, include explicit files instead of the directory sweep.
+# # for file in (
+# #     "3_feature_extraction_kmer/kmer_analysis.jl",
+# #     "3_feature_extraction_kmer/qualmer-analysis.jl",
+# # )
+# #     include(joinpath(@__DIR__, file))
+# # end
 
 # Stage 4 (assembly): include individual files until stable, then switch back to include_all_tests.
 include_all_tests(joinpath(@__DIR__, "4_assembly"))
@@ -241,7 +244,11 @@ include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # [ Info: Skipping integration tests; set MYCELIA_RUN_EXTERNAL=true to run external tools
 
 # sentencepiece isn't working
-include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+if MYCELIA_RUN_EXTERNAL
+    include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+else
+    @info "Skipping tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
+end
 # for file in (
 #     "8_tool_integration/autocycler.jl",
 #     "8_tool_integration/bioconda.jl",

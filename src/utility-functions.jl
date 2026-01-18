@@ -12,8 +12,12 @@ Collapse duplicate rows in a DataFrame by consolidating non-missing values.
 For each group defined by `grouping_col`, this function attempts to merge rows
 by taking the first non-missing value for each column. If conflicting non-missing
 values are found in any column, a warning is issued and all conflicting rows are kept.
+
+# Keywords
+- `warn_on_conflict::Bool=true`: Emit a warning when conflicting values are found.
+- `summarize_conflicts::Bool=true`: Print a conflict summary after processing.
 """
-function collapse_duplicates(df, grouping_col)
+function collapse_duplicates(df, grouping_col; warn_on_conflict::Bool=true, summarize_conflicts::Bool=true)
     result_rows = DataFrames.DataFrame[]
     conflicts = []
     
@@ -44,8 +48,12 @@ function collapse_duplicates(df, grouping_col)
         if has_conflict
             # Keep all rows due to conflict
             group_id = g[1, grouping_col]
-            @warn "Conflict found in group $group_id in columns: $(join(conflicting_cols, ", ")). Keeping all rows."
-            push!(conflicts, (group_id, conflicting_cols))
+            if warn_on_conflict
+                @warn "Conflict found in group $group_id in columns: $(join(conflicting_cols, ", ")). Keeping all rows."
+            end
+            if summarize_conflicts
+                push!(conflicts, (group_id, conflicting_cols))
+            end
             push!(result_rows, g)
         else
             # Merge rows by taking first non-missing value
@@ -59,7 +67,7 @@ function collapse_duplicates(df, grouping_col)
     
     collapsed_df = DataFrames.vcat(result_rows...)
     
-    if !isempty(conflicts)
+    if summarize_conflicts && !isempty(conflicts)
         println("\n=== Summary of Conflicts ===")
         println("Total groups with conflicts: $(length(conflicts))")
         for (group_id, cols) in conflicts
@@ -71,7 +79,7 @@ function collapse_duplicates(df, grouping_col)
 end
 
 """
-    with_retry(f; max_attempts=3, initial_delay=5.0, max_delay=120.0, backoff_factor=2.0, on_retry=nothing)
+    with_retry(f; max_attempts=3, initial_delay=5.0, max_delay=120.0, backoff_factor=2.0, on_retry=nothing, log_on_retry=true, log_on_failure=true)
 
 Execute a function with automatic retry logic and exponential backoff.
 
@@ -88,6 +96,8 @@ that may fail due to transient issues.
 - `backoff_factor::Float64=2.0`: Multiplier for delay after each failed attempt
 - `on_retry::Union{Function,Nothing}=nothing`: Optional callback `(attempt, exception, delay) -> nothing` 
   called before each retry sleep
+- `log_on_retry::Bool=true`: Emit a warning for each retry when `on_retry` is not provided
+- `log_on_failure::Bool=true`: Emit an error when all attempts fail
 
 # Returns
 - Result of `f()` on success
@@ -115,7 +125,9 @@ function with_retry(f;
                     initial_delay::Float64=5.0, 
                     max_delay::Float64=120.0, 
                     backoff_factor::Float64=2.0,
-                    on_retry::Union{Function,Nothing}=nothing)
+                    on_retry::Union{Function,Nothing}=nothing,
+                    log_on_retry::Bool=true,
+                    log_on_failure::Bool=true)
     local last_exception
     delay = initial_delay
     
@@ -127,7 +139,7 @@ function with_retry(f;
             if attempt < max_attempts
                 if on_retry !== nothing
                     on_retry(attempt, e, delay)
-                else
+                elseif log_on_retry
                     @warn "Attempt $attempt/$max_attempts failed, retrying in $(delay)s..." exception=(e, catch_backtrace())
                 end
                 sleep(delay)
@@ -136,7 +148,9 @@ function with_retry(f;
         end
     end
     
-    @error "All $max_attempts attempts failed" exception=(last_exception, catch_backtrace())
+    if log_on_failure
+        @error "All $max_attempts attempts failed" exception=(last_exception, catch_backtrace())
+    end
     throw(last_exception)
 end
 
@@ -1114,13 +1128,14 @@ suitable for upload to Google BigQuery.
 
 # Examples
 ```julia
-using DataFrames, Dates
+import DataFrames
+import Dates
 
 # Sample DataFrame
-df = DataFrame(
+df = DataFrames.DataFrame(
     id = [1, 2, 3],
     name = ["Alice", "Bob", "Carol"],
-    created = [DateTime(2025, 4, 8, 14, 30), DateTime(2025, 4, 8, 15, 0), missing]
+    created = [Dates.DateTime(2025, 4, 8, 14, 30), Dates.DateTime(2025, 4, 8, 15, 0), missing]
 )
 
 ndjson_str = dataframe_to_ndjson(df)
@@ -2715,14 +2730,14 @@ contiguous range of `true` values meeting the minimum length requirement.
 function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
     indices = findall(bool_vec)  # Get indices of true values
     if isempty(indices)
-    return []  # Handle the case of no true values
+        return []  # Handle the case of no true values
     end
     diffs = diff(indices)
     breakpoints = findall(>(1), diffs)  # Find where the difference is greater than 1
     starts = [first(indices); indices[breakpoints .+ 1]]
     ends = [indices[breakpoints]; last(indices)]
     # true_ranges_table = DataFrames.DataFrame(starts = starts, ends = ends, lengths = ends .- starts)
-    return collect(Iterators.filter(x -> (x[2] - x[1]) >= min_length, zip(starts, ends)))
+    return collect(Iterators.filter(x -> (x[2] - x[1] + 1) >= min_length, zip(starts, ends)))
 end
 
 """
@@ -2849,7 +2864,15 @@ Convert a type to its string representation, with special handling for Kmer type
 """
 function type_to_string(T)
     if T <: Kmers.Kmer
-        return "Kmers.DNAKmer{$(T.parameters[2])}"
+        unwrapped = Base.unwrap_unionall(T)
+        if isempty(unwrapped.parameters)
+            return string(T)
+        end
+        k_index = findfirst(param -> param isa Integer, unwrapped.parameters)
+        if k_index === nothing
+            return string(T)
+        end
+        return "Kmers.DNAKmer{$(unwrapped.parameters[k_index])}"
     else
         return string(T)
     end
@@ -3326,22 +3349,27 @@ function calculate_gc_content(sequence::BioSequences.LongSequence)
     if length(sequence) == 0
         return 0.0
     end
-    
+
+    alphabet = detect_alphabet(sequence)
+    is_dna = alphabet == :DNA
+    is_rna = alphabet == :RNA
+    if !is_dna && !is_rna
+        error("GC content calculation only supported for DNA and RNA sequences, got $(alphabet)")
+    end
+
     gc_count = 0
     total_bases = 0
-    
+
     for base in sequence
         total_bases += 1
-        if BioSequences.alphabet(sequence) isa BioSequences.DNAAlphabet
+        if is_dna
             if base == BioSequences.DNA_G || base == BioSequences.DNA_C
                 gc_count += 1
             end
-        elseif BioSequences.alphabet(sequence) isa BioSequences.RNAAlphabet
+        elseif is_rna
             if base == BioSequences.RNA_G || base == BioSequences.RNA_C
                 gc_count += 1
             end
-        else
-            error("GC content calculation only supported for DNA and RNA sequences, got $(BioSequences.alphabet(sequence))")
         end
     end
     
@@ -3372,18 +3400,15 @@ function calculate_gc_content(sequence::AbstractString)
     if length(sequence) == 0
         return 0.0
     end
-    
-    # Detect if DNA (contains T) or RNA (contains U)
+
     sequence_upper = uppercase(sequence)
-    if occursin('T', sequence_upper)
-        bio_sequence = BioSequences.LongDNA{4}(sequence_upper)
-    elseif occursin('U', sequence_upper)
-        bio_sequence = BioSequences.LongRNA{4}(sequence_upper)  
-    else
-        # Default to DNA if ambiguous
-        bio_sequence = BioSequences.LongDNA{4}(sequence_upper)
+    alphabet = detect_alphabet(sequence_upper)
+    if alphabet != :DNA && alphabet != :RNA
+        error("GC content calculation only supported for DNA and RNA sequences, got $(alphabet)")
     end
-    
+
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    bio_sequence = sequence_type(sequence_upper)
     return calculate_gc_content(bio_sequence)
 end
 
@@ -3416,23 +3441,26 @@ function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{FAST
     total_bases = 0
     
     for record in records
-        sequence = FASTX.sequence(record)
-        gc_count = 0
-        
+        _, sequence = detect_and_extract_sequence(record)
+        alphabet = detect_alphabet(sequence)
+        is_dna = alphabet == :DNA
+        is_rna = alphabet == :RNA
+        if !is_dna && !is_rna
+            error("GC content calculation only supported for DNA and RNA sequences, got $(alphabet)")
+        end
+
         for base in sequence
             total_bases += 1
-            if BioSequences.alphabet(sequence) isa BioSequences.DNAAlphabet
+            if is_dna
                 if base == BioSequences.DNA_G || base == BioSequences.DNA_C
-                    gc_count += 1
+                    total_gc += 1
                 end
-            elseif BioSequences.alphabet(sequence) isa BioSequences.RNAAlphabet
+            elseif is_rna
                 if base == BioSequences.RNA_G || base == BioSequences.RNA_C
-                    gc_count += 1
+                    total_gc += 1
                 end
             end
         end
-        
-        total_gc += gc_count
     end
     
     if total_bases == 0

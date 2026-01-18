@@ -1,6 +1,6 @@
 # Tool Wrapper Implementation Status (Archived)
 
-**Date**: 2025-01-25 (historical snapshot)
+**Date**: 2026-01-17 (historical snapshot, refreshed for accuracy)
 **Current source of truth**: `planning-docs/TODO.md` (assembler/QC status) and `planning-docs/TODO.md` “Today's Priority Actions” for next steps.
 **Purpose**: Historical verification of external tool integrations in Mycelia. Retained for provenance; do not rely on counts here.
 
@@ -10,7 +10,7 @@
 
 **Mycelia has extensive assembler coverage** with 13+ assemblers wrapped and tested, plus quality control tools. Coverage gaps remain for tests/docs/tutorials/benchmarks in classification, binning, variant calling, and pangenome tooling.
 
-### Status Overview (Updated 2025-12-10)
+### Status Overview (Updated 2026-01-17)
 
 | Category | Implemented | Tested | Missing from Workflow |
 |----------|-------------|--------|----------------------|
@@ -113,9 +113,9 @@
 - ✅ metaflye: **FOUND** & **TESTED** in `src/assembly.jl:268`
   - Test: `test/4_assembly/third_party_assemblers.jl:699-732`
   - Function: `run_metaflye()`
-- ⚠️ hifiasm-meta: **WRAPPER EXISTS** but **COMMENTED OUT** in `src/assembly.jl:443`
-  - Function: `run_hifiasm_meta()` (line 443 is commented)
-  - Test: Commented out in third_party_assemblers.jl:637-696
+- ✅ hifiasm-meta: **WRAPPER EXISTS** in `src/assembly.jl`
+  - Function: `run_hifiasm_meta()`
+  - Tests: opt-in in `test/4_assembly/third_party_assemblers_legacy.jl`
 
 **Bonus Long Read Assemblers Also Wrapped**:
 - ✅ flye: `run_flye()` (tested)
@@ -192,10 +192,10 @@
 **Status**:
 - ✅ QUAST: **FOUND** in `src/quality-control-and-benchmarking.jl:1038`
   - Functions: `run_quast(assembly_files::Vector{String})`, `run_quast(assembly_file::String)`
-  - Tests: ❓ NOT VERIFIED
+  - Tests: opt-in in `test/5_validation/quast_busco_wrappers_test.jl`
 - ✅ BUSCO: **FOUND** in `src/quality-control-and-benchmarking.jl:1165`
   - Functions: `run_busco(assembly_files::Vector{String})`, `run_busco(assembly_file::String)`
-  - Tests: ❓ NOT VERIFIED
+  - Tests: opt-in in `test/5_validation/quast_busco_wrappers_test.jl`
 
 **Verdict**: ✅ **IMPLEMENTED** but tests needed
 

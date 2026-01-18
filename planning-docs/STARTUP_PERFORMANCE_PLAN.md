@@ -3,7 +3,7 @@
 Goal: cut time-to-first-analysis for Mycelia by enabling precompilation, avoiding eager loading of heavy stacks, and providing reproducible warm-start workflows for temporary environments.
 
 ## Current Observations
-- Precompilation explicitly disabled in `src/Mycelia.jl`.
+- Precompilation enabled in `src/Mycelia.jl`; `src/precompile_workload.jl` exists and is included.
 - Eager top-level imports pull in Makie/Plots/GraphMakie/Luxor/SankeyPlots, Conda/HTTP, POMDPs/ReinforcementLearning, etc., even when not used.
 - Conda/tool bootstrap helpers exist; must stay off the import path to avoid side effects during precompile.
 

@@ -8,13 +8,13 @@ $(DocStringExtensions.TYPEDFIELDS)
 
 # Examples
 ```julia
-using Mycelia
-using Kmers
+import Mycelia
+import Kmers
 
 # Create a DNA k-mer with quality scores
-kmer = DNAKmer("ATCG")
+kmer = Kmers.DNAKmer("ATCG")
 qualities = [30, 35, 32, 28]  # Phred quality scores
-qmer = Qualmer(kmer, qualities)
+qmer = Mycelia.Qualmer(kmer, qualities)
 
 # Access individual bases and qualities
 base, quality = qmer[1]  # Returns ('A', 30)
@@ -337,7 +337,8 @@ function _count_qualmers_impl(::Type{KMER_TYPE}, sequence, quality::AbstractVect
     k = qualmer_kmer_length(KMER_TYPE)
     iterator = canonical ? qualmers_unambiguous_canonical(sequence, quality, Val(k)) :
                            qualmers_unambiguous(sequence, quality, Val(k))
-    return sort(StatsBase.countmap([qmer.kmer for (qmer, _) in iterator]))
+    kmer_counts = StatsBase.countmap([qmer.kmer for (qmer, _) in iterator])
+    return sort!(OrderedCollections.OrderedDict(kmer_counts))
 end
 
 """
@@ -376,7 +377,7 @@ function count_qualmers(::Type{KMER_TYPE}, records::AbstractVector{<:FASTX.FASTQ
             combined[kmer] = get(combined, kmer, 0) + count
         end
     end
-    return sort(combined)
+    return sort!(OrderedCollections.OrderedDict(combined))
 end
 
 """

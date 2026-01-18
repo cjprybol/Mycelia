@@ -8,7 +8,7 @@
 # - Sequence reconstruction from paths
 # - Type-stable path traversal
 #
-# Based on functions from src/sequence-graphs-next.jl
+# Based on legacy sequence-graph utilities now ported to Rhizomorph
 
 # ============================================================================
 # Path Data Structures
@@ -52,6 +52,14 @@ struct StrandWeightedEdgeData
     weight::Float64
     src_strand::StrandOrientation
     dst_strand::StrandOrientation
+end
+
+function edge_data_weight(edge_data::StrandWeightedEdgeData)
+    return edge_data.weight
+end
+
+function edge_data_weight(edge_data)
+    return compute_edge_weight(edge_data)
 end
 
 """
@@ -110,7 +118,7 @@ function weighted_graph_from_rhizomorph(
         label_type=label_type,
         vertex_data_type=Any,
         edge_data_type=StrandWeightedEdgeData,
-        weight_function=Mycelia.edge_data_weight,
+        weight_function=edge_data_weight,
         default_weight=0.0,
     )
 
@@ -181,7 +189,7 @@ function maximum_weight_walk_next(
     graph::MetaGraphsNext.MetaGraph,
     start_vertex::T,
     max_steps::Int;
-    weight_function::Function = Mycelia.edge_data_weight,
+    weight_function::Function = edge_data_weight,
 ) where T
     if !(start_vertex in MetaGraphsNext.labels(graph))
         throw(ArgumentError("Start vertex $start_vertex not found in graph"))

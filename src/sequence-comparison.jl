@@ -328,6 +328,32 @@ function skani_dist(fasta_files::Vector{String};
     end
 end
 
+"""
+    ngrams(seq::AbstractString, k::Integer)
+
+Return the overlapping k-length substrings of `seq` (character-wise).
+"""
+function ngrams(seq::AbstractString, k::Integer)
+    if k < 1
+        return SubString{String}[]
+    end
+
+    sstr = String(seq)
+    idxs = collect(eachindex(sstr))
+    n = length(idxs)
+    if k > n
+        return SubString{String}[]
+    end
+
+    grams = Vector{SubString{String}}(undef, n - k + 1)
+    for i in 1:(n - k + 1)
+        start_idx = idxs[i]
+        stop_idx = idxs[i + k - 1]
+        grams[i] = SubString(sstr, start_idx, stop_idx)
+    end
+    return grams
+end
+
 
 """
     shannon_entropy(seq; k::Int=1, base::Real=2, alphabet=nothing)

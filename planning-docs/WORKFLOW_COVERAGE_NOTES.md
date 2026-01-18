@@ -4,7 +4,7 @@ See `planning-docs/FUNCTION_COVERAGE_AUDIT.md` for per-module coverage counts an
 
 ## Auto-included surface area (from `src/Mycelia.jl`)
 
-- **Core graph + IO**: `utility-functions`, `alphabets`, `constants`, `fastx`, `graph-core`, `sequence-graphs-next`, `string-graphs`, `qualmer-analysis/graphs`, `fasta-graphs`, `fastq-graphs`.
+- **Core graph + IO**: `utility-functions`, `alphabets`, `constants`, `fastx`, `metagraph`, `graph-cleanup`, `coverage-clustering`, `kmer-saturation-analysis`, `sequence-graphs` (legacy/deprecated), plus the full `rhizomorph/` module tree.
   - Owner: graph core team (Rhizomorph maintainers).
 - **Assembly**: `assembly.jl` (external assemblers), `iterative-assembly.jl` (native likelihood improver), `viterbi-next.jl`.
   - Owner: assembly pipeline.
@@ -12,22 +12,23 @@ See `planning-docs/FUNCTION_COVERAGE_AUDIT.md` for per-module coverage counts an
   - Owner: QC + benchmarking.
 - **Taxonomy/annotation**: `taxonomy-and-trees.jl`, `classification.jl`, `reference-databases.jl`, `annotation.jl`.
   - Owner: taxonomy/annotation.
-- **Wrappers/orchestration**: `bioconda.jl`, `rclone.jl`, `slurm-sbatch.jl`, `neo4jl.jl`, `xam.jl`.
+- **Wrappers/orchestration**: `bioconda.jl`, `rclone.jl`, `slurm-sbatch.jl`, `neo4jl.jl`, `xam.jl`, `autocycler.jl`, `bcalm.jl`, `ggcat.jl`, `foldseek.jl`, `pantools.jl`, `prokrustean.jl`, `sentencepiece.jl`.
   - Owner: tooling/integration.
 
 ## Documented vs. undocumented entry points
 
 - Documented: external assemblers (`run_megahit`, `run_metaspades`, `run_spades`, `run_skesa`) and QC helpers (`robust_cv`, `robust_threshold`, `filter_genome_outliers`) already had docstrings; now referenced on the workflow map.
-- Newly surfaced: iterative assembly helpers (`mycelia_iterative_assemble`, `improve_read_set_likelihood`, `find_optimal_sequence_path`) were missing from docs/tutorials and are now summarized on the map with proposed tutorial coverage.
-- Still sparse: Rhizomorph path-finding/simplification utilities have docstrings in-file but no tutorial; taxonomy assignment utilities lack an end-to-end example.
+- Newly surfaced: iterative assembly helpers (`mycelia_iterative_assemble`, `improve_read_set_likelihood`, `find_optimal_sequence_path`) remain lightly documented and need a focused tutorial example.
+- Still sparse: Rhizomorph path-finding/simplification utilities have docstrings in-file; API docs now include `Mycelia.Rhizomorph`, but tutorials are still thin.
 
 ## Tutorial coverage findings
 
 - Present: acquisition (01), QC (02), k-mer analysis (03), assembly (04), validation (05), annotation/comparative genomics (06–08), graph round-trips (09 series), advanced assembly theory.
 - Missing:
-  - Rhizomorph graph experiments (k-mer/qualmer/string graph builds, path-finding, simplification).
-  - Taxonomy/reference database workflow end-to-end.
-  - QC outlier filtering example using `filter_genome_outliers` and `robust_cv`.
+  - Rhizomorph graph inspection/path-finding/simplification workflows beyond assembly.
+  - Taxonomy and tree-building workflows (end-to-end).
+  - Reference database management (BLAST/MetaPhlAn/Metabuli).
+  - QC outlier filtering example (`filter_genome_outliers`, `robust_cv`).
   - Iterative likelihood-improvement handoff after external assembly.
   - Variant calling example (VCF normalization + evaluation).
   - Metagenomic binning + profiling paths.

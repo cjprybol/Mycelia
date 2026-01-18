@@ -53,6 +53,7 @@ import Mycelia
 - **[API Reference](https://cjprybol.github.io/Mycelia/dev/)** - Complete function documentation
 - **[Tutorials](https://cjprybol.github.io/Mycelia/dev/tutorials/)** - Step-by-step workflows
 - **[Workflow & Tool Map](docs/src/workflow-map.md)** - Quick links from inputs to tools, outputs, and tutorials
+- **[References](https://cjprybol.github.io/Mycelia/dev/references/)** - Citation guidance for Mycelia and external tools
 
 ## Installation
 
@@ -68,6 +69,12 @@ Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 ```
 
 For detailed installation instructions including HPC setup, see the [Getting Started Guide](https://cjprybol.github.io/Mycelia/dev/getting-started/).
+
+## Citing Mycelia and External Tools
+
+If you use Mycelia in publications, cite the repository and the specific release tag or commit.
+For workflows that use external tools or datasets, cite those tools as well. See
+the [References](https://cjprybol.github.io/Mycelia/dev/references/) page for guidance.
 
 ## Development Status
 

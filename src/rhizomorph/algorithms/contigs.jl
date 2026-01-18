@@ -1,6 +1,6 @@
 # Contig Extraction Algorithms
 #
-# Ports contig finding utilities from sequence-graphs-next.jl and adapts them
+# Ports contig finding utilities from legacy graph code and adapts them
 # to Rhizomorph's type-safe vertex data (k-mers, BioSequences, and strings).
 
 """

@@ -55,7 +55,7 @@ and identifies the optimal k-mer size that provides sufficient diversity without
 excessive sparsity.
 
 # Arguments
-- `sequences::Vector{T}`: Vector of DNA sequences (BioSequences or strings)
+- `sequences::Vector{T}`: Vector of biological sequences (BioSequences, FASTX records, or strings converted once to BioSequences)
 - `k_range::Vector{Int}`: Range of k-mer sizes to test
 - `max_sampling_points::Int=20`: Maximum number of sampling points for curve fitting
 - `min_sequences::Int=100`: Minimum number of sequences required for analysis
@@ -104,6 +104,43 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
     end
     
     n_sequences = length(sequences)
+
+    sequence_alphabet = nothing
+    sequence_type = nothing
+    normalized_sequences = Vector{BioSequences.BioSequence}(undef, n_sequences)
+
+    for (i, sequence) in enumerate(sequences)
+        if sequence isa Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}
+            seq_alphabet, typed_sequence = detect_and_extract_sequence(sequence)
+        elseif sequence isa BioSequences.BioSequence
+            seq_alphabet = detect_alphabet(sequence)
+            typed_sequence = sequence
+        elseif sequence isa AbstractString
+            seq_alphabet = detect_alphabet(sequence)
+            typed_sequence = detect_and_extract_sequence(sequence, seq_alphabet)
+        else
+            throw(ArgumentError("Unsupported sequence type: $(typeof(sequence))"))
+        end
+
+        if sequence_alphabet === nothing
+            sequence_alphabet = seq_alphabet
+            sequence_type = alphabet_to_biosequence_type(seq_alphabet)
+        elseif seq_alphabet != sequence_alphabet
+            throw(ArgumentError("Mixed alphabets are not supported: $(sequence_alphabet) vs $(seq_alphabet)"))
+        end
+
+        normalized_sequences[i] = sequence_type(typed_sequence)
+    end
+
+    alphabet_symbols = if sequence_alphabet == :DNA
+        DNA_ALPHABET
+    elseif sequence_alphabet == :RNA
+        RNA_ALPHABET
+    elseif sequence_alphabet == :AA
+        AA_ALPHABET
+    else
+        throw(ArgumentError("Unsupported alphabet: $(sequence_alphabet)"))
+    end
     
     ## Create sampling points (logarithmic spacing for better curve resolution)
     sampling_points = unique([round(Int, 10^x) for x in range(log10(min_sequences), 
@@ -125,27 +162,25 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
         @info "Analyzing k=$k saturation..."
         
         kmer_counts_at_sampling = Int[]
+        kmer_type = if sequence_alphabet == :DNA
+            Kmers.DNAKmer{k}
+        elseif sequence_alphabet == :RNA
+            Kmers.RNAKmer{k}
+        else
+            Kmers.AAKmer{k}
+        end
         
         ## Progressive sampling to build saturation curve
         for n_sample in sampling_points
-            sampled_sequences = sequences[1:n_sample]
-            
-            ## Count unique k-mers at this sampling point
-            kmer_set = Set{String}()
-            
+            sampled_sequences = normalized_sequences[1:n_sample]
+
+            kmer_counts = Dict{kmer_type, Int}()
             for seq in sampled_sequences
-                seq_str = string(seq)
-                if length(seq_str) >= k
-                    for i in 1:(length(seq_str) - k + 1)
-                        kmer = seq_str[i:(i + k - 1)]
-                        ## Add canonical k-mer (lexicographically smaller of forward/reverse complement)
-                        canonical_kmer = _get_canonical_kmer(kmer)
-                        push!(kmer_set, canonical_kmer)
-                    end
-                end
+                seq_counts = count_canonical_kmers(kmer_type, seq)
+                merge!(+, kmer_counts, seq_counts)
             end
-            
-            push!(kmer_counts_at_sampling, length(kmer_set))
+
+            push!(kmer_counts_at_sampling, length(kmer_counts))
         end
         
         unique_kmer_counts[k] = kmer_counts_at_sampling
@@ -158,7 +193,15 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
             
             ## Calculate saturation level
             vmax = params[1]
-            theoretical_max = 4^k  ## Maximum possible k-mers for DNA alphabet
+            max_possible_kmers = determine_max_possible_kmers(k, alphabet_symbols)
+            if sequence_alphabet == :AA
+                theoretical_max = max_possible_kmers
+            elseif isodd(k)
+                theoretical_max = max_possible_kmers / 2
+            else
+                palindrome_count = length(alphabet_symbols)^(k ÷ 2)
+                theoretical_max = (max_possible_kmers + palindrome_count) / 2
+            end
             saturation = vmax / theoretical_max
             push!(saturation_levels, saturation)
             
@@ -214,7 +257,7 @@ This algorithm tests different coverage thresholds and selects the one that opti
 graph connectivity while maintaining reasonable assembly complexity.
 
 # Arguments
-- `kmer_counts::Dict{T, Int}`: K-mer coverage counts
+- `kmer_counts::Dict{T, Int}`: K-mer coverage counts (keys must be `Kmers.Kmer` types)
 - `k::Int`: K-mer size used
 - `min_threshold::Int=1`: Minimum coverage threshold to test
 - `max_threshold::Int=100`: Maximum coverage threshold to test
@@ -246,7 +289,7 @@ filtered_kmers = filter(p -> p.second >= result.optimal_threshold, kmer_counts)
 """
 function find_optimal_assembly_threshold(kmer_counts::Dict{T, Int}, k::Int;
                                        min_threshold::Int=1,
-                                       max_threshold::Int=100) where T
+                                       max_threshold::Int=100) where {T <: Kmers.Kmer}
     
     if isempty(kmer_counts)
         throw(ArgumentError("kmer_counts cannot be empty"))
@@ -357,27 +400,52 @@ function _fit_michaelis_menten(x::Vector{Int}, y::Vector{Int})
 end
 
 ## Helper function to build k-mer overlap graph
-function _build_kmer_overlap_graph(kmers::Vector{T}, k::Int) where T
-    kmer_strings = [string(kmer) for kmer in kmers]
-    kmer_to_index = Dict(kmer => i for (i, kmer) in enumerate(kmer_strings))
-    n = length(kmer_strings)
-    
-    ## Build adjacency list representation
+function _build_kmer_overlap_graph(kmers::Vector{T}, k::Int) where {T <: Kmers.Kmer}
+    if isempty(kmers)
+        return Vector{Vector{Int}}()
+    end
+
+    kmer_size = Kmers.ksize(typeof(first(kmers)))
+    if k != kmer_size
+        throw(ArgumentError("k does not match k-mer size: expected $kmer_size, got $k"))
+    end
+
+    kmer_to_index = Dict{T, Int}(kmer => i for (i, kmer) in enumerate(kmers))
+    n = length(kmers)
+
     adjacency = [Int[] for _ in 1:n]
-    
-    for (i, kmer) in enumerate(kmer_strings)
-        ## Find overlapping k-mers (suffix of length k-1 matches prefix of length k-1)
-        suffix = kmer[2:end]
-        
-        for base in ['A', 'C', 'G', 'T']
-            candidate = suffix * base
-            if haskey(kmer_to_index, candidate) && candidate != kmer
+
+    if T <: Kmers.DNAKmer
+        alphabet = DNA_ALPHABET
+        sequence_type = BioSequences.LongDNA{4}
+    elseif T <: Kmers.RNAKmer
+        alphabet = RNA_ALPHABET
+        sequence_type = BioSequences.LongRNA{4}
+    elseif T <: Kmers.AAKmer
+        alphabet = AA_ALPHABET
+        sequence_type = BioSequences.LongAA
+    else
+        throw(ArgumentError("Unsupported k-mer type: $(T)"))
+    end
+
+    for (i, kmer) in enumerate(kmers)
+        sequence = sequence_type(kmer)
+        suffix = sequence[2:end]
+
+        for base in alphabet
+            candidate_sequence = sequence_type(suffix)
+            push!(candidate_sequence, base)
+            candidate = T(candidate_sequence)
+            if T <: Union{Kmers.DNAKmer, Kmers.RNAKmer}
+                candidate = BioSequences.canonical(candidate)
+            end
+            if candidate != kmer && haskey(kmer_to_index, candidate)
                 j = kmer_to_index[candidate]
                 push!(adjacency[i], j)
             end
         end
     end
-    
+
     return adjacency
 end
 

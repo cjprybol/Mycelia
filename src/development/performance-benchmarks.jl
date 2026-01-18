@@ -94,7 +94,7 @@
     
 #     # Benchmark next-generation implementation  
 #     println("📊 Benchmarking Next-Generation MetaGraphsNext Implementation...")
-#     next_benchmark = BenchmarkTools.@benchmark Mycelia.build_kmer_graph_next($kmer_type, $sequences) samples=5 evals=1
+#     next_benchmark = BenchmarkTools.@benchmark Mycelia.Rhizomorph.build_kmer_graph($sequences, k) samples=5 evals=1
     
 #     # Extract metrics
 #     legacy_time = Statistics.median(legacy_benchmark.times) / 1e9  # Convert to seconds
@@ -166,7 +166,7 @@
 #     # Build graphs
 #     println("Building graphs for memory analysis...")
 #     legacy_graph = Mycelia.build_stranded_kmer_graph(kmer_type, sequences)
-#     next_graph = Mycelia.build_kmer_graph_next(kmer_type, sequences)
+#     next_graph = Mycelia.Rhizomorph.build_kmer_graph(sequences, k)
     
 #     # Analyze vertex counts
 #     legacy_vertices = Graphs.nv(legacy_graph)
@@ -227,7 +227,7 @@
 #     println("Analyzing type stability of next-generation implementation...")
     
 #     # Build graph and measure allocations during operations
-#     graph = Mycelia.build_kmer_graph_next(kmer_type, sequences)
+#     graph = Mycelia.Rhizomorph.build_kmer_graph(sequences, k)
     
 #     # Test vertex access type stability
 #     vertex_access = BenchmarkTools.@benchmark begin

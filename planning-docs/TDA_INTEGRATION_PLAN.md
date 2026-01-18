@@ -110,5 +110,5 @@ Implemented as a new core file: `src/tda.jl`.
 
 ## Implementation Status (as of this doc)
 
-- `src/tda.jl`: initial skeleton planned/started (graph Betti invariants + filtration curves)
-- `test/4_assembly/tda_metrics_test.jl`: initial tests planned/started (cycle vs path; filtration sanity)
+- `src/tda.jl`: implemented graph Betti invariants and filtration curves (graph-only backend).
+- `test/4_assembly/tda_metrics_test.jl`: tests exist for cycle vs path and filtration sanity.

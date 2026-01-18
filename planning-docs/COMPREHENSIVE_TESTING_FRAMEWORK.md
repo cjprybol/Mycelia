@@ -13,13 +13,13 @@
 4. **Performance Validation** - Scalability and efficiency guarantees
 5. **Error Resilience** - Comprehensive edge case and error handling
 
-### Coverage Requirements
-- ✅ **24 Graph Type Combinations** - All permutations tested individually
-- ✅ **Pathological Suite Coverage** - All graph types validated against a standard suite of difficult edge-case graphs.
-- ✅ **Core Functions** - Construction, pathfinding, reconstruction, I/O
-- ✅ **Correctness Assertions** - Mathematical validation of outputs
-- ✅ **Scientific Accuracy** - Phred scores, strand orientations, provenance
-- ✅ **Performance Bounds** - Time/memory complexity validation
+### Coverage Requirements (targets; partial coverage today)
+- ⏳ **24 Graph Type Combinations** - Target; current suites cover a subset in `test/4_assembly`.
+- ⏳ **Pathological Suite Coverage** - Target; partial coverage in existing graph tests.
+- ⏳ **Core Functions** - Construction, pathfinding, reconstruction, I/O (uneven coverage by graph type).
+- ⏳ **Correctness Assertions** - Mathematical validation of outputs (present in several suites, not all).
+- ⏳ **Scientific Accuracy** - Phred scores, strand orientations, provenance (covered for qualmer/k-mer paths; expand as needed).
+- ⏳ **Performance Bounds** - Time/memory complexity validation (benchmarks exist, not enforced in tests).
 
 ---
 
@@ -62,6 +62,8 @@ To facilitate a TDD approach, we define a standard library of small, hand-crafta
 ## 📋 Comprehensive Testing Template
 
 ### 1. **Graph Construction Validation**
+
+NOTE: The helper functions referenced below (`validate_kmer_transition`, `is_topologically_equal`, `is_semantically_equal`) are templates. Either implement them in shared test utilities or replace with the concrete helpers already used in `test/4_assembly`.
 
 ```julia
 """

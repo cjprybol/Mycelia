@@ -28,7 +28,7 @@
 # julia --project=. -e 'import Literate; Literate.notebook("tutorials/10_viroid_assembly_workflow.jl", "tutorials/notebooks", execute=false)'
 # ```
 
-using Pkg
+import Pkg
 Pkg.activate(".")
 
 import Mycelia
