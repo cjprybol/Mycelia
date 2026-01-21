@@ -557,7 +557,6 @@ Test.@testset "Long Read Isolate Assembly" begin
                 Extended testing:
                 julia --project=. run_extended_tests.jl tutorials
                 """
-                Test.@test_skip "hifiasm test skipped in CI environment - resource constraints"
             else
                 # Test hifiasm - create reference genome and simulate HiFi reads
                 hifiasm_ref_fasta = joinpath(dir, "hifiasm_reference.fasta")
@@ -652,14 +651,8 @@ Test.@testset "Long Read Metagenomic Assembly" begin
                 Test.@test result.hifiasm_outprefix == expected_prefix
                 rm(hifiasm_meta_outdir, recursive=true, force=true)
             catch e
-                if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "Memory") || contains(string(e), "killed") || contains(string(e), "Segmentation fault")
-                    @warn """
-                    hifiasm-meta assembly may require >3-6GB RAM. Current test: 90kb total genome (3 genomes), 20x coverage, ~1.8MB total sequence data.
-                    """
-                    Test.@test_skip "hifiasm-meta test skipped - insufficient resources"
-                else
-                    rethrow(e)
-                end
+                @error "hifiasm-meta test failed." exception=(e, catch_backtrace())
+                Test.@test false
                 rm(hifiasm_meta_outdir, recursive=true, force=true)
             end
         end
@@ -868,8 +861,7 @@ end
 #                 # Decompress long reads for HyLight
 #                 meta_long_reads = joinpath(dir, "meta_long_reads.fq")
 #                 run(pipeline(`gunzip -c $(meta_long_reads_gz)`, meta_long_reads))
-# Hybrid metagenomic assembly (HyLight) placeholder.
-# Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
+# Hybrid metagenomic assembly (HyLight) smoke test with a lightweight fixture.
 # Keep a stub so we remember to reintroduce a lightweight fixture later.
 # Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
 #     Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
@@ -914,9 +906,59 @@ end
 
 # Hybrid metagenomic assembly (HyLight) placeholder.
 # Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
-# Keep a stub so we remember to reintroduce a lightweight fixture later.
 Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
-    Test.@test_skip "HyLight test temporarily disabled pending lightweight fixture"
+    mktempdir() do dir
+        threads = clamp(something(tryparse(Int, get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2")), 2), 1, 4)
+
+        ref_fasta = joinpath(dir, "hylight_ref.fasta")
+        rng_hylight_1 = StableRNGs.StableRNG(910)
+        rng_hylight_2 = StableRNGs.StableRNG(911)
+        genome_1 = BioSequences.randdnaseq(rng_hylight_1, 6000)
+        genome_2 = BioSequences.randdnaseq(rng_hylight_2, 6000)
+        Mycelia.write_fasta(
+            outfile=ref_fasta,
+            records=[
+                FASTX.FASTA.Record("hylight_strain_1", genome_1),
+                FASTX.FASTA.Record("hylight_strain_2", genome_2),
+            ]
+        )
+
+        illumina = Mycelia.simulate_illumina_reads(
+            fasta=ref_fasta,
+            coverage=10,
+            outbase=joinpath(dir, "hylight_short"),
+            read_length=150,
+            mflen=300,
+            seqSys="HS25",
+            paired=true,
+            errfree=true,
+            rndSeed=910,
+            quiet=true
+        )
+
+        long_reads_gz = Mycelia.simulate_nanopore_reads(
+            fasta=ref_fasta,
+            quantity="5x",
+            quiet=true
+        )
+
+        short_1 = joinpath(dir, "hylight_short_1.fq")
+        short_2 = joinpath(dir, "hylight_short_2.fq")
+        long_reads = joinpath(dir, "hylight_long.fq")
+        run(pipeline(`gunzip -c $(illumina.forward_reads)`, short_1))
+        run(pipeline(`gunzip -c $(illumina.reverse_reads)`, short_2))
+        run(pipeline(`gunzip -c $(long_reads_gz)`, long_reads))
+
+        outdir = joinpath(dir, "hylight_out")
+        try
+            result = Mycelia.run_hylight(short_1, short_2, long_reads; outdir=outdir, threads=threads)
+            Test.@test result.outdir == outdir
+            Test.@test isdir(result.strain_assemblies)
+        catch e
+            @error "HyLight test failed." exception=(e, catch_backtrace())
+            Test.@test false
+        end
+    end
 end
 #     Test.@testset "6. Probabilistic Assembly (Mycelia)" begin
 #         mktempdir() do dir
@@ -1320,24 +1362,16 @@ Test.@testset "Strain-aware workflows (STRONG/Strainy)" begin
                     Test.@test result.outdir == strong_outdir
                     Test.@test result.strain_unitigs == joinpath(strong_outdir, "strain_unitigs.fasta")
                 catch e
-                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                        @warn "STRONG strain resolution failed due to resource constraints." exception=e
-                        Test.@test_skip "STRONG test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
+                    @error "STRONG test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             else
-                @warn "Assembly graph not generated by metaFlye - skipping STRONG test"
-                Test.@test_skip "STRONG test skipped - no assembly graph available"
+                @error "STRONG test failed: metaFlye did not produce an assembly graph."
+                Test.@test false
             end
         catch e
-            if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                @warn "metaFlye failed; cannot run STRONG" exception=e
-                Test.@test_skip "STRONG test skipped - cannot generate assembly graph"
-            else
-                rethrow(e)
-            end
+            @error "STRONG test failed: metaFlye could not generate assembly graph." exception=(e, catch_backtrace())
+            Test.@test false
         end
         isdir(metaflye_for_graph_outdir) && rm(metaflye_for_graph_outdir, recursive=true, force=true)
 
@@ -1354,24 +1388,16 @@ Test.@testset "Strain-aware workflows (STRONG/Strainy)" begin
                     Test.@test result.outdir == strainy_outdir
                     Test.@test result.strain_assemblies == joinpath(strainy_outdir, "strain_assemblies.fasta")
                 catch e
-                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                        @warn "Strainy strain phasing failed due to resource constraints." exception=e
-                        Test.@test_skip "Strainy test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
+                    @error "Strainy test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             else
-                @warn "Assembly not generated by metaFlye - skipping Strainy test"
-                Test.@test_skip "Strainy test skipped - no assembly available"
+                @error "Strainy test failed: metaFlye did not produce an assembly."
+                Test.@test false
             end
         catch e
-            if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                @warn "metaFlye failed; cannot run Strainy" exception=e
-                Test.@test_skip "Strainy test skipped - cannot generate assembly"
-            else
-                rethrow(e)
-            end
+            @error "Strainy test failed: metaFlye could not generate assembly." exception=(e, catch_backtrace())
+            Test.@test false
         end
         isdir(metaflye_for_strainy_outdir) && rm(metaflye_for_strainy_outdir, recursive=true, force=true)
     end
@@ -1405,12 +1431,8 @@ Test.@testset "Protein Assembly - PLASS (simulated reads)" begin
             result = Mycelia.run_plass_assemble(reads1=sim.forward_reads, reads2=sim.reverse_reads, outdir=outdir, min_length=20, num_iterations=1)
             Test.@test isfile(result.assembly)
         catch e
-            if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "not found")
-                @warn "PLASS test skipped due to environment/resource constraints: $e"
-                Test.@test_skip "PLASS test skipped - environment/resource constraints"
-            else
-                rethrow(e)
-            end
+            @error "PLASS test failed." exception=(e, catch_backtrace())
+            Test.@test false
         end
     end
 end
@@ -1439,12 +1461,8 @@ Test.@testset "Nucleotide Assembly - PenguiN guided_nuclassemble (simulated read
             result = Mycelia.run_penguin_guided_nuclassemble(reads1=sim.forward_reads, reads2=sim.reverse_reads, outdir=outdir)
             Test.@test isfile(result.assembly)
         catch e
-            if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "not found")
-                @warn "PenguiN guided_nuclassemble test skipped due to environment/resource constraints: $e"
-                Test.@test_skip "PenguiN guided test skipped - environment/resource constraints"
-            else
-                rethrow(e)
-            end
+            @error "PenguiN guided_nuclassemble test failed." exception=(e, catch_backtrace())
+            Test.@test false
         end
     end
 end
@@ -1473,12 +1491,8 @@ Test.@testset "Nucleotide Assembly - PenguiN nuclassemble (simulated reads)" beg
             result = Mycelia.run_penguin_nuclassemble(reads1=sim.forward_reads, reads2=sim.reverse_reads, outdir=outdir)
             Test.@test isfile(result.assembly)
         catch e
-            if isa(e, ProcessFailedException) || contains(string(e), "memory") || contains(string(e), "not found")
-                @warn "PenguiN nuclassemble test skipped due to environment/resource constraints: $e"
-                Test.@test_skip "PenguiN nuclassemble test skipped - environment/resource constraints"
-            else
-                rethrow(e)
-            end
+            @error "PenguiN nuclassemble test failed." exception=(e, catch_backtrace())
+            Test.@test false
         end
     end
 end

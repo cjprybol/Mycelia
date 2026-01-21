@@ -89,17 +89,8 @@ Test.@testset "Hybrid Assembly Tools" begin
                     result = Mycelia.run_dnaapler_all(input_fasta; outdir=outdir, force=true, threads=threads)
                     Test.@test isfile(result.reoriented)
                 catch e
-                    if isa(e, ProcessFailedException) ||
-                        occursin("not found", lowercase(string(e))) ||
-                        occursin("no such file", lowercase(string(e))) ||
-                        occursin("conda", lowercase(string(e))) ||
-                        occursin("mamba", lowercase(string(e))) ||
-                        occursin("killed", lowercase(string(e))) ||
-                        occursin("memory", lowercase(string(e)))
-                        Test.@test_skip "DNAapler test skipped due to missing external dependencies or resources."
-                    else
-                        rethrow(e)
-                    end
+                    @error "DNAapler test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             end
         end
@@ -146,17 +137,8 @@ Test.@testset "Hybrid Assembly Tools" begin
                         )
                         Test.@test isfile(result.final_fasta)
                     catch e
-                        if isa(e, ProcessFailedException) ||
-                            occursin("not found", lowercase(string(e))) ||
-                            occursin("no such file", lowercase(string(e))) ||
-                            occursin("conda", lowercase(string(e))) ||
-                            occursin("mamba", lowercase(string(e))) ||
-                            occursin("killed", lowercase(string(e))) ||
-                            occursin("memory", lowercase(string(e)))
-                            Test.@test_skip "Hybracter test skipped due to missing external dependencies or resources."
-                        else
-                            rethrow(e)
-                        end
+                        @error "Hybracter test failed." exception=(e, catch_backtrace())
+                        Test.@test false
                     finally
                         isdir(outdir) && rm(outdir; recursive=true, force=true)
                     end
@@ -175,17 +157,8 @@ Test.@testset "Hybrid Assembly Tools" begin
                         )
                         Test.@test isfile(result.plasmids_fasta)
                     catch e
-                        if isa(e, ProcessFailedException) ||
-                            occursin("not found", lowercase(string(e))) ||
-                            occursin("no such file", lowercase(string(e))) ||
-                            occursin("conda", lowercase(string(e))) ||
-                            occursin("mamba", lowercase(string(e))) ||
-                            occursin("killed", lowercase(string(e))) ||
-                            occursin("memory", lowercase(string(e)))
-                            Test.@test_skip "Plassembler test skipped due to missing external dependencies or resources."
-                        else
-                            rethrow(e)
-                        end
+                        @error "Plassembler test failed." exception=(e, catch_backtrace())
+                        Test.@test false
                     finally
                         isdir(outdir) && rm(outdir; recursive=true, force=true)
                     end
@@ -193,10 +166,17 @@ Test.@testset "Hybrid Assembly Tools" begin
             end
         end
     else
-        Test.@test_skip "External tool runs disabled; set MYCELIA_RUN_EXTERNAL=true to enable."
+        @info "External tool runs disabled; set MYCELIA_RUN_EXTERNAL=true to enable."
     end
 end
 
 Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
-    Test.@test_skip "HyLight test disabled pending lightweight fixture (moved to benchmarking)"
+    mktempdir() do outdir
+        Test.@test_throws ErrorException Mycelia.run_hylight(
+            "missing_r1.fq",
+            "missing_r2.fq",
+            "missing_long.fq";
+            outdir=outdir
+        )
+    end
 end

@@ -513,7 +513,7 @@ end
 homopolish_result = nothing
 if apollo_result !== nothing
     try
-        homopolish_result = Mycelia.run_homopolish(apollo_result.polished_assembly, long_reads_file; outdir=joinpath(assembly_output, "homopolish"), threads=threads)
+        homopolish_result = Mycelia.run_homopolish(apollo_result.polished_assembly, apollo_result.polished_assembly; outdir=joinpath(assembly_output, "homopolish"), threads=threads)
         println("Homopolish output: $(homopolish_result.polished_assembly)")
     catch e
         @warn "Homopolish failed" exception=e

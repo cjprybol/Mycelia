@@ -5,7 +5,7 @@ Test.@testset "Taxonomy Helpers" begin
     Test.@testset "Column helpers" begin
         df = Mycelia.DataFrames.DataFrame(
             "subject tax id" => [1, 2],
-            :foo => ["a", "b"]
+            "foo" => ["a", "b"]
         )
 
         Test.@test Mycelia.actual_name(df, "subject tax id") == "subject tax id"

@@ -84,7 +84,7 @@ Test.@testset "Bcalm Tool Integration" begin
                     Test.@test !isempty(gfa_lines)
                     Test.@test startswith(gfa_lines[1], "H\t") || startswith(gfa_lines[1], "S\t")
 
-                    graph = Mycelia.read_gfa_next(result_single.gfa)
+                    graph = Mycelia.Rhizomorph.read_gfa_next(result_single.gfa)
                     Test.@test graph isa MetaGraphsNext.MetaGraph
 
                     out_multi = joinpath(workdir, "bcalm_multi")

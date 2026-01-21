@@ -57,12 +57,8 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
                 )
                 Test.@test isfile(result.assembly)
             catch e
-                if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("not found", lowercase(string(e)))
-                    @warn "PLASS test skipped due to environment/resource constraints." exception=e
-                    Test.@test_skip "PLASS test skipped - environment/resource constraints"
-                else
-                    rethrow(e)
-                end
+                @error "PLASS test failed." exception=(e, catch_backtrace())
+                Test.@test false
             end
         end
     end
@@ -97,12 +93,8 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
                 )
                 Test.@test isfile(result.assembly)
             catch e
-                if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("not found", lowercase(string(e)))
-                    @warn "PenguiN guided_nuclassemble test skipped due to environment/resource constraints." exception=e
-                    Test.@test_skip "PenguiN guided test skipped - environment/resource constraints"
-                else
-                    rethrow(e)
-                end
+                @error "PenguiN guided_nuclassemble test failed." exception=(e, catch_backtrace())
+                Test.@test false
             end
         end
     end
@@ -137,12 +129,8 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
                 )
                 Test.@test isfile(result.assembly)
             catch e
-                if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("not found", lowercase(string(e)))
-                    @warn "PenguiN nuclassemble test skipped due to environment/resource constraints." exception=e
-                    Test.@test_skip "PenguiN nuclassemble test skipped - environment/resource constraints"
-                else
-                    rethrow(e)
-                end
+                @error "PenguiN nuclassemble test failed." exception=(e, catch_backtrace())
+                Test.@test false
             end
         end
     end

@@ -23,6 +23,8 @@ import DataFrames
 
 run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
 if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
+    test_tmp_root = get(ENV, "MYCELIA_TEST_TMPDIR", Mycelia.DEFAULT_BLASTDB_PATH)
+    mkpath(test_tmp_root)
     Test.@testset "BLAST Database Integration" begin
         Test.@testset "BLAST DB Search Paths" begin
             env_paths = split(get(ENV, "BLASTDB", ""), ":")
@@ -32,7 +34,7 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
         end
         Test.@testset "Download and Metadata Extraction" begin
             db_name = "ref_viroids_rep_genomes"
-            db_dir = mktempdir()
+            db_dir = mktempdir(test_tmp_root)
             try
                 db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
                 Test.@test isa(db_path, String)
@@ -46,7 +48,7 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
         end
         Test.@testset "BLAST DB to Arrow and FASTA" begin
             db_name = "ref_viroids_rep_genomes"
-            db_dir = mktempdir()
+            db_dir = mktempdir(test_tmp_root)
             try
                 db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
                 table = Mycelia.blastdb2table(
@@ -60,11 +62,26 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
                 )
                 Test.@test table isa DataFrames.DataFrame
                 Test.@test DataFrames.nrow(table) > 0
-                arrow_path = tempname() * ".arrow"
+                arrow_path = tempname(db_dir) * ".arrow"
                 Arrow.write(arrow_path, table)
                 arrow_table = Arrow.Table(arrow_path)
                 Test.@test arrow_table isa Arrow.Table
-                fasta_file = Mycelia.blastdb_to_fasta(blastdb=db_path, outfile=joinpath(db_dir, "$(db_name).fna.gz"), force=true, max_cores=1)
+                entry_candidates = if "accession" in DataFrames.names(table)
+                    filter(!isempty, string.(coalesce.(table.accession, "")))
+                else
+                    String[]
+                end
+                entries = unique(first(entry_candidates, min(length(entry_candidates), 5)))
+                Test.@test !isempty(entries)
+                fasta_file = withenv("TMPDIR" => db_dir) do
+                    Mycelia.blastdb_to_fasta(
+                        blastdb=db_path,
+                        entries=entries,
+                        outfile=joinpath(db_dir, "$(db_name).fna.gz"),
+                        force=true,
+                        max_cores=1
+                    )
+                end
                 Test.@test isfile(fasta_file)
             finally
                 rm(db_dir, recursive=true, force=true)
@@ -72,7 +89,7 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
         end
         Test.@testset "Filter by Taxid/Entry" begin
             db_name = "ref_viroids_rep_genomes"
-            db_dir = mktempdir()
+            db_dir = mktempdir(test_tmp_root)
             try
                 db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
                 filtered = Mycelia.blastdb2table(

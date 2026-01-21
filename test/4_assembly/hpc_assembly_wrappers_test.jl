@@ -53,26 +53,20 @@ Test.@testset "HPC Assembly Wrappers" begin
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.contigs)
                 catch e
-                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                        Test.@test_skip "metaVelvet test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
+                    @error "metaVelvet test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             end
 
             Test.@testset "Unicycler hybrid assembly" begin
                 outdir = joinpath(dir, "unicycler_assembly")
                 try
-                    result = Mycelia.run_unicycler(short_1=short_1, short_2=short_2, long_reads=long_reads, outdir=outdir, threads=2)
+                    result = Mycelia.run_unicycler(short_1=short_1, short_2=short_2, long_reads=long_reads, outdir=outdir, threads=2, spades_options="-m 4", kmers="21,33,55")
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.assembly)
                 catch e
-                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                        Test.@test_skip "Unicycler test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
+                    @error "Unicycler test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             end
 
@@ -83,30 +77,24 @@ Test.@testset "HPC Assembly Wrappers" begin
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.polished_assembly)
                 catch e
-                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e)))
-                        Test.@test_skip "Apollo test skipped - insufficient resources"
-                    else
-                        rethrow(e)
-                    end
+                    @error "Apollo test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             end
 
             Test.@testset "Homopolish polishing" begin
                 outdir = joinpath(dir, "homopolish_polish")
                 try
-                    result = Mycelia.run_homopolish(reference, long_reads; outdir=outdir, threads=2)
+                    result = Mycelia.run_homopolish(reference, reference; outdir=outdir, threads=2)
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.polished_assembly)
                 catch e
-                    if isa(e, ProcessFailedException) || occursin("memory", lowercase(string(e))) || occursin("killed", lowercase(string(e))) || occursin("model", lowercase(string(e)))
-                        Test.@test_skip "Homopolish test skipped - insufficient resources or missing model"
-                    else
-                        rethrow(e)
-                    end
+                    @error "Homopolish test failed." exception=(e, catch_backtrace())
+                    Test.@test false
                 end
             end
         end
     else
-        Test.@test_skip "HPC assembly wrappers skipped (set MYCELIA_RUN_EXTERNAL=true to enable)"
+        @info "HPC assembly wrappers disabled; set MYCELIA_RUN_EXTERNAL=true to enable."
     end
 end

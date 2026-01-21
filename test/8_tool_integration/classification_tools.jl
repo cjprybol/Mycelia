@@ -202,7 +202,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                         # Simulate realistic paired-end Illumina reads (100bp, >70bp requirement)
                         sim_result = Mycelia.simulate_illumina_hs20_100bp(
                             fasta=test_fasta,
-                            read_count=20000,
+                            read_count=10000,
                             quiet=true
                         )
                         forward_reads = sim_result.forward_reads
@@ -341,7 +341,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                         # Simulate realistic paired-end Illumina reads
                         sim_result = Mycelia.simulate_illumina_hs20_100bp(
                             fasta=test_fasta,
-                            read_count=20000,
+                            read_count=10000,
                             quiet=true
                         )
                         forward_reads = sim_result.forward_reads

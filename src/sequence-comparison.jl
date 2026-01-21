@@ -332,13 +332,17 @@ end
     ngrams(seq::AbstractString, k::Integer)
 
 Return the overlapping k-length substrings of `seq` (character-wise).
+Throws `BoundsError` when `seq` is empty or `k < 1`.
 """
 function ngrams(seq::AbstractString, k::Integer)
+    sstr = String(seq)
     if k < 1
-        return SubString{String}[]
+        throw(BoundsError(sstr, k))
+    end
+    if isempty(sstr)
+        throw(BoundsError(sstr, k))
     end
 
-    sstr = String(seq)
     idxs = collect(eachindex(sstr))
     n = length(idxs)
     if k > n

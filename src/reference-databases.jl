@@ -1814,6 +1814,32 @@ function local_blast_database_info(;blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH)
     return df
 end
 
+function _blastdb_url_reachable(url::AbstractString; connect_timeout::Integer=5, max_time::Integer=10)
+    cmd = `$(CONDA_RUNNER) run -n blast curl -sfI --connect-timeout $(connect_timeout) --max-time $(max_time) $(url)`
+    return success(cmd)
+end
+
+function _blastdb_auto_source()
+    ncbi_metadata_url = "https://ftp.ncbi.nlm.nih.gov/blast/db/blastdb-metadata-1-1.json"
+    if _blastdb_url_reachable(ncbi_metadata_url)
+        return ""
+    end
+
+    gcp_latest_dir_url = "https://storage.googleapis.com/blast-db/latest-dir"
+    if _blastdb_url_reachable(gcp_latest_dir_url)
+        @info "NCBI BLAST metadata unreachable; falling back to GCP source"
+        return "gcp"
+    end
+
+    aws_latest_dir_url = "http://s3.amazonaws.com/ncbi-blast-databases/latest-dir"
+    if _blastdb_url_reachable(aws_latest_dir_url)
+        @info "NCBI BLAST metadata unreachable; falling back to AWS source"
+        return "aws"
+    end
+
+    return ""
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1842,24 +1868,32 @@ function download_blast_db(;db, dbdir=Mycelia.DEFAULT_BLASTDB_PATH, source="", w
     @assert source in ["", "aws", "gcp", "ncbi"]
     mkpath(dbdir)
     current_directory = pwd()
-    cd(dbdir)
-    if isempty(source)
-        @info "source not provided, letting blast auto-detect fastest download option"
-        cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
-        # cmd = `update_blastdb --decompress $(db)`
-    else
-        @info "downloading from source $(source)"
-        if source == "ncbi"
-            # --timeout 360 --passive no 
-            cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
-            # cmd = `update_blastdb --timeout 360 --passive no --decompress --source $(source) $(db)`
+    try
+        cd(dbdir)
+        if isempty(source)
+            source = _blastdb_auto_source()
+            if isempty(source)
+                @info "source not provided, letting blast auto-detect fastest download option"
+                cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress`
+            else
+                @info "downloading from source $(source)"
+                cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
+            end
         else
-            cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
-            # cmd = `update_blastdb --decompress --source $(source) $(db)`
+            @info "downloading from source $(source)"
+            if source == "ncbi"
+                # --timeout 360 --passive no 
+                cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source) --timeout 360 --passive no`
+                # cmd = `update_blastdb --timeout 360 --passive no --decompress --source $(source) $(db)`
+            else
+                cmd = `$(CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl $(db) --decompress --source $(source)`
+                # cmd = `update_blastdb --decompress --source $(source) $(db)`
+            end
         end
+        run(cmd, wait=wait)
+    finally
+        cd(current_directory)
     end
-    run(cmd, wait=wait)
-    cd(current_directory)
     return "$(dbdir)/$(db)"
 end
 
