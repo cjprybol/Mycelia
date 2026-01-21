@@ -603,6 +603,40 @@ See `planning-docs/DEVELOPMENT_TRIAGE.md` for the full inventory and plan.
 
 ## Future Work (Post-Production) 🔵 BACKLOG
 
+### Soft-Masking Support via TwoBit.jl Integration (Added 2026-01-21)
+
+**Context**: BioSequences.jl is case-insensitive and does not preserve soft-masking (lowercase). Case is treated as metadata, not part of the sequence. See BioJulia/BioSequences.jl#275.
+
+**Phase 2 (Recommended)**: Masking-Aware Quality Scoring
+- [ ] Add `consider_masking::Bool=false` and `masked_penalty::Float64=0.5` kwargs to `assess_sequence_quality(::AbstractString)` in `src/graph-cleanup.jl`
+- [ ] When enabled, calculate masked fraction from lowercase characters and reduce quality score accordingly
+- [ ] Update `is_high_quality_tip` to support optional masking consideration
+- [ ] Add tests for masking-aware quality scoring
+
+**Phase 3**: Update Graph Cleanup Callers
+- [ ] Add `consider_masking` kwarg to `statistical_tip_clipping` and propagate to `is_high_quality_tip`
+- [ ] Document masking behavior in docstrings
+
+**Phase 4**: Full Masking Infrastructure with TwoBit.jl
+- [ ] Add TwoBit.jl as optional dependency in `Project.toml` for reading 2bit genome files
+- [ ] Create `src/masking.jl` with utilities:
+  - `extract_mask(sequence::AbstractString)::BitVector` - Extract soft-mask from string
+  - `extract_masked_ranges(sequence::AbstractString)::Vector{UnitRange{Int}}` - TwoBit-style ranges
+  - `apply_hard_mask(sequence::BioSequences.LongDNA{4}, mask::BitVector)` - Convert masked to N
+  - `bitvector_to_ranges(mask::BitVector)::Vector{UnitRange{Int}}` - Compress BitVector to ranges
+  - `ranges_to_bitvector(ranges::Vector{UnitRange{Int}}, length::Int)::BitVector` - Expand ranges
+- [ ] Add `MaskedSequence{S<:BioSequence}` wrapper type for workflows needing masking preservation
+- [ ] Include `masking.jl` in `src/Mycelia.jl`
+- [ ] Add comprehensive tests in `test/2_preprocessing_qc/masking_test.jl`
+- [ ] Document masking utilities and TwoBit.jl integration in docs
+
+**Reference pattern for FASTA soft-mask handling**:
+```julia
+raw  = FASTX.sequence(record)  # preserves case
+mask = BitVector(islowercase(c) for c in raw)  # extract mask
+dna  = FASTX.sequence(LongDNA{4}, record)  # case dropped by BioSequences
+```
+
 ### Missing Algorithm Implementations
 - [x] Implement remove_tips() in simplification.jl
 - [x] Implement collapse_linear_chains() in simplification.jl
