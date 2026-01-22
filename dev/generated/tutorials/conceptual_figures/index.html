@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Conceptual Figures · Mycelia</title><meta name="title" content="Conceptual Figures · Mycelia"/><meta property="og:title" content="Conceptual Figures · Mycelia"/><meta property="twitter:title" content="Conceptual Figures · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Step 4b: Graph Type Tutorials</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs</a></li><li><a class="tocitem" href="../09_round_trip_02_ngram_to_string/">Round-Trip 02: N-gram to String</a></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round-Trip 03: FASTA Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round-Trip 04: K-mer to Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round-Trip 05: FASTQ Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round-Trip 06: Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Step 10: Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Step 11: Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Step 12: CoverM Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Step 13: Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 14a: Binning Workflow</a></li><li><a class="tocitem" href="../14_mash_classification/">Step 14b: Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Step 15: Round Trip Benchmarking</a></li><li><a class="tocitem" href="../16_un_corpus_ngram_vs_token_graphs/">Step 16: UN Corpus Ngram vs Token Graphs</a></li><li><a class="tocitem" href="../17_viroid_sketch_round_trip/">Step 17: Viroid Sketch Round Trip</a></li><li><a class="tocitem" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice</a></li><li class="is-active"><a class="tocitem" href>Conceptual Figures</a><ul class="internal"><li><a class="tocitem" href="#Figures-Overview"><span>Figures Overview</span></a></li><li><a class="tocitem" href="#Usage"><span>Usage</span></a></li><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Figure-1:-Graph-Type-Hierarchy"><span>Figure 1: Graph Type Hierarchy</span></a></li><li><a class="tocitem" href="#Figure-2:-Quality-Aware-Assembly"><span>Figure 2: Quality-Aware Assembly</span></a></li><li><a class="tocitem" href="#Figure-3:-Workflow-Comparison"><span>Figure 3: Workflow Comparison</span></a></li><li><a class="tocitem" href="#Export-All-Figures"><span>Export All Figures</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li></ul></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../references/">References</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Conceptual Figures</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Conceptual Figures</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/conceptual_figures.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Conceptual-Figures-for-Mycelia-Publication"><a class="docs-heading-anchor" href="#Conceptual-Figures-for-Mycelia-Publication">Conceptual Figures for Mycelia Publication</a><a id="Conceptual-Figures-for-Mycelia-Publication-1"></a><a class="docs-heading-anchor-permalink" href="#Conceptual-Figures-for-Mycelia-Publication" title="Permalink"></a></h1><p>This script generates conceptual figures for the Mycelia manuscript. These figures illustrate core concepts without requiring data generation.</p><h2 id="Figures-Overview"><a class="docs-heading-anchor" href="#Figures-Overview">Figures Overview</a><a id="Figures-Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Figures-Overview" title="Permalink"></a></h2><ol><li><strong>Figure 1: Graph Type Hierarchy</strong> - The 6-graph progression from n-gram to FASTQ</li><li><strong>Figure 2: Quality-Aware Assembly</strong> - How per-base quality scores are preserved</li><li><strong>Figure 3: Workflow Comparison</strong> - Mycelia vs. traditional assembly pipelines</li></ol><h2 id="Usage"><a class="docs-heading-anchor" href="#Usage">Usage</a><a id="Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Usage" title="Permalink"></a></h2><p>From the Mycelia base directory:</p><pre><code class="language-bash hljs">julia --project=. -e &#39;import Literate; Literate.notebook(&quot;tutorials/conceptual_figures.jl&quot;, &quot;tutorials/notebooks&quot;, execute=false)&#39;</code></pre><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import Mycelia
+import Plots
+import Colors
+
+# Output directory for figures
+const FIGURE_DIR = joinpath(@__DIR__, &quot;..&quot;, &quot;results&quot;, &quot;figures&quot;)
+mkpath(FIGURE_DIR)</code></pre><h2 id="Figure-1:-Graph-Type-Hierarchy"><a class="docs-heading-anchor" href="#Figure-1:-Graph-Type-Hierarchy">Figure 1: Graph Type Hierarchy</a><a id="Figure-1:-Graph-Type-Hierarchy-1"></a><a class="docs-heading-anchor-permalink" href="#Figure-1:-Graph-Type-Hierarchy" title="Permalink"></a></h2><p>Illustrates the 6-graph type progression in Mycelia&#39;s assembly framework:</p><ol><li><strong>N-gram Graph</strong>: Fixed-length character substrings</li><li><strong>K-mer Graph</strong>: Canonical k-mers (De Bruijn graph)</li><li><strong>Qualmer Graph</strong>: K-mers with quality score annotations</li><li><strong>String Graph</strong>: Variable-length overlap graph</li><li><strong>FASTA Graph</strong>: Sequence records with headers</li><li><strong>FASTQ Graph</strong>: Sequences with per-base quality scores</li></ol><p>The progression represents increasing information content and biological meaning.</p><pre><code class="language-julia hljs">function figure1_graph_hierarchy()
+    # TODO: Create diagram showing 6-graph hierarchy
+    # - Boxes for each graph type
+    # - Arrows showing progression/transformation
+    # - Key properties listed for each type
+    # - Color coding: blue (fixed-length) → green (variable-length) → orange (with quality)
+
+    println(&quot;Figure 1: Graph Type Hierarchy&quot;)
+    println(&quot;==============================&quot;)
+    println(&quot;N-gram → K-mer → Qualmer → String → FASTA → FASTQ&quot;)
+    println(&quot;&quot;)
+    println(&quot;Fixed-length graphs (information compression):&quot;)
+    println(&quot;  - N-gram: character substrings, language-agnostic&quot;)
+    println(&quot;  - K-mer: canonical DNA/RNA k-mers, De Bruijn structure&quot;)
+    println(&quot;  - Qualmer: k-mers + quality annotations&quot;)
+    println(&quot;&quot;)
+    println(&quot;Variable-length graphs (information preservation):&quot;)
+    println(&quot;  - String: overlap graph, variable-length sequences&quot;)
+    println(&quot;  - FASTA: sequences with identifiers&quot;)
+    println(&quot;  - FASTQ: full sequencing records with quality scores&quot;)
+
+    # Placeholder for actual figure generation
+    # p = Plots.plot(...)
+    # Plots.savefig(p, joinpath(FIGURE_DIR, &quot;figure1_graph_hierarchy.pdf&quot;))
+end
+
+figure1_graph_hierarchy()</code></pre><h2 id="Figure-2:-Quality-Aware-Assembly"><a class="docs-heading-anchor" href="#Figure-2:-Quality-Aware-Assembly">Figure 2: Quality-Aware Assembly</a><a id="Figure-2:-Quality-Aware-Assembly-1"></a><a class="docs-heading-anchor-permalink" href="#Figure-2:-Quality-Aware-Assembly" title="Permalink"></a></h2><p>Illustrates how Mycelia preserves per-base quality information through assembly:</p><ol><li><strong>Input reads</strong> with quality scores (FASTQ)</li><li><strong>Qualmer graph</strong> nodes carry quality distributions</li><li><strong>Path selection</strong> uses quality weights</li><li><strong>Output contigs</strong> retain quality annotations</li></ol><p>Traditional assemblers discard quality after initial filtering. Mycelia propagates quality through the entire assembly process.</p><pre><code class="language-julia hljs">function figure2_quality_aware_assembly()
+    # TODO: Create diagram showing quality preservation
+    # - Left: Input reads with quality heatmap
+    # - Center: Qualmer graph with node quality annotations
+    # - Right: Output contigs with quality tracks
+    # - Arrows showing information flow
+    # - Comparison panel: traditional (quality discarded) vs Mycelia (quality preserved)
+
+    println(&quot;Figure 2: Quality-Aware Assembly&quot;)
+    println(&quot;================================&quot;)
+    println(&quot;&quot;)
+    println(&quot;Traditional Pipeline:&quot;)
+    println(&quot;  FASTQ → (discard quality) → K-mer graph → Contigs (no quality)&quot;)
+    println(&quot;&quot;)
+    println(&quot;Mycelia Pipeline:&quot;)
+    println(&quot;  FASTQ → Qualmer graph → Quality-weighted paths → Contigs + quality tracks&quot;)
+    println(&quot;&quot;)
+    println(&quot;Key insight: Quality scores inform which paths through the graph&quot;)
+    println(&quot;represent true biological sequence vs. sequencing errors.&quot;)
+
+    # Placeholder for actual figure generation
+end
+
+figure2_quality_aware_assembly()</code></pre><h2 id="Figure-3:-Workflow-Comparison"><a class="docs-heading-anchor" href="#Figure-3:-Workflow-Comparison">Figure 3: Workflow Comparison</a><a id="Figure-3:-Workflow-Comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Figure-3:-Workflow-Comparison" title="Permalink"></a></h2><p>Compares Mycelia&#39;s integrated approach to traditional pipelines:</p><p><strong>Traditional Pipeline:</strong></p><ul><li>Separate tools for each step (QC, assembly, annotation, analysis)</li><li>Data format conversions between steps</li><li>Quality information lost early</li><li>Parameter tuning per tool</li></ul><p><strong>Mycelia Approach:</strong></p><ul><li>Unified graph framework</li><li>Native Julia implementation + external tool integration</li><li>Quality preservation throughout</li><li>Consistent API and data structures</li></ul><pre><code class="language-julia hljs">function figure3_workflow_comparison()
+    # TODO: Create side-by-side workflow diagrams
+    # - Left: Traditional (multiple disconnected tools)
+    # - Right: Mycelia (integrated framework)
+    # - Highlight: data flow, format conversions, quality preservation
+    # - Color coding for tool categories
+
+    println(&quot;Figure 3: Workflow Comparison&quot;)
+    println(&quot;=============================&quot;)
+    println(&quot;&quot;)
+    println(&quot;Traditional Pipeline:&quot;)
+    println(&quot;  FastQC → Trimmomatic → SPAdes → Prokka → BLAST → ...&quot;)
+    println(&quot;  (6+ tools, multiple formats, quality discarded)&quot;)
+    println(&quot;&quot;)
+    println(&quot;Mycelia Pipeline:&quot;)
+    println(&quot;  Mycelia.qc() → Mycelia.assemble() → Mycelia.annotate()&quot;)
+    println(&quot;  (unified framework, quality preserved, consistent API)&quot;)
+    println(&quot;&quot;)
+    println(&quot;Mycelia integrates external tools when beneficial while&quot;)
+    println(&quot;maintaining a consistent interface and data model.&quot;)
+
+    # Placeholder for actual figure generation
+end
+
+figure3_workflow_comparison()</code></pre><h2 id="Export-All-Figures"><a class="docs-heading-anchor" href="#Export-All-Figures">Export All Figures</a><a id="Export-All-Figures-1"></a><a class="docs-heading-anchor-permalink" href="#Export-All-Figures" title="Permalink"></a></h2><p>Generate publication-quality versions of all figures.</p><pre><code class="language-julia hljs">function export_all_figures()
+    println(&quot;\n&quot; * &quot;=&quot;^60)
+    println(&quot;Generating publication-quality figures...&quot;)
+    println(&quot;=&quot;^60)
+
+    # TODO: Implement actual figure generation with:
+    # - Vector graphics (PDF/SVG) for publication
+    # - Consistent styling (fonts, colors, line weights)
+    # - Appropriate dimensions for journal requirements
+    # - Color-blind friendly palette
+
+    figure1_graph_hierarchy()
+    figure2_quality_aware_assembly()
+    figure3_workflow_comparison()
+
+    println(&quot;\nFigures saved to: $FIGURE_DIR&quot;)
+    println(&quot;Files: figure1_graph_hierarchy.pdf, figure2_quality_aware_assembly.pdf, figure3_workflow_comparison.pdf&quot;)
+end
+
+# Uncomment to generate all figures:
+# export_all_figures()</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>This script provides the skeleton for generating conceptual figures. The actual visualization code should be added to each function.</p><p>Recommended visualization approach:</p><ul><li>Use Plots.jl or Makie.jl for programmatic figure generation</li><li>Consider TikZ/LaTeX for precise control over diagram elements</li><li>Luxor.jl is available in Mycelia for custom graphics</li></ul><p>Next steps:</p><ol><li>Decide on specific visual design for each figure</li><li>Implement drawing code in each function</li><li>Add styling consistent with target journal</li><li>Generate final outputs in required formats</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../18_advanced_assembly_theory_and_practice/">« Step 18: Advanced Assembly Theory and Practice</a><a class="docs-footer-nextpage" href="../run_all_tutorials/">Run All Tutorials »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 22 January 2026 23:29">Thursday 22 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
