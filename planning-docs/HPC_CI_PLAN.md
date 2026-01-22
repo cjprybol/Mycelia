@@ -7,10 +7,12 @@ Phased plan for integrating HPC-driven CI while keeping GitHub Actions as-is. Mi
 - Add HPC-only coverage, extended correctness tests, and benchmarks; surface results back to GitHub with extra Codecov flag(s), badges, and optional PR/status checks.
 - Assume HPC harness can emit coverage (`lcov.info`), benchmark JSON/HTML, and correctness summaries (pass/fail counts, regression info).
 
+**Status (2026-01-17)**: Phase 1 is in use; HPC coverage is uploaded to Codecov with a dedicated flag and displayed via the README badge. Remaining phases focus on automated results publishing and benchmarking summaries.
+
 ## 1. Common Building Blocks (All Phases)
 - **Single HPC driver**: `ci/hpc/run_hpc_ci.sh` (or `.jl` wrapper) that:
   - Checks out the intended commit using `HPC_CI_COMMIT` (SHA) and `HPC_CI_BRANCH` (optional for Codecov) via `git fetch origin "$HPC_CI_BRANCH"` then `git checkout "$HPC_CI_COMMIT"`.
-  - Runs extended tests with coverage, e.g. `julia --project=. --code-coverage=user ci/run_extended_tests.jl --mode=all --hpc`.
+  - Runs `Pkg.test()` with coverage via `ci/hpc/run_hpc_ci.sh` (defaults to `MYCELIA_RUN_ALL=true`).
   - Runs benchmarks, e.g. `julia --project=. benchmarking/benchmark_runner.jl medium --hpc` or `benchmarking/run_all_benchmarks.sh`.
   - Writes standardized artifacts under `hpc-ci/artifacts/`:
     - `coverage/lcov.info`
@@ -149,7 +151,7 @@ Phased plan for integrating HPC-driven CI while keeping GitHub Actions as-is. Mi
 ## Additional Repo-Specific Notes
 - **Driver script**: `ci/hpc/run_hpc_ci.sh` now exists with `--tests-only`, `--benchmarks-only`, and `--no-codecov` switches. It emits `hpc-ci/hpc-results.json` (schema_version=1) with top-level keys: `commit`, `branch`, `generated_at`, `hpc{cluster,job_id,node,julia_version}`, `coverage{flag,coverage_percent,total_lines,covered_lines,report_file,summary_file|null}`, `tests{status,duration_seconds,log_file}`, `benchmarks{status,duration_seconds,tutorials_log,benchmarks_log}`. Coverage uploads use flag `hpc-extended` by default.
 - Keep Julia dependencies centralized in `src/Mycelia.jl`; avoid new `using` statements in leaf files. Any Julia helper for `run_hpc_ci.sh` should live under `src/` or `ci/hpc/` and be included via `Mycelia.jl` if needed.
-- Use existing test harnesses: `ci/run_extended_tests.jl` for broad coverage; `run_extended_tests.jl tutorials` / `run_extended_tests.jl benchmarks` are available patterns.
+- Use existing test harnesses: `ci/hpc/run_hpc_ci.sh` for coverage and optional tutorial/benchmark runs.
 - Prefer `joinpath` for paths and deterministic seeds (per testing guidelines). Reserve HPC walltime in scripts conservatively to avoid scheduler preemption.
 - For README badges, follow existing badge style and place new badges near current Codecov badge; document the meaning of each flag in `docs/` or `planning-docs/TOOL_WRAPPER_STATUS.md` if cross-referenced.
 

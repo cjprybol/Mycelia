@@ -5,11 +5,11 @@
 A detailed plan for implementing a robust "rhizomorph" graph ecosystem that properly handles all graph types as **directed, strand-aware graphs** where vertices and edges are added only when observed. The design distinguishes between two orthogonal concepts:
 
 ## ✅ Status Snapshot (current)
-- Implemented in `src/rhizomorph`: enums, evidence structs/functions, quality utilities, graph query helpers, strand-specific singlestrand builders for k-mer/qualmer/n-gram and variable-length string/FASTA/FASTQ graphs, DNA/RNA doublestrand + canonical conversions, Eulerian path + path_to_sequence fixes, GFA export/import, and tip removal.
+- Implemented in `src/rhizomorph`: enums, evidence structs/functions, quality utilities, graph query helpers, strand-specific singlestrand builders for k-mer/qualmer/n-gram and variable-length string/FASTA/FASTQ graphs, DNA/RNA doublestrand + canonical conversions (fixed and variable-length), Eulerian path + path_to_sequence fixes, GFA export/import, and tip removal.
 - Tests now on Rhizomorph: `basic_graph_tests`, `sequence_graphs_next`, `graph_algorithms_next` (bubble helpers, DFS fallback, tip thresholds), `end_to_end_graph_tests` (exact k-mer content/evidence positions, qualmer edge/vertex quality evidence, variable-length overlap evidence, doublestrand/canonical conversion checks, GFA vertex-count round-trip), canonicalization/singlestrand orientation suites, `gfa_io_next`, strand-specific/canonical traversal suites, and GFA parsing basics.
-- Missing/planned: repeat detection/contig finding/coverage profile utilities from legacy `sequence-graphs-next.jl`, graph-type conversions (`core/graph-type-conversions.jl`, `algorithms/strand-conversions.jl`), error-correction, and JLD2 round-trip coverage. Simplification still lacks bubble resolution/removal of internal edges.
+- Missing/planned: error-correction; expand simplification edge-removal coverage (bubble resolution/inner-edge cleanup); add traversal coverage for variable-length/n-gram graphs beyond smoke tests.
 - Migration work needed: port remaining high-touch legacy suites (`end_to_end_assembly_tests.jl`, `six_graph_hierarchy_tests.jl`, `comprehensive_*`, `probabilistic_algorithms_next.jl`, older string/assembly end-to-end suites) to `Mycelia.Rhizomorph` APIs, then drop legacy includes (`graph-core.jl`, `kmer-graphs.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`).
-- Testing gaps: no JLD2 coverage for rhizomorph graphs; variable-length and n-gram traversal still light; simplification only has tip removal/bubble detection smoke tests.
+- Testing gaps: variable-length and n-gram traversal still light; simplification needs broader edge-removal tests beyond bubble detection/tip pruning smoke tests.
 
 1. **Strand Specificity** (methodological): Whether evidence is preserved per strand orientation or merged across reverse-complement pairs
    - **Strand-specific**: Preserve strand orientation as observed (default construction mode)
@@ -108,7 +108,7 @@ The module is organized to separate concerns:
 
 **Note on Strand Conversion Placement:**
 - Basic strand operations (flipping evidence, finding RC pairs) → `core/evidence-functions.jl` (Section 1.3.1)
-- Graph-level conversions (convert between 4 graph modes) → `algorithms/strand-conversions.jl`
+- Graph-level conversions (convert between graph modes) → `variable-length/strand-conversions.jl`
 - Rationale: Evidence operations are fundamental building blocks; graph conversions are higher-level transformations
 
 ```
@@ -119,7 +119,7 @@ src/rhizomorph/
 │   ├── edge-data.jl               # Generic EdgeData{T} structures
 │   ├── evidence-functions.jl      # Evidence manipulation + basic strand operations
 │   ├── graph-construction.jl      # Shared graph building logic
-│   └── graph-type-conversions.jl  # Fixed↔Variable, Quality↔Non-quality (planned)
+│   └── graph-type-conversions.jl  # Fixed↔Variable, Quality↔Non-quality
 ├── fixed-length/
 │   ├── kmer-graphs.jl             # DNAKmer, RNAKmer, AAKmer graphs
 │   ├── qualmer-graphs.jl          # Quality-aware k-mer graphs
@@ -127,10 +127,10 @@ src/rhizomorph/
 ├── variable-length/
 │   ├── fasta-graphs.jl            # Variable-length BioSequence graphs
 │   ├── fastq-graphs.jl            # Variable-length quality BioSequence graphs
+│   ├── strand-conversions.jl      # Graph-level strand mode transformations (variable-length)
 │   └── string-graphs.jl           # Variable-length string graphs
 ├── algorithms/
 │   ├── path-finding.jl            # Eulerian paths, reconstruction
-│   ├── strand-conversions.jl      # Graph-level strand mode transformations (planned)
 │   ├── error-correction.jl        # Read-centric probabilistic correction (planned)
 │   ├── simplification.jl          # Bubble popping, tip clipping, variant calling (partial)
 │   └── io.jl                      # GFA export/import
@@ -141,7 +141,7 @@ src/rhizomorph/
 1. Continue porting legacy graph suites directly to `Mycelia.Rhizomorph` (no shims): gfa IO, end-to-end assembly, six-graph hierarchy, comprehensive correctness/fixes/type-stable, canonicalization consistency, AA/RNA singlestrand, and probabilistic algorithm tests.
 2. Implement or replace legacy-only helpers in Rhizomorph where tests still rely on them (repeat detection, contig/coverage helpers, graph-type conversions) with real code + tests; otherwise re-scope tests to existing APIs.
 3. Once the remaining suites run on Rhizomorph, remove legacy includes from `src/Mycelia.jl` and delete the deprecated graph files.
-4. Add round-trip JLD2/GFA coverage for Rhizomorph graphs and expand traversal coverage for variable-length/n-gram modes alongside simplification edge-case tests.
+4. Expand traversal coverage for variable-length/n-gram modes alongside simplification edge-case tests (JLD2 and GFA round-trips are covered in end-to-end suites).
 
 ---
 
@@ -213,7 +213,6 @@ include("variable-length/fastq-graphs.jl")
 include("variable-length/string-graphs.jl")
 
 include("algorithms/path-finding.jl")
-include("algorithms/strand-conversions.jl")
 include("algorithms/error-correction.jl")
 include("algorithms/simplification.jl")
 include("algorithms/io.jl")

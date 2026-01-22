@@ -1,6 +1,6 @@
 # Repeat Resolution Algorithms
 #
-# Ports repeat detection utilities from sequence-graphs-next.jl into the
+# Ports repeat detection utilities from legacy graph code into the
 # Rhizomorph namespace while adopting the new evidence-centric vertex types.
 
 """

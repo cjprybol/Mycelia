@@ -207,23 +207,47 @@ function is_high_quality_tip(graph, tip_node::Int)::Bool
     node_data = get_node_data(graph, tip_node)
     
     # Check for high-quality sequence (low N content, reasonable complexity)
-    if haskey(node_data, :sequence)
-        sequence_quality = assess_sequence_quality(node_data.sequence)
+    sequence = if node_data isa AbstractDict
+        get(node_data, :sequence, nothing)
+    elseif hasproperty(node_data, :sequence)
+        getproperty(node_data, :sequence)
+    else
+        nothing
+    end
+
+    if sequence !== nothing
+        sequence_quality = assess_sequence_quality(sequence)
         if sequence_quality > 0.9  # High quality threshold
             return true
         end
     end
     
     # Check for strong connecting edge
-    if haskey(node_data, :edge_weights)
-        max_edge_weight = maximum(node_data.edge_weights)
+    edge_weights = if node_data isa AbstractDict
+        get(node_data, :edge_weights, nothing)
+    elseif hasproperty(node_data, :edge_weights)
+        getproperty(node_data, :edge_weights)
+    else
+        nothing
+    end
+
+    if edge_weights !== nothing
+        max_edge_weight = maximum(edge_weights)
         if max_edge_weight > 10.0  # Strong connection threshold
             return true
         end
     end
     
     # Check for long-read support (if available)
-    if haskey(node_data, :long_read_support) && node_data.long_read_support > 5
+    long_read_support = if node_data isa AbstractDict
+        get(node_data, :long_read_support, nothing)
+    elseif hasproperty(node_data, :long_read_support)
+        getproperty(node_data, :long_read_support)
+    else
+        nothing
+    end
+
+    if long_read_support !== nothing && long_read_support > 5
         return true
     end
     
@@ -473,6 +497,56 @@ Helper functions that provide an abstraction layer for different graph implement
 These would need to be implemented based on the actual graph data structure used.
 """
 
+function get_coverage_values(graph::MetaGraphsNext.MetaGraph, component::Vector{Int})::Vector{Float64}
+    return [get_node_coverage(graph, node) for node in component]
+end
+
+function get_node_coverage(graph::MetaGraphsNext.MetaGraph, node::Int)::Float64
+    node_data = get_node_data(graph, node)
+    if node_data isa AbstractDict
+        return get(node_data, :coverage, 1.0)
+    end
+    return hasproperty(node_data, :coverage) ? getproperty(node_data, :coverage) : 1.0
+end
+
+function get_node_degree(graph::MetaGraphsNext.MetaGraph, node::Int)::Int
+    return length(get_node_neighbors(graph, node))
+end
+
+function get_node_data(graph::MetaGraphsNext.MetaGraph, node::Int)
+    return haskey(graph, node) ? graph[node] : Dict{Symbol, Any}()
+end
+
+function get_node_neighbors(graph::MetaGraphsNext.MetaGraph, node::Int, direction::Symbol = :all)::Vector{Int}
+    if !haskey(graph, node)
+        return Int[]
+    end
+
+    if direction == :in
+        return collect(MetaGraphsNext.inneighbor_labels(graph, node))
+    elseif direction == :out
+        return collect(MetaGraphsNext.outneighbor_labels(graph, node))
+    elseif direction == :all
+        in_neighbors = collect(MetaGraphsNext.inneighbor_labels(graph, node))
+        out_neighbors = collect(MetaGraphsNext.outneighbor_labels(graph, node))
+        return unique(vcat(in_neighbors, out_neighbors))
+    else
+        throw(ArgumentError("direction must be :all, :in, or :out; got $(direction)"))
+    end
+end
+
+function get_all_nodes(graph::MetaGraphsNext.MetaGraph)::Vector{Int}
+    return collect(MetaGraphsNext.labels(graph))
+end
+
+function remove_graph_node!(graph::MetaGraphsNext.MetaGraph, node::Int)
+    if haskey(graph, node)
+        idx = MetaGraphsNext.code_for(graph, node)
+        MetaGraphsNext.rem_vertex!(graph, idx)
+    end
+    return nothing
+end
+
 function get_coverage_values(graph, component::Vector{Int})::Vector{Float64}
     # Implementation depends on graph structure
     return [get_node_coverage(graph, node) for node in component]
@@ -481,7 +555,10 @@ end
 function get_node_coverage(graph, node::Int)::Float64
     # Implementation depends on graph structure
     node_data = get_node_data(graph, node)
-    return haskey(node_data, :coverage) ? node_data.coverage : 1.0
+    if node_data isa AbstractDict
+        return get(node_data, :coverage, 1.0)
+    end
+    return hasproperty(node_data, :coverage) ? getproperty(node_data, :coverage) : 1.0
 end
 
 function get_node_degree(graph, node::Int)::Int
@@ -513,23 +590,37 @@ function remove_graph_node!(graph, node::Int)
     return nothing
 end
 
-function assess_sequence_quality(sequence::String)::Float64
-    # Simple sequence quality assessment
+function assess_sequence_quality(sequence::BioSequences.LongSequence)::Float64
+    if length(sequence) == 0
+        return 0.0
+    end
+
+    alphabet = detect_alphabet(sequence)
+    alphabet_size = if alphabet == :DNA || alphabet == :RNA
+        4
+    elseif alphabet == :AA
+        20
+    else
+        length(Set(sequence))
+    end
+
+    ambiguous_count = count(base -> BioSymbols.isambiguous(base) || BioSymbols.isgap(base), sequence)
+    ambiguous_fraction = ambiguous_count / length(sequence)
+    unique_symbols = length(Set(sequence))
+    complexity_score = unique_symbols / alphabet_size
+
+    quality = (1.0 - ambiguous_fraction) * complexity_score
+    return min(1.0, quality)
+end
+
+function assess_sequence_quality(sequence::AbstractString)::Float64
     if isempty(sequence)
         return 0.0
     end
-    
-    # Count N's and ambiguous bases
-    n_count = count(c -> c == 'N' || c == 'n', sequence)
-    n_fraction = n_count / length(sequence)
-    
-    # Basic complexity assessment (avoid homopolymers)
-    unique_chars = length(Set(uppercase(sequence)))
-    complexity_score = unique_chars / 4.0  # Normalize by DNA alphabet size
-    
-    # Combine metrics
-    quality = (1.0 - n_fraction) * complexity_score
-    return min(1.0, quality)
+
+    alphabet = detect_alphabet(sequence)
+    sequence_type = alphabet_to_biosequence_type(alphabet)
+    return assess_sequence_quality(sequence_type(sequence))
 end
 
 function find_bubble_start_candidates(graph)::Vector{Int}

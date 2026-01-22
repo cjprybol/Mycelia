@@ -6,7 +6,7 @@
 # - GFA v1.0 (Graphical Fragment Assembly format)
 # - JLD2 (Julia serialization for lossless graph storage)
 #
-# Based on functions from src/kmer-graphs.jl and src/sequence-graphs-next.jl
+# Based on legacy graph utilities now ported to Rhizomorph
 
 # ============================================================================
 # GFA Export
@@ -38,7 +38,7 @@ Writes:
 
 # Example
 ```julia
-graph = build_kmer_graph_next(Kmers.DNAKmer{31}, records)
+graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
 write_gfa_next(graph, "assembly.gfa")
 ```
 """

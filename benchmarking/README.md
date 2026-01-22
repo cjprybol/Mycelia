@@ -74,8 +74,11 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 ```bash
 # Ensure adequate resources
 # Recommended: 64GB+ RAM, 1TB+ storage, 16+ cores
-# Install required external tools via bioconda
-mamba env create -f environment.yml
+# Install required external tools via bioconda.
+# The repo includes a starter environment at deps/autocycler/environment.yml.
+mamba env create -f deps/autocycler/environment.yml
+
+# Extend the environment with any benchmark-specific tools not covered by the starter file.
 
 # Ensure BenchmarkTools.jl is installed
 julia --project=. -e "import Pkg; Pkg.add(\"BenchmarkTools\")"

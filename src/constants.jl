@@ -398,7 +398,7 @@ Maps amino acids to:
 - 'K': K, N, Q, R, S (Polar/Basic)
 
 # References
-Wang J., Wang W. - Citation needed
+Wang J., Wang W. - Citation pending; see docs/src/references.md
 
 # See Also
 - [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:WW5`
@@ -428,7 +428,7 @@ Maps amino acids to:
 - 'H': H (Histidine)
 
 # References
-Melo F., Marti-Renom M.A. - Citation needed
+Melo F., Marti-Renom M.A. - Citation pending; see docs/src/references.md
 
 # See Also
 - [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:MM5`

@@ -6,7 +6,7 @@
 # - Collapsing linear chains
 # - Removing tips (dead ends)
 #
-# Based on functions from src/sequence-graphs-next.jl
+# Based on legacy graph utilities now ported to Rhizomorph
 
 # ============================================================================
 # Data Structures for Simplification
@@ -76,7 +76,7 @@ Detect bubble structures (alternative paths) in the assembly graph.
 
 # Example
 ```julia
-graph = build_kmer_graph_next(Kmers.DNAKmer{31}, records)
+graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
 bubbles = detect_bubbles_next(graph, min_bubble_length=2, max_bubble_length=50)
 ```
 """
@@ -358,7 +358,7 @@ For each bubble:
 
 # Example
 ```julia
-graph = build_kmer_graph_next(Kmers.DNAKmer{31}, records)
+graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
 bubbles = detect_bubbles_next(graph)
 simplified = simplify_graph_next(graph, bubbles)
 ```

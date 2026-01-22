@@ -1,7 +1,7 @@
 [settings]
 append_unmapped = true
 include_subdirs = true
-exclude_files = []
+exclude_files = ["development/"]
 
 [[modules]]
 file = "Mycelia.jl"
@@ -38,6 +38,36 @@ file = "assembly.jl"
 primary_doc_label = "Genome Assembly"
 primary_doc_path = "docs/src/generated/tutorials/04_genome_assembly.md"
 coverage_notes = "Wrapper coverage for MEGAHIT/metaSPAdes/Flye/hifiasm documented; link polishing and long-read retries into tutorials."
+
+[[modules]]
+file = "autocycler.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "External tool wrapper; add tool integration notes when ready."
+
+[[modules]]
+file = "bcalm.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "External tool wrapper; add tool integration notes when ready."
+
+[[modules]]
+file = "foldseek.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "External tool wrapper; add tool integration notes when ready."
+
+[[modules]]
+file = "ggcat.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "External tool wrapper; add tool integration notes when ready."
+
+[[modules]]
+file = "prokrustean.jl"
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "External tool wrapper; add tool integration notes when ready."
 
 [[modules]]
 file = "binning.jl"
@@ -85,103 +115,7 @@ coverage_notes = "TODO: map to docs or mark internal."
 file = "coverage-clustering.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/annealing-error-correction.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/circular-genome-reconstruction.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/cross-validation.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/genomic-graph-algorithms.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/intelligent-assembly.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/neo4jl.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/pangenome-core-genome.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/performance-benchmarks.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/protein-clustering-pangenome.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/reinforcement-learning-comparison.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/reinforcement-learning-mcts.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/reinforcement-learning-pomdp.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/reinforcement-learning-rl-jl.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/reinforcement-learning.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/strain-resolved-types.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "development/therapeutic-optimization.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
+coverage_notes = "Tests in test/3_feature_extraction_kmer/coverage_clustering.jl; consider adding a short workflow note."
 
 [[modules]]
 file = "dimensionality-reduction.jl"
@@ -195,17 +129,6 @@ primary_doc_label = "K-mer Analysis"
 primary_doc_path = "docs/src/generated/tutorials/03_kmer_analysis.md"
 coverage_notes = "Mash/Jaccard/JS divergence functions are linked from tutorials."
 
-[[modules]]
-file = "fasta-graphs.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "fastq-graphs.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
 file = "fastx.jl"
@@ -223,13 +146,8 @@ coverage_notes = "TODO: map to docs or mark internal."
 file = "graph-cleanup.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
+coverage_notes = "Tests in test/4_assembly/graph_cleanup_test.jl; add documentation link if promoted."
 
-[[modules]]
-file = "graph-core.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
 file = "iterative-assembly.jl"
@@ -243,23 +161,24 @@ primary_doc_label = "K-mer Analysis"
 primary_doc_path = "docs/src/generated/tutorials/03_kmer_analysis.md"
 coverage_notes = "K-mer spectrum utilities are referenced; add examples for saved-result loaders."
 
-[[modules]]
-file = "kmer-graphs.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
 file = "kmer-saturation-analysis.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
+coverage_notes = "Tests in test/3_feature_extraction_kmer/kmer_saturation_analysis.jl; decide if tutorial coverage is needed."
 
 [[modules]]
 file = "metagenomic-classification.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
+
+[[modules]]
+file = "metagraph.jl"
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "MetaGraphsNext helpers and utilities; link from workflow map if promoted."
 
 [[modules]]
 file = "ncbi-datasets-cli.jl"
@@ -275,9 +194,9 @@ coverage_notes = "PGGB/cactus wrappers present; tutorials pending."
 
 [[modules]]
 file = "pantools.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
+primary_doc_label = "Workflow & Tool Map"
+primary_doc_path = "docs/src/workflow-map.md"
+coverage_notes = "External tool wrapper; add tool integration notes when ready."
 
 [[modules]]
 file = "plotting-and-visualization.jl"
@@ -303,11 +222,6 @@ primary_doc_label = "Internal"
 primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
 
-[[modules]]
-file = "qualmer-graphs.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
 file = "rclone.jl"
@@ -478,18 +392,6 @@ primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
-file = "sequence-graphs-next.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "sequence-graphs.jl.deprecated"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
 file = "simulation.jl"
 primary_doc_label = "Data Acquisition"
 primary_doc_path = "docs/src/generated/tutorials/01_data_acquisition.md"
@@ -501,11 +403,6 @@ primary_doc_label = "Internal"
 primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
 
-[[modules]]
-file = "string-graphs.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
 file = "taxonomy-and-trees.jl"

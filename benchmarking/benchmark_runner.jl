@@ -15,6 +15,17 @@ import JSON
 
 include("benchmark_utils.jl")
 
+function preflight_benchmark_environment(scale)
+    valid_scales = Set(["small", "medium", "large"])
+    if !(scale in valid_scales)
+        error("Unknown benchmark scale: $(scale). Use one of $(collect(valid_scales)).")
+    end
+    if isnothing(Sys.which("conda")) && isnothing(Sys.which("mamba")) && isnothing(Sys.which("micromamba"))
+        println("WARNING: No conda/mamba found on PATH; external-tool benchmarks may fail.")
+    end
+    return nothing
+end
+
 """
     run_benchmark_suite(scale="small"; check_regression=true, baseline_dir="baselines")
 
@@ -26,6 +37,7 @@ Run the complete Mycelia benchmark suite with performance regression checking.
 - `baseline_dir`: Directory containing baseline benchmark results
 """
 function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir="baselines")
+    preflight_benchmark_environment(scale)
     println("="^60)
     println("MYCELIA PERFORMANCE BENCHMARK SUITE")
     println("="^60)

@@ -39,7 +39,7 @@ clean_strings = [
     "The quick brown fox jumps over the lazy dog",
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
     "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    ## "αβγδεζηθικλμνξοπρστυφχψω",  ## Unicode testing - requires fix in string-graphs.jl
+    ## "αβγδεζηθικλμνξοπρστυφχψω",  ## Unicode testing - requires fix in Rhizomorph string graphs
     "Pattern recognition and machine learning algorithms"
 ]
 

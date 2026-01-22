@@ -45,6 +45,15 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 17. [17 Viroid Sketch Round Trip](generated/tutorials/17_viroid_sketch_round_trip.md) - BLAST DB export, sketching, and validation
 18. [18 Advanced Assembly Theory and Practice](generated/tutorials/18_advanced_assembly_theory_and_practice.md) - Deep dive into assembly algorithms
 
+## Tutorial Gaps (TODO)
+
+- TODO: Taxonomy and tree-building workflows (`taxonomy-and-trees.jl`) with end-to-end examples
+- TODO: Variant analysis workflows (VCF handling, variant calling) (`variant-analysis.jl`)
+- TODO: Reference database management (BLAST/MetaPhlAn/Metabuli) (`reference-databases.jl`)
+- TODO: QC outlier filtering and benchmarking workflows (`quality-control-and-benchmarking.jl`)
+- TODO: Rhizomorph graph inspection, traversal, and path-finding beyond assembly (`src/rhizomorph/`)
+- TODO: Iterative assembly handoff and downstream validation integration (`iterative-assembly.jl`)
+
 ## Running Tutorials
 
 All tutorials are executable Julia scripts. To run a tutorial:

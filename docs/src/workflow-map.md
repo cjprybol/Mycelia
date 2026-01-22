@@ -10,6 +10,9 @@ A comprehensive, à la carte map of Mycelia’s capabilities. Each row connects:
 
 Planned capabilities are rendered in <span style="background-color:#f0f0f0;">shaded cells</span> so we can see what still needs to be built.
 
+NOTE: If a workflow uses third-party tools or datasets, cite them. See
+[References](references.md) for citation guidance.
+
 ---
 
 ## High-Level Data Flow (Mermaid)
@@ -100,7 +103,7 @@ Use this diagram as the “big picture”; the tables below are the detailed à 
 | Public genomes (NCBI)                                      | `download_genome_by_accession`, `prefetch_sra_runs`, `fasterq_dump_parallel`                                                     | NCBI datasets / Entrez / SRA Toolkit                                                                 | FASTA/FASTQ datasets + accession metadata tables                                                              | [Data Acquisition](generated/tutorials/01_data_acquisition.md#download-from-ncbi)                                                                            |
 | FASTQ (assembly)                                           | `Mycelia.Rhizomorph.assemble_genome` (front-end) → `run_megahit`, `run_metaspades`, `run_spades`, `run_flye`, `run_hifiasm`, `run_unicycler`        | MEGAHIT, metaSPAdes, SPAdes, Flye/metaFlye, hifiasm, Canu, SKESA, Unicycler                          | Contig/scaffold FASTA, assembly logs, GFA/FASTG graphs                                                        | [Genome Assembly](generated/tutorials/04_genome_assembly.md)                                                                                                 |
 | FASTQ (native / experimental assembly)                     | `mycelia_iterative_assemble`, `improve_read_set_likelihood`, `find_optimal_sequence_path`                                        | — (native Rhizomorph graphs)                                                                         | Iteratively improved reads, qualmer/string graphs, checkpoint metadata                                        | <span style="background-color:#f0f0f0;">Planned: `12_rhizomorph_graphs.jl`</span>                                                                            |
-| GFA / FASTG assembly graphs                                | `read_gfa_next`, `build_kmer_graph_next`, `build_qualmer_graph_next`, `write_quality_biosequence_gfa`                            | —                                                                                                    | Parsed graph objects, simplified graphs, re-exported GFA/FASTG                                                | [Graph Type Tutorials](generated/tutorials/04_graph_type_tutorials.md), [Round-Trip Graphs](generated/tutorials/09_round_trip_05_fastq_graphs.md)            |
+| GFA / FASTG assembly graphs                                | `Mycelia.Rhizomorph.read_gfa_next`, `Mycelia.Rhizomorph.build_kmer_graph`, `Mycelia.Rhizomorph.build_qualmer_graph`, `Mycelia.Rhizomorph.write_gfa_next`                            | —                                                                                                    | Parsed graph objects, simplified graphs, re-exported GFA/FASTG                                                | [Graph Type Tutorials](generated/tutorials/04_graph_type_tutorials.md), [Round-Trip Graphs](generated/tutorials/09_round_trip_05_fastq_graphs.md)            |
 | BAM / SAM / CRAM alignments                                | `xam_to_dataframe`, `visualize_genome_coverage`, `run_qualimap_bamqc`                                                            | samtools, Qualimap                                                                                   | Coverage plots, per-base depth tables, BAM-QC HTML reports                                                    | [Tool Integration](generated/tutorials/08_tool_integration.md), [Assembly Validation](generated/tutorials/05_assembly_validation.md#coverage)                |
 | Assemblies (FASTA) + references                            | `assess_assembly_quality`, `run_quast`, `run_busco`, `run_mummer`                                                                | QUAST, BUSCO, MUMmer, CheckM/CheckM2                                                                 | Assembly QC summary tables, BUSCO metrics, alignment plots                                                    | [Assembly Validation](generated/tutorials/05_assembly_validation.md)                                                                                         |
 | Gene prediction inputs (assembled contigs)                 | `run_prodigal`, `run_pyrodigal`, `run_prodigal_gv`, `run_augustus`, `run_metaeuk`, `run_blastp_search`, `run_mmseqs_search`, `run_transterm`, `run_trnascan`, `run_mlst` | Prodigal, Pyrodigal, Prodigal-gv, Augustus, MetaEuk, BLAST+, MMSeqs2, TransTerm, tRNAscan-SE, MLST | GFF3 annotations, protein FASTA, functional/categorical tables                                                | [Gene Annotation](generated/tutorials/06_gene_annotation.md)                                                                                                 |
@@ -145,9 +148,24 @@ This mirrors patch 2’s capability section and ensures everything is covered fr
 
 These bullets are a concise, user-facing summary of the auto-included modules.
 
-- **Core graph + I/O**: `utility-functions.jl`, `alphabets.jl`, `constants.jl`, `fastx.jl`, `graph-core.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`
-  → Exposed via Rhizomorph: `build_string_graph`, `build_fasta_graph`, `build_qualmer_graph`, path-finding & simplification utilities.
+- **Core graph + I/O**: `utility-functions.jl`, `alphabets.jl`, `constants.jl`, `fastx.jl`, `rhizomorph/rhizomorph.jl` (core enums/evidence, fixed-length graphs, variable-length graphs, graph algorithms)
+  → Exposed via Rhizomorph: `build_ngram_graph`, `build_kmer_graph`, `build_qualmer_graph`, `build_fasta_graph`, `build_fastq_graph`, path-finding & simplification utilities.
 - **Assembly pipelines**: `assembly.jl` (external assemblers), `iterative-assembly.jl` (`mycelia_iterative_assemble`, `improve_read_set_likelihood`, `find_optimal_sequence_path`), `viterbi-next.jl`.
 - **Analytics & QC**: `quality-control-and-benchmarking.jl`, `performance-benchmarks.jl`, `kmer-analysis.jl`, `distance-metrics.jl`.
 - **Taxonomy & annotation**: `taxonomy-and-trees.jl`, `classification.jl`, `reference-databases.jl`, `annotation.jl`.
 - **Wrappers & orchestration**: `bioconda.jl`, `rclone.jl`, `slurm-sbatch.jl`, `neo4jl.jl`, `xam.jl`.
+
+### 3.2 External tool wrappers (no dedicated tutorials yet)
+
+These wrappers are available in `src/` but do not yet have dedicated tutorials.
+They are listed here so the function coverage map can point to an explicit doc
+location until tutorials are added.
+
+| Wrapper file | Entry points (selected) | Tool | Notes |
+| --- | --- | --- | --- |
+| `autocycler.jl` | `install_autocycler`, `run_autocycler` | Autocycler | Conda env + Autocycler bash pipeline. |
+| `bcalm.jl` | `install_bcalm`, `run_bcalm` | BCALM | Converts unitigs to GFA via `convertToGFA.py`. |
+| `foldseek.jl` | `install_foldseek`, `foldseek_easy_search`, `foldseek_easy_cluster`, `foldseek_createdb`, `foldseek_databases` | Foldseek | Structure search and clustering. |
+| `ggcat.jl` | `install_ggcat`, `ggcat_build`, `ggcat_query` | GGCAT | Compacted or colored de Bruijn graphs. |
+| `pantools.jl` | `run_pantools`, `pantools_cmd`, `write_pantools_genome_locations_file`, `write_pantools_annotation_locations_file` | PanTools | Pangenome toolkit wrapper via Bioconda. |
+| `prokrustean.jl` | `install_prokrustean`, `prokrustean_build_graph`, `prokrustean_kmer_count`, `prokrustean_unitig_count`, `prokrustean_braycurtis`, `prokrustean_overlap` | Prokrustean | Builds from source; provides k-mer and unitig metrics. |

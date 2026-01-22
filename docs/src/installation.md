@@ -7,7 +7,7 @@ This comprehensive guide covers installing Mycelia on various platforms and envi
 For most users, the simplest installation method is:
 
 ```julia
-using Pkg
+import Pkg
 Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 ```
 
@@ -26,7 +26,7 @@ Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 ## System Requirements
 
 ### Recommended Requirements
-- **Julia**: Latest stable version
+- **Julia**: 1.10 (LTS) or newer (LTS recommended)
 - **RAM**: 32 GB or more (for genomic datasets)
 - **Storage**: 50 GB free space
 - **CPU**: Multi-core processor for parallel operations
@@ -59,7 +59,7 @@ Some features require additional software:
 ### Method 1: Direct Package Installation (Recommended)
 
 ```julia
-using Pkg
+import Pkg
 Pkg.add(url="https://github.com/cjprybol/Mycelia.git")
 ```
 
@@ -73,7 +73,7 @@ julia --project=.
 
 In Julia REPL:
 ```julia
-using Pkg
+import Pkg
 Pkg.instantiate()
 ```
 
@@ -81,7 +81,7 @@ Pkg.instantiate()
 
 ### Run Test Suite
 ```julia
-using Pkg
+import Pkg
 Pkg.test("Mycelia")
 ```
 
@@ -97,6 +97,16 @@ reads_file = Mycelia.simulate_pacbio_reads(
     fasta=ref_file,
     quantity="10x"
 )
+```
+
+## HPC and Cluster Setup
+
+Mycelia includes SLURM helpers and an HPC CI runner for extended tests, tutorials, and benchmarks.
+Start with the local guide in `ci/hpc/README.md` for scheduler examples and resource sizing.
+
+If you see shared library conflicts (common on clusters), launch Julia with a clean library path:
+```bash
+export LD_LIBRARY_PATH="" && julia
 ```
 
 ## Next Steps

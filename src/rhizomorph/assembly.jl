@@ -641,14 +641,14 @@ function _prepare_observations(reads)
         for file_path in reads
             if endswith(file_path, ".fastq") || endswith(file_path, ".fq")
                 # Load FASTQ and convert to FASTA records
-                FASTX.FASTQ.open(file_path) do reader
+                open(FASTX.FASTQ.Reader, file_path) do reader
                     for record in reader
                         push!(observations, FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record)))
                     end
                 end
             else
                 # Load FASTA records
-                FASTX.FASTA.open(file_path) do reader
+                open(FASTX.FASTA.Reader, file_path) do reader
                     for record in reader
                         push!(observations, record)
                     end

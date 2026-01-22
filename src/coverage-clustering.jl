@@ -108,7 +108,7 @@ function k_medoids_coverage_clustering(kmer_counts::Dict{T, Int}, k::Int=2;
     features = reshape(log_coverages, :, 1)
     
     ## Initialize medoids randomly
-    medoid_indices = randperm(n)[1:k]
+    medoid_indices = Random.randperm(n)[1:k]
     assignments = zeros(Int, n)
     previous_cost = Inf
     iterations = 0
@@ -334,7 +334,11 @@ function _calculate_distance(x::Vector{Float64}, y::Vector{Float64}, metric::Sym
         dot_product = sum(x .* y)
         norm_x = sqrt(sum(x.^2))
         norm_y = sqrt(sum(y.^2))
-        return 1.0 - (dot_product / (norm_x * norm_y + 1e-10))
+        denom = norm_x * norm_y
+        if denom == 0.0
+            return (norm_x == 0.0 && norm_y == 0.0) ? 0.0 : 1.0
+        end
+        return 1.0 - (dot_product / denom)
     else
         throw(ArgumentError("Unsupported distance metric: $metric"))
     end

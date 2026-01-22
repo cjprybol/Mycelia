@@ -486,7 +486,7 @@ function evaluate_variant_calling_accuracy(baseline_vcf::String, calls_vcf::Stri
         if endswith(file_path, ".tsv.gz")
             try
                 parsed_results[key] = parse_rtg_eval_output(file_path)
-                println("  Parsed $(key): $(nrow(parsed_results[key])) rows")
+                println("  Parsed $(key): $(DataFrames.nrow(parsed_results[key])) rows")
             catch e
                 @warn "Failed to parse $(key): $(e)"
             end
@@ -544,7 +544,7 @@ function calculate_evaluation_summary(parsed_results::Dict{String, DataFrames.Da
     summary_stats = Dict{String, Any}()
     
     for (roc_type, data) in parsed_results
-        if endswith(roc_type, "_roc") && nrow(data) > 0
+        if endswith(roc_type, "_roc") && DataFrames.nrow(data) > 0
             # Calculate key metrics if columns exist
             metrics = Dict{String, Float64}()
             
@@ -574,7 +574,7 @@ function calculate_evaluation_summary(parsed_results::Dict{String, DataFrames.Da
             end
             
             # Store area under curve estimate (simple trapezoidal)
-            if "Precision" in names(data) && "Recall" in names(data) && nrow(data) > 1
+            if "Precision" in names(data) && "Recall" in names(data) && DataFrames.nrow(data) > 1
                 recall_vals = sort(data[!, "Recall"])
                 precision_vals = data[sortperm(data[!, "Recall"]), "Precision"]
                 

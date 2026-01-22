@@ -17,10 +17,10 @@ git clone https://github.com/your-username/Mycelia.jl.git
 cd Mycelia.jl
 
 ## Install dependencies
-julia --project=. -e "using Pkg; Pkg.instantiate()"
+julia --project=. -e "import Pkg; Pkg.instantiate()"
 
 ## Run tests
-julia --project=. -e "using Pkg; Pkg.test()"
+julia --project=. -e "import Pkg; Pkg.test()"
 ```
 
 ## Code Standards
@@ -29,7 +29,7 @@ julia --project=. -e "using Pkg; Pkg.test()"
 
 - Follow Julia style conventions
 - Use full module namespacing (e.g., `Test.@test`, not `@test`)
-- Import packages at module level, not in individual files
+- Use `import` (not `using`) and fully qualify; only import packages in `src/Mycelia.jl`
 - Add docstrings to all exported functions
 
 ### Testing

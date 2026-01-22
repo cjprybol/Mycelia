@@ -35,7 +35,21 @@ The following issues have been **FIXED** and all 302 assembly tests now pass:
 - Ported legacy suites to Rhizomorph APIs: `basic_graph_tests`, `sequence_graphs_next`, `graph_algorithms_next` (bubble helpers, DFS fallback, tip thresholds), `end_to_end_graph_tests` (exact k-mer content/evidence positions, qualmer edge/vertex quality checks, variable-length overlap evidence, doublestrand/canonical conversion and GFA vertex-count round-trip), `gfa_io_next`, singlestrand canonicalization and orientation suites (`dna|rna|aa_kmer_singlestrand_test`, `doublestrand_canonicalization_test`, `canonicalization_consistency_test`) now build graphs via `Mycelia.Rhizomorph` (no shims).
 - `rna_kmer_singlestrand_test` now asserts strand-aware evidence positions and edge evidence using `Mycelia.Rhizomorph` helpers.
 - Remaining legacy-heavy suites still calling `build_kmer_graph_next`/legacy conversions: `end_to_end_assembly_tests.jl`, `six_graph_hierarchy_tests.jl`, `comprehensive_*`, `probabilistic_algorithms_next.jl`, and older string/assembly end-to-end suites.
-- Implementation gaps blocking full migration: repeat detection/contig/coverage helpers live only in legacy `sequence-graphs-next.jl`; simplification does not delete edges when resolving bubbles; no JLD2 round-trip coverage for Rhizomorph graphs; probabilistic walk utilities are still legacy-only.
+- Implementation gaps blocking full migration: simplification edge-removal tests are still thin; variable-length/n-gram traversal tests are still light; probabilistic walk utilities remain legacy-only.
+
+## 2026-01-17 Priority Log (audit follow-up)
+
+P1 (done)
+- Promote `coverage-clustering.jl`, `graph-cleanup.jl`, and `kmer-saturation-analysis.jl` into `src/Mycelia.jl`; add unit tests for k-mer saturation and graph cleanup.
+- Add `Mycelia.Rhizomorph` to the API docs and add tutorial gap TODOs in `docs/src/tutorials.md`.
+
+P1 (in progress)
+- Refresh `planning-docs/FUNCTION_COVERAGE_AUDIT.md` to include `Mycelia.Rhizomorph` and update `planning-docs/function-coverage-map.toml` to remove deleted legacy files.
+- Update planning docs that still reference missing graph-type conversions, JLD2 round-trips, or legacy-only repeat/contig helpers.
+
+P2 (queued)
+- Add missing citations in `docs/src/references.md` (WW5/MM5 and external tool wrappers).
+- Restore stage-1 tests and Aqua/JET checks in `test/runtests.jl` after downstream tests stabilize.
 
 ## Executive Summary
 
@@ -76,13 +90,13 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - Clean modular architecture
 - MetaGraphsNext integration
 
-### Critical Gaps ❌ (Updated 2025-12-10)
+### Critical Gaps ❌ (Updated 2026-01-17)
 
 **Core Algorithms**
 - ✅ Path finding (find_eulerian_paths_next) - 43 tests passing (path_finding_test.jl)
 - ✅ Sequence reconstruction (path_to_sequence) - Tests passing (doublestrand/canonical traversal tests)
-- 🔸 Simplification (detect_bubbles_next) - Smoke coverage in `graph_algorithms_next`; edge removal still unimplemented
-- 🔸 I/O roundtrip (GFA export/import) - Covered in `gfa_io_next` and `end_to_end_graph_tests`; JLD2 still missing
+- 🔸 Simplification (detect_bubbles_next) - Smoke coverage in `graph_algorithms_next`; edge-removal cases still need broader tests
+- ✅ I/O roundtrip (GFA export/import, JLD2) - Covered in `gfa_io_next` and `end_to_end_graph_tests`
 
 **Graph Construction Testing (Updated 2025-12-10)**
 - ✅ K-mer graphs (DNA/RNA/AA) - 232 tests passing across singlestrand/doublestrand/canonical
@@ -94,10 +108,10 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 **Missing Algorithm Implementations**
 - ✅ remove_tips! exists and is smoke-tested; full simplification still pending
-- ❌ collapse_linear_chains() - Not found
+- ✅ collapse_linear_chains! exists in `src/rhizomorph/algorithms/simplification.jl`
 - ✅ Strand conversion implemented for fixed-length and variable-length graphs (convert_* in core/graph-construction.jl and variable-length/strand-conversions.jl)
 - ❌ Error correction - Not found (algorithms/error-correction.jl planned)
-- ❌ Graph type conversions - Not found (core/graph-type-conversions.jl planned)
+- ✅ Graph type conversions implemented in `src/rhizomorph/core/graph-type-conversions.jl`
 
 **Old Code to Deprecate (~7,300 lines)**
 - src/graph-core.jl (15 lines)
@@ -136,12 +150,12 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - No tests for iterative-assembly.jl (accessible but untested!)
    - No tests for cross-validation.jl (claimed "89/89 tests passing" - FALSE!)
 
-3. **Tool Wrapper Reality (verified in TOOL_WRAPPER_STATUS.md, 2025-01-25)**:
-   - ✅ 13 wrappers implemented **and tested**: megahit, metaspades, skesa, spades, velvet, flye, metaflye, canu, hifiasm, metamdbg, minimap2, diamond, mmseqs
-   - ✅ 9 wrappers implemented but **untested**: QUAST, BUSCO, HyLight, STRONG, Strainy, apollo, homopolish, unicycler, metavelvet
+3. **Tool Wrapper Reality (verified in TOOL_WRAPPER_STATUS.md, 2026-01-17)**:
+   - ✅ 13 wrappers implemented **and tested** (some opt-in): megahit, metaspades, skesa, spades, velvet, flye, metaflye, canu, hifiasm, metamdbg, minimap2, diamond, mmseqs
+   - ⚠️ 9 wrappers implemented but **lightly tested/opt-in**: QUAST, BUSCO, HyLight, STRONG, Strainy, apollo, homopolish, unicycler, metavelvet
 - ✅ QUAST/BUSCO wrappers implemented **with opt-in tests** (extended env flags) and default outdir behavior; CI-safe guards in harness; HyLight/STRONG/Strainy smoke tests enabled with resource-aware skips.
 - ⚠️ Still lightly validated: apollo, homopolish, unicycler, metavelvet
-- ⚠️ hifiasm-meta wrapper exists but is commented out
+- ✅ hifiasm-meta wrapper exists with opt-in tests in `test/4_assembly/third_party_assemblers_legacy.jl`
 - ✅ NCBI FCS-GX contamination screening wrapper added (bioconda `ncbi-fcs-gx`); supports GX DB download via manifest URL and clean-genome output.
 - ⚠️ Implemented but coverage gaps remain: classification (sourmash, metaphlan, metabuli, mosdepth, sylph), binning/post-binning (Taxometer, TaxVAMB, VAMB, MetaBAT2, COMEBin, dRep, MAGmax, etc.), variant calling (GATK, Freebayes, Clair3, BCFtools), pangenome (PGGB, Cactus, vg toolkit). Track tests/docs/tutorials/benchmarks below.
 
@@ -175,6 +189,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
    - [x] Remove false tool integration claims from old planning docs (updated Sylph/Skani status)
    - [ ] Correct "89/89 tests passing" claim
    - [ ] Add warnings about commented-out code
+   - [ ] Fill missing citations for reduced amino acid alphabets (WW5, MM5) in `src/constants.jl` and update `docs/src/references.md`
    - [ ] Keep function coverage audit current via `planning-docs/generate_function_coverage.jl` → `planning-docs/FUNCTION_COVERAGE_AUDIT.md`
 
 4. **Tool Wrapper Validation Updates (done)**:
@@ -195,9 +210,16 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 ## New Rhizomorph Migration Actions (current)
 - Avoid shims; port remaining legacy graph tests directly to `Mycelia.Rhizomorph` and update GraphMode usage so old code paths can be retired cleanly.
-- Port legacy graph tests (comprehensive/end-to-end/probabilistic/assembly hierarchy) to Rhizomorph APIs and add missing Rhizomorph coverage for variable-length/n-gram traversal and GFA/JLD2 round-trips.
+- Port legacy graph tests (comprehensive/end-to-end/probabilistic/assembly hierarchy) to Rhizomorph APIs and add missing Rhizomorph coverage for variable-length/n-gram traversal and simplification edge-removal cases.
 - Remove legacy graph includes from `src/Mycelia.jl` once Rhizomorph tests pass; then delete deprecated graph files (`graph-core.jl`, `kmer-graphs.jl`, `sequence-graphs-next.jl`, `string-graphs.jl`, `qualmer-analysis.jl`, `qualmer-graphs.jl`, `fasta-graphs.jl`, `fastq-graphs.jl`).
-- Implement the planned conversion layer (`core/graph-type-conversions.jl`, `algorithms/strand-conversions.jl`) plus simplification tip-removal/linear-chain collapse and expose non-strand-specific merge helpers as public APIs; add focused tests.
+
+## Development Triage TODOs (deferred)
+See `planning-docs/DEVELOPMENT_TRIAGE.md` for the full inventory and plan.
+- [ ] Migrate `genomic-graph-algorithms.jl` into a production module and add tests.
+- [ ] Refactor `intelligent-assembly.jl` to remove placeholders and add deterministic tests.
+- [ ] Split `cross-validation.jl` into reusable helpers + HPC-only pipeline tests.
+- [ ] Decide implement vs archive for each commented prototype under `src/development/`.
+- Expand tests around the existing conversion layer (`core/graph-type-conversions.jl`, `variable-length/strand-conversions.jl`) and simplification (tip removal/linear-chain collapse); expose non-strand-specific merge helpers as public APIs if needed.
 
 ## Approach: Rigorous Test-First Validation
 
@@ -215,7 +237,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 ## Today's Priority Actions (Third-Party + Rhizomorph Coverage)
 
 **Third-party assemblers (end-to-end with QC + benchmarks)**
-- Re-enable and validate all shipped wrappers: un-comment `run_hifiasm_meta` in `src/assembly.jl` and corresponding tests; make sure HyLight/STRONG/Strainy tests run instead of being commented out.
+- Validate all shipped wrappers: confirm hifiasm-meta opt-in tests remain stable and decide whether to promote them to the main third-party suite; keep HyLight/STRONG/Strainy smoke tests active.
 - Wire wrappers into a repeatable QC pipeline: after each assembler run, auto-run `run_quast` and `run_busco` (where applicable) and capture runtime/memory so benchmarks report both accuracy and efficiency.
 - Stabilize the PhiX comparison harness (`benchmarking/phix174_assembler_comparison.jl`): fix macOS failures for SPAdes/SKESA/metaSPAdes, address metaMDBG errors on small genomes, and add a Linux CI-friendly smoke dataset.
 - Expand coverage: PLASS/PenguiN wrappers exist; add docs/tutorial/benchmark coverage and surface classification/binning gaps (metaphlan/metabuli, mosdepth, Taxometer/TaxVAMB/VAMB/MetaBAT2/etc.) so the workflow is complete from reads → assembly → QC → binning.
@@ -227,14 +249,14 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 - Update documentation to explicitly list the 3×6×alphabet matrix and current support status so we can checkpoint progress if interrupted.
 - Make strand-mode interconversion rules explicit (Single → Double → Canonical and reverse), including evidence handling and directed vs undirected storage; see updated section in `planning-docs/rhizomorph-graph-ecosystem-plan.md`.
 - Add reduced amino acid alphabet coverage to graph-creation tests (AA graphs and Unicode/string graphs) to validate integration beyond preprocessing.
-- Clarify current status of variable-length graphs (FASTA/FASTQ): singlestrand only; doublestrand/canonical conversion still pending.
+- Clarify current status of variable-length graphs (FASTA/FASTQ): doublestrand/canonical conversions are implemented for DNA/RNA; traversal coverage still light.
 - Rhizomorph 100% plan (remaining):
   - Fixed-length k-mer/qualmer: add doublestrand traversal/reconstruction tests for DNA/RNA; add canonical traversal tests for DNA/RNA qualmers; AA/string already error on doublestrand/canonical.
-- Variable-length FASTA/FASTQ: implement doublestrand/canonical converters for DNA/RNA OR add explicit errors+tests if deferring; currently singlestrand only.
+- Variable-length FASTA/FASTQ: add traversal tests for doublestrand/canonical converters (DNA/RNA); keep explicit errors for AA/string.
   - N-gram/string: keep singlestrand-only; ensure doc/tests cover non-applicable conversions (errors).
   - Algorithms: add quality-aware traversal edge cases (mixed datasets, RC evidence) and verify path_to_sequence on canonical for DNA/RNA k-mer/qualmer.
 - Matrix: add/refresh 3×6×alphabet support matrix (supported vs not-applicable vs pending).
-- Implemented: variable-length strand conversions for DNA/RNA (convert_variable_length_to_doublestrand / convert_variable_length_to_canonical) + tests; update matrix/docs accordingly.
+- Implemented: variable-length strand conversions for DNA/RNA (convert_variable_length_to_doublestrand / convert_variable_length_to_canonical); expand tests and keep the support matrix current.
 - Added support matrix: planning-docs/RHIZOMORPH_SUPPORT_MATRIX.md (✅/🚫/⏳ by graph type/alphabet/strand mode).
 - Next up (recommended):
   - Add quality-aware traversal edge cases (mixed datasets, RC evidence) for doublestrand/canonical qualmer graphs.
@@ -581,12 +603,46 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
 
 ## Future Work (Post-Production) 🔵 BACKLOG
 
+### Soft-Masking Support via TwoBit.jl Integration (Added 2026-01-21)
+
+**Context**: BioSequences.jl is case-insensitive and does not preserve soft-masking (lowercase). Case is treated as metadata, not part of the sequence. See BioJulia/BioSequences.jl#275.
+
+**Phase 2 (Recommended)**: Masking-Aware Quality Scoring
+- [ ] Add `consider_masking::Bool=false` and `masked_penalty::Float64=0.5` kwargs to `assess_sequence_quality(::AbstractString)` in `src/graph-cleanup.jl`
+- [ ] When enabled, calculate masked fraction from lowercase characters and reduce quality score accordingly
+- [ ] Update `is_high_quality_tip` to support optional masking consideration
+- [ ] Add tests for masking-aware quality scoring
+
+**Phase 3**: Update Graph Cleanup Callers
+- [ ] Add `consider_masking` kwarg to `statistical_tip_clipping` and propagate to `is_high_quality_tip`
+- [ ] Document masking behavior in docstrings
+
+**Phase 4**: Full Masking Infrastructure with TwoBit.jl
+- [ ] Add TwoBit.jl as optional dependency in `Project.toml` for reading 2bit genome files
+- [ ] Create `src/masking.jl` with utilities:
+  - `extract_mask(sequence::AbstractString)::BitVector` - Extract soft-mask from string
+  - `extract_masked_ranges(sequence::AbstractString)::Vector{UnitRange{Int}}` - TwoBit-style ranges
+  - `apply_hard_mask(sequence::BioSequences.LongDNA{4}, mask::BitVector)` - Convert masked to N
+  - `bitvector_to_ranges(mask::BitVector)::Vector{UnitRange{Int}}` - Compress BitVector to ranges
+  - `ranges_to_bitvector(ranges::Vector{UnitRange{Int}}, length::Int)::BitVector` - Expand ranges
+- [ ] Add `MaskedSequence{S<:BioSequence}` wrapper type for workflows needing masking preservation
+- [ ] Include `masking.jl` in `src/Mycelia.jl`
+- [ ] Add comprehensive tests in `test/2_preprocessing_qc/masking_test.jl`
+- [ ] Document masking utilities and TwoBit.jl integration in docs
+
+**Reference pattern for FASTA soft-mask handling**:
+```julia
+raw  = FASTX.sequence(record)  # preserves case
+mask = BitVector(islowercase(c) for c in raw)  # extract mask
+dna  = FASTX.sequence(LongDNA{4}, record)  # case dropped by BioSequences
+```
+
 ### Missing Algorithm Implementations
-- [ ] Implement remove_tips() in simplification.jl
-- [ ] Implement collapse_linear_chains() in simplification.jl
-- [ ] Implement algorithms/strand-conversions.jl
+- [x] Implement remove_tips() in simplification.jl
+- [x] Implement collapse_linear_chains() in simplification.jl
+- [x] Implement variable-length strand conversions in `variable-length/strand-conversions.jl`
 - [ ] Implement algorithms/error-correction.jl
-- [ ] Implement core/graph-type-conversions.jl
+- [x] Implement core graph-type conversions in `core/graph-type-conversions.jl`
 
 ### Advanced Features (from planning documents)
 - [ ] Reinforcement learning framework
@@ -648,10 +704,10 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
   - `src/viterbi-next.jl` (confirm dedicated tests exist)
   - `src/simulation.jl` functions: `simulate_pacbio_reads`, `simulate_nanopore_reads`, `simulate_illumina_paired_reads`
   - Quality/QC/visualization functions: `plot_per_base_quality`, `analyze_fastq_quality`, `calculate_gc_content`, `plot_embeddings`, `plot_optimal_cluster_assessment_results`, `plot_taxa_abundances`, `visualize_many_timeseries`
-- **Algorithm verification (exists; test status unknown)**:
-  - `src/coverage-clustering.jl` (k-medoids coverage clustering)
-  - `src/kmer-saturation-analysis.jl` (saturation curves and thresholds)
-  - `src/graph-cleanup.jl` (statistical cleanup)
+- **Algorithm verification (exists; test status tracked)**:
+  - `src/coverage-clustering.jl` (k-medoids coverage clustering) — tests in `test/3_feature_extraction_kmer/coverage_clustering.jl`
+  - `src/kmer-saturation-analysis.jl` (saturation curves and thresholds) — tests in `test/3_feature_extraction_kmer/kmer_saturation_analysis.jl`
+  - `src/graph-cleanup.jl` (statistical cleanup) — tests in `test/4_assembly/graph_cleanup_test.jl`
   - `src/development/genomic-graph-algorithms.jl`
   - `src/development/pangenome-core-genome.jl`
 - **Tutorial/docs checks**:
@@ -659,7 +715,7 @@ A feature is ✅ **COMPLETE** only if ALL THREE criteria are met:
   - Inspect `src/development/intelligent-assembly.jl` for the k=5 loop issue noted historically.
   - Verify any “probabilistic-assembly-hub” doc page if referenced elsewhere.
 - **Tool wrappers**:
-  - Authoritative inventory: `planning-docs/TOOL_WRAPPER_STATUS.md` (13 tested, 9 untested, 1 commented out). Coverage gaps remain in classification/binning/post-binning/variant calling/pangenome; add tests/docs/tutorials/benchmarks and decide on enabling hifiasm-meta.
+  - Authoritative inventory: `planning-docs/TOOL_WRAPPER_STATUS.md` (13 tested, 9 lightly tested/opt-in). Coverage gaps remain in classification/binning/post-binning/variant calling/pangenome; add tests/docs/tutorials/benchmarks and keep hifiasm-meta opt-in tests stable.
 
 ### Tool Wrapper Coverage TODOs (implemented)
 

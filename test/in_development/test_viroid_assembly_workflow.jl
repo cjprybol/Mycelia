@@ -20,7 +20,7 @@
 # These tests validate the core functionality of the viroid assembly workflow
 # including quality propagation, FASTQ output, and multi-sequence assembly.
 
-using Pkg
+import Pkg
 Pkg.activate(".")
 
 import Mycelia

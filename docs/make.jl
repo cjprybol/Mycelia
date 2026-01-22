@@ -1,14 +1,16 @@
 # generate docs locally with
 # julia --project=docs -e 'include("docs/make.jl")'
 
-using Documenter
-using Mycelia
+import Documenter
+import Mycelia
 import Literate
 
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, ".."))
 const TUTORIALS_DIR = joinpath(PROJECT_ROOT, "tutorials")
 const LITERATE_SRC_DIR = joinpath(PROJECT_ROOT, "test")
 const GENERATED_DOCS_DIR = joinpath(@__DIR__, "src", "generated")
+const DOCS_EXECUTE_TUTORIALS = lowercase(get(ENV, "MYCELIA_DOCS_EXECUTE", "false")) == "true"
+const DOCS_RUN_DOCTESTS = lowercase(get(ENV, "MYCELIA_DOCS_DOCTEST", "false")) == "true"
 
 # Drop any stale generated content so we don't ship orphaned pages
 if isdir(GENERATED_DOCS_DIR)
@@ -35,9 +37,8 @@ if isdir(TUTORIALS_DIR)
                     tutorials_output_dir;
                     credit = false,
                     flavor = Literate.DocumenterFlavor(),
-                    # Disable execution for now to fix build issues
-                    # TODO: Re-enable once tutorial examples are fixed
-                    execute = false
+                    # Keep execution opt-in until tutorial examples are stable
+                    execute = DOCS_EXECUTE_TUTORIALS
                 )
                 
                 # Post-process the generated markdown to convert @example blocks to ```julia blocks
@@ -65,8 +66,8 @@ if isfile(joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"))
         GENERATED_DOCS_DIR;
         credit = false,
         flavor = Literate.DocumenterFlavor(),
-        # Disable execution for now to fix build issues
-        execute = false
+        # Keep execution opt-in until tutorial examples are stable
+        execute = DOCS_EXECUTE_TUTORIALS
     )
     
     # Post-process to disable @example blocks
@@ -147,17 +148,16 @@ end
 #     push!(tutorial_pages, "Test Tutorial" => joinpath("generated", "test-driven-tutorial.md"))
 # end
 
-makedocs(
+Documenter.makedocs(
     sitename = "Mycelia",
-    modules = [Mycelia],
+    modules = [Mycelia, Mycelia.Rhizomorph],
     authors = "Cameron Prybol <cameron.prybol@gmail.com> and contributors",
     repo = Documenter.Remotes.GitHub("cjprybol", "Mycelia"),
     format = Documenter.HTMLWriter.HTML(size_threshold = 1_000_000),
     build = joinpath(@__DIR__, "build"),
     source = joinpath(@__DIR__, "src"),
-    # Disable doctests and example blocks for now to fix build issues
-    # TODO: Re-enable these once tutorial examples are fixed
-    doctest = false,
+    # Keep doctests opt-in until tutorial examples are stable
+    doctest = DOCS_RUN_DOCTESTS,
     checkdocs = :none,
     warnonly = [:cross_references, :example_block, :missing_docs],
     pages = [
@@ -175,11 +175,12 @@ makedocs(
             "Complete API Surface" => "api/all-functions.md",
         ],
         "Benchmarks" => "benchmarks.md",
+        "References" => "references.md",
         "Contributing" => "contributing.md",
         "Related Projects" => "related-projects.md",
     ]
 )
 
-deploydocs(
+Documenter.deploydocs(
     repo = "github.com/cjprybol/Mycelia.git",
 )

@@ -9,13 +9,13 @@ This page is generated directly from the package docstrings so every documented 
 ## Index of All Documented Symbols
 
 ```@index
-Modules = [Mycelia]
+Modules = [Mycelia, Mycelia.Rhizomorph]
 ```
 
 ## Detailed Reference (auto-generated)
 
 ```@autodocs
-Modules = [Mycelia]
+Modules = [Mycelia, Mycelia.Rhizomorph]
 Order = [:type, :function, :macro, :constant]
 Private = false
 ```

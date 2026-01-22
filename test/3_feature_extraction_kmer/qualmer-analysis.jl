@@ -349,7 +349,7 @@ Test.@testset "Qualmer Analysis" begin
         
         Test.@testset "Basic Graph Construction" begin
             # Build a qualmer graph
-            graph = Mycelia.build_qualmer_graph(records, k=4)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 4)
             Test.@test isa(graph, MetaGraphsNext.MetaGraph)
             
             # Check that graph has vertices
@@ -357,37 +357,50 @@ Test.@testset "Qualmer Analysis" begin
             Test.@test length(vertices) > 0
             
             # Get basic statistics
-            stats = Mycelia.get_qualmer_statistics(graph)
-            Test.@test haskey(stats, "num_vertices")
-            Test.@test haskey(stats, "num_edges")
-            Test.@test haskey(stats, "mean_coverage")
-            Test.@test stats["num_vertices"] >= 0
-            Test.@test stats["mean_coverage"] >= 0.0
+            stats = Mycelia.Rhizomorph.get_qualmer_statistics(graph)
+            Test.@test haskey(stats, :num_vertices)
+            Test.@test haskey(stats, :num_edges)
+            Test.@test haskey(stats, :mean_joint_quality)
+            Test.@test stats[:num_vertices] >= 0
+            Test.@test stats[:num_edges] >= 0
+            Test.@test stats[:mean_joint_quality] !== nothing
         end
         
         Test.@testset "Quality Metrics" begin
-            graph = Mycelia.build_qualmer_graph(records, k=3, min_coverage=1)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 3)
             
-            # Calculate assembly quality metrics
-            quality_metrics = Mycelia.calculate_assembly_quality_metrics(graph)
-            Test.@test quality_metrics.mean_coverage >= 0.0
-            Test.@test quality_metrics.mean_quality >= 0.0
-            Test.@test quality_metrics.mean_confidence >= 0.0
-            Test.@test quality_metrics.low_confidence_fraction >= 0.0
-            Test.@test quality_metrics.low_confidence_fraction <= 1.0
-            Test.@test quality_metrics.total_kmers >= 0
+            # Validate quality summaries for a representative vertex
+            first_label = first(MetaGraphsNext.labels(graph))
+            joint_quality = Mycelia.Rhizomorph.get_vertex_joint_quality(
+                graph[first_label],
+                "dataset_01"
+            )
+            Test.@test joint_quality !== nothing
+            Test.@test length(joint_quality) == 3
+            Test.@test all(q -> q >= UInt8(0), joint_quality)
+
+            mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(
+                graph[first_label],
+                "dataset_01"
+            )
+            Test.@test mean_quality !== nothing
+            Test.@test length(mean_quality) == 3
+            Test.@test all(q -> q >= 0.0, mean_quality)
         end
         
         Test.@testset "Error Identification" begin
-            graph = Mycelia.build_qualmer_graph(records, k=3, min_coverage=1)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 3)
             
-            # Identify potential errors with lenient thresholds
-            error_labels = Mycelia.identify_potential_errors(graph, 
-                min_coverage=1, min_quality=5.0, min_confidence=0.1)
-            Test.@test isa(error_labels, Vector)
+            # Identify low-confidence positions by filtering on minimum quality
+            high_quality_kmers = Mycelia.Rhizomorph.filter_by_quality(
+                graph,
+                5,
+                "dataset_01"
+            )
+            Test.@test isa(high_quality_kmers, Vector)
             # All labels should be k-mers (Kmers.Kmer types)
-            if !isempty(error_labels)
-                Test.@test all(v -> isa(v, Kmers.Kmer), error_labels)
+            if !isempty(high_quality_kmers)
+                Test.@test all(v -> isa(v, Kmers.Kmer), high_quality_kmers)
             end
         end
     end
@@ -427,16 +440,16 @@ Test.@testset "Qualmer Analysis" begin
             empty_graph = MetaGraphsNext.MetaGraph(
                 MetaGraphsNext.DiGraph(),
                 label_type=Kmers.DNAKmer{3},
-                vertex_data_type=Mycelia.QualmerVertexData,
-                edge_data_type=Mycelia.QualmerEdgeData,
-                weight_function=Mycelia.edge_data_weight,
+                vertex_data_type=Mycelia.Rhizomorph.QualmerVertexData,
+                edge_data_type=Mycelia.Rhizomorph.QualmerEdgeData,
+                weight_function=Mycelia.Rhizomorph.edge_data_weight,
                 default_weight=0.0
             )
             
-            stats = Mycelia.get_qualmer_statistics(empty_graph)
-            Test.@test stats["num_vertices"] == 0
-            Test.@test stats["num_edges"] == 0
-            Test.@test stats["mean_coverage"] == 0.0
+            stats = Mycelia.Rhizomorph.get_qualmer_statistics(empty_graph)
+            Test.@test stats[:num_vertices] == 0
+            Test.@test stats[:num_edges] == 0
+            Test.@test stats[:mean_joint_quality] === nothing
         end
     end
 end

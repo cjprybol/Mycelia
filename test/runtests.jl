@@ -21,6 +21,9 @@ const TEST_ARTIFACT_DIRS = [
 ]
 
 function cleanup_test_artifacts()
+    if any(isdir, TEST_ARTIFACT_DIRS)
+        @info "Cleaning test artifacts (busco downloads/results)."
+    end
     for path in TEST_ARTIFACT_DIRS
         if isdir(path)
             rm(path; recursive=true, force=true)
@@ -241,7 +244,11 @@ include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # [ Info: Skipping integration tests; set MYCELIA_RUN_EXTERNAL=true to run external tools
 
 # sentencepiece isn't working
-include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+if MYCELIA_RUN_EXTERNAL
+    include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+else
+    @info "Skipping tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
+end
 # for file in (
 #     "8_tool_integration/autocycler.jl",
 #     "8_tool_integration/bioconda.jl",

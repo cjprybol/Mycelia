@@ -48,6 +48,32 @@ println("- Phylogenetics: IQ-TREE, RAxML, MrBayes")
 println("- Visualization: Circos, IGV, Artemis")
 println("- Quality Control: FastQC, Quast, BUSCO")
 
+# ### Wrapper entry points
+#
+# The wrappers below expose thin Julia entry points for external tools. Use these
+# examples as templates and replace paths with real inputs. These snippets are
+# shown as documentation only and are not executed in docs builds.
+#
+# ```julia
+# Mycelia.install_autocycler()
+# Mycelia.run_autocycler(
+#     long_reads="reads.fastq",
+#     out_dir="autocycler_out";
+#     short_reads_1="reads_R1.fastq",
+#     short_reads_2="reads_R2.fastq",
+# )
+#
+# Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size=31)
+# Mycelia.ggcat_build("reads.fastq", "graph.lz4", 31)
+# Mycelia.ggcat_query("graph.lz4", "queries.fasta", "ggcat_hits.tsv", 31)
+#
+# Mycelia.foldseek_easy_search("query_structures/", "target_db/", "foldseek_hits.m8")
+# Mycelia.run_pantools(["--help"])
+#
+# Mycelia.install_prokrustean()
+# Mycelia.prokrustean_build_graph("example.ebwt", "prokrustean.bin"; kmin=21)
+# ```
+
 # ## Part 2: Bioconda Integration
 #
 # Bioconda provides a standardized way to install and manage

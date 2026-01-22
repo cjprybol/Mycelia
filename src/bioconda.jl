@@ -1,3 +1,19 @@
+function _ensure_conda_env_vars!()
+    conda_exe = CONDA_RUNNER
+    if isfile(conda_exe)
+        # Prefer Conda.jl's conda to avoid stale module paths.
+        if !isfile(get(ENV, "CONDA_EXE", "")) || get(ENV, "CONDA_EXE", "") != conda_exe
+            ENV["CONDA_EXE"] = conda_exe
+        end
+        conda_python = joinpath(dirname(conda_exe), "python")
+        if isfile(conda_python)
+            if !isfile(get(ENV, "CONDA_PYTHON_EXE", "")) || get(ENV, "CONDA_PYTHON_EXE", "") != conda_python
+                ENV["CONDA_PYTHON_EXE"] = conda_python
+            end
+        end
+    end
+end
+
 """
     _install_vibrant()
 
@@ -125,6 +141,7 @@ end
 Check if a conda environment exists.
 """
 function _check_conda_env_exists(env_name::AbstractString)
+    _ensure_conda_env_vars!()
     try
         result = Base.read(`$(Mycelia.CONDA_RUNNER) env list`, String)
         return Base.occursin(env_name, result)
@@ -140,6 +157,7 @@ Return the first line of a tool version string from a conda environment, or
 missing when the tool or environment is unavailable.
 """
 function conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
+    _ensure_conda_env_vars!()
     if !isfile(Mycelia.CONDA_RUNNER)
         return missing
     end
@@ -165,6 +183,7 @@ Check whether a named Bioconda environment already exists.
 `Bool` indicating if the environment is present.
 """
 function check_bioconda_env_is_installed(pkg)
+    _ensure_conda_env_vars!()
     # ensure conda environment is available
     if !isfile(CONDA_RUNNER)
         if (basename(CONDA_RUNNER) == "mamba")
@@ -195,6 +214,7 @@ Create a Conda environment from a YAML file.
 - `force::Bool=false`: If true, remove existing environment before creation
 """
 function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::AbstractString; force::Bool=false)
+    _ensure_conda_env_vars!()
     if !isfile(yaml_file)
         throw(ArgumentError("YAML file does not exist: $(yaml_file)"))
     end
@@ -251,6 +271,7 @@ add_bioconda_env("blast", force=true)
 - Cleans conda cache after installation
 """
 function add_bioconda_env(pkg; force=false, quiet=false)
+    _ensure_conda_env_vars!()
     channel = nothing
     if occursin("::", pkg)
         if !quiet
@@ -296,6 +317,7 @@ Update a package and its dependencies in its dedicated Conda environment.
 - `pkg::String`: Name of the package/environment to update
 """
 function update_bioconda_env(pkg)
+    _ensure_conda_env_vars!()
     run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
     # conda update --all -n <env_name>
 end

@@ -1475,7 +1475,7 @@ This function iterates over the provided dictionary `kmer_counts`, which maps k-
 - `kmer_counts::Dict{BioSequences.Kmer, Int}`: A dictionary where keys are k-mers and values are their counts.
 
 # Returns
-- The input dictionary `kmer_counts` with all k-mers in their canonical form, sorted by k-mers.
+- The input dictionary `kmer_counts` with all k-mers in their canonical form. If `kmer_counts` is an OrderedDict, it is sorted by k-mers.
 """
 function canonicalize_kmer_counts!(kmer_counts)
     # Only canonicalize nucleic acid k-mers (DNA/RNA), not amino acids
@@ -1500,7 +1500,10 @@ function canonicalize_kmer_counts!(kmer_counts)
         end
         # For amino acids, no canonicalization needed - they are already canonical
     end
-    return sort!(kmer_counts)
+    if kmer_counts isa OrderedCollections.OrderedDict
+        return sort!(kmer_counts)
+    end
+    return kmer_counts
 end
 
 """
@@ -1554,7 +1557,8 @@ A sorted dictionary mapping each k-mer to its frequency count in the sequence.
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.DNAAlphabet, K}
     # return sort(StatsBase.countmap(Kmers.FwDNAMers{K}(sequence)))
-    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousDNAMers{K}(sequence)]))
+    kmer_counts = StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousDNAMers{K}(sequence)])
+    return sort!(OrderedCollections.OrderedDict(kmer_counts))
 end
 
 """
@@ -1571,7 +1575,8 @@ Count the frequency of each k-mer in an RNA sequence.
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.RNAAlphabet, K}
     # return sort(StatsBase.countmap(Kmers.FwRNAMers{K}(sequence)))
-    return sort(StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousRNAMers{K}(sequence)]))
+    kmer_counts = StatsBase.countmap([kmer for (kmer, index) in Kmers.UnambiguousRNAMers{K}(sequence)])
+    return sort!(OrderedCollections.OrderedDict(kmer_counts))
 end
 
 """
@@ -1587,7 +1592,8 @@ Count the frequency of amino acid k-mers in a biological sequence.
 A sorted dictionary mapping each k-mer to its frequency count in the sequence.
 """
 function count_kmers(::Type{Kmers.Kmer{A, K}}, sequence::BioSequences.LongSequence) where {A <: BioSequences.AminoAcidAlphabet, K}
-    return sort(StatsBase.countmap(Kmers.FwAAMers{K}(sequence)))
+    kmer_counts = StatsBase.countmap(Kmers.FwAAMers{K}(sequence))
+    return sort!(OrderedCollections.OrderedDict(kmer_counts))
 end
 
 # TODO add a way to handle ambiguity or not
