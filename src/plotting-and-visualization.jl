@@ -1,4 +1,154 @@
 """
+    plot_batch_qc_distributions(df::DataFrames.DataFrame; title="Batch QC Summary")
+
+Visualize distributions of QC metrics across multiple samples.
+Panel 1: Sorted Yield (Knee Plot).
+Panel 2: Read Count Distribution.
+Panel 3: Read Length Distributions.
+Panel 4: Base Quality Distribution.
+"""
+function plot_batch_qc_distributions(df::DataFrames.DataFrame; title="Cohort QC Overview")
+    # Filter for clean data only
+    clean_df = filter(row -> row.stage == "after_filtering", df)
+    
+    n_samples = DataFrames.nrow(clean_df)
+    if n_samples == 0
+        @warn "No 'after_filtering' data found."
+        return CairoMakie.Figure()
+    end
+
+    fig = CairoMakie.Figure(size = (1200, 900), fontsize=18)
+    
+    # UPDATED: Added halign=:center to center the title
+    CairoMakie.Label(fig[0, :], "$title (N=$n_samples)", fontsize=24, font=:bold, halign=:center)
+
+    # --- Panel 1: Yield Rank (Knee Plot) ---
+    ax1 = CairoMakie.Axis(fig[1, 1], 
+        title="Yield per Sample (Ranked)", 
+        xlabel="Sample Rank", 
+        ylabel="Yield (Gb)")
+    
+    sorted_yields = sort(clean_df.yield_gb)
+    CairoMakie.barplot!(ax1, 1:length(sorted_yields), sorted_yields, 
+        color=sorted_yields, colormap=:plasma, strokewidth=0.5)
+
+    # --- Panel 2: Read Count Distribution ---
+    ax2 = CairoMakie.Axis(fig[1, 2], 
+        title="Read Count Distribution", 
+        ylabel="Number of Reads",
+        xticksvisible=false, xticklabelsvisible=false)
+    
+    CairoMakie.violin!(ax2, fill(1, n_samples), clean_df.total_reads, color=(:teal, 0.5), show_median=true)
+    CairoMakie.boxplot!(ax2, fill(1, n_samples), clean_df.total_reads, color=:black, width=0.1)
+
+    # --- Panel 3: Read Length Distributions ---
+    ax3 = CairoMakie.Axis(fig[2, 1], 
+        title="Read Length Distributions", 
+        ylabel="Length (bp)", 
+        xticks=([1, 2], ["Mean", "N50"]))
+    
+    CairoMakie.violin!(ax3, fill(1, n_samples), clean_df.mean_length, color=(:dodgerblue, 0.5), show_median=true)
+    CairoMakie.boxplot!(ax3, fill(1, n_samples), clean_df.mean_length, color=:black, width=0.1)
+
+    if "n50" in names(clean_df) && any(clean_df.n50 .> 0)
+        CairoMakie.violin!(ax3, fill(2, n_samples), clean_df.n50, color=(:orange, 0.5), show_median=true)
+        CairoMakie.boxplot!(ax3, fill(2, n_samples), clean_df.n50, color=:black, width=0.1)
+    end
+
+    # --- Panel 4: Quality Distribution ---
+    ax4 = CairoMakie.Axis(fig[2, 2], 
+        title="Base Quality Distribution", 
+        ylabel="Percentage (%)", 
+        limits=(nothing, nothing, 0, 100),
+        xticks=([1, 2], ["Q20%", "Q30%"]))
+    
+    CairoMakie.violin!(ax4, fill(1, n_samples), clean_df.q20_percent, color=(:lightgreen, 0.5), show_median=true)
+    CairoMakie.violin!(ax4, fill(2, n_samples), clean_df.q30_percent, color=(:forestgreen, 0.5), show_median=true)
+    
+    CairoMakie.boxplot!(ax4, fill(1, n_samples), clean_df.q20_percent, color=:black, width=0.1)
+    CairoMakie.boxplot!(ax4, fill(2, n_samples), clean_df.q30_percent, color=:black, width=0.1)
+    
+    CairoMakie.hlines!(ax4, [90], color=:red, linestyle=:dash)
+
+    return fig
+end
+
+"""
+    visualize_fastplong_single(data; title=nothing)
+
+Create a detailed QC report for a single sample.
+Includes: Yield, Lengths, Quality (no GC), and Filtering Stats.
+"""
+function visualize_fastplong_single(data; title=nothing)
+    if isnothing(data)
+        return CairoMakie.Figure()
+    end
+    
+    df = data.summary
+    sample_name = isnothing(title) ? data.sample_id : title
+    
+    fig = CairoMakie.Figure(size = (1200, 800), fontsize=18)
+    
+    # UPDATED: Added halign=:center to center the title
+    CairoMakie.Label(fig[0, :], "QC Report: $sample_name", fontsize=24, font=:bold, halign=:center)
+
+    colors = [:grey80, :dodgerblue]
+    stages = ["Raw", "Filtered"]
+
+    # --- Panel 1: Reads & Yield ---
+    ax1 = CairoMakie.Axis(fig[1, 1], title="Sequencing Yield", ylabel="Reads", xticks=(1:2, stages))
+    CairoMakie.barplot!(ax1, 1:2, df.total_reads, color=colors, strokewidth=1)
+    
+    ax1_r = CairoMakie.Axis(fig[1, 1], yaxisposition=:right, ylabel="Yield (Gb)")
+    CairoMakie.hidespines!(ax1_r); CairoMakie.hidexdecorations!(ax1_r)
+    CairoMakie.scatter!(ax1_r, 1:2, df.yield_gb, color=:orange, markersize=15, label="Gb")
+    CairoMakie.axislegend(ax1_r, position=:rt)
+
+    # --- Panel 2: Read Lengths ---
+    has_n50 = any(df.n50 .> 0)
+    
+    ax2 = CairoMakie.Axis(fig[1, 2], title="Read Lengths", ylabel="Base Pairs (bp)", xticks=(1:2, stages))
+    
+    if has_n50
+        CairoMakie.barplot!(ax2, [0.85, 1.85], df.mean_length, width=0.3, color=colors, label="Mean")
+        CairoMakie.barplot!(ax2, [1.15, 2.15], df.n50, width=0.3, color=colors, gap=0, hatch=:x, label="N50")
+        CairoMakie.axislegend(ax2, position=:lt)
+    else
+        CairoMakie.barplot!(ax2, 1:2, df.mean_length, width=0.5, color=colors, label="Mean")
+        CairoMakie.text!(ax2, 1.5, maximum(df.mean_length)*0.5, text="N50 not available", align=(:center, :center))
+    end
+
+    # --- Panel 3: Base Quality ---
+    ax3 = CairoMakie.Axis(fig[2, 1], title="Base Quality", ylabel="Percentage (%)", limits=(nothing, nothing, 0, 100), xticks=(1:2, stages))
+    CairoMakie.barplot!(ax3, [0.85, 1.85], df.q20_percent, width=0.3, color=colors, label="Q20%")
+    CairoMakie.barplot!(ax3, [1.15, 2.15], df.q30_percent, width=0.3, color=colors, hatch=:/, label="Q30%")
+    CairoMakie.hlines!(ax3, [90], color=:gray, linestyle=:dash)
+    CairoMakie.axislegend(ax3, position=:rb)
+
+    # --- Panel 4: Filtering Stats ---
+    ax4 = CairoMakie.Axis(fig[2, 2], title="Filtering Reasons", ylabel="Reads Dropped", xticklabelrotation=π/4)
+    
+    if !isempty(data.filtering_stats)
+        drop_reasons = filter(p -> p.first != "passed_filter_reads" && p.second > 0, data.filtering_stats)
+        
+        if !isempty(drop_reasons)
+            reasons = collect(keys(drop_reasons))
+            counts = collect(values(drop_reasons))
+            labels = replace.(reasons, "_reads" => "", "_" => " ")
+            
+            CairoMakie.barplot!(ax4, 1:length(counts), counts, color=:firebrick)
+            ax4.xticks = (1:length(counts), labels)
+        else
+            CairoMakie.text!(ax4, 0.5, 0.5, text="No reads dropped!", align=(:center, :center))
+        end
+    else
+        CairoMakie.text!(ax4, 0.5, 0.5, text="No filtering data", align=(:center, :center))
+    end
+
+    return fig
+end
+
+"""
 Generate a taxonomic rank consensus visualization from sampled data.
 
 Returns a CairoMakie Figure object showing consensus agreement across taxonomic ranks.

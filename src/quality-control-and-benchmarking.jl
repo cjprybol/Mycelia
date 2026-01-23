@@ -1,4 +1,132 @@
 """
+    parse_fastplong_json(json_file::String)
+
+Robustly parse a fastplong JSON report, handling various nesting structures.
+Returns `nothing` if parsing fails, preventing crashes in batch operations.
+"""
+function parse_fastplong_json(json_file::String)
+    if !isfile(json_file)
+        @warn "File not found: $json_file"
+        return nothing
+    end
+
+    try
+        data = JSON.parsefile(json_file)
+        sample_id = replace(basename(json_file), 
+            r"\.json$" => "", 
+            r"\.fastplong.*$" => "", # Cleanup common suffixes
+            r"\.hifi_reads.*$" => ""
+        )
+
+        # 1. Locate the summary section (handle nesting variations)
+        summary_node = nothing
+        if haskey(data, "summary")
+            summary_node = data["summary"]
+        elseif haskey(data, "before_filtering")
+            summary_node = data # Data is at root
+        end
+
+        if isnothing(summary_node)
+            @warn "Could not find 'summary' or 'before_filtering' in $json_file"
+            return nothing
+        end
+
+        # 2. Extract Metrics
+        rows = []
+        for stage in ["before_filtering", "after_filtering"]
+            if haskey(summary_node, stage)
+                section = summary_node[stage]
+                push!(rows, (
+                    sample_id   = sample_id,
+                    stage       = stage,
+                    total_reads = get(section, "total_reads", 0),
+                    total_bases = get(section, "total_bases", 0),
+                    q20_bases   = get(section, "q20_bases", 0),
+                    q30_bases   = get(section, "q30_bases", 0),
+                    # Handle naming variations (fastp uses mean_length, fastplong uses read_mean_length)
+                    mean_length = get(section, "read_mean_length", get(section, "mean_length", 0.0)),
+                    n50         = get(section, "read_n50", get(section, "n50", 0.0)),
+                    gc_content  = get(section, "gc_content", 0.0)
+                ))
+            end
+        end
+
+        if isempty(rows)
+            @warn "No stats found in $json_file"
+            return nothing
+        end
+
+        df = DataFrames.DataFrame(rows)
+
+        # 3. Safe Calculation of Derived Metrics
+        # Use safe division to avoid errors if total_bases is 0
+        df.q20_percent = [r.total_bases > 0 ? r.q20_bases / r.total_bases * 100 : 0.0 for r in eachrow(df)]
+        df.q30_percent = [r.total_bases > 0 ? r.q30_bases / r.total_bases * 100 : 0.0 for r in eachrow(df)]
+        df.yield_gb = df.total_bases ./ 1e9
+
+        # 4. Extract Histograms (if available) for advanced plotting
+        # fastplong often puts these at the root level, e.g., "read_length_histogram"
+        histograms = Dict()
+        if haskey(data, "read_length_histogram")
+            histograms[:read_length] = data["read_length_histogram"]
+        end
+        
+        return (; sample_id, summary=df, json_data=data, histograms)
+
+    catch e
+        @warn "Error parsing $json_file: $e"
+        return nothing
+    end
+end
+
+"""
+    aggregate_fastplong_reports(parsed_results::Vector)
+
+Aggregate a list of pre-parsed fastplong results into a single master DataFrame.
+Useful if you have already run `parse_fastplong_json` (e.g., via pmap or a loop).
+"""
+function aggregate_fastplong_reports(parsed_results::Vector)
+    # Filter out any 'nothing' entries from failed parses
+    valid_results = filter(!isnothing, parsed_results)
+    
+    if isempty(valid_results)
+        return DataFrames.DataFrame()
+    end
+
+    # Combine all individual summary DataFrames
+    all_summaries = vcat([r.summary for r in valid_results]...)
+    
+    # By default, we usually want the 'after_filtering' stats for batch QC
+    # But returning the full table allows the user to filter later if they want 'before_filtering'
+    return all_summaries
+end
+
+"""
+    aggregate_fastplong_reports(input_paths::Vector{String})
+
+Aggregate QC metrics from a list of file paths. Parses them on the fly.
+"""
+function aggregate_fastplong_reports(input_paths::Vector{String})
+    # Parse all files
+    parsed = map(parse_fastplong_json, input_paths)
+    return aggregate_fastplong_reports(parsed)
+end
+
+"""
+    aggregate_fastplong_reports(input_dir::String; recursive=false)
+
+Aggregate QC metrics from all .json files in a directory.
+"""
+function aggregate_fastplong_reports(input_dir::String; recursive=false)
+    if recursive
+        files = [joinpath(root, f) for (root, dirs, files) in walkdir(input_dir) for f in files if endswith(f, ".json")]
+    else
+        files = filter(f -> endswith(f, ".json"), readdir(input_dir, join=true))
+    end
+    return aggregate_fastplong_reports(files)
+end
+
+"""
     robust_cv(x::AbstractVector{<:Real}; epsilon::Float64 = eps(Float64))::Float64
 
 Compute a robust coefficient of variation for a vector of distances x
