@@ -1661,6 +1661,27 @@ function minimap_merge_map_and_split(;
         read_map_format_local = :tsv
     end
 
+    # Guardrail: Check for inefficient use of minimap2 on tiny datasets
+    # Calculate total input size from all FASTQ files
+    total_input_size = sum(filesize, single_end_fastqs; init=0)
+    for (fwd, rev) in paired_end_fastqs
+        total_input_size += filesize(fwd) + filesize(rev)
+    end
+
+    # Threshold: 50KB (approx 10-20 average long reads)
+    MINIMAP_EFFICIENCY_THRESHOLD = 50 * 1024
+
+    if total_input_size > 0 && total_input_size < MINIMAP_EFFICIENCY_THRESHOLD
+        @warn """
+        Detected very small input size ($(Base.format_bytes(total_input_size))).
+        Using minimap2 requires loading the full reference index, which may be slower than the alignment itself.
+
+        Recommendation: For small numbers of reads, consider using:
+        - Mycelia.run_blastn(..., remote=true) for remote BLAST
+        - Mycelia.run_blastn(..., task="megablast") for local megaBLAST
+        """
+    end
+
     prefix_jobs = NamedTuple[]
     sample_infos = NamedTuple[]
     mapping_suffix = if read_map_format_local == :arrow
@@ -2725,6 +2746,24 @@ function run_blastn(;
 )
     Mycelia.add_bioconda_env("blast")
     outdir = mkpath(outdir)
+
+    # Guardrail: Check for inefficient use of BLAST on large datasets
+    if isfile(fasta)
+        input_size = filesize(fasta)
+        # Threshold: 5MB (approx 1000-2000 reads)
+        BLAST_EFFICIENCY_THRESHOLD = 5 * 1024 * 1024
+
+        if input_size > BLAST_EFFICIENCY_THRESHOLD
+            @warn """
+            Detected large input size ($(Base.format_bytes(input_size))) for BLASTn.
+            BLASTn scales linearly with query count and may be very slow for large datasets.
+
+            Recommendation: Consider using Mycelia.minimap_map or Mycelia.minimap_merge_map_and_split
+            for high-throughput mapping against large references.
+            """
+        end
+    end
+
     outfile = "$(outdir)/$(basename(fasta)).blastn.$(basename(blastdb)).$(task).txt"
     
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
