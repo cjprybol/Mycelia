@@ -102,6 +102,9 @@ Test.@testset "Hybrid Assembly Tools" begin
                 genome = BioSequences.randdnaseq(rng, 30_000)
                 Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("hybrid_ref", genome)])
 
+                chrom_size = length(genome)
+                plassembler_chrom_size = max(10_000, Int(floor(chrom_size * 0.8)))
+
                 illumina = Mycelia.simulate_illumina_reads(
                     fasta=ref_fasta,
                     coverage=10,
@@ -117,8 +120,9 @@ Test.@testset "Hybrid Assembly Tools" begin
 
                 long_reads_gz = Mycelia.simulate_nanopore_reads(
                     fasta=ref_fasta,
-                    quantity="10x",
-                    quiet=true
+                    quantity="12x",
+                    quiet=true,
+                    seed=101
                 )
                 long_reads = joinpath(dir, "hybrid_long.fq")
                 run(pipeline(`gunzip -c $(long_reads_gz)`, long_reads))
@@ -130,7 +134,7 @@ Test.@testset "Hybrid Assembly Tools" begin
                             long_reads,
                             illumina.forward_reads,
                             illumina.reverse_reads,
-                            length(genome);
+                            chrom_size;
                             sample_name="hybracter_sample",
                             outdir=outdir,
                             threads=threads
@@ -151,7 +155,7 @@ Test.@testset "Hybrid Assembly Tools" begin
                             long_reads,
                             illumina.forward_reads,
                             illumina.reverse_reads,
-                            length(genome);
+                            plassembler_chrom_size;
                             outdir=outdir,
                             threads=threads
                         )

@@ -253,6 +253,7 @@ Run metaSPAdes assembler for metagenomic short read assembly.
 - `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
 - `outdir::String`: Output directory path (default: "metaspades_output")
 - `k_list::String`: k-mer sizes to use (default: "21,33,55,77")
+- `only_assembler::Bool`: Skip read correction (default: false)
 
 # Returns
 Named tuple containing:
@@ -267,16 +268,19 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_metaspades(;fastq1, fastq2=nothing, outdir="metaspades_output", k_list="21,33,55,77", threads = get_default_threads())
+function run_metaspades(;fastq1, fastq2=nothing, outdir="metaspades_output", k_list="21,33,55,77", threads = get_default_threads(), only_assembler::Bool=false)
     Mycelia.add_bioconda_env("spades")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "contigs.fasta"))
+        cmd_args = ["metaspades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
+        only_assembler && push!(cmd_args, "--only-assembler")
         if isnothing(fastq2)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades metaspades.py -s $(fastq1) -o $(outdir) -k $(k_list) -t $(threads)`)
+            push!(cmd_args, "-s", fastq1)
         else
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades metaspades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(threads)`)
+            push!(cmd_args, "-1", fastq1, "-2", fastq2)
         end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades $(cmd_args)`)
     end
     return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"), graph=joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
 end
@@ -291,6 +295,7 @@ Run SPAdes assembler for single genome isolate assembly.
 - `fastq2::String`: Path to second paired-end FASTQ file (optional for single-end)
 - `outdir::String`: Output directory path (default: "spades_output")
 - `k_list::String`: k-mer sizes to use (default: "21,33,55,77")
+- `only_assembler::Bool`: Skip read correction (default: false)
 
 # Returns
 Named tuple containing:
@@ -306,16 +311,19 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,33,55,77", threads = get_default_threads())
+function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,33,55,77", threads = get_default_threads(), only_assembler::Bool=false)
     Mycelia.add_bioconda_env("spades")
     mkpath(outdir)
     
     if !isfile(joinpath(outdir, "contigs.fasta"))
+        cmd_args = ["spades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
+        only_assembler && push!(cmd_args, "--only-assembler")
         if isnothing(fastq2)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -s $(fastq1) -o $(outdir) -k $(k_list) -t $(threads)`)
+            push!(cmd_args, "-s", fastq1)
         else
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades spades.py -1 $(fastq1) -2 $(fastq2) -o $(outdir) -k $(k_list) -t $(threads)`)
+            push!(cmd_args, "-1", fastq1, "-2", fastq2)
         end
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades $(cmd_args)`)
     end
     return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"), graph=joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
 end
@@ -1588,6 +1596,15 @@ Run HyLight for hybrid strain-resolved metagenomic assembly.
 - `long_reads::String`: Path to long read FASTQ file
 - `outdir::String`: Output directory path (default: "hylight_output")
 - `threads::Int`: Number of threads to use (default: `get_default_threads()`)
+- `nsplit::Union{Nothing,Int}`: Number of split input chunks (default: nothing)
+- `min_identity::Union{Nothing,Float64}`: Minimum overlap identity (default: nothing)
+- `min_ovlp_len::Union{Nothing,Int}`: Minimum overlap length (default: nothing)
+- `size::Union{Nothing,Int}`: Max cluster size for short reads (default: nothing)
+- `max_tip_len::Union{Nothing,Int}`: Max tip length (default: nothing)
+- `insert_size::Union{Nothing,Int}`: Short-read insert size (default: nothing)
+- `average_read_len::Union{Nothing,Int}`: Short-read average length (default: nothing)
+- `corrected::Bool`: Whether reads are already corrected (default: false)
+- `low_q::Bool`: Whether short reads are low quality (default: false)
 
 # Returns
 Named tuple containing:
@@ -1599,10 +1616,23 @@ Named tuple containing:
 - Implements "cross hybrid" mutual support strategy for strain resolution
 - Separates closely related strains in metagenomic samples
 - Automatically creates and uses a conda environment with hylight
+- Concatenates paired short-read inputs to match HyLight's single-file interface
 - Utilizes requested CPU threads for HyLight run
 - Skips assembly if output directory already exists
 """
-function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::String; outdir::String="hylight_output", threads = get_default_threads())
+function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::String;
+    outdir::String="hylight_output",
+    threads = get_default_threads(),
+    nsplit::Union{Nothing,Int}=nothing,
+    min_identity::Union{Nothing,Float64}=nothing,
+    min_ovlp_len::Union{Nothing,Int}=nothing,
+    size::Union{Nothing,Int}=nothing,
+    max_tip_len::Union{Nothing,Int}=nothing,
+    insert_size::Union{Nothing,Int}=nothing,
+    average_read_len::Union{Nothing,Int}=nothing,
+    corrected::Bool=false,
+    low_q::Bool=false
+)
     isfile(short_reads_1) || error("Short read 1 file not found: $(short_reads_1)")
     isfile(short_reads_2) || error("Short read 2 file not found: $(short_reads_2)")
     isfile(long_reads) || error("Long read file not found: $(long_reads)")
@@ -1610,11 +1640,38 @@ function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::S
     Mycelia.add_bioconda_env("hylight")
     mkpath(outdir)
     
+    # HyLight expects a single short-read FASTQ; combine paired inputs.
+    short_reads = joinpath(outdir, "short_reads.fq")
+    open(short_reads, "w") do io
+        for path in (short_reads_1, short_reads_2)
+            open(path, "r") do input
+                Base.copyto!(io, input)
+            end
+        end
+    end
+
     strain_assemblies = joinpath(outdir, "strain_assemblies")
     
     if !isdir(strain_assemblies)
         # Run HyLight assembly
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hylight hylight -1 $(short_reads_1) -2 $(short_reads_2) -l $(long_reads) -o $(outdir) -t $(threads)`)
+        cmd_args = [
+            "hylight",
+            "-s", short_reads,
+            "-l", long_reads,
+            "-o", outdir,
+            "-t", string(threads)
+        ]
+        corrected && push!(cmd_args, "--corrected")
+        low_q && push!(cmd_args, "--low_q")
+        isnothing(nsplit) || push!(cmd_args, "--nsplit", string(nsplit))
+        isnothing(min_identity) || push!(cmd_args, "--min_identity", string(min_identity))
+        isnothing(min_ovlp_len) || push!(cmd_args, "--min_ovlp_len", string(min_ovlp_len))
+        isnothing(size) || push!(cmd_args, "--size", string(size))
+        isnothing(max_tip_len) || push!(cmd_args, "--max_tip_len", string(max_tip_len))
+        isnothing(insert_size) || push!(cmd_args, "--insert_size", string(insert_size))
+        isnothing(average_read_len) || push!(cmd_args, "--average_read_len", string(average_read_len))
+
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hylight $(cmd_args)`)
     end
     
     return (;outdir, strain_assemblies)

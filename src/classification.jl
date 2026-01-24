@@ -821,7 +821,8 @@ end
 """
     run_metabuli_classify(;input_files, outdir, database_path=nothing,
                           seq_mode="1", threads=get_default_threads(),
-                          min_score=nothing, min_sp_score=nothing)
+                          min_score=nothing, min_sp_score=nothing,
+                          max_ram_gb=nothing)
 
 Run Metabuli for fast metagenomic classification.
 
@@ -836,6 +837,8 @@ Run Metabuli for fast metagenomic classification.
 - `threads::Int`: Number of threads (default: get_default_threads())
 - `min_score::Union{Nothing, Float64}`: Minimum score threshold
 - `min_sp_score::Union{Nothing, Float64}`: Minimum species-level score
+- `max_ram_gb::Union{Nothing, Int}`: Max RAM (GiB) for Metabuli. Defaults to an auto-detected
+  value capped at 128 GiB to avoid overcommitting memory on smaller machines.
 
 # Returns
 Named tuple with:
@@ -852,6 +855,30 @@ result = run_metabuli_classify(
 )
 ```
 """
+function _default_metabuli_max_ram_gb()::Int
+    total_memory = Int(Sys.total_memory())
+    available_memory = try
+        Int(Sys.free_memory())
+    catch
+        total_memory
+    end
+
+    slurm_threads = Mycelia._detect_slurm_cpu_allocation()
+    slurm_gpus = Mycelia._detect_slurm_gpu_allocation()
+    slurm_memory, _ = Mycelia._detect_slurm_memory_bytes(
+        cpu_allocation=slurm_threads,
+        gpu_allocation=slurm_gpus,
+        total_memory=total_memory,
+        available_memory=available_memory,
+    )
+
+    usable_memory = slurm_memory === nothing ? min(available_memory, total_memory) : min(slurm_memory, available_memory, total_memory)
+    safe_bytes = Int(floor(usable_memory * 0.90))
+    gib_bytes = 1024^3
+    safe_gb = max(1, Int(floor(safe_bytes / gib_bytes)))
+    return min(safe_gb, 128)
+end
+
 function run_metabuli_classify(;
         input_files::Vector{String},
         outdir::String,
@@ -859,7 +886,8 @@ function run_metabuli_classify(;
         seq_mode::String="1",
         threads::Int=get_default_threads(),
         min_score::Union{Nothing, Float64}=nothing,
-        min_sp_score::Union{Nothing, Float64}=nothing)
+        min_sp_score::Union{Nothing, Float64}=nothing,
+        max_ram_gb::Union{Nothing, Int}=nothing)
 
     # Validate inputs
     for f in input_files
@@ -872,6 +900,9 @@ function run_metabuli_classify(;
     end
     isdir(database_path) || error("Database directory not found: $(database_path)")
     seq_mode in ["1", "2", "3"] || error("Invalid seq_mode: $(seq_mode). Use '1' for single-end, '2' for paired-end interleaved, '3' for paired-end separate")
+
+    max_ram_value = max_ram_gb === nothing ? Mycelia._default_metabuli_max_ram_gb() : max_ram_gb
+    max_ram_value > 0 || error("max_ram_gb must be positive (got $(max_ram_value)).")
 
     Mycelia.add_bioconda_env("metabuli")
     mkpath(outdir)
@@ -890,7 +921,8 @@ function run_metabuli_classify(;
             outdir,
             job_id,
             "--seq-mode", seq_mode,
-            "--threads", string(threads)
+            "--threads", string(threads),
+            "--max-ram", string(max_ram_value)
         ]
 
         if !isnothing(min_score)

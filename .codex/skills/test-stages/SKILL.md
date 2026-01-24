@@ -64,6 +64,7 @@ julia --project=. test/jet.jl
 
 - **NEVER disable tests because functionality is broken** - fix the implementation first
 - Use `Test.@test_skip` ONLY for explicitly planned but unimplemented features
+- When debugging tests gated by environment flags (for example `MYCELIA_RUN_EXTERNAL`), enable them by default unless the user explicitly opts out
 - External tool tests must run with `MYCELIA_RUN_EXTERNAL=true` without extra flags
 - Use simulated inputs and default database paths where possible
 - Extended tutorials/benchmarks are opt-in; note runtime or external-tool requirements
