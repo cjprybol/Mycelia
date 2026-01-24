@@ -211,8 +211,6 @@ include_all_tests(joinpath(@__DIR__, "6_annotation"))
 #     include(joinpath(@__DIR__, file))
 # end
 
-
-
 # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
 include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 # for file in (

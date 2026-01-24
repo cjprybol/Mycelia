@@ -583,7 +583,7 @@ end
                           read_platform::Symbol=:illumina,
                           precision_mode::Bool=true,
                           threads::Int=Threads.nthreads(),
-                          max_ram_gb::Int=128,
+                          max_ram_gb=nothing,
                           additional_args::Vector{String}=String[],
                           force::Bool=false)
 
@@ -595,6 +595,9 @@ exist unless `force=true`.
 When `dbdir` is not provided, uses `METABULI_DB`/`METABULI_DB_PATH` or auto-downloads
 the configured database under `METABULI_DB_ROOT` (default: `$(Mycelia.DEFAULT_METABULI_DB_PATH)`).
 Set `METABULI_DB_NAME` to choose a named download (default: `$(Mycelia.DEFAULT_METABULI_DB_NAME)`).
+
+`max_ram_gb` defaults to an auto-detected value capped at 128 GiB to avoid
+overcommitting memory on smaller machines.
 """
 function run_metabuli_classify(reads1::AbstractString;
         reads2::Union{Nothing,AbstractString}=nothing,
@@ -604,7 +607,7 @@ function run_metabuli_classify(reads1::AbstractString;
         read_platform::Symbol=:illumina,
         precision_mode::Bool=true,
         threads::Int=Threads.nthreads(),
-        max_ram_gb::Int=128,
+        max_ram_gb::Union{Nothing, Int}=nothing,
         additional_args::Vector{String}=String[],
         force::Bool=false)
 
@@ -632,6 +635,9 @@ function run_metabuli_classify(reads1::AbstractString;
         report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
         return MetabuliResult(classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
     end
+
+    max_ram_value = max_ram_gb === nothing ? Mycelia._default_metabuli_max_ram_gb() : max_ram_gb
+    max_ram_value > 0 || error("max_ram_gb must be positive (got $(max_ram_value)).")
 
     Mycelia.add_bioconda_env("metabuli")
 
@@ -664,7 +670,7 @@ function run_metabuli_classify(reads1::AbstractString;
         end
     end
 
-    append!(cmd_args, ["--threads", string(threads), "--max-ram", string(max_ram_gb)])
+    append!(cmd_args, ["--threads", string(threads), "--max-ram", string(max_ram_value)])
     append!(cmd_args, additional_args)
 
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli $cmd_args`
