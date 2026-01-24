@@ -147,8 +147,8 @@ function long_to_relational_matrix(
     b_to_idx = Dict(b => i for (i, b) in enumerate(entity_b_ids))
 
     ## Initialize matrix with missing values
-    T = typeof(missing_value)
-    matrix = fill(T(missing_value), n_a, n_b)
+    T = promote_type(eltype(grouped._agg_value), typeof(missing_value))
+    matrix = fill(convert(T, missing_value), n_a, n_b)
 
     ## Fill matrix
     n_filled = 0
@@ -165,7 +165,7 @@ function long_to_relational_matrix(
 
         i = a_to_idx[a_id]
         j = b_to_idx[b_id]
-        matrix[i, j] = T(val)
+        matrix[i, j] = convert(T, val)
         n_filled += 1
     end
 

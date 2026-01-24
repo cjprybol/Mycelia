@@ -853,7 +853,7 @@ function gower_distance(
         ranges = zeros(Float64, n_features)
         for j in 1:n_features
             if feature_types[j] == :numeric
-                vals = filter(x -> !isnan(x) && !ismissing(x), matrix[:, j])
+                vals = filter(x -> !ismissing(x) && !(x isa Number && isnan(x)), matrix[:, j])
                 if isempty(vals)
                     ranges[j] = 1.0  ## No data for this feature
                 else
