@@ -1642,12 +1642,10 @@ function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::S
     
     # HyLight expects a single short-read FASTQ; combine paired inputs.
     short_reads = joinpath(outdir, "short_reads.fq")
-    if !isfile(short_reads)
-        open(short_reads, "w") do io
-            for path in (short_reads_1, short_reads_2)
-                open(path, "r") do input
-                    write(io, read(input))
-                end
+    open(short_reads, "w") do io
+        for path in (short_reads_1, short_reads_2)
+            open(path, "r") do input
+                Base.copyto!(io, input)
             end
         end
     end
