@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Relational Clustering · Mycelia</title><meta name="title" content="Relational Clustering · Mycelia"/><meta property="og:title" content="Relational Clustering · Mycelia"/><meta property="twitter:title" content="Relational Clustering · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Step 4b: Graph Type Tutorials</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs</a></li><li><a class="tocitem" href="../09_round_trip_02_ngram_to_string/">Round-Trip 02: N-gram to String</a></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round-Trip 03: FASTA Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round-Trip 04: K-mer to Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round-Trip 05: FASTQ Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round-Trip 06: Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Step 10: Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Step 11: Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Step 12: CoverM Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Step 13: Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 14a: Binning Workflow</a></li><li><a class="tocitem" href="../14_mash_classification/">Step 14b: Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Step 15: Round Trip Benchmarking</a></li><li><a class="tocitem" href="../16_un_corpus_ngram_vs_token_graphs/">Step 16: UN Corpus Ngram vs Token Graphs</a></li><li><a class="tocitem" href="../17_viroid_sketch_round_trip/">Step 17: Viroid Sketch Round Trip</a></li><li><a class="tocitem" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice</a></li><li class="is-active"><a class="tocitem" href>Relational Clustering</a><ul class="internal"><li><a class="tocitem" href="#Learning-Objectives"><span>Learning Objectives</span></a></li><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Part-1:-Understanding-Relational-Data"><span>Part 1: Understanding Relational Data</span></a></li><li><a class="tocitem" href="#Part-2:-Constructing-a-RelationalMatrix"><span>Part 2: Constructing a RelationalMatrix</span></a></li><li><a class="tocitem" href="#Part-3:-Computing-Pairwise-Distances"><span>Part 3: Computing Pairwise Distances</span></a></li><li><a class="tocitem" href="#Part-4:-Handling-Missing-Distances"><span>Part 4: Handling Missing Distances</span></a></li><li><a class="tocitem" href="#Part-5:-Identifying-Optimal-Cluster-Count"><span>Part 5: Identifying Optimal Cluster Count</span></a></li><li><a class="tocitem" href="#Part-6:-Ranking-Cluster-Members"><span>Part 6: Ranking Cluster Members</span></a></li><li><a class="tocitem" href="#Part-7:-Cluster-Summary-Statistics"><span>Part 7: Cluster Summary Statistics</span></a></li><li><a class="tocitem" href="#Part-8:-Using-the-Complete-Pipeline"><span>Part 8: Using the Complete Pipeline</span></a></li><li><a class="tocitem" href="#Part-9:-Clustering-the-Other-Dimension"><span>Part 9: Clustering the Other Dimension</span></a></li><li><a class="tocitem" href="#Part-10:-Distance-Metric-Comparison-Notes"><span>Part 10: Distance Metric Comparison Notes</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li></ul></li><li><a class="tocitem" href="../conceptual_figures/">Conceptual Figures</a></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../references/">References</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Relational Clustering</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Relational Clustering</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/19_relational_clustering.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-19:-Relational-Clustering"><a class="docs-heading-anchor" href="#Tutorial-19:-Relational-Clustering">Tutorial 19: Relational Clustering</a><a id="Tutorial-19:-Relational-Clustering-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-19:-Relational-Clustering" title="Permalink"></a></h1><p>This tutorial demonstrates how to cluster entities based on their relationships with other entities. This is useful for phenotypic clustering where entities are characterized by their interaction profiles with a set of features or targets.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will understand:</p><ul><li>How to construct a RelationalMatrix from tabular data</li><li>Distance metrics for relational data with missing values (Gower, Euclidean, etc.)</li><li>How to impute missing pairwise distances</li><li>How to identify optimal cluster counts using silhouette analysis</li><li>How to rank entities within clusters by centrality (medoid identification)</li><li>How to interpret clustering results and generate prioritized entity lists</li></ul><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><p>From the Mycelia base directory, convert this tutorial to a notebook:</p><pre><code class="language-bash hljs">julia --project=. -e &#39;import Literate; Literate.notebook(&quot;tutorials/19_relational_clustering.jl&quot;, &quot;tutorials/notebooks&quot;, execute=false)&#39;</code></pre><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import Mycelia
+import DataFrames
+import Random
+import Statistics
+import Distances
+
+Random.seed!(42)
+
+println(&quot;=&quot; ^ 60)
+println(&quot;Tutorial 19: Relational Clustering&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h2 id="Part-1:-Understanding-Relational-Data"><a class="docs-heading-anchor" href="#Part-1:-Understanding-Relational-Data">Part 1: Understanding Relational Data</a><a id="Part-1:-Understanding-Relational-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Part-1:-Understanding-Relational-Data" title="Permalink"></a></h2><p>Relational data captures measurements between two types of entities. This is a common pattern in many biological and scientific domains:</p><ul><li>Interaction assays: Entity A tested against Entity B</li><li>Host range profiles: Samples characterized by their responses to a panel</li><li>Drug susceptibility: Compounds tested against pathogen isolates</li><li>Gene expression: Genes measured across experimental conditions</li></ul><p>The key insight is that we can cluster Entity A based on their profiles across Entity B (or vice versa).</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 1: Understanding Relational Data&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h3 id="Create-Example-Data"><a class="docs-heading-anchor" href="#Create-Example-Data">Create Example Data</a><a id="Create-Example-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Create-Example-Data" title="Permalink"></a></h3><p>We&#39;ll simulate an interaction dataset for demonstration. This could represent any entity-entity measurement scenario.</p><pre><code class="language-julia hljs"># Simulate 20 samples tested against 15 features
+n_samples = 20
+n_features = 15
+
+# Create long-format data (typical experimental output)
+long_data = DataFrames.DataFrame(
+    sample_id = String[],
+    feature_id = String[],
+    measurement = Float64[]
+)
+
+Random.seed!(42)
+
+# Generate data with underlying cluster structure
+# Samples 1-7: Profile Type A (high response on features 1-5)
+# Samples 8-14: Profile Type B (high response on features 6-10)
+# Samples 15-20: Profile Type C (high response on features 11-15)
+
+for s in 1:n_samples
+    for f in 1:n_features
+        # Simulate some missing data (15% not tested)
+        if rand() &lt; 0.15
+            continue
+        end
+
+        # Generate measurement based on cluster membership
+        if s &lt;= 7
+            # Profile Type A: high on features 1-5
+            measurement = f &lt;= 5 ? (0.7 + 0.3 * rand()) : (0.0 + 0.15 * rand())
+        elseif s &lt;= 14
+            # Profile Type B: high on features 6-10
+            measurement = 6 &lt;= f &lt;= 10 ? (0.6 + 0.4 * rand()) : (0.0 + 0.1 * rand())
+        else
+            # Profile Type C: high on features 11-15
+            measurement = f &gt;= 11 ? (0.5 + 0.5 * rand()) : (0.05 + 0.1 * rand())
+        end
+
+        push!(long_data, (
+            sample_id = &quot;Sample_$(lpad(s, 2, &#39;0&#39;))&quot;,
+            feature_id = &quot;Feature_$(lpad(f, 2, &#39;0&#39;))&quot;,
+            measurement = round(measurement, digits=3)
+        ))
+    end
+end
+
+println(&quot;\nGenerated $(DataFrames.nrow(long_data)) measurements&quot;)
+println(&quot;This simulates $n_samples samples tested against $n_features features&quot;)
+println(&quot;\nPreview of long-format data:&quot;)
+println(first(long_data, 10))</code></pre><h2 id="Part-2:-Constructing-a-RelationalMatrix"><a class="docs-heading-anchor" href="#Part-2:-Constructing-a-RelationalMatrix">Part 2: Constructing a RelationalMatrix</a><a id="Part-2:-Constructing-a-RelationalMatrix-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Constructing-a-RelationalMatrix" title="Permalink"></a></h2><p>Convert long-format data to a matrix representation using <code>long_to_relational_matrix</code>. This function handles:</p><ul><li>Automatic detection of unique entities</li><li>Aggregation of duplicate measurements (median by default)</li><li>Missing value representation (NaN by default)</li></ul><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 2: RelationalMatrix Construction&quot;)
+println(&quot;=&quot; ^ 60)
+
+rm = Mycelia.long_to_relational_matrix(
+    long_data,
+    :sample_id,      ## Column containing row entity IDs
+    :feature_id,     ## Column containing column entity IDs
+    :measurement;    ## Column containing values
+    entity_a_name = &quot;sample&quot;,
+    entity_b_name = &quot;feature&quot;,
+    measurement_name = &quot;response&quot;
+)
+
+# Get summary statistics
+stats = Mycelia.summarize_relational_matrix(rm)
+
+println(&quot;\nMatrix coverage: $(stats.pct_filled)% of cells have values&quot;)
+println(&quot;Missing $(stats.n_missing_values) measurements out of $(stats.n_total_cells) total&quot;)</code></pre><h2 id="Part-3:-Computing-Pairwise-Distances"><a class="docs-heading-anchor" href="#Part-3:-Computing-Pairwise-Distances">Part 3: Computing Pairwise Distances</a><a id="Part-3:-Computing-Pairwise-Distances-1"></a><a class="docs-heading-anchor-permalink" href="#Part-3:-Computing-Pairwise-Distances" title="Permalink"></a></h2><p>To cluster samples, we need to compute pairwise distances between their profiles. Mycelia supports several distance metrics:</p><ul><li><strong>Euclidean</strong>: Standard L2 distance, sensitive to magnitude</li><li><strong>Cosine</strong>: Angular distance, invariant to magnitude</li><li><strong>Jaccard</strong>: For binary presence/absence data</li><li><strong>Gower</strong>: Handles missing values natively, works with mixed types</li></ul><p>Gower distance is particularly useful for relational data because it:</p><ol><li>Computes partial distances using only shared (non-missing) features</li><li>Normalizes each feature by its range</li><li>Returns NaN when insufficient features are shared</li></ol><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 3: Pairwise Distance Computation&quot;)
+println(&quot;=&quot; ^ 60)
+
+# Extract the matrix (samples as rows, features as columns)
+profile_matrix = Mycelia.Matrix(rm)
+println(&quot;\nProfile matrix shape: $(size(profile_matrix))&quot;)
+
+# Compute Gower distance (handles NaN automatically)
+gower_dist = Mycelia.gower_distance(profile_matrix; min_shared_features=3)
+
+# Check how many pairs have valid distances
+validation = Mycelia.validate_distance_matrix(gower_dist)
+println(&quot;\nDistance matrix validation:&quot;)
+println(&quot;  Valid: $(validation.is_valid)&quot;)
+println(&quot;  Missing pairs: $(validation.n_missing_pairs) out of $(n_samples * (n_samples-1) ÷ 2)&quot;)</code></pre><h2 id="Part-4:-Handling-Missing-Distances"><a class="docs-heading-anchor" href="#Part-4:-Handling-Missing-Distances">Part 4: Handling Missing Distances</a><a id="Part-4:-Handling-Missing-Distances-1"></a><a class="docs-heading-anchor-permalink" href="#Part-4:-Handling-Missing-Distances" title="Permalink"></a></h2><p>When some sample pairs don&#39;t have enough shared features, their distance is NaN. Before clustering, we need to impute these missing values.</p><p>Available imputation methods:</p><ul><li><code>IMPUTE_MAX</code>: Use theoretical maximum (1.0 for normalized distances)</li><li><code>IMPUTE_MAX_OBSERVED</code>: Use the maximum observed distance</li><li><code>IMPUTE_MEDIAN</code>: Use the median of observed distances</li><li><code>IMPUTE_MEAN</code>: Use the mean of observed distances</li></ul><p><code>IMPUTE_MAX_OBSERVED</code> is often a good default: it treats pairs with insufficient data as &quot;maximally different within the observed range&quot;.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 4: Distance Imputation&quot;)
+println(&quot;=&quot; ^ 60)
+
+if validation.has_missing
+    println(&quot;\nImputing $(validation.n_missing_pairs) missing distance pairs...&quot;)
+
+    # Impute using maximum observed distance
+    imputed_dist = Mycelia.impute_distances(gower_dist; method=Mycelia.IMPUTE_MAX_OBSERVED)
+
+    # Verify imputation worked
+    validation_after = Mycelia.validate_distance_matrix(imputed_dist)
+    println(&quot;After imputation: $(validation_after.n_missing_pairs) missing pairs&quot;)
+else
+    imputed_dist = gower_dist
+    println(&quot;No missing distances to impute&quot;)
+end
+
+# Normalize to [0, 1] range
+normalized_dist = Mycelia.normalize_distance_matrix(imputed_dist)</code></pre><h2 id="Part-5:-Identifying-Optimal-Cluster-Count"><a class="docs-heading-anchor" href="#Part-5:-Identifying-Optimal-Cluster-Count">Part 5: Identifying Optimal Cluster Count</a><a id="Part-5:-Identifying-Optimal-Cluster-Count-1"></a><a class="docs-heading-anchor-permalink" href="#Part-5:-Identifying-Optimal-Cluster-Count" title="Permalink"></a></h2><p>Use silhouette analysis to find the optimal number of clusters. The silhouette score measures how similar each sample is to its own cluster compared to other clusters. Higher scores indicate better-defined clusters.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 5: Optimal Cluster Identification&quot;)
+println(&quot;=&quot; ^ 60)
+
+cluster_result = Mycelia.identify_optimal_number_of_clusters(
+    normalized_dist;
+    ks = 2:6,  ## Test 2 to 6 clusters
+    plot_backend = :cairomakie
+)
+
+println(&quot;\nSilhouette scores by k:&quot;)
+for (k, score) in zip(cluster_result.ks, cluster_result.silhouette_scores)
+    marker = k == cluster_result.optimal_number_of_clusters ? &quot; &lt;-- optimal&quot; : &quot;&quot;
+    println(&quot;  k=$k: $(round(score, digits=3))$marker&quot;)
+end
+
+optimal_k = cluster_result.optimal_number_of_clusters
+assignments = cluster_result.assignments
+
+println(&quot;\nOptimal number of clusters: $optimal_k&quot;)
+
+# Show cluster sizes
+cluster_sizes = [count(==(i), assignments) for i in 1:optimal_k]
+println(&quot;Cluster sizes: $cluster_sizes&quot;)</code></pre><h2 id="Part-6:-Ranking-Cluster-Members"><a class="docs-heading-anchor" href="#Part-6:-Ranking-Cluster-Members">Part 6: Ranking Cluster Members</a><a id="Part-6:-Ranking-Cluster-Members-1"></a><a class="docs-heading-anchor-permalink" href="#Part-6:-Ranking-Cluster-Members" title="Permalink"></a></h2><p>Within each cluster, identify the most representative sample (medoid) and rank all members by their distance to the medoid.</p><p>The <strong>medoid</strong> is the sample that minimizes the sum of distances to all other cluster members. This is more robust than the centroid for non-Euclidean distances.</p><p>Rankings help prioritize samples: rank 1 is the best representative, rank 2 is a good backup, etc.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 6: Cluster Member Ranking&quot;)
+println(&quot;=&quot; ^ 60)
+
+entity_ids = Mycelia.entity_a_ids(rm)
+
+rankings = Mycelia.rank_cluster_members(
+    normalized_dist,
+    assignments,
+    entity_ids;
+    metric_type = :distance
+)
+
+# Convert to DataFrame for easy viewing
+rankings_df = Mycelia.rankings_to_dataframe(rankings)
+
+println(&quot;\nFull rankings table:&quot;)
+println(rankings_df)
+
+# Show medoids (cluster representatives)
+println(&quot;\n&quot; * &quot;-&quot; ^ 40)
+println(&quot;Cluster Representatives (Medoids):&quot;)
+println(&quot;-&quot; ^ 40)
+medoids_df = DataFrames.filter(row -&gt; row.is_medoid, rankings_df)
+for row in DataFrames.eachrow(medoids_df)
+    println(&quot;  Cluster $(row.cluster_id): $(row.entity_id)&quot;)
+end
+
+# Show backups
+println(&quot;\n&quot; * &quot;-&quot; ^ 40)
+println(&quot;Backup Representatives:&quot;)
+println(&quot;-&quot; ^ 40)
+backups_df = DataFrames.filter(row -&gt; row.is_backup, rankings_df)
+for row in DataFrames.eachrow(backups_df)
+    println(&quot;  Cluster $(row.cluster_id): $(row.entity_id) (dist to medoid: $(round(row.distance_to_medoid, digits=3)))&quot;)
+end</code></pre><h2 id="Part-7:-Cluster-Summary-Statistics"><a class="docs-heading-anchor" href="#Part-7:-Cluster-Summary-Statistics">Part 7: Cluster Summary Statistics</a><a id="Part-7:-Cluster-Summary-Statistics-1"></a><a class="docs-heading-anchor-permalink" href="#Part-7:-Cluster-Summary-Statistics" title="Permalink"></a></h2><p>Generate summary statistics for each cluster including:</p><ul><li>Number of members</li><li>Cluster diameter (maximum intra-cluster distance)</li><li>Average intra-cluster distance (cohesion)</li></ul><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 7: Cluster Summary Statistics&quot;)
+println(&quot;=&quot; ^ 60)
+
+summary_df = Mycelia.cluster_summary(rankings, normalized_dist)
+
+println(&quot;\nCluster Summary:&quot;)
+println(summary_df)
+
+println(&quot;\nInterpretation:&quot;)
+for row in DataFrames.eachrow(summary_df)
+    println(&quot;  Cluster $(row.cluster_id):&quot;)
+    println(&quot;    - $(row.n_members) members, medoid: $(row.medoid_id)&quot;)
+    println(&quot;    - Diameter: $(round(row.diameter, digits=3)) (max spread)&quot;)
+    println(&quot;    - Avg cohesion: $(round(row.avg_intra_distance, digits=3))&quot;)
+end</code></pre><h2 id="Part-8:-Using-the-Complete-Pipeline"><a class="docs-heading-anchor" href="#Part-8:-Using-the-Complete-Pipeline">Part 8: Using the Complete Pipeline</a><a id="Part-8:-Using-the-Complete-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Part-8:-Using-the-Complete-Pipeline" title="Permalink"></a></h2><p>For convenience, all steps can be run with a single function call: <code>relational_clustering_pipeline</code></p><p>This function:</p><ol><li>Extracts the profile matrix from the RelationalMatrix</li><li>Computes pairwise distances with the specified metric</li><li>Imputes missing distances</li><li>Identifies optimal cluster count via silhouette analysis</li><li>Ranks cluster members by centrality</li><li>Returns all results in a named tuple</li></ol><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 8: Full Pipeline&quot;)
+println(&quot;=&quot; ^ 60)
+
+# Run the complete pipeline
+# Note: Using Gower distance because our data has missing values.
+# Gower handles NaN natively by computing partial distances.
+# Euclidean/Cosine would produce NaN for any pair with shared missing features.
+pipeline_result = Mycelia.relational_clustering_pipeline(
+    rm;
+    cluster_by = :entity_a,       ## Cluster samples (rows)
+    distance_metric = :gower,     ## Best for data with missing values
+    imputation = :max_observed,
+    ks = 2:6,
+    plot_backend = :cairomakie
+)
+
+println(&quot;\nPipeline Results Summary:&quot;)
+println(&quot;  Optimal k: $(pipeline_result.optimal_k)&quot;)
+println(&quot;  Rankings DataFrame: $(DataFrames.nrow(pipeline_result.rankings_df)) rows&quot;)
+println(&quot;  Summary DataFrame: $(DataFrames.nrow(pipeline_result.summary_df)) clusters&quot;)</code></pre><h2 id="Part-9:-Clustering-the-Other-Dimension"><a class="docs-heading-anchor" href="#Part-9:-Clustering-the-Other-Dimension">Part 9: Clustering the Other Dimension</a><a id="Part-9:-Clustering-the-Other-Dimension-1"></a><a class="docs-heading-anchor-permalink" href="#Part-9:-Clustering-the-Other-Dimension" title="Permalink"></a></h2><p>We can also cluster features (entity_b) based on their sample profiles. This is useful when you want to identify groups of features that behave similarly across samples.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 9: Clustering Features&quot;)
+println(&quot;=&quot; ^ 60)
+
+feature_result = Mycelia.relational_clustering_pipeline(
+    rm;
+    cluster_by = :entity_b,  ## Cluster features (columns)
+    distance_metric = :gower, ## Handles missing values
+    ks = 2:5,
+    plot_backend = :cairomakie
+)
+
+println(&quot;\nFeature Clustering Results:&quot;)
+println(&quot;  Optimal k: $(feature_result.optimal_k)&quot;)
+println(feature_result.summary_df)</code></pre><h2 id="Part-10:-Distance-Metric-Comparison-Notes"><a class="docs-heading-anchor" href="#Part-10:-Distance-Metric-Comparison-Notes">Part 10: Distance Metric Comparison Notes</a><a id="Part-10:-Distance-Metric-Comparison-Notes-1"></a><a class="docs-heading-anchor-permalink" href="#Part-10:-Distance-Metric-Comparison-Notes" title="Permalink"></a></h2><p>Different distance metrics are appropriate for different data types:</p><ul><li><strong>Gower</strong>: Best for data with missing values (handles NaN natively)</li><li><strong>Euclidean</strong>: Standard distance, but produces NaN if any feature is missing</li><li><strong>Cosine</strong>: Angular similarity, also produces NaN with missing values</li><li><strong>Jaccard</strong>: For binary presence/absence data</li></ul><p>Since our data has ~15% missing values, Gower is the appropriate choice. For complete data without missing values, all metrics would work.</p><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 10: Distance Metric Notes&quot;)
+println(&quot;=&quot; ^ 60)
+
+println(&quot;\nMetric Selection Guide:&quot;)
+println(&quot;  - Gower: Best for data with missing values (used in this tutorial)&quot;)
+println(&quot;  - Euclidean: Standard L2 distance, requires complete data&quot;)
+println(&quot;  - Cosine: Angular similarity, requires complete data&quot;)
+println(&quot;  - Jaccard: For binary presence/absence data&quot;)
+
+println(&quot;\nWith ~$(round(100 - 100*DataFrames.nrow(long_data)/(n_samples*n_features), digits=1))% missing data,&quot;)
+println(&quot;Gower distance is the recommended choice for this dataset.&quot;)</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>In this tutorial, we learned how to:</p><ol><li><strong>Construct a RelationalMatrix</strong> from long-format experimental data</li><li><strong>Compute pairwise distances</strong> between entity profiles using various metrics</li><li><strong>Handle missing values</strong> with appropriate imputation strategies</li><li><strong>Identify optimal cluster count</strong> using silhouette analysis</li><li><strong>Rank cluster members</strong> to identify representatives (medoids) and backups</li><li><strong>Generate summary statistics</strong> for cluster interpretation</li><li><strong>Use the complete pipeline</strong> for end-to-end analysis</li></ol><p>Key takeaways:</p><ul><li>Gower distance is robust to missing values</li><li>Medoids are more robust than centroids for non-Euclidean distances</li><li>Silhouette analysis helps identify natural cluster structure</li><li>Rankings help prioritize entities for downstream applications</li></ul><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Tutorial Complete!&quot;)
+println(&quot;=&quot; ^ 60)
+println(&quot;\nKey functions demonstrated:&quot;)
+println(&quot;  - Mycelia.long_to_relational_matrix()&quot;)
+println(&quot;  - Mycelia.gower_distance()&quot;)
+println(&quot;  - Mycelia.impute_distances()&quot;)
+println(&quot;  - Mycelia.identify_optimal_number_of_clusters()&quot;)
+println(&quot;  - Mycelia.rank_cluster_members()&quot;)
+println(&quot;  - Mycelia.rankings_to_dataframe()&quot;)
+println(&quot;  - Mycelia.cluster_summary()&quot;)
+println(&quot;  - Mycelia.relational_clustering_pipeline()&quot;)
+
+nothing</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../18_advanced_assembly_theory_and_practice/">« Step 18: Advanced Assembly Theory and Practice</a><a class="docs-footer-nextpage" href="../conceptual_figures/">Conceptual Figures »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Saturday 24 January 2026 17:52">Saturday 24 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
