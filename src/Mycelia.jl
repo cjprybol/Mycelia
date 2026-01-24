@@ -166,6 +166,7 @@ remaining_files = [
     "busco-datasets.jl",
     "ncbi-datasets-cli.jl",
     "rclone.jl",
+    "relational-matrices.jl",
     "reference-databases.jl",
     "sentencepiece.jl",
     "sequence-comparison.jl",

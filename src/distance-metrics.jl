@@ -699,3 +699,432 @@ end
 #     end
 #     return d2_star_matrix, d2_star_norm_matrix
 # end
+
+
+# =============================================================================
+# Distance Matrix Imputation and Validation Functions
+# =============================================================================
+
+"""
+Imputation methods for handling missing values in distance calculations.
+
+- `IMPUTE_MAX`: Replace missing with theoretical maximum distance (1.0)
+- `IMPUTE_MAX_OBSERVED`: Replace with maximum observed non-missing distance
+- `IMPUTE_MEDIAN`: Replace with median of non-missing distances
+- `IMPUTE_MEAN`: Replace with mean of non-missing distances
+"""
+@enum ImputationMethod begin
+    IMPUTE_MAX
+    IMPUTE_MAX_OBSERVED
+    IMPUTE_MEDIAN
+    IMPUTE_MEAN
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Impute missing values (NaN, Inf) in a distance matrix.
+
+# Arguments
+- `distance_matrix::Matrix{Float64}`: Input distance matrix potentially containing NaN/Inf values
+- `method::ImputationMethod`: Imputation strategy (default: IMPUTE_MAX_OBSERVED)
+
+# Returns
+- `Matrix{Float64}`: Distance matrix with imputed values
+
+# Details
+The imputation is symmetric: the same value is used for D[i,j] and D[j,i].
+Diagonal values (self-distances) are always set to 0.0.
+"""
+function impute_distances(
+    distance_matrix::Matrix{Float64};
+    method::ImputationMethod = IMPUTE_MAX_OBSERVED
+)
+    result = copy(distance_matrix)
+    n = size(result, 1)
+
+    ## Identify missing values (NaN or Inf)
+    missing_mask = isnan.(result) .| isinf.(result)
+
+    if !any(missing_mask)
+        return result
+    end
+
+    ## Extract valid (non-missing, non-diagonal) values
+    valid_values = Float64[]
+    for i in 1:n
+        for j in (i+1):n
+            val = result[i, j]
+            if !isnan(val) && !isinf(val)
+                push!(valid_values, val)
+            end
+        end
+    end
+
+    if isempty(valid_values)
+        error("Cannot impute: all off-diagonal values are missing")
+    end
+
+    ## Compute fill value based on method
+    fill_value = if method == IMPUTE_MAX
+        1.0
+    elseif method == IMPUTE_MAX_OBSERVED
+        maximum(valid_values)
+    elseif method == IMPUTE_MEDIAN
+        Statistics.median(valid_values)
+    elseif method == IMPUTE_MEAN
+        Statistics.mean(valid_values)
+    end
+
+    ## Count imputed pairs
+    n_imputed = 0
+
+    ## Apply imputation symmetrically
+    for i in 1:n
+        for j in (i+1):n
+            if isnan(result[i, j]) || isinf(result[i, j])
+                result[i, j] = fill_value
+                result[j, i] = fill_value
+                n_imputed += 1
+            end
+        end
+    end
+
+    ## Ensure diagonal is zero
+    for i in 1:n
+        result[i, i] = 0.0
+    end
+
+    @info "Imputed $n_imputed NaN/Inf pairs with $(method) value: $(round(fill_value, digits=4))"
+
+    return result
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute Gower distance between rows of a matrix with missing value handling.
+
+Gower distance is the mean absolute difference normalized by feature ranges,
+computed only over features where both observations have non-missing values.
+
+# Arguments
+- `matrix::AbstractMatrix`: n_samples × n_features matrix (may contain NaN for missing values)
+- `feature_types::Union{Nothing, Vector{Symbol}}`: Type per feature (:numeric, :binary, :categorical).
+  Default: all :numeric
+- `feature_ranges::Union{Nothing, Vector{Float64}}`: Pre-computed ranges for numeric features.
+  Default: computed from data
+- `min_shared_features::Int`: Minimum shared non-missing features required (default: 1)
+
+# Returns
+- `Matrix{Float64}`: n_samples × n_samples distance matrix. NaN where insufficient shared features.
+
+# Properties
+- D[i,i] = 0 (diagonal is zero)
+- D[i,j] = D[j,i] (symmetric)
+- D[i,j] ∈ [0, 1] for valid pairs
+- D[i,j] = NaN if shared features < min_shared_features
+
+# Reference
+Gower, J. C. (1971). A general coefficient of similarity and some of its properties.
+Biometrics, 27(4), 857-871.
+"""
+function gower_distance(
+    matrix::AbstractMatrix;
+    feature_types::Union{Nothing, Vector{Symbol}} = nothing,
+    feature_ranges::Union{Nothing, Vector{Float64}} = nothing,
+    min_shared_features::Int = 1
+)
+    n_samples, n_features = size(matrix)
+
+    ## Default: all numeric features
+    if isnothing(feature_types)
+        feature_types = fill(:numeric, n_features)
+    end
+
+    if length(feature_types) != n_features
+        throw(ArgumentError("feature_types length ($(length(feature_types))) must match n_features ($n_features)"))
+    end
+
+    ## Compute ranges for numeric features if not provided
+    if isnothing(feature_ranges)
+        ranges = zeros(Float64, n_features)
+        for j in 1:n_features
+            if feature_types[j] == :numeric
+                vals = filter(x -> !isnan(x) && !ismissing(x), matrix[:, j])
+                if isempty(vals)
+                    ranges[j] = 1.0  ## No data for this feature
+                else
+                    r = maximum(vals) - minimum(vals)
+                    ranges[j] = r == 0.0 ? 1.0 : r  ## Avoid division by zero
+                end
+            else
+                ranges[j] = 1.0  ## Binary/categorical: range is 1
+            end
+        end
+    else
+        if length(feature_ranges) != n_features
+            throw(ArgumentError("feature_ranges length ($(length(feature_ranges))) must match n_features ($n_features)"))
+        end
+        ranges = feature_ranges
+    end
+
+    distance_matrix = zeros(Float64, n_samples, n_samples)
+
+    for i in 1:n_samples
+        for j in (i+1):n_samples
+            sum_dist = 0.0
+            count = 0
+
+            for k in 1:n_features
+                xi = matrix[i, k]
+                xj = matrix[j, k]
+
+                ## Skip if either is missing
+                xi_missing = ismissing(xi) || (xi isa Number && isnan(xi))
+                xj_missing = ismissing(xj) || (xj isa Number && isnan(xj))
+
+                if xi_missing || xj_missing
+                    continue
+                end
+
+                count += 1
+
+                if feature_types[k] == :numeric
+                    sum_dist += abs(xi - xj) / ranges[k]
+                else  ## :binary or :categorical
+                    sum_dist += (xi != xj) ? 1.0 : 0.0
+                end
+            end
+
+            if count >= min_shared_features
+                distance_matrix[i, j] = sum_dist / count
+            else
+                distance_matrix[i, j] = NaN
+            end
+            distance_matrix[j, i] = distance_matrix[i, j]
+        end
+    end
+
+    return distance_matrix
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert distances to rank-normalized values.
+
+Ranks are normalized to [0, 1] where 0 is the smallest distance and 1 is the largest.
+
+# Arguments
+- `distance_matrix::Matrix{Float64}`: Input symmetric distance matrix
+- `handle_ties::Symbol`: How to handle ties (:average, :min, :max). Default: :average
+
+# Returns
+- `Matrix{Float64}`: Rank-normalized distance matrix with values in [0, 1]
+"""
+function normalize_ranks(
+    distance_matrix::Matrix{Float64};
+    handle_ties::Symbol = :average
+)
+    n = size(distance_matrix, 1)
+    @assert size(distance_matrix, 2) == n "Distance matrix must be square"
+
+    ## Extract upper triangle values and their indices
+    upper_indices = [(i, j) for i in 1:n for j in (i+1):n]
+    values = [distance_matrix[i, j] for (i, j) in upper_indices]
+
+    ## Handle NaN values: they stay as NaN in the output
+    valid_mask = .!isnan.(values)
+
+    if !any(valid_mask)
+        ## All NaN: return as-is with zeros on diagonal
+        result = copy(distance_matrix)
+        for i in 1:n
+            result[i, i] = 0.0
+        end
+        return result
+    end
+
+    ## Compute ranks for valid values
+    valid_values = values[valid_mask]
+    valid_indices = findall(valid_mask)
+
+    ## Use StatsBase for proper rank computation with tie handling
+    ranked = if handle_ties == :average
+        StatsBase.tiedrank(valid_values)
+    elseif handle_ties == :min
+        StatsBase.competerank(valid_values)
+    elseif handle_ties == :max
+        ## For max rank, compute compete rank and adjust
+        n_valid = length(valid_values)
+        sorted_order = sortperm(valid_values)
+        ranks = zeros(n_valid)
+        i = 1
+        while i <= n_valid
+            j = i
+            while j < n_valid && valid_values[sorted_order[j]] == valid_values[sorted_order[j+1]]
+                j += 1
+            end
+            ## All tied values get the maximum rank in the group
+            for k in i:j
+                ranks[sorted_order[k]] = Float64(j)
+            end
+            i = j + 1
+        end
+        ranks
+    else
+        throw(ArgumentError("handle_ties must be :average, :min, or :max"))
+    end
+
+    ## Normalize ranks to [0, 1]
+    max_rank = maximum(ranked)
+    min_rank = minimum(ranked)
+    if max_rank == min_rank
+        normalized_ranks = fill(0.5, length(ranked))
+    else
+        normalized_ranks = (ranked .- min_rank) ./ (max_rank - min_rank)
+    end
+
+    ## Build result matrix
+    result = fill(NaN, n, n)
+
+    for (k, idx) in enumerate(valid_indices)
+        i, j = upper_indices[idx]
+        result[i, j] = normalized_ranks[k]
+        result[j, i] = normalized_ranks[k]
+    end
+
+    ## Diagonal is always 0
+    for i in 1:n
+        result[i, i] = 0.0
+    end
+
+    return result
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Validate properties of a distance matrix.
+
+# Arguments
+- `distance_matrix::Matrix{Float64}`: Input distance matrix
+- `check_symmetry::Bool`: Check if matrix is symmetric (default: true)
+- `check_diagonal::Bool`: Check if diagonal is zero (default: true)
+- `check_nonnegative::Bool`: Check if all values are non-negative (default: true)
+- `tolerance::Float64`: Tolerance for floating-point comparisons (default: 1e-10)
+
+# Returns
+- `NamedTuple`: Validation results with any violations
+
+# Example
+```julia
+D = [0.0 0.5 0.8; 0.5 0.0 0.3; 0.8 0.3 0.0]
+result = Mycelia.validate_distance_matrix(D)
+result.is_valid  # true
+```
+"""
+function validate_distance_matrix(
+    distance_matrix::Matrix{Float64};
+    check_symmetry::Bool = true,
+    check_diagonal::Bool = true,
+    check_nonnegative::Bool = true,
+    tolerance::Float64 = 1e-10
+)
+    n = size(distance_matrix, 1)
+
+    ## Check square
+    is_square = size(distance_matrix, 2) == n
+    if !is_square
+        return (
+            is_valid = false,
+            violations = ["Matrix is not square: $(size(distance_matrix))"],
+            n_samples = n,
+            has_missing = any(isnan, distance_matrix),
+            n_missing = count(isnan, distance_matrix)
+        )
+    end
+
+    violations = String[]
+
+    ## Check symmetry
+    is_symmetric = true
+    if check_symmetry
+        for i in 1:n
+            for j in (i+1):n
+                d_ij = distance_matrix[i, j]
+                d_ji = distance_matrix[j, i]
+                ## Both NaN is symmetric, otherwise compare values
+                if isnan(d_ij) && isnan(d_ji)
+                    continue
+                elseif isnan(d_ij) || isnan(d_ji) || abs(d_ij - d_ji) > tolerance
+                    is_symmetric = false
+                    push!(violations, "Matrix is not symmetric at ($i, $j): $(d_ij) != $(d_ji)")
+                    break
+                end
+            end
+            if !is_symmetric
+                break
+            end
+        end
+    end
+
+    ## Check diagonal
+    is_diag_zero = true
+    if check_diagonal
+        for i in 1:n
+            if abs(distance_matrix[i, i]) > tolerance
+                is_diag_zero = false
+                push!(violations, "Diagonal contains non-zero values at ($i, $i): $(distance_matrix[i, i])")
+                break
+            end
+        end
+    end
+
+    ## Check non-negative
+    is_nonneg = true
+    if check_nonnegative
+        for i in 1:n
+            for j in 1:n
+                val = distance_matrix[i, j]
+                if !isnan(val) && val < -tolerance
+                    is_nonneg = false
+                    push!(violations, "Matrix contains negative values at ($i, $j): $(val)")
+                    break
+                end
+            end
+            if !is_nonneg
+                break
+            end
+        end
+    end
+
+    ## Count NaN values
+    n_nan = count(isnan, distance_matrix)
+    ## Off-diagonal NaN pairs (each appears twice in the matrix)
+    n_nan_pairs = 0
+    for i in 1:n
+        for j in (i+1):n
+            if isnan(distance_matrix[i, j])
+                n_nan_pairs += 1
+            end
+        end
+    end
+
+    is_valid = is_square && (!check_symmetry || is_symmetric) &&
+               (!check_diagonal || is_diag_zero) && (!check_nonnegative || is_nonneg)
+
+    return (
+        is_valid = is_valid,
+        violations = violations,
+        n_samples = n,
+        has_missing = n_nan > 0,
+        n_missing = n_nan,
+        n_missing_pairs = n_nan_pairs
+    )
+end
