@@ -1078,7 +1078,7 @@ function select_diverse_representatives(
     
     # Stage 2: Fill remaining
     remaining_slots = n_total - length(selected_medoids)
-    
+
     if remaining_slots > 0
         all_candidates = collect(1:size(distance_matrix, 1))
         final_selected = greedy_maxmin_diversity(
@@ -1102,4 +1102,246 @@ function select_diverse_representatives(
         end
         return selected_medoids
     end
+end
+
+
+# =============================================================================
+# Cluster Ranking and Relational Clustering Pipeline
+# =============================================================================
+
+"""
+    ClusterRanking
+
+Ranking of entities within a cluster, including medoid and backup selections.
+
+# Fields
+- `cluster_id::Int`: Cluster identifier
+- `entity_indices::Vector{Int}`: All entity indices in this cluster
+- `entity_ids::Vector{String}`: Entity identifiers corresponding to indices
+- `medoid_index::Int`: Index of the cluster medoid (representative)
+- `backup_index::Union{Int, Nothing}`: Second-most diverse entity (backup representative)
+- `rankings::Vector{Int}`: Rank order of all entities (1 = medoid)
+- `intra_cluster_distances::Vector{Float64}`: Distance from each entity to medoid
+"""
+struct ClusterRanking
+    cluster_id::Int
+    entity_indices::Vector{Int}
+    entity_ids::Vector{String}
+    medoid_index::Int
+    backup_index::Union{Int, Nothing}
+    rankings::Vector{Int}
+    intra_cluster_distances::Vector{Float64}
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Rank members within each cluster by distance from the medoid.
+
+Uses existing `find_group_medoid()` and `find_second_most_diverse()` functions
+for medoid and backup selection.
+
+# Arguments
+- `distance_matrix::Matrix{Float64}`: Symmetric pairwise distance matrix
+- `cluster_assignments::Vector{Int}`: Cluster ID for each entity (1-indexed)
+- `entity_ids::Vector{String}`: Entity identifiers
+- `metric_type::Symbol`: `:distance` (0=identical) or `:similarity` (1=identical). Default: `:distance`
+
+# Returns
+- `Vector{ClusterRanking}`: Rankings for each cluster, sorted by cluster_id
+
+# Example
+```julia
+D = [0.0 0.1 0.5; 0.1 0.0 0.4; 0.5 0.4 0.0]
+assignments = [1, 1, 2]
+entity_ids = ["E1", "E2", "E3"]
+rankings = Mycelia.rank_cluster_members(D, assignments, entity_ids)
+```
+"""
+function rank_cluster_members(
+    distance_matrix::Matrix{Float64},
+    cluster_assignments::Vector{Int},
+    entity_ids::Vector{String};
+    metric_type::Symbol = :distance
+)
+    n_samples = size(distance_matrix, 1)
+
+    if length(cluster_assignments) != n_samples
+        throw(ArgumentError("Length of cluster_assignments ($(length(cluster_assignments))) must match matrix dimension ($n_samples)"))
+    end
+
+    if length(entity_ids) != n_samples
+        throw(ArgumentError("Length of entity_ids ($(length(entity_ids))) must match matrix dimension ($n_samples)"))
+    end
+
+    unique_clusters = sort(unique(cluster_assignments))
+    rankings = ClusterRanking[]
+
+    for cluster_id in unique_clusters
+        ## Get indices belonging to this cluster
+        cluster_indices = findall(==(cluster_id), cluster_assignments)
+        cluster_entity_ids = entity_ids[cluster_indices]
+
+        if length(cluster_indices) == 1
+            ## Single-member cluster: it's its own medoid
+            push!(rankings, ClusterRanking(
+                cluster_id,
+                cluster_indices,
+                cluster_entity_ids,
+                cluster_indices[1],
+                nothing,
+                [1],
+                [0.0]
+            ))
+            continue
+        end
+
+        ## Use existing find_group_medoid function
+        medoid_idx = find_group_medoid(distance_matrix, cluster_indices; metric_type=metric_type)
+
+        ## Use existing find_second_most_diverse function
+        backup_idx = find_second_most_diverse(distance_matrix, cluster_indices, medoid_idx; metric_type=metric_type)
+
+        ## Calculate distances from medoid to all cluster members
+        distances_to_medoid = [distance_matrix[idx, medoid_idx] for idx in cluster_indices]
+
+        ## Rank by distance (closest to medoid = rank 1)
+        rank_order = sortperm(distances_to_medoid)
+        rankings_vec = invperm(rank_order)
+
+        push!(rankings, ClusterRanking(
+            cluster_id,
+            cluster_indices,
+            cluster_entity_ids,
+            medoid_idx,
+            backup_idx,
+            rankings_vec,
+            distances_to_medoid
+        ))
+    end
+
+    ## Sort by cluster_id for consistent output
+    sort!(rankings, by=r -> r.cluster_id)
+
+    return rankings
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert cluster rankings to a DataFrame for analysis and export.
+
+# Arguments
+- `rankings::Vector{ClusterRanking}`: Cluster ranking results
+- `include_distances::Bool`: Include intra-cluster distances (default: true)
+
+# Returns
+- `DataFrames.DataFrame`: Table with columns:
+  - `cluster_id`: Cluster identifier
+  - `entity_id`: Entity identifier
+  - `entity_index`: Original matrix index
+  - `rank`: Rank within cluster (1 = medoid)
+  - `is_medoid`: Whether this entity is the cluster medoid
+  - `is_backup`: Whether this entity is the backup representative
+  - `distance_to_medoid`: Distance from entity to medoid (if include_distances=true)
+"""
+function rankings_to_dataframe(
+    rankings::Vector{ClusterRanking};
+    include_distances::Bool = true
+)
+    rows = NamedTuple[]
+
+    for cr in rankings
+        for (i, entity_id) in enumerate(cr.entity_ids)
+            entity_idx = cr.entity_indices[i]
+            row = (
+                cluster_id = cr.cluster_id,
+                entity_id = entity_id,
+                entity_index = entity_idx,
+                rank = cr.rankings[i],
+                is_medoid = entity_idx == cr.medoid_index,
+                is_backup = !isnothing(cr.backup_index) && entity_idx == cr.backup_index
+            )
+
+            if include_distances
+                row = merge(row, (distance_to_medoid = cr.intra_cluster_distances[i],))
+            end
+
+            push!(rows, row)
+        end
+    end
+
+    return DataFrames.DataFrame(rows)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate summary statistics for cluster rankings.
+
+# Arguments
+- `rankings::Vector{ClusterRanking}`: Cluster ranking results
+- `distance_matrix::Matrix{Float64}`: Original pairwise distance matrix
+
+# Returns
+- `DataFrames.DataFrame`: Summary with columns:
+  - `cluster_id`: Cluster identifier
+  - `n_members`: Number of entities in cluster
+  - `medoid_id`: Entity ID of the medoid
+  - `backup_id`: Entity ID of the backup (or missing)
+  - `diameter`: Maximum intra-cluster distance
+  - `avg_intra_distance`: Mean intra-cluster distance
+  - `max_distance_to_medoid`: Maximum distance from any member to medoid
+"""
+function cluster_summary(
+    rankings::Vector{ClusterRanking},
+    distance_matrix::Matrix{Float64}
+)
+    rows = NamedTuple[]
+
+    for cr in rankings
+        indices = cr.entity_indices
+        n_members = length(indices)
+
+        ## Find medoid entity ID
+        medoid_local_idx = findfirst(==(cr.medoid_index), indices)
+        medoid_id = cr.entity_ids[medoid_local_idx]
+
+        ## Find backup entity ID
+        backup_id = if isnothing(cr.backup_index)
+            missing
+        else
+            backup_local_idx = findfirst(==(cr.backup_index), indices)
+            isnothing(backup_local_idx) ? missing : cr.entity_ids[backup_local_idx]
+        end
+
+        ## Compute intra-cluster distances
+        intra_dists = Float64[]
+        for i in 1:(n_members-1)
+            for j in (i+1):n_members
+                d = distance_matrix[indices[i], indices[j]]
+                if !isnan(d)
+                    push!(intra_dists, d)
+                end
+            end
+        end
+
+        diameter = isempty(intra_dists) ? 0.0 : maximum(intra_dists)
+        avg_intra = isempty(intra_dists) ? 0.0 : Statistics.mean(intra_dists)
+
+        push!(rows, (
+            cluster_id = cr.cluster_id,
+            n_members = n_members,
+            medoid_id = medoid_id,
+            backup_id = backup_id,
+            diameter = diameter,
+            avg_intra_distance = avg_intra,
+            max_distance_to_medoid = maximum(cr.intra_cluster_distances)
+        ))
+    end
+
+    return DataFrames.DataFrame(rows)
 end
