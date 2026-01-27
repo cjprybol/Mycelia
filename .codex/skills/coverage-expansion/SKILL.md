@@ -20,14 +20,23 @@ Systematically expand test coverage for the Mycelia Julia package.
    export MYCELIA_RUN_ALL=true
    export MYCELIA_RUN_EXTERNAL=true
    ```
+   Coverage needs non-precompiled code for accurate line hits. Use `--compiled-modules=no`
+   (matches `ci/hpc/run_hpc_ci.sh`).
 
 ## Running Coverage Analysis
 
 ```bash
-# Full coverage with all tests enabled
-MYCELIA_RUN_ALL=true julia --project=. --code-coverage=user -e "import Pkg; Pkg.test()"
+# Full coverage with all tests enabled (matches HPC CI flags)
+MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true \
+  julia --project=. --compiled-modules=no \
+  -e "import Pkg; Pkg.test(coverage=true)"
 
 # Coverage files will be generated as src/*.jl.cov
+```
+
+Optional parity with HPC CI (skips Codecov upload):
+```bash
+ci/hpc/run_hpc_ci.sh --tests-only --no-codecov
 ```
 
 ## Analyzing Coverage
@@ -122,7 +131,8 @@ After adding tests, re-run coverage and compare:
 
 ```bash
 # Quick check of specific file coverage
-MYCELIA_RUN_ALL=true julia --project=. --code-coverage=user -e '
+MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true \
+  julia --project=. --compiled-modules=no -e '
     import Pkg; Pkg.test()
 ' && grep -c "^    0" src/utility-functions.jl.cov
 ```

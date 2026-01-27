@@ -53,8 +53,9 @@ MYCELIA_RUN_ALL=true julia --project=. -e "import Pkg; Pkg.test()"
 # External tool tests
 MYCELIA_RUN_EXTERNAL=true julia --project=. -e "import Pkg; Pkg.test()"
 
-# Coverage
-julia --project=. --code-coverage=user -e "import Pkg; Pkg.test()"
+# Coverage (disable precompilation for accurate line hits)
+MYCELIA_RUN_ALL=true MYCELIA_RUN_EXTERNAL=true \
+  julia --project=. --compiled-modules=no -e "import Pkg; Pkg.test(coverage=true)"
 
 # Static analysis
 julia --project=. test/jet.jl
