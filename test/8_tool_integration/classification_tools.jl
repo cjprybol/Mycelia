@@ -262,16 +262,16 @@ Test.@testset "Classification Tools Integration Tests" begin
     Test.@testset "Metabuli Integration" begin
 
         Test.@testset "Metabuli report parsing" begin
-            # Test parsing with mock report data (no external tools needed)
+            # Test parsing with actual Metabuli report format (no header row)
+            # Format: percentage, num_reads, num_direct_reads, rank, taxid, name
             temp_report = tempname()
 
-            # Create a realistic Metabuli report
+            # Create a realistic Metabuli report (no header, tab-separated)
             open(temp_report, "w") do io
-                write(io, "percentage\treads\ttaxReads\trank\ttaxID\tname\n")
-                write(io, "45.50\t1000\t455\tS\t562\tEscherichia coli\n")
-                write(io, "30.20\t1000\t302\tS\t632\tYersinia pestis\n")
-                write(io, "15.10\t1000\t151\tS\t287\tPseudomonas aeruginosa\n")
-                write(io, "9.20\t1000\t92\tU\t0\tunclassified\n")
+                write(io, "0.6970\t789\t789\tno rank\t0\tunclassified\n")
+                write(io, "99.3030\t112410\t1\tno rank\t1\troot\n")
+                write(io, "45.50\t1000\t455\tspecies\t562\tEscherichia coli\n")
+                write(io, "30.20\t800\t302\tspecies\t632\tYersinia pestis\n")
             end
 
             try
@@ -279,11 +279,72 @@ Test.@testset "Classification Tools Integration Tests" begin
 
                 Test.@test df isa DataFrames.DataFrame
                 Test.@test DataFrames.nrow(df) == 4
+
+                # Verify all expected columns exist
                 Test.@test :percentage in DataFrames.propertynames(df)
-                Test.@test :taxID in DataFrames.propertynames(df)
+                Test.@test :num_reads in DataFrames.propertynames(df)
+                Test.@test :num_direct_reads in DataFrames.propertynames(df)
+                Test.@test :rank in DataFrames.propertynames(df)
+                Test.@test :taxid in DataFrames.propertynames(df)
                 Test.@test :name in DataFrames.propertynames(df)
+
+                # Verify data types
+                Test.@test eltype(df.percentage) <: AbstractFloat
+                Test.@test eltype(df.num_reads) <: Integer
+                Test.@test eltype(df.num_direct_reads) <: Integer
+                Test.@test eltype(df.taxid) <: Integer
+                Test.@test eltype(df.rank) <: AbstractString
+                Test.@test eltype(df.name) <: AbstractString
+
+                # Verify specific values
+                Test.@test df.percentage[1] ≈ 0.6970
+                Test.@test df.num_reads[1] == 789
+                Test.@test df.taxid[3] == 562
+                Test.@test df.name[3] == "Escherichia coli"
             finally
                 rm(temp_report, force=true)
+            end
+        end
+
+        Test.@testset "Metabuli report vcat (combining multiple samples)" begin
+            # Test that multiple parsed reports can be combined with vcat
+            # This was the original bug: different samples had different "column names"
+            # because the parser was treating data rows as headers
+            temp_report1 = tempname()
+            temp_report2 = tempname()
+
+            # Create two different sample reports
+            open(temp_report1, "w") do io
+                write(io, "50.00\t500\t250\tspecies\t562\tEscherichia coli\n")
+                write(io, "30.00\t300\t150\tspecies\t632\tYersinia pestis\n")
+                write(io, "20.00\t200\t100\tno rank\t0\tunclassified\n")
+            end
+
+            open(temp_report2, "w") do io
+                write(io, "60.00\t600\t300\tspecies\t287\tPseudomonas aeruginosa\n")
+                write(io, "25.00\t250\t125\tspecies\t562\tEscherichia coli\n")
+                write(io, "15.00\t150\t75\tno rank\t0\tunclassified\n")
+            end
+
+            try
+                df1 = Mycelia.parse_metabuli_report(temp_report1)
+                df2 = Mycelia.parse_metabuli_report(temp_report2)
+
+                # Add sample identifiers (as notebooks do)
+                df1[!, :sample] .= "sample1"
+                df2[!, :sample] .= "sample2"
+
+                # This should NOT throw an error - the original bug caused
+                # ArgumentError due to mismatched column names
+                combined = DataFrames.vcat(df1, df2)
+
+                Test.@test DataFrames.nrow(combined) == 6
+                Test.@test length(unique(combined.sample)) == 2
+                Test.@test "sample1" in combined.sample
+                Test.@test "sample2" in combined.sample
+            finally
+                rm(temp_report1, force=true)
+                rm(temp_report2, force=true)
             end
         end
 

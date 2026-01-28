@@ -1043,13 +1043,30 @@ Parse a Metabuli classification report into a DataFrame.
 - `report_file::String`: Path to Metabuli report.tsv output
 
 # Returns
-DataFrame with classification statistics per taxon
+DataFrame with columns: percentage, num_reads, num_direct_reads, rank, taxid, name
+
+# Notes
+Metabuli report files have no header row. Column order follows Kraken2 report format:
+1. percentage - Percentage of reads classified to the clade rooted at this taxon
+2. num_reads - Number of reads classified to the clade (clade_count)
+3. num_direct_reads - Number of reads classified directly to this taxon (taxon_count)
+4. rank - Taxonomic rank (no rank, superkingdom, phylum, class, order, family, genus, species, etc.)
+5. taxid - NCBI taxonomy ID
+6. name - Scientific name (may have leading spaces indicating hierarchy depth)
 """
 function parse_metabuli_report(report_file::String)::DataFrames.DataFrame
     isfile(report_file) || error("Report file not found: $(report_file)")
 
-    # Metabuli report is tab-separated
-    df = DataFrames.DataFrame(CSV.File(report_file; delim='\t', header=true))
+    # Metabuli report is tab-separated with no header row
+    df = DataFrames.DataFrame(CSV.File(
+        report_file;
+        delim='\t',
+        header=false,
+        types=[Float64, Int, Int, String, Int, String]
+    ))
+
+    # Assign standard column names
+    DataFrames.rename!(df, [:percentage, :num_reads, :num_direct_reads, :rank, :taxid, :name])
 
     return df
 end
