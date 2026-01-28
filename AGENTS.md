@@ -46,6 +46,14 @@ Mycelia is a Julia package for bioinformatics and computational biology, providi
 - Prefer Rhizomorph graph/assembly functionality when newer variants exist; avoid legacy base-graph/assembly APIs in tutorials unless explicitly requested.
 - Literate.jl comment rules: `#` starts markdown, `##` remains a code comment. Use `##` for inline comments inside code blocks.
 
+## Reusable Code Principle
+- **Mycelia is the library; notebooks are consumers.** When implementing functionality in external notebooks and/or repositories, always ask: "Is this broadly useful for genomics/metagenomics workflows?"
+- If yes, add the function to Mycelia under `src/` with proper documentation and tests, then call `Mycelia.function_name()` from the notebook.
+- This applies to: diversity metrics, distance calculations, ordination methods, parsing utilities, visualization helpers, and any other analysis functions that could benefit multiple workflows.
+- **Do not duplicate functionality.** Before writing a custom implementation in a notebook, check if Mycelia already has the capability (e.g., `Mycelia.bray_curtis_distance`, `Mycelia.pcoa_from_dist`).
+- One-offs specific to a particular dataset or Locus-proprietary logic may remain in notebooks, but general-purpose bioinformatics functions belong in Mycelia.
+- When in doubt, add to Mycelia. It's easier to use a library function than to copy-paste between notebooks.
+
 ## Testing Guidelines
 - Place new tests in the relevant stage directory; name files after the feature (e.g., `assembly_merging.jl`). Use `Test.@testset` with descriptive labels.
 - Never disable or skip tests because functionality is broken; fix the implementation first. Use `Test.@test_skip` only for explicitly planned features.
