@@ -194,6 +194,47 @@ function run_sourmash_gather(;
     return (; outdir, results_csv, results_matches)
 end
 
+"""
+    parse_sourmash_gather_output(file)
+
+Parse a Sourmash gather output CSV file into a DataFrame.
+
+# Arguments
+- `file::String`: Path to the sourmash gather CSV output file
+
+# Returns
+A DataFrame containing the gather results with columns including:
+- `intersect_bp`: Base pairs in the intersection
+- `f_orig_query`: Fraction of original query matched
+- `f_match`: Fraction of the reference matched
+- `name`: Reference genome name
+- And other sourmash gather output columns
+"""
+function parse_sourmash_gather_output(file::String)
+    isfile(file) || error("Sourmash gather output not found: $(file)")
+    return CSV.read(file, DataFrames.DataFrame)
+end
+
+"""
+    parse_sourmash_search_output(file)
+
+Parse a Sourmash search output CSV file into a DataFrame.
+
+# Arguments
+- `file::String`: Path to the sourmash search CSV output file
+
+# Returns
+A DataFrame containing the search results with columns including:
+- `similarity`: Jaccard similarity score
+- `name`: Reference genome name
+- `filename`: Path to signature file
+- `md5`: MD5 hash of the signature
+"""
+function parse_sourmash_search_output(file::String)
+    isfile(file) || error("Sourmash search output not found: $(file)")
+    return CSV.read(file, DataFrames.DataFrame)
+end
+
 # ============================================================================
 # Mash - MinHash sketching, screening, and distance
 # ============================================================================
