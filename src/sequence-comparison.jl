@@ -189,9 +189,9 @@ function select_sketch_supported_references(reference_scores::AbstractDict{<:Abs
 end
 
 """
-    skani_triangle(fasta_files::Vector{String}; 
+    skani_triangle(fasta_files::Vector{String};
                    small_genomes::Bool=false,
-                   sparse::Bool=true,
+                   sparse::Union{Bool,Nothing}=nothing,
                    threads::Int=3,
                    min_af::Union{Nothing,Float64}=nothing,
                    output_file::Union{Nothing,String}=nothing,
@@ -202,7 +202,8 @@ Perform pairwise all-vs-all ANI/AF comparison using skani triangle.
 # Arguments
 - `fasta_files::Vector{String}`: Vector of paths to FASTA files to compare
 - `small_genomes::Bool=false`: Use `--small-genomes` flag for viral/plasmid genomes
-- `sparse::Bool=true`: Output sparse matrix format (like `skani dist` output). If false, outputs dense triangular matrix
+- `sparse::Union{Bool,Nothing}=nothing`: Output format. If `nothing` (default), automatically uses sparse
+  format (`-E`) when >500 genomes, dense otherwise. Set explicitly to `true` or `false` to override.
 - `threads::Int=3`: Number of threads to use
 - `min_af::Union{Nothing,Float64}=nothing`: Minimum aligned fraction threshold
 - `output_file::Union{Nothing,String}=nothing`: Output file path. If nothing, returns stdout as string
@@ -211,10 +212,14 @@ Perform pairwise all-vs-all ANI/AF comparison using skani triangle.
 # Returns
 - If `output_file` is specified: writes to file and returns the file path
 - If `output_file` is nothing: returns the output as a String
+
+# Notes
+For >500 genomes, sparse output is recommended to avoid large matrix files. The sparse format
+produces TSV output similar to `skani dist`, while dense format produces a triangular matrix.
 """
-function skani_triangle(fasta_files::Vector{String}; 
+function skani_triangle(fasta_files::Vector{String};
                        small_genomes::Bool=false,
-                       sparse::Bool=true,
+                       sparse::Union{Bool,Nothing}=nothing,
                        threads::Int=3,
                        min_af::Union{Nothing,Float64}=nothing,
                        output_file::Union{Nothing,String}=nothing,
@@ -226,25 +231,38 @@ function skani_triangle(fasta_files::Vector{String};
         end
     end
 
+    # Auto-detect sparse mode based on genome count (skani recommends sparse for >500 genomes)
+    n_genomes = length(fasta_files)
+    use_sparse = if isnothing(sparse)
+        if n_genomes > 500
+            @info "Auto-enabling sparse mode (-E) for $n_genomes genomes (>500 threshold)"
+            true
+        else
+            false
+        end
+    else
+        sparse
+    end
+
     Mycelia.add_bioconda_env("skani")
-    
+
     temp_dir = mktempdir()
     list_file = joinpath(temp_dir, "skani_input_list.txt")
-    
+
     try
         open(list_file, "w") do io
             for file in fasta_files
                 println(io, abspath(file))
             end
         end
-        
+
         cmd_args = ["triangle", "-l", list_file, "-t", string(threads)]
-        
+
         if small_genomes
             push!(cmd_args, "--small-genomes")
         end
-        
-        if sparse
+
+        if use_sparse
             push!(cmd_args, "-E")
         end
         
