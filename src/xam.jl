@@ -55,6 +55,7 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
     pnexts = Union{Int, Missing}[]
     tlens = Union{Int, Missing}[]
     seqs = Union{Nothing, BioSequences.LongSequence{BioSequences.DNAAlphabet{4}}}[]
+    query_lengths = Int[]
     quals = Union{Missing, Vector{UInt8}}[]
     alignlengths = Union{Int, Missing}[]
     alignment_score = Union{Int, Missing}[]
@@ -148,6 +149,15 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
         end
 
         try
+            # Compute query_length from the sequence
+            seq = seqs[end]
+            push!(query_lengths, isnothing(seq) ? 0 : length(seq))
+        catch err
+            println("Error computing query_length from record: ", record)
+            rethrow(err)
+        end
+
+        try
             push!(quals, MODULE.isprimary(record) ? MODULE.quality(record) : missing)
         catch err
             println("Error extracting quality from record: ", record)
@@ -199,6 +209,7 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
         pnext = pnexts,
         tlen = tlens,
         seq = seqs,
+        query_length = query_lengths,
         qual = quals,
         alignlength = alignlengths,
         alignment_score = alignment_score,

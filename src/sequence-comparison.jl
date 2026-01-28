@@ -238,7 +238,7 @@ function skani_triangle(fasta_files::Vector{String};
             end
         end
         
-        cmd_args = ["triangle", "--ql", list_file, "-t", string(threads)]
+        cmd_args = ["triangle", "-l", list_file, "-t", string(threads)]
         
         if small_genomes
             push!(cmd_args, "--small-genomes")

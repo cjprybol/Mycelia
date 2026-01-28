@@ -1058,15 +1058,25 @@ function parse_metabuli_report(report_file::String)::DataFrames.DataFrame
     isfile(report_file) || error("Report file not found: $(report_file)")
 
     # Metabuli report is tab-separated with no header row
+    # Column count may vary, but first 6 are standard Kraken2-style columns
     df = DataFrames.DataFrame(CSV.File(
         report_file;
         delim='\t',
-        header=false,
-        types=[Float64, Int, Int, String, Int, String]
+        header=false
     ))
 
-    # Assign standard column names
-    DataFrames.rename!(df, [:percentage, :num_reads, :num_direct_reads, :rank, :taxid, :name])
+    # Rename the standard 6 columns (if present)
+    standard_names = [:percentage, :num_reads, :num_direct_reads, :rank, :taxid, :name]
+    ncols = DataFrames.ncol(df)
+    if ncols >= 6
+        # Rename first 6 columns to standard names
+        rename_pairs = [Symbol("Column", i) => standard_names[i] for i in 1:6]
+        DataFrames.rename!(df, rename_pairs...)
+    elseif ncols > 0
+        # Partial rename for files with fewer columns
+        rename_pairs = [Symbol("Column", i) => standard_names[i] for i in 1:ncols]
+        DataFrames.rename!(df, rename_pairs...)
+    end
 
     return df
 end
