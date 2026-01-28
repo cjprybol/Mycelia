@@ -154,7 +154,7 @@ Result is invariant to input order and total counts (normalized internally).
 function kmer_counts_to_cosine_similarity(kmer_counts_1, kmer_counts_2)
     sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
     a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+    b = [get(kmer_counts_2, kmer, 0) for kmer in sorted_shared_keys]
     # Distances.cosine_dist(a, b) == Distances.cosine_dist(b, a) == Distances.cosine_dist(a ./ sum(a), b ./ sum(b)) == Distances.cosine_dist(b ./ sum(b), a ./ sum(a))
     return Distances.cosine_dist(a, b)
 end
@@ -180,7 +180,7 @@ Calculate the Jensen-Shannon divergence between two k-mer frequency distribution
 function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
     sorted_shared_keys = sort(collect(union(keys(kmer_counts_1), keys(kmer_counts_2))))
     a = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
-    b = [get(kmer_counts_1, kmer, 0) for kmer in sorted_shared_keys]
+    b = [get(kmer_counts_2, kmer, 0) for kmer in sorted_shared_keys]
     a_norm = a ./ sum(a)
     b_norm = b ./ sum(b)
     # Distances.js_divergence(a ./ sum(a), b ./ sum(b)) == Distances.js_divergence(b ./ sum(b), a ./ sum(a))
