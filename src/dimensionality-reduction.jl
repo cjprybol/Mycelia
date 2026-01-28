@@ -393,6 +393,55 @@ function pcoa_from_dist(
     )
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert PCoA results to a DataFrame for easy plotting and analysis.
+
+# Arguments
+- `pcoa_result`: Result from `pcoa_from_dist` containing coordinates
+- `sample_names::AbstractVector`: Names/identifiers for each sample
+- `metadata::Union{Nothing, DataFrames.DataFrame}`: Optional metadata to join
+  (must have a column matching sample names)
+- `sample_col::Symbol`: Column name in metadata containing sample identifiers (default: :sample)
+
+# Returns
+- `DataFrames.DataFrame`: DataFrame with columns PC1, PC2, PC3 (etc.) and sample names,
+  optionally joined with metadata
+
+# Example
+```julia
+dist_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(abundance)
+pcoa = Mycelia.pcoa_from_dist(dist_matrix)
+pcoa_df = Mycelia.pcoa_to_dataframe(pcoa, sample_names)
+# Now plot with StatsPlots: scatter(pcoa_df.PC1, pcoa_df.PC2)
+```
+"""
+function pcoa_to_dataframe(
+    pcoa_result,
+    sample_names::AbstractVector;
+    metadata::Union{Nothing, DataFrames.DataFrame}=nothing,
+    sample_col::Symbol=:sample
+)
+    n_dims = size(pcoa_result.coordinates, 1)
+    n_samples = size(pcoa_result.coordinates, 2)
+
+    # Create base DataFrame with PC columns
+    df = DataFrames.DataFrame()
+    df[!, :sample] = collect(sample_names)
+
+    for i in 1:n_dims
+        col_name = Symbol("PC$i")
+        df[!, col_name] = pcoa_result.coordinates[i, :]
+    end
+
+    # Join with metadata if provided
+    if metadata !== nothing
+        df = DataFrames.leftjoin(df, metadata, on=:sample => sample_col)
+    end
+
+    return df
+end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

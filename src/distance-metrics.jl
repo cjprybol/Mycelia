@@ -1128,3 +1128,361 @@ function validate_distance_matrix(
         n_missing_pairs = n_nan_pairs
     )
 end
+
+# =============================================================================
+# Alpha Diversity Metrics
+# =============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Shannon diversity index (H') for an abundance vector.
+
+The Shannon diversity index measures the entropy of species proportions:
+    H' = -∑(pᵢ × ln(pᵢ))
+
+where pᵢ is the proportion of species i.
+
+# Arguments
+- `counts::AbstractVector{<:Real}`: Vector of species abundances/counts
+
+# Returns
+- `Float64`: Shannon diversity index (using natural log). Higher values indicate
+  greater diversity. Returns 0.0 for empty or all-zero vectors.
+
+# Notes
+- Uses natural logarithm (base e) by default
+- Zero counts are excluded from the calculation
+- For a community with S equally abundant species, H' = ln(S)
+"""
+function shannon_diversity(counts::AbstractVector{<:Real})
+    total = sum(counts)
+    total == 0 && return 0.0
+
+    proportions = counts ./ total
+    # Filter out zeros to avoid log(0)
+    nonzero = filter(x -> x > 0, proportions)
+    return -sum(p * log(p) for p in nonzero)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Simpson's diversity index (1 - D) for an abundance vector.
+
+Simpson's diversity index represents the probability that two randomly
+selected individuals belong to different species:
+    1 - D = 1 - ∑(pᵢ²)
+
+where pᵢ is the proportion of species i.
+
+# Arguments
+- `counts::AbstractVector{<:Real}`: Vector of species abundances/counts
+
+# Returns
+- `Float64`: Simpson's diversity index in range [0, 1]. Higher values
+  indicate greater diversity. Returns 0.0 for empty or all-zero vectors.
+
+# Notes
+- Returns 1 - Simpson's dominance (D), which is more intuitive
+- A value close to 1 indicates high diversity (many species, evenly distributed)
+- A value close to 0 indicates low diversity (few species or dominance)
+"""
+function simpsons_diversity(counts::AbstractVector{<:Real})
+    total = sum(counts)
+    total == 0 && return 0.0
+
+    proportions = counts ./ total
+    return 1 - sum(proportions .^ 2)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate species richness (number of taxa with non-zero abundance).
+
+# Arguments
+- `counts::AbstractVector{<:Real}`: Vector of species abundances/counts
+
+# Returns
+- `Int`: Number of species/taxa present (count > 0)
+"""
+function species_richness(counts::AbstractVector{<:Real})
+    return count(x -> x > 0, counts)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Pielou's evenness index (J').
+
+Pielou's evenness measures how evenly individuals are distributed among species:
+    J' = H' / ln(S)
+
+where H' is Shannon diversity and S is species richness.
+
+# Arguments
+- `counts::AbstractVector{<:Real}`: Vector of species abundances/counts
+
+# Returns
+- `Float64`: Pielou's evenness in range [0, 1]. A value of 1 indicates
+  perfect evenness (all species equally abundant). Returns 0.0 if richness ≤ 1.
+
+# Notes
+- Requires at least 2 species for meaningful calculation
+- Based on Shannon diversity using natural logarithm
+"""
+function pielous_evenness(counts::AbstractVector{<:Real})
+    S = species_richness(counts)
+    S <= 1 && return 0.0
+    H = shannon_diversity(counts)
+    return H / log(S)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate multiple alpha diversity metrics for each sample in an abundance matrix.
+
+# Arguments
+- `abundance_matrix::AbstractMatrix`: Taxa × samples abundance matrix (rows = taxa, columns = samples)
+- `sample_names::AbstractVector`: Names/identifiers for each sample (column)
+
+# Returns
+- `DataFrames.DataFrame`: DataFrame with columns:
+  - `sample`: Sample identifier
+  - `shannon`: Shannon diversity index
+  - `simpsons`: Simpson's diversity index
+  - `richness`: Species richness (count of non-zero taxa)
+  - `evenness`: Pielou's evenness index
+
+# Example
+```julia
+# Taxa (rows) × Samples (columns)
+abundance = [10 5 0; 20 15 30; 5 10 10]
+samples = ["Sample1", "Sample2", "Sample3"]
+alpha_df = calculate_alpha_diversity(abundance, samples)
+```
+"""
+function calculate_alpha_diversity(abundance_matrix::AbstractMatrix, sample_names::AbstractVector)
+    n_samples = size(abundance_matrix, 2)
+
+    alpha_df = DataFrames.DataFrame(
+        sample = collect(sample_names),
+        shannon = zeros(n_samples),
+        simpsons = zeros(n_samples),
+        richness = zeros(Int, n_samples),
+        evenness = zeros(n_samples)
+    )
+
+    for (i, sample) in enumerate(sample_names)
+        counts = abundance_matrix[:, i]
+        alpha_df[i, :shannon] = shannon_diversity(counts)
+        alpha_df[i, :simpsons] = simpsons_diversity(counts)
+        alpha_df[i, :richness] = species_richness(counts)
+        alpha_df[i, :evenness] = pielous_evenness(counts)
+    end
+
+    return alpha_df
+end
+
+# =============================================================================
+# Beta Diversity Metrics (Pairwise)
+# =============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Bray-Curtis dissimilarity between two abundance vectors.
+
+Bray-Curtis dissimilarity is defined as:
+    BC = ∑|aᵢ - bᵢ| / (∑aᵢ + ∑bᵢ)
+
+This is equivalent to: 1 - 2×∑min(aᵢ, bᵢ) / (∑aᵢ + ∑bᵢ)
+
+# Arguments
+- `a::AbstractVector{<:Real}`: First abundance vector
+- `b::AbstractVector{<:Real}`: Second abundance vector
+
+# Returns
+- `Float64`: Bray-Curtis dissimilarity in range [0, 1].
+  0 indicates identical compositions, 1 indicates completely different.
+
+# Notes
+- Suitable for abundance/count data (not presence/absence)
+- Sensitive to differences in both composition and magnitude
+"""
+function bray_curtis_dissimilarity(a::AbstractVector{<:Real}, b::AbstractVector{<:Real})
+    sum_total = sum(a) + sum(b)
+    sum_total == 0 && return 0.0
+    sum_abs_diff = sum(abs.(a .- b))
+    return sum_abs_diff / sum_total
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate Jaccard distance between two abundance vectors (presence/absence).
+
+Jaccard distance is defined as:
+    J_d = 1 - |A ∩ B| / |A ∪ B|
+
+where A and B are sets of taxa present (count > 0).
+
+# Arguments
+- `a::AbstractVector{<:Real}`: First abundance vector
+- `b::AbstractVector{<:Real}`: Second abundance vector
+
+# Returns
+- `Float64`: Jaccard distance in range [0, 1].
+  0 indicates identical presence/absence, 1 indicates no shared taxa.
+
+# Notes
+- Based on presence/absence only; ignores abundance magnitudes
+- Use `bray_curtis_dissimilarity` when abundances matter
+"""
+function jaccard_distance_vectors(a::AbstractVector{<:Real}, b::AbstractVector{<:Real})
+    a_present = a .> 0
+    b_present = b .> 0
+
+    intersection = sum(a_present .& b_present)
+    union_count = sum(a_present .| b_present)
+
+    union_count == 0 && return 0.0
+    return 1 - (intersection / union_count)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Calculate pairwise beta diversity matrix from an abundance matrix.
+
+# Arguments
+- `abundance_matrix::AbstractMatrix`: Taxa × samples abundance matrix
+- `sample_names::AbstractVector`: Names/identifiers for each sample
+- `metric::Symbol`: Distance metric to use:
+  - `:bray_curtis` (default): Bray-Curtis dissimilarity
+  - `:jaccard`: Jaccard distance (presence/absence)
+
+# Returns
+- Named tuple with:
+  - `distance_matrix::Matrix{Float64}`: Symmetric pairwise distance matrix
+  - `sample_names::Vector`: Sample identifiers (for row/column labels)
+
+# Example
+```julia
+abundance = rand(0:100, 50, 10)  # 50 taxa, 10 samples
+samples = ["S\$i" for i in 1:10]
+beta = calculate_beta_diversity(abundance, samples, metric=:bray_curtis)
+# beta.distance_matrix is a 10×10 symmetric matrix
+```
+"""
+function calculate_beta_diversity(
+    abundance_matrix::AbstractMatrix,
+    sample_names::AbstractVector;
+    metric::Symbol=:bray_curtis
+)
+    dist_func = if metric == :bray_curtis
+        bray_curtis_dissimilarity
+    elseif metric == :jaccard
+        jaccard_distance_vectors
+    else
+        error("Unknown metric: $metric. Use :bray_curtis or :jaccard")
+    end
+
+    n_samples = size(abundance_matrix, 2)
+    dist_matrix = zeros(n_samples, n_samples)
+
+    for i in 1:n_samples
+        for j in (i+1):n_samples
+            d = dist_func(abundance_matrix[:, i], abundance_matrix[:, j])
+            dist_matrix[i, j] = d
+            dist_matrix[j, i] = d
+        end
+    end
+
+    return (distance_matrix=dist_matrix, sample_names=collect(sample_names))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Wrapper around `bray_curtis_distance` for consistency with other matrix functions.
+
+# Arguments
+- `M::AbstractMatrix`: Taxa × samples count matrix (rows = features, columns = samples)
+
+# Returns
+- `Matrix{Float64}`: Symmetric Bray-Curtis distance matrix
+
+# Notes
+- This is an alias for `bray_curtis_distance(M)` for API consistency
+- Input matrix is automatically converted to appropriate integer type
+"""
+function frequency_matrix_to_bray_curtis_distance_matrix(M::AbstractMatrix)
+    # Upcast to Int64 to prevent overflow with UInt16 etc.
+    return bray_curtis_distance(Int64.(M))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+End-to-end beta diversity analysis: compute distance matrix, run PCoA, return plottable DataFrame.
+
+This is a convenience wrapper that combines:
+1. Bray-Curtis (or Jaccard) distance matrix calculation
+2. PCoA ordination
+3. DataFrame conversion for plotting
+
+# Arguments
+- `abundance_matrix::AbstractMatrix`: Taxa × samples abundance matrix
+- `sample_names::AbstractVector`: Names/identifiers for each sample
+- `metric::Symbol`: Distance metric (:bray_curtis or :jaccard, default: :bray_curtis)
+- `maxoutdim::Int`: Number of PCoA dimensions to compute (default: 3)
+- `metadata::Union{Nothing, DataFrames.DataFrame}`: Optional sample metadata to join
+
+# Returns
+- Named tuple with:
+  - `distance_matrix`: Pairwise distance matrix
+  - `pcoa`: PCoA result (model + coordinates)
+  - `pcoa_df`: DataFrame ready for plotting (sample, PC1, PC2, PC3, ...)
+  - `variance_explained`: Proportion of variance explained by each PC
+
+# Example
+```julia
+result = Mycelia.beta_diversity_pcoa(abundance, samples, metric=:bray_curtis)
+StatsPlots.scatter(result.pcoa_df.PC1, result.pcoa_df.PC2,
+    title="PCoA of Bray-Curtis Distances",
+    xlabel="PC1 (\$(round(result.variance_explained[1]*100, digits=1))%)",
+    ylabel="PC2 (\$(round(result.variance_explained[2]*100, digits=1))%)"
+)
+```
+"""
+function beta_diversity_pcoa(
+    abundance_matrix::AbstractMatrix,
+    sample_names::AbstractVector;
+    metric::Symbol=:bray_curtis,
+    maxoutdim::Int=3,
+    metadata::Union{Nothing, DataFrames.DataFrame}=nothing
+)
+    # Calculate distance matrix
+    beta = calculate_beta_diversity(abundance_matrix, sample_names; metric=metric)
+
+    # Run PCoA
+    pcoa = pcoa_from_dist(beta.distance_matrix; maxoutdim=maxoutdim)
+
+    # Calculate variance explained
+    eigenvalues = MultivariateStats.eigvals(pcoa.model)
+    total_var = sum(abs.(eigenvalues))
+    variance_explained = abs.(eigenvalues) ./ total_var
+
+    # Convert to DataFrame
+    pcoa_df = pcoa_to_dataframe(pcoa, sample_names; metadata=metadata)
+
+    return (
+        distance_matrix = beta.distance_matrix,
+        pcoa = pcoa,
+        pcoa_df = pcoa_df,
+        variance_explained = variance_explained
+    )
+end
