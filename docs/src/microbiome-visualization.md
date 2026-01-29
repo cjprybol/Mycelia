@@ -229,6 +229,199 @@ prepared_data = results[:data]       # NamedTuple with processed matrices
 - [`determine_view_types`](@ref) - Select view types based on sample count
 - [`calculate_tick_step`](@ref) - Calculate label spacing
 
+## Coverage-Weighted Abundance
+
+Mycelia provides functions to compute relative abundance from sequencing coverage data combined with taxonomic classifications. This approach uses per-contig coverage (from tools like mosdepth) weighted by taxonomic assignments to produce abundance estimates.
+
+### Overview
+
+The coverage-weighted abundance workflow:
+
+1. **Coverage data**: Per-contig mean coverage from mosdepth summary files
+2. **Taxonomy data**: Contig-to-taxon assignments from BLAST, MMseqs2, or other classifiers
+3. **Merge**: Combine coverage and taxonomy by contig ID
+4. **Aggregate**: Sum coverage by taxonomic rank, normalize to relative abundance
+
+### Basic Usage
+
+```julia
+import Mycelia
+import DataFrames
+
+# Load coverage data (from mosdepth summary)
+coverage_df = Mycelia.parse_mosdepth_summary("sample.mosdepth.summary.txt")
+
+# Load taxonomy data (from BLAST or MMseqs2)
+taxonomy_df = Mycelia.parse_blast_report("sample.blast.tsv")
+taxonomy_df = Mycelia.ensure_lineage_columns(taxonomy_df)
+
+# Merge coverage with taxonomy
+merged = Mycelia.merge_coverage_with_taxonomy(
+    coverage_df,
+    taxonomy_df,
+    contig_col = :query_id,
+    min_coverage = 1.0,   # Filter low-coverage contigs
+    min_length = 500      # Filter short contigs
+)
+
+# Compute abundance at genus level
+abundance = Mycelia.compute_coverage_weighted_abundance(
+    merged,
+    "Sample_001",
+    rank = :genus,
+    include_unclassified = true
+)
+
+# Result is ready for plot_microbiome_abundance
+results = Mycelia.plot_microbiome_abundance(
+    abundance,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = "genus"
+)
+```
+
+### BLAST Workflow
+
+For BLAST-based taxonomy with NCBI databases:
+
+```julia
+# One-step convenience function
+abundance = Mycelia.blast_coverage_abundance(
+    "sample.blast.tsv",       # BLAST output with taxonomy
+    "sample.mosdepth.summary.txt",
+    "Sample_001",
+    rank = :genus,
+    min_coverage = 1.0,
+    evalue_max = 1e-10        # Filter weak hits
+)
+```
+
+### MMseqs2 Workflow
+
+For MMseqs2 easy-taxonomy LCA output:
+
+```julia
+# One-step convenience function
+abundance = Mycelia.mmseqs_coverage_abundance(
+    "sample_lca.tsv",         # MMseqs2 easy-taxonomy output
+    "sample.mosdepth.summary.txt",
+    "Sample_001",
+    rank = :genus,
+    min_coverage = 1.0,
+    min_support = 0.5         # LCA support threshold
+)
+```
+
+### Multi-Sample Processing
+
+Process multiple samples in batch:
+
+```julia
+# Define samples with their data files
+samples = [
+    (sample_id = "S001", coverage = "S001.mosdepth.summary.txt", taxonomy = "S001.blast.tsv"),
+    (sample_id = "S002", coverage = "S002.mosdepth.summary.txt", taxonomy = "S002.blast.tsv"),
+    (sample_id = "S003", coverage = "S003.mosdepth.summary.txt", taxonomy = "S003.blast.tsv"),
+]
+
+# Process all samples
+all_abundance = Mycelia.process_samples_coverage_abundance(
+    samples,
+    rank = :genus,
+    min_coverage = 1.0,
+    taxonomy_format = :blast  # or :mmseqs, :auto
+)
+
+# Visualize
+results = Mycelia.plot_microbiome_abundance(
+    all_abundance,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = "genus",
+    title = "Genus-Level Composition (N=$(length(samples)))"
+)
+```
+
+### Filtering Options
+
+Control which contigs contribute to abundance calculations:
+
+```julia
+merged = Mycelia.merge_coverage_with_taxonomy(
+    coverage_df,
+    taxonomy_df,
+    contig_col = :query_id,
+    min_coverage = 5.0,    # Require ≥5x mean coverage
+    min_length = 1000      # Require ≥1kb contig length
+)
+```
+
+### Handling Unclassified Contigs
+
+```julia
+# Include unclassified contigs in abundance
+abundance = Mycelia.compute_coverage_weighted_abundance(
+    merged, "Sample_001",
+    rank = :genus,
+    include_unclassified = true,
+    unclassified_label = "Unclassified"
+)
+
+# Exclude unclassified (renormalizes to 100% among classified)
+abundance = Mycelia.compute_coverage_weighted_abundance(
+    merged, "Sample_001",
+    rank = :genus,
+    include_unclassified = false
+)
+```
+
+### Available Taxonomic Ranks
+
+Aggregate at any standard rank:
+- `:species`
+- `:genus`
+- `:family`
+- `:order`
+- `:class`
+- `:phylum`
+- `:kingdom`
+- `:domain` (or `:superkingdom`)
+
+### Output Format
+
+`compute_coverage_weighted_abundance` returns a DataFrame with:
+
+| Column | Description |
+|--------|-------------|
+| `sample` | Sample identifier |
+| `taxon` | Taxon name at specified rank |
+| `total_coverage` | Sum of mean coverage for contigs assigned to this taxon |
+| `n_contigs` | Number of contigs assigned to this taxon |
+| `relative_abundance` | Proportion of total coverage (sums to 1.0) |
+
+Results are sorted by relative abundance (descending), ready for visualization.
+
+### Coverage Integration API Reference
+
+#### Core Functions
+
+- [`merge_coverage_with_taxonomy`](@ref) - Merge coverage and taxonomy DataFrames
+- [`compute_coverage_weighted_abundance`](@ref) - Calculate weighted abundance at taxonomic rank
+
+#### Convenience Functions
+
+- [`blast_coverage_abundance`](@ref) - One-step BLAST + coverage workflow
+- [`mmseqs_coverage_abundance`](@ref) - One-step MMseqs2 + coverage workflow
+- [`process_samples_coverage_abundance`](@ref) - Multi-sample batch processing
+
+#### Internal Helpers
+
+- [`_load_taxonomy_file`](@ref) - Load taxonomy file with format detection
+- [`_detect_contig_column`](@ref) - Auto-detect contig ID column name
+
 ## See Also
 
 - [Metagenomic Workflow](metagenomic-workflow.md) - Full workflow including classification

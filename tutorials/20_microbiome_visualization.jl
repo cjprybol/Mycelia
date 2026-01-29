@@ -258,6 +258,177 @@ for f in readdir(auto_output)
     println("  $f")
 end
 
+# ## Coverage-Weighted Abundance from Sequencing Data
+#
+# A common workflow is computing abundance from sequencing coverage combined with
+# taxonomic classification. Mycelia provides functions to integrate mosdepth coverage
+# data with BLAST or MMseqs2 taxonomy assignments.
+
+# ### Simulated Coverage + Taxonomy Data
+#
+# Let's create mock data representing a typical metagenomics workflow output.
+
+function generate_coverage_taxonomy_data(n_contigs::Int; seed::Int=42)
+    Random.seed!(seed)
+
+    ## Mock mosdepth summary data
+    coverage_df = DataFrames.DataFrame(
+        chrom = ["contig_$(lpad(i, 4, '0'))" for i in 1:n_contigs],
+        length = rand(500:10000, n_contigs),
+        bases = rand(500:10000, n_contigs),
+        mean = rand(1.0:50.0, n_contigs),
+        min = zeros(Int, n_contigs),
+        max = rand(10:100, n_contigs)
+    )
+
+    ## Mock taxonomy data (some contigs unclassified)
+    domains = ["Bacteria", "Viruses", "Archaea", missing]
+    phyla = ["Proteobacteria", "Firmicutes", "Bacteroidetes", "Actinobacteria", missing]
+    genera = ["Escherichia", "Bacillus", "Bacteroides", "Streptococcus",
+              "Lactobacillus", "Clostridium", "Prevotella", missing]
+
+    taxonomy_df = DataFrames.DataFrame(
+        contig_id = coverage_df.chrom,
+        domain = rand(domains, n_contigs),
+        phylum = rand(phyla, n_contigs),
+        genus = rand(genera, n_contigs)
+    )
+
+    return coverage_df, taxonomy_df
+end
+
+## Generate mock data for 100 contigs
+coverage_df, taxonomy_df = generate_coverage_taxonomy_data(100)
+println("Coverage data: $(DataFrames.nrow(coverage_df)) contigs")
+println("Taxonomy data: $(DataFrames.nrow(taxonomy_df)) assignments")
+
+# ### Merge Coverage with Taxonomy
+#
+# The `merge_coverage_with_taxonomy` function joins coverage and taxonomy data,
+# optionally filtering by minimum coverage or contig length.
+
+merged = Mycelia.merge_coverage_with_taxonomy(
+    coverage_df,
+    taxonomy_df,
+    contig_col = :contig_id,
+    min_coverage = 1.0,    ## Require at least 1x mean coverage
+    min_length = 500       ## Require at least 500bp
+)
+
+println("\nMerged data: $(DataFrames.nrow(merged)) contigs after filtering")
+display(first(merged, 5))
+
+# ### Compute Coverage-Weighted Abundance
+#
+# Calculate relative abundance by summing coverage across taxonomic groups
+# and normalizing to proportions.
+
+abundance = Mycelia.compute_coverage_weighted_abundance(
+    merged,
+    "Sample_001",
+    rank = :genus,
+    include_unclassified = true
+)
+
+println("\nGenus-level abundance:")
+display(abundance)
+
+## Verify abundances sum to 1
+println("\nTotal relative abundance: $(sum(abundance.relative_abundance))")
+
+# ### Visualize Coverage-Based Abundance
+
+results_coverage = Mycelia.plot_microbiome_abundance(
+    abundance,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = "genus",
+    title = "Coverage-Weighted Genus Abundance"
+)
+
+display(results_coverage[:barplot])
+
+# ### Multi-Sample Coverage Workflow
+#
+# Process multiple samples in batch for cohort-level visualization.
+
+function generate_multi_sample_coverage_data(n_samples::Int, n_contigs::Int; seed::Int=42)
+    Random.seed!(seed)
+
+    all_abundances = DataFrames.DataFrame()
+
+    for s in 1:n_samples
+        sample_id = "Sample_$(lpad(s, 3, '0'))"
+
+        ## Each sample has its own coverage/taxonomy data
+        cov_df, tax_df = generate_coverage_taxonomy_data(n_contigs, seed=seed+s)
+
+        ## Merge and compute abundance
+        merged = Mycelia.merge_coverage_with_taxonomy(
+            cov_df, tax_df,
+            contig_col = :contig_id,
+            min_coverage = 1.0
+        )
+
+        abundance = Mycelia.compute_coverage_weighted_abundance(
+            merged, sample_id,
+            rank = :genus
+        )
+
+        all_abundances = DataFrames.vcat(all_abundances, abundance, cols=:union)
+    end
+
+    return all_abundances
+end
+
+## Generate data for 20 samples
+multi_sample_abundance = generate_multi_sample_coverage_data(20, 50)
+println("\nMulti-sample data: $(DataFrames.nrow(multi_sample_abundance)) rows")
+println("Samples: $(length(unique(multi_sample_abundance.sample)))")
+println("Taxa: $(length(unique(multi_sample_abundance.taxon)))")
+
+# ### Visualize Multi-Sample Cohort
+
+cohort_config = Mycelia.MicrobiomePlotConfig(
+    top_n_taxa = 10,
+    sample_ordering = Mycelia.AxisOrdering(
+        method = :hclust,
+        distance_metric = :braycurtis
+    ),
+    show_sample_dendrogram = true
+)
+
+results_cohort = Mycelia.plot_microbiome_abundance(
+    multi_sample_abundance,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = "genus",
+    config = cohort_config,
+    title = "Cohort Coverage-Weighted Abundance (N=20)"
+)
+
+display(results_cohort[:barplot])
+
+# ### Abundance at Different Taxonomic Ranks
+#
+# Compare community composition at different taxonomic levels.
+
+for rank in [:domain, :phylum, :genus]
+    ## Recompute abundance at each rank
+    cov_df, tax_df = generate_coverage_taxonomy_data(100, seed=123)
+    merged = Mycelia.merge_coverage_with_taxonomy(cov_df, tax_df, contig_col=:contig_id)
+
+    abundance = Mycelia.compute_coverage_weighted_abundance(
+        merged, "Sample_001",
+        rank = rank
+    )
+
+    println("\n$(titlecase(string(rank)))-level abundance (top 5):")
+    display(first(abundance, 5))
+end
+
 # ## Summary
 #
 # Key takeaways:
@@ -266,5 +437,8 @@ end
 # 3. `AxisOrdering` specifies sample/taxa ordering (hclust, alphabetical, preordered)
 # 4. The system automatically selects appropriate views based on sample count
 # 5. `save_plot` exports figures in multiple formats
+# 6. `merge_coverage_with_taxonomy` combines mosdepth coverage with taxonomy data
+# 7. `compute_coverage_weighted_abundance` calculates relative abundance from coverage
+# 8. Coverage-based abundance works at any taxonomic rank (domain to species)
 #
 # For more details, see the [Microbiome Visualization](../docs/src/microbiome-visualization.md) documentation.
