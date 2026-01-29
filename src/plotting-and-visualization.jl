@@ -5170,17 +5170,18 @@ function _create_paginated_barplots(
 end
 
 """
-    save_microbiome_plot(
+    save_plot(
         fig,
         base_path::String;
         formats::Vector{Symbol} = [:png, :svg],
         dpi::Int = 300
     )
 
-Save a microbiome plot in multiple formats.
+Save a plot in multiple formats. Works with both CairoMakie figures and
+StatsPlots/Plots.jl plots.
 
 # Arguments
-- `fig`: CairoMakie figure to save
+- `fig`: Figure object (CairoMakie.Figure or Plots.Plot)
 - `base_path::String`: Base path without extension (e.g., "output/genus_barplot")
 - `formats::Vector{Symbol}`: Output formats (default: [:png, :svg])
 - `dpi::Int`: Resolution in dots per inch (default: 300)
@@ -5190,11 +5191,16 @@ Save a microbiome plot in multiple formats.
 
 # Examples
 ```julia
-paths = save_microbiome_plot(fig, "results/genus_abundance")
+# CairoMakie figure
+paths = save_plot(makie_fig, "results/genus_abundance")
+
+# StatsPlots/Plots.jl plot
+paths = save_plot(statsplots_p, "results/barplot")
+
 # Returns: Dict(:png => "results/genus_abundance.png", :svg => "results/genus_abundance.svg")
 ```
 """
-function save_microbiome_plot(
+function save_plot(
     fig,
     base_path::String;
     formats::Vector{Symbol} = [:png, :svg],
@@ -5202,33 +5208,51 @@ function save_microbiome_plot(
 )
     paths = Dict{Symbol, String}()
 
+    # Create directory if it doesn't exist
+    dir = dirname(base_path)
+    if !isempty(dir) && !isdir(dir)
+        mkpath(dir)
+    end
+
+    # Detect figure type
+    is_makie = fig isa CairoMakie.Figure || fig isa CairoMakie.FigureAxisPlot
+    is_plots = isdefined(Main, :Plots) && fig isa Main.Plots.Plot ||
+               isdefined(Mycelia, :StatsPlots) && (
+                   typeof(fig) <: StatsPlots.Plots.Plot ||
+                   string(typeof(fig)) |> t -> occursin("Plot{", t)
+               )
+
     for fmt in formats
         path = "$(base_path).$(fmt)"
 
-        # Create directory if it doesn't exist
-        dir = dirname(path)
-        if !isempty(dir) && !isdir(dir)
-            mkpath(dir)
-        end
+        try
+            if is_makie
+                # CairoMakie figure
+                if fmt == :png
+                    CairoMakie.save(path, fig, px_per_unit=dpi/72)
+                elseif fmt in [:svg, :pdf]
+                    CairoMakie.save(path, fig)
+                else
+                    @warn "Unknown format for CairoMakie: $fmt, skipping"
+                    continue
+                end
+            else
+                # Assume StatsPlots/Plots.jl
+                StatsPlots.savefig(fig, path)
+            end
 
-        # Save with appropriate settings
-        if fmt == :png
-            CairoMakie.save(path, fig, px_per_unit=dpi/72)
-        elseif fmt == :svg
-            CairoMakie.save(path, fig)
-        elseif fmt == :pdf
-            CairoMakie.save(path, fig)
-        else
-            @warn "Unknown format: $fmt, skipping"
-            continue
+            paths[fmt] = path
+            @info "Saved: $path"
+        catch e
+            @warn "Failed to save $path: $e"
         end
-
-        paths[fmt] = path
-        @info "Saved: $path"
     end
 
     return paths
 end
+
+# Alias for backward compatibility
+const save_microbiome_plot = save_plot
 
 """
     plot_microbiome_abundance(
