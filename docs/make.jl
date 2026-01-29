@@ -117,6 +117,8 @@ tutorial_order = [
     ("Step 16: UN Corpus Ngram vs Token Graphs", "16_un_corpus_ngram_vs_token_graphs.md"),
     ("Step 17: Viroid Sketch Round Trip", "17_viroid_sketch_round_trip.md"),
     ("Step 18: Advanced Assembly Theory and Practice", "18_advanced_assembly_theory_and_practice.md"),
+    ("Step 19: Relational Clustering", "19_relational_clustering.md"),
+    ("Step 20: Microbiome Visualization", "20_microbiome_visualization.md"),
 ]
 
 # Add tutorials that exist in the specified order
