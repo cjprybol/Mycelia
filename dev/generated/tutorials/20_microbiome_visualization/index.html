@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Step 20: Microbiome Visualization · Mycelia</title><meta name="title" content="Step 20: Microbiome Visualization · Mycelia"/><meta property="og:title" content="Step 20: Microbiome Visualization · Mycelia"/><meta property="twitter:title" content="Step 20: Microbiome Visualization · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><a class="tocitem" href="../../../microbiome-visualization/">Microbiome Visualization</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Step 4b: Graph Type Tutorials</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs</a></li><li><a class="tocitem" href="../09_round_trip_02_ngram_to_string/">Round-Trip 02: N-gram to String</a></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round-Trip 03: FASTA Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round-Trip 04: K-mer to Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round-Trip 05: FASTQ Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round-Trip 06: Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Step 10: Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Step 11: Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Step 12: CoverM Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Step 13: Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 14a: Binning Workflow</a></li><li><a class="tocitem" href="../14_mash_classification/">Step 14b: Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Step 15: Round Trip Benchmarking</a></li><li><a class="tocitem" href="../16_un_corpus_ngram_vs_token_graphs/">Step 16: UN Corpus Ngram vs Token Graphs</a></li><li><a class="tocitem" href="../17_viroid_sketch_round_trip/">Step 17: Viroid Sketch Round Trip</a></li><li><a class="tocitem" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice</a></li><li><a class="tocitem" href="../19_relational_clustering/">Step 19: Relational Clustering</a></li><li class="is-active"><a class="tocitem" href>Step 20: Microbiome Visualization</a><ul class="internal"><li><a class="tocitem" href="#Learning-Objectives"><span>Learning Objectives</span></a></li><li><a class="tocitem" href="#Prerequisites"><span>Prerequisites</span></a></li><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Generate-Example-Data"><span>Generate Example Data</span></a></li><li><a class="tocitem" href="#Basic-Visualization"><span>Basic Visualization</span></a></li><li><a class="tocitem" href="#Customizing-Configuration"><span>Customizing Configuration</span></a></li><li><a class="tocitem" href="#Controlling-Sample-Order"><span>Controlling Sample Order</span></a></li><li><a class="tocitem" href="#Medium-Dataset-(150-samples)"><span>Medium Dataset (150 samples)</span></a></li><li><a class="tocitem" href="#Large-Dataset-(400-samples)"><span>Large Dataset (400 samples)</span></a></li><li><a class="tocitem" href="#Saving-Plots"><span>Saving Plots</span></a></li><li><a class="tocitem" href="#Automatic-Output-Directory"><span>Automatic Output Directory</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li></ul></li><li><a class="tocitem" href="../conceptual_figures/">Conceptual Figures</a></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../references/">References</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Step 20: Microbiome Visualization</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Step 20: Microbiome Visualization</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/20_microbiome_visualization.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-20:-Microbiome-Visualization"><a class="docs-heading-anchor" href="#Tutorial-20:-Microbiome-Visualization">Tutorial 20: Microbiome Visualization</a><a id="Tutorial-20:-Microbiome-Visualization-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-20:-Microbiome-Visualization" title="Permalink"></a></h1><p>This tutorial demonstrates Mycelia&#39;s unified microbiome visualization system, which produces publication-quality figures with adaptive sizing for datasets of any size (from a few samples to 600+).</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><ul><li>Create relative abundance visualizations using <code>plot_microbiome_abundance</code></li><li>Configure visualization options with <code>MicrobiomePlotConfig</code></li><li>Control sample ordering with <code>AxisOrdering</code></li><li>Save plots in multiple formats</li></ul><h2 id="Prerequisites"><a class="docs-heading-anchor" href="#Prerequisites">Prerequisites</a><a id="Prerequisites-1"></a><a class="docs-heading-anchor-permalink" href="#Prerequisites" title="Permalink"></a></h2><ul><li>Basic familiarity with DataFrames</li><li>Microbiome abundance data in long format</li></ul><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><pre><code class="language-julia hljs">import Mycelia
+import DataFrames
+import Random</code></pre><p>Set seed for reproducible example data</p><pre><code class="language-julia hljs">Random.seed!(42)</code></pre><h2 id="Generate-Example-Data"><a class="docs-heading-anchor" href="#Generate-Example-Data">Generate Example Data</a><a id="Generate-Example-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Generate-Example-Data" title="Permalink"></a></h2><p>We&#39;ll create synthetic microbiome abundance data to demonstrate the visualization system.</p><pre><code class="language-julia hljs">function generate_example_data(n_samples::Int, n_taxa::Int; seed::Int=42)
+    Random.seed!(seed)</code></pre><p>Generate sample names</p><pre><code class="language-julia hljs">    samples = [&quot;Sample_$(lpad(i, 3, &#39;0&#39;))&quot; for i in 1:n_samples]</code></pre><p>Generate taxa names (common gut bacteria genera)</p><pre><code class="language-julia hljs">    taxa_names = [
+        &quot;Bacteroides&quot;, &quot;Prevotella&quot;, &quot;Faecalibacterium&quot;, &quot;Ruminococcus&quot;,
+        &quot;Blautia&quot;, &quot;Coprococcus&quot;, &quot;Dorea&quot;, &quot;Roseburia&quot;, &quot;Lachnospira&quot;,
+        &quot;Eubacterium&quot;, &quot;Clostridium&quot;, &quot;Akkermansia&quot;, &quot;Bifidobacterium&quot;,
+        &quot;Lactobacillus&quot;, &quot;Streptococcus&quot;, &quot;Enterococcus&quot;, &quot;Escherichia&quot;,
+        &quot;Veillonella&quot;, &quot;Dialister&quot;, &quot;Megasphaera&quot;, &quot;Alistipes&quot;, &quot;Parabacteroides&quot;,
+        &quot;Oscillospira&quot;, &quot;Sutterella&quot;, &quot;Bilophila&quot;
+    ]</code></pre><p>Use first n_taxa</p><pre><code class="language-julia hljs">    taxa = taxa_names[1:min(n_taxa, length(taxa_names))]</code></pre><p>Generate abundance matrix with some structure</p><pre><code class="language-julia hljs">    rows = DataFrames.DataFrame[]
+
+    for sample in samples</code></pre><p>Random abundances that sum to 1</p><pre><code class="language-julia hljs">        abundances = rand(length(taxa))
+        abundances ./= sum(abundances)
+
+        for (taxon, abund) in zip(taxa, abundances)
+            push!(rows, DataFrames.DataFrame(
+                sample = sample,
+                taxon = taxon,
+                relative_abundance = abund
+            ))
+        end
+    end
+
+    return DataFrames.vcat(rows...)
+end</code></pre><p>Generate a small dataset (30 samples, 15 taxa)</p><pre><code class="language-julia hljs">small_df = generate_example_data(30, 15)
+println(&quot;Small dataset: $(DataFrames.nrow(small_df)) rows&quot;)
+display(first(small_df, 10))</code></pre><h2 id="Basic-Visualization"><a class="docs-heading-anchor" href="#Basic-Visualization">Basic Visualization</a><a id="Basic-Visualization-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Visualization" title="Permalink"></a></h2><p>The simplest usage requires just a DataFrame with sample, taxon, and abundance columns.</p><p>Basic plot with defaults</p><pre><code class="language-julia hljs">results_basic = Mycelia.plot_microbiome_abundance(
+    small_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;
+)</code></pre><p>The results dictionary contains the generated visualizations</p><pre><code class="language-julia hljs">println(&quot;\nGenerated views: $(keys(results_basic))&quot;)</code></pre><p>Display the barplot</p><pre><code class="language-julia hljs">display(results_basic[:barplot])</code></pre><h2 id="Customizing-Configuration"><a class="docs-heading-anchor" href="#Customizing-Configuration">Customizing Configuration</a><a id="Customizing-Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Customizing-Configuration" title="Permalink"></a></h2><p>Use <code>MicrobiomePlotConfig</code> to control visualization parameters.</p><p>Create custom configuration</p><pre><code class="language-julia hljs">custom_config = Mycelia.MicrobiomePlotConfig(
+    top_n_taxa = 10,                    # Show top 10 taxa
+    orientation = :landscape,           # Force landscape orientation
+    legend_fontsize = 10.0,             # Larger legend text
+    show_sample_dendrogram = true,      # Add dendrogram
+    output_formats = [:png, :svg]       # Output formats
+)
+
+results_custom = Mycelia.plot_microbiome_abundance(
+    small_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;,
+    config = custom_config,
+    title = &quot;Custom Configuration Example&quot;
+)
+
+display(results_custom[:barplot])</code></pre><h2 id="Controlling-Sample-Order"><a class="docs-heading-anchor" href="#Controlling-Sample-Order">Controlling Sample Order</a><a id="Controlling-Sample-Order-1"></a><a class="docs-heading-anchor-permalink" href="#Controlling-Sample-Order" title="Permalink"></a></h2><p>Use <code>AxisOrdering</code> to specify how samples should be ordered.</p><p>Alphabetical ordering</p><pre><code class="language-julia hljs">alpha_config = Mycelia.MicrobiomePlotConfig(
+    sample_ordering = Mycelia.AxisOrdering(method = :alphabetical),
+    top_n_taxa = 10
+)
+
+results_alpha = Mycelia.plot_microbiome_abundance(
+    small_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;,
+    config = alpha_config,
+    title = &quot;Alphabetical Sample Order&quot;
+)
+
+display(results_alpha[:barplot])</code></pre><p>Hierarchical clustering with different distance metrics</p><pre><code class="language-julia hljs">hclust_config = Mycelia.MicrobiomePlotConfig(
+    sample_ordering = Mycelia.AxisOrdering(
+        method = :hclust,
+        distance_metric = :braycurtis,  # Bray-Curtis (standard for microbiome)
+        linkage = :average
+    ),
+    show_sample_dendrogram = true,
+    top_n_taxa = 10
+)
+
+results_hclust = Mycelia.plot_microbiome_abundance(
+    small_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;,
+    config = hclust_config,
+    title = &quot;Hierarchical Clustering (Bray-Curtis)&quot;
+)
+
+display(results_hclust[:barplot])</code></pre><h2 id="Medium-Dataset-(150-samples)"><a class="docs-heading-anchor" href="#Medium-Dataset-(150-samples)">Medium Dataset (150 samples)</a><a id="Medium-Dataset-(150-samples)-1"></a><a class="docs-heading-anchor-permalink" href="#Medium-Dataset-(150-samples)" title="Permalink"></a></h2><p>For larger datasets, the system automatically adjusts sizing and may generate multiple view types.</p><pre><code class="language-julia hljs">medium_df = generate_example_data(150, 20)
+println(&quot;\nMedium dataset: $(DataFrames.nrow(medium_df)) rows, $(length(unique(medium_df.sample))) samples&quot;)
+
+results_medium = Mycelia.plot_microbiome_abundance(
+    medium_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;,
+    title = &quot;Medium Cohort (150 samples)&quot;
+)
+
+println(&quot;Generated views: $(keys(results_medium))&quot;)</code></pre><p>Display barplot (may be in portrait orientation)</p><pre><code class="language-julia hljs">if haskey(results_medium, :barplot)
+    display(results_medium[:barplot])
+end</code></pre><h2 id="Large-Dataset-(400-samples)"><a class="docs-heading-anchor" href="#Large-Dataset-(400-samples)">Large Dataset (400 samples)</a><a id="Large-Dataset-(400-samples)-1"></a><a class="docs-heading-anchor-permalink" href="#Large-Dataset-(400-samples)" title="Permalink"></a></h2><p>For very large datasets, heatmaps and paginated views are generated automatically.</p><pre><code class="language-julia hljs">large_df = generate_example_data(400, 25)
+println(&quot;\nLarge dataset: $(DataFrames.nrow(large_df)) rows, $(length(unique(large_df.sample))) samples&quot;)
+
+large_config = Mycelia.MicrobiomePlotConfig(
+    large_dataset_view = :auto,  # Let system decide
+    samples_per_page = 100       # For paginated view
+)
+
+results_large = Mycelia.plot_microbiome_abundance(
+    large_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;,
+    config = large_config,
+    title = &quot;Large Cohort Study&quot;
+)
+
+println(&quot;Generated views: $(keys(results_large))&quot;)</code></pre><p>Display heatmap if generated</p><pre><code class="language-julia hljs">if haskey(results_large, :heatmap)
+    println(&quot;\nHeatmap view:&quot;)
+    display(results_large[:heatmap])
+end</code></pre><p>Display first page of paginated view if generated</p><pre><code class="language-julia hljs">if haskey(results_large, :paginated)
+    println(&quot;\nPaginated view ($(length(results_large[:paginated])) pages):&quot;)
+    display(results_large[:paginated][1])
+end</code></pre><h2 id="Saving-Plots"><a class="docs-heading-anchor" href="#Saving-Plots">Saving Plots</a><a id="Saving-Plots-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-Plots" title="Permalink"></a></h2><p>Use <code>save_plot</code> to export figures in multiple formats.</p><p>Create output directory</p><pre><code class="language-julia hljs">output_dir = mktempdir()
+println(&quot;\nSaving to: $output_dir&quot;)</code></pre><p>Save a figure</p><pre><code class="language-julia hljs">if haskey(results_basic, :barplot)
+    paths = Mycelia.save_plot(
+        results_basic[:barplot],
+        joinpath(output_dir, &quot;basic_barplot&quot;),
+        formats = [:png, :svg],
+        dpi = 300
+    )
+    println(&quot;Saved files: $(values(paths))&quot;)
+end</code></pre><h2 id="Automatic-Output-Directory"><a class="docs-heading-anchor" href="#Automatic-Output-Directory">Automatic Output Directory</a><a id="Automatic-Output-Directory-1"></a><a class="docs-heading-anchor-permalink" href="#Automatic-Output-Directory" title="Permalink"></a></h2><p>Pass <code>output_dir</code> to automatically save all generated views.</p><pre><code class="language-julia hljs">auto_output = mktempdir()
+results_auto = Mycelia.plot_microbiome_abundance(
+    small_df,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance,
+    rank = &quot;genus&quot;,
+    output_dir = auto_output  # Automatic saving
+)
+
+println(&quot;\nAuto-saved files:&quot;)
+for f in readdir(auto_output)
+    println(&quot;  $f&quot;)
+end</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>Key takeaways:</p><ol><li><code>plot_microbiome_abundance</code> is the main entry point</li><li><code>MicrobiomePlotConfig</code> controls all visualization parameters</li><li><code>AxisOrdering</code> specifies sample/taxa ordering (hclust, alphabetical, preordered)</li><li>The system automatically selects appropriate views based on sample count</li><li><code>save_plot</code> exports figures in multiple formats</li></ol><p>For more details, see the <a href="../docs/src/microbiome-visualization.md">Microbiome Visualization</a> documentation.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../19_relational_clustering/">« Step 19: Relational Clustering</a><a class="docs-footer-nextpage" href="../conceptual_figures/">Conceptual Figures »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 29 January 2026 12:36">Thursday 29 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
