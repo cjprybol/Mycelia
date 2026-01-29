@@ -5410,3 +5410,578 @@ function plot_microbiome_abundance(
 
     return results
 end
+
+# ============================================================================
+# Coverage Integration Functions for Contig-Level Abundance
+# ============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Merge mosdepth coverage data with taxonomy assignments to create a unified
+contig-level abundance table.
+
+# Arguments
+- `coverage_df::DataFrames.DataFrame`: DataFrame from `parse_mosdepth_summary()` with columns:
+  - `chrom`: Contig/chromosome ID
+  - `mean`: Mean coverage depth
+  - Optional: `length`, `bases`, `min`, `max`
+- `taxonomy_df::DataFrames.DataFrame`: DataFrame with taxonomy assignments, must have:
+  - A contig ID column (specified by `contig_col`)
+  - Taxonomy rank columns (species, genus, family, etc.)
+- `contig_col::Symbol`: Column name in taxonomy_df containing contig IDs (default: :contig_id)
+- `coverage_col::Symbol`: Column name in coverage_df containing coverage values (default: :mean)
+- `coverage_contig_col::Symbol`: Column name in coverage_df containing contig IDs (default: :chrom)
+- `min_coverage::Float64`: Minimum coverage threshold to include contigs (default: 0.0)
+- `min_length::Int`: Minimum contig length to include (default: 0, requires `length` column)
+
+# Returns
+- `DataFrames.DataFrame`: Merged table with coverage and taxonomy information
+
+# Example
+```julia
+coverage_df = Mycelia.parse_mosdepth_summary("sample.mosdepth.summary.txt")
+taxonomy_df = Mycelia.parse_blast_report("sample.blast.txt") |> Mycelia.ensure_lineage_columns
+
+merged = Mycelia.merge_coverage_with_taxonomy(
+    coverage_df,
+    taxonomy_df,
+    contig_col = :query_id,  # BLAST query ID column
+    min_coverage = 1.0
+)
+```
+"""
+function merge_coverage_with_taxonomy(
+    coverage_df::DataFrames.DataFrame,
+    taxonomy_df::DataFrames.DataFrame;
+    contig_col::Symbol = :contig_id,
+    coverage_col::Symbol = :mean,
+    coverage_contig_col::Symbol = :chrom,
+    min_coverage::Float64 = 0.0,
+    min_length::Int = 0
+)
+    # Validate required columns in coverage_df
+    if !DataFrames.hasproperty(coverage_df, coverage_contig_col)
+        error("coverage_df must have column: $coverage_contig_col")
+    end
+    if !DataFrames.hasproperty(coverage_df, coverage_col)
+        error("coverage_df must have column: $coverage_col")
+    end
+
+    # Validate required columns in taxonomy_df
+    if !DataFrames.hasproperty(taxonomy_df, contig_col)
+        error("taxonomy_df must have column: $contig_col")
+    end
+
+    # Apply coverage filter
+    filtered_coverage = coverage_df[coverage_df[!, coverage_col] .>= min_coverage, :]
+
+    # Apply length filter if column exists and min_length > 0
+    if min_length > 0 && DataFrames.hasproperty(filtered_coverage, :length)
+        filtered_coverage = filtered_coverage[filtered_coverage[!, :length] .>= min_length, :]
+    end
+
+    @info "Coverage filtering: $(DataFrames.nrow(coverage_df)) -> $(DataFrames.nrow(filtered_coverage)) contigs (min_coverage=$min_coverage, min_length=$min_length)"
+
+    # Merge coverage with taxonomy
+    merged = DataFrames.leftjoin(
+        filtered_coverage,
+        taxonomy_df,
+        on = coverage_contig_col => contig_col,
+        matchmissing = :notequal
+    )
+
+    # Count successful joins
+    n_with_taxonomy = sum(!ismissing, merged[!, :domain])  # Assuming domain is a standard column
+    if DataFrames.hasproperty(merged, :domain)
+        n_with_taxonomy = sum(!ismissing, merged[!, :domain])
+    else
+        # Try to count based on any taxonomy column present
+        taxonomy_cols = [:species, :genus, :family, :order, :class, :phylum, :kingdom, :domain]
+        for col in taxonomy_cols
+            if DataFrames.hasproperty(merged, col)
+                n_with_taxonomy = sum(!ismissing, merged[!, col])
+                break
+            end
+        end
+    end
+
+    @info "Taxonomy join: $(DataFrames.nrow(merged)) contigs, $n_with_taxonomy with taxonomy assignments"
+
+    return merged
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute coverage-weighted relative abundances at a specified taxonomic rank.
+
+Takes merged coverage + taxonomy data and aggregates by taxonomic rank,
+weighting abundances by coverage depth. The output is formatted for use
+with `plot_microbiome_abundance()`.
+
+# Arguments
+- `merged_df::DataFrames.DataFrame`: Output from `merge_coverage_with_taxonomy()`
+- `sample_id::String`: Sample identifier to include in output
+- `rank::Symbol`: Taxonomic rank to aggregate by (default: :genus)
+  Options: :species, :genus, :family, :order, :class, :phylum, :kingdom, :domain
+- `coverage_col::Symbol`: Column containing coverage values (default: :mean)
+- `include_unclassified::Bool`: Whether to include contigs without taxonomy (default: true)
+- `unclassified_label::String`: Label for unclassified contigs (default: "Unclassified")
+
+# Returns
+- `DataFrames.DataFrame`: Long-format abundance table with columns:
+  - `sample`: Sample identifier
+  - `taxon`: Taxon name at specified rank
+  - `relative_abundance`: Coverage-weighted relative abundance (0-1)
+  - `total_coverage`: Sum of coverage for this taxon
+  - `n_contigs`: Number of contigs assigned to this taxon
+
+# Example
+```julia
+merged = Mycelia.merge_coverage_with_taxonomy(coverage_df, taxonomy_df)
+abundance = Mycelia.compute_coverage_weighted_abundance(
+    merged,
+    sample_id = "Sample_001",
+    rank = :genus
+)
+
+# Use with visualization
+results = Mycelia.plot_microbiome_abundance(
+    abundance,
+    sample_col = :sample,
+    taxon_col = :taxon,
+    abundance_col = :relative_abundance
+)
+```
+"""
+function compute_coverage_weighted_abundance(
+    merged_df::DataFrames.DataFrame,
+    sample_id::String;
+    rank::Symbol = :genus,
+    coverage_col::Symbol = :mean,
+    include_unclassified::Bool = true,
+    unclassified_label::String = "Unclassified"
+)
+    # Validate rank column exists
+    if !DataFrames.hasproperty(merged_df, rank)
+        error("merged_df must have rank column: $rank")
+    end
+    if !DataFrames.hasproperty(merged_df, coverage_col)
+        error("merged_df must have coverage column: $coverage_col")
+    end
+
+    # Create working copy with taxon column
+    work_df = DataFrames.select(merged_df, coverage_col, rank)
+    DataFrames.rename!(work_df, rank => :taxon)
+
+    # Handle missing values
+    if include_unclassified
+        work_df.taxon = coalesce.(work_df.taxon, unclassified_label)
+    else
+        work_df = work_df[.!ismissing.(work_df.taxon), :]
+    end
+
+    # Convert to string type for consistency
+    work_df.taxon = string.(work_df.taxon)
+
+    # Aggregate by taxon
+    aggregated = DataFrames.combine(
+        DataFrames.groupby(work_df, :taxon),
+        coverage_col => sum => :total_coverage,
+        DataFrames.nrow => :n_contigs
+    )
+
+    # Compute relative abundance
+    total_coverage = sum(aggregated.total_coverage)
+    if total_coverage > 0
+        aggregated.relative_abundance = aggregated.total_coverage ./ total_coverage
+    else
+        aggregated.relative_abundance = zeros(DataFrames.nrow(aggregated))
+    end
+
+    # Add sample column
+    aggregated.sample = fill(sample_id, DataFrames.nrow(aggregated))
+
+    # Reorder columns
+    result = DataFrames.select(aggregated, :sample, :taxon, :relative_abundance, :total_coverage, :n_contigs)
+
+    # Sort by abundance descending
+    DataFrames.sort!(result, :relative_abundance, rev=true)
+
+    @info "Aggregated to $(DataFrames.nrow(result)) taxa at $rank level for $sample_id"
+
+    return result
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Process multiple samples to create a combined coverage-weighted abundance table.
+
+This is a convenience function that processes multiple mosdepth + taxonomy file
+pairs and combines them into a single abundance table suitable for multi-sample
+visualization.
+
+# Arguments
+- `sample_data::Vector{NamedTuple}`: Vector of named tuples, each containing:
+  - `sample_id::String`: Sample identifier
+  - `coverage_file::String`: Path to mosdepth summary file
+  - `taxonomy_file::String`: Path to taxonomy file (BLAST, mmseqs, or Arrow)
+  - Optional: `contig_col::Symbol`: Column name for contig IDs in taxonomy file
+- `rank::Symbol`: Taxonomic rank to aggregate by (default: :genus)
+- `min_coverage::Float64`: Minimum coverage threshold (default: 0.0)
+- `min_length::Int`: Minimum contig length (default: 0)
+- `include_unclassified::Bool`: Include unclassified contigs (default: true)
+- `taxonomy_format::Symbol`: Format of taxonomy files (default: :auto)
+  Options: :auto, :blast, :mmseqs, :arrow
+
+# Returns
+- `DataFrames.DataFrame`: Combined abundance table for all samples
+
+# Example
+```julia
+samples = [
+    (sample_id = "Sample_001",
+     coverage_file = "sample1.mosdepth.summary.txt",
+     taxonomy_file = "sample1.blast.txt"),
+    (sample_id = "Sample_002",
+     coverage_file = "sample2.mosdepth.summary.txt",
+     taxonomy_file = "sample2.blast.txt"),
+]
+
+combined = Mycelia.process_samples_coverage_abundance(
+    samples,
+    rank = :family,
+    min_coverage = 1.0
+)
+
+results = Mycelia.plot_microbiome_abundance(combined)
+```
+"""
+function process_samples_coverage_abundance(
+    sample_data::Vector{<:NamedTuple};
+    rank::Symbol = :genus,
+    min_coverage::Float64 = 0.0,
+    min_length::Int = 0,
+    include_unclassified::Bool = true,
+    taxonomy_format::Symbol = :auto
+)
+    all_abundances = DataFrames.DataFrame()
+
+    for (i, sample) in enumerate(sample_data)
+        @info "Processing sample $(i)/$(length(sample_data)): $(sample.sample_id)"
+
+        # Load coverage data
+        coverage_df = parse_mosdepth_summary(sample.coverage_file)
+
+        # Load taxonomy data based on format
+        taxonomy_df = _load_taxonomy_file(
+            sample.taxonomy_file,
+            format = taxonomy_format
+        )
+
+        # Get contig column name (default or from sample tuple)
+        contig_col = haskey(sample, :contig_col) ? sample.contig_col : _detect_contig_column(taxonomy_df)
+
+        # Merge coverage with taxonomy
+        merged = merge_coverage_with_taxonomy(
+            coverage_df,
+            taxonomy_df,
+            contig_col = contig_col,
+            min_coverage = min_coverage,
+            min_length = min_length
+        )
+
+        # Compute abundance for this sample
+        abundance = compute_coverage_weighted_abundance(
+            merged,
+            sample.sample_id,
+            rank = rank,
+            include_unclassified = include_unclassified
+        )
+
+        # Append to combined table
+        all_abundances = DataFrames.vcat(all_abundances, abundance, cols = :union)
+    end
+
+    @info "Combined abundance table: $(DataFrames.nrow(all_abundances)) rows, $(length(unique(all_abundances.sample))) samples"
+
+    return all_abundances
+end
+
+"""
+Internal helper to load taxonomy files in various formats.
+"""
+function _load_taxonomy_file(
+    filepath::String;
+    format::Symbol = :auto
+)
+    # Auto-detect format
+    if format == :auto
+        if endswith(filepath, ".arrow")
+            format = :arrow
+        elseif occursin("_lca.tsv", filepath) || occursin("mmseqs", lowercase(filepath))
+            format = :mmseqs
+        else
+            format = :blast
+        end
+    end
+
+    if format == :arrow
+        return DataFrames.DataFrame(Arrow.Table(filepath))
+    elseif format == :mmseqs
+        df = parse_mmseqs_easy_taxonomy_lca_tsv(filepath)
+        # Ensure lineage columns exist
+        if DataFrames.hasproperty(df, :taxon_id) && !DataFrames.hasproperty(df, :domain)
+            taxids = collect(skipmissing(df.taxon_id))
+            if !isempty(taxids)
+                lineage = taxids2taxonkit_summarized_lineage_table(taxids)
+                df = DataFrames.leftjoin(df, lineage, on = :taxon_id => :taxid)
+            end
+        end
+        return df
+    elseif format == :blast
+        df = parse_blast_report(filepath)
+        return ensure_lineage_columns(df)
+    else
+        error("Unknown taxonomy format: $format")
+    end
+end
+
+"""
+Internal helper to detect the contig ID column in taxonomy DataFrames.
+"""
+function _detect_contig_column(df::DataFrames.DataFrame)
+    # Common contig column names in order of preference
+    candidates = [:contig_id, :query_id, Symbol("query id"), :qseqid, :contig, :sequence_id]
+
+    for col in candidates
+        if DataFrames.hasproperty(df, col)
+            return col
+        end
+    end
+
+    # If none found, return first column as fallback
+    @warn "Could not detect contig column, using first column: $(names(df)[1])"
+    return Symbol(names(df)[1])
+end
+
+# ============================================================================
+# BLAST-specific Coverage Integration
+# ============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute coverage-weighted abundance from BLAST results and mosdepth coverage.
+
+This is a convenience function for the common workflow of combining BLAST taxonomy
+assignments with mosdepth contig coverage to produce relative abundances.
+
+# Arguments
+- `blast_file::String`: Path to BLAST output file (outfmt 6 or 7)
+- `mosdepth_summary::String`: Path to mosdepth summary file (.mosdepth.summary.txt)
+- `sample_id::String`: Sample identifier for the output DataFrame
+- `rank::Symbol`: Taxonomic rank to aggregate by (default: :genus)
+- `min_coverage::Float64`: Minimum mean coverage to include contig (default: 1.0)
+- `min_length::Int`: Minimum contig length to include (default: 0)
+- `evalue_max::Float64`: Maximum e-value for BLAST hits (default: 1e-10)
+- `include_unclassified::Bool`: Include contigs without BLAST hits (default: true)
+
+# Returns
+- `DataFrames.DataFrame`: Abundance table with columns:
+  - `sample`: Sample identifier
+  - `taxon`: Taxon name at specified rank
+  - `relative_abundance`: Coverage-weighted relative abundance (0-1)
+  - `total_coverage`: Sum of coverage for this taxon
+  - `n_contigs`: Number of contigs assigned to this taxon
+
+# Example
+```julia
+abundance = Mycelia.blast_coverage_abundance(
+    "contigs.blast.txt",
+    "contigs.mosdepth.summary.txt",
+    "Sample_001",
+    rank = :family,
+    min_coverage = 3.0
+)
+
+# Combine multiple samples
+all_abundances = DataFrames.vcat([
+    Mycelia.blast_coverage_abundance(blast_files[i], mosdepth_files[i], sample_ids[i])
+    for i in 1:length(sample_ids)
+]...)
+
+# Visualize
+results = Mycelia.plot_microbiome_abundance(all_abundances, rank = "family")
+```
+"""
+function blast_coverage_abundance(
+    blast_file::String,
+    mosdepth_summary::String,
+    sample_id::String;
+    rank::Symbol = :genus,
+    min_coverage::Float64 = 1.0,
+    min_length::Int = 0,
+    evalue_max::Float64 = 1e-10,
+    include_unclassified::Bool = true
+)
+    @info "Processing BLAST coverage abundance for $sample_id"
+
+    # Load and parse BLAST results
+    blast_df = parse_blast_report(blast_file)
+    @info "Loaded $(DataFrames.nrow(blast_df)) BLAST hits"
+
+    # Filter by e-value if column exists
+    if DataFrames.hasproperty(blast_df, :evalue) || DataFrames.hasproperty(blast_df, Symbol("evalue"))
+        evalue_col = DataFrames.hasproperty(blast_df, :evalue) ? :evalue : Symbol("evalue")
+        blast_df = blast_df[blast_df[!, evalue_col] .<= evalue_max, :]
+        @info "After e-value filter (≤$evalue_max): $(DataFrames.nrow(blast_df)) hits"
+    end
+
+    # Get best hit per query (by bit score or e-value)
+    query_col = _detect_contig_column(blast_df)
+    if DataFrames.hasproperty(blast_df, Symbol("bit score"))
+        # Group by query and take best hit by bit score
+        blast_df = DataFrames.combine(
+            DataFrames.groupby(blast_df, query_col),
+            sdf -> sdf[argmax(sdf[!, Symbol("bit score")]), :]
+        )
+        @info "Best hits per query: $(DataFrames.nrow(blast_df)) contigs"
+    end
+
+    # Add lineage columns
+    taxonomy_df = ensure_lineage_columns(blast_df)
+
+    # Load mosdepth coverage
+    coverage_df = parse_mosdepth_summary(mosdepth_summary)
+
+    # Merge coverage with taxonomy
+    merged = merge_coverage_with_taxonomy(
+        coverage_df,
+        taxonomy_df,
+        contig_col = query_col,
+        min_coverage = min_coverage,
+        min_length = min_length
+    )
+
+    # Compute coverage-weighted abundance
+    abundance = compute_coverage_weighted_abundance(
+        merged,
+        sample_id,
+        rank = rank,
+        include_unclassified = include_unclassified
+    )
+
+    return abundance
+end
+
+# ============================================================================
+# MMseqs2-specific Coverage Integration
+# ============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute coverage-weighted abundance from mmseqs2 easy-taxonomy results and mosdepth coverage.
+
+This is a convenience function for combining mmseqs2 taxonomic assignments
+(from UniRef databases) with mosdepth contig coverage.
+
+# Arguments
+- `mmseqs_lca_file::String`: Path to mmseqs2 LCA TSV file (from easy-taxonomy workflow)
+- `mosdepth_summary::String`: Path to mosdepth summary file (.mosdepth.summary.txt)
+- `sample_id::String`: Sample identifier for the output DataFrame
+- `rank::Symbol`: Taxonomic rank to aggregate by (default: :genus)
+- `min_coverage::Float64`: Minimum mean coverage to include contig (default: 1.0)
+- `min_length::Int`: Minimum contig length to include (default: 0)
+- `min_support::Float64`: Minimum -log(E-value) support for mmseqs assignments (default: 0.0)
+- `include_unclassified::Bool`: Include contigs without taxonomy (default: true)
+
+# Returns
+- `DataFrames.DataFrame`: Abundance table with columns:
+  - `sample`: Sample identifier
+  - `taxon`: Taxon name at specified rank
+  - `relative_abundance`: Coverage-weighted relative abundance (0-1)
+  - `total_coverage`: Sum of coverage for this taxon
+  - `n_contigs`: Number of contigs assigned to this taxon
+
+# Example
+```julia
+abundance = Mycelia.mmseqs_coverage_abundance(
+    "contigs_lca.tsv",
+    "contigs.mosdepth.summary.txt",
+    "Sample_001",
+    rank = :family
+)
+
+# For UniRef50 vs UniRef90 comparison
+uniref50_abundance = Mycelia.mmseqs_coverage_abundance(
+    "contigs.uniref50_lca.tsv",
+    "contigs.mosdepth.summary.txt",
+    "Sample_001_UniRef50"
+)
+
+uniref90_abundance = Mycelia.mmseqs_coverage_abundance(
+    "contigs.uniref90_lca.tsv",
+    "contigs.mosdepth.summary.txt",
+    "Sample_001_UniRef90"
+)
+```
+"""
+function mmseqs_coverage_abundance(
+    mmseqs_lca_file::String,
+    mosdepth_summary::String,
+    sample_id::String;
+    rank::Symbol = :genus,
+    min_coverage::Float64 = 1.0,
+    min_length::Int = 0,
+    min_support::Float64 = 0.0,
+    include_unclassified::Bool = true
+)
+    @info "Processing mmseqs2 coverage abundance for $sample_id"
+
+    # Load and parse mmseqs LCA results
+    mmseqs_df = parse_mmseqs_easy_taxonomy_lca_tsv(mmseqs_lca_file)
+    @info "Loaded $(DataFrames.nrow(mmseqs_df)) mmseqs2 taxonomy assignments"
+
+    # Filter by support if specified
+    support_col = Symbol("support -log(E-value)")
+    if min_support > 0 && DataFrames.hasproperty(mmseqs_df, support_col)
+        mmseqs_df = mmseqs_df[mmseqs_df[!, support_col] .>= min_support, :]
+        @info "After support filter (≥$min_support): $(DataFrames.nrow(mmseqs_df)) assignments"
+    end
+
+    # Add full lineage columns from taxon_id
+    if DataFrames.hasproperty(mmseqs_df, :taxon_id) && !DataFrames.hasproperty(mmseqs_df, :domain)
+        taxids = collect(skipmissing(mmseqs_df.taxon_id))
+        if !isempty(taxids)
+            @info "Looking up lineage for $(length(taxids)) unique taxids"
+            lineage = taxids2taxonkit_summarized_lineage_table(taxids)
+            mmseqs_df = DataFrames.leftjoin(mmseqs_df, lineage, on = :taxon_id => :taxid)
+        end
+    end
+
+    # Load mosdepth coverage
+    coverage_df = parse_mosdepth_summary(mosdepth_summary)
+
+    # Merge coverage with taxonomy
+    merged = merge_coverage_with_taxonomy(
+        coverage_df,
+        mmseqs_df,
+        contig_col = :contig_id,
+        min_coverage = min_coverage,
+        min_length = min_length
+    )
+
+    # Compute coverage-weighted abundance
+    abundance = compute_coverage_weighted_abundance(
+        merged,
+        sample_id,
+        rank = rank,
+        include_unclassified = include_unclassified
+    )
+
+    return abundance
+end
