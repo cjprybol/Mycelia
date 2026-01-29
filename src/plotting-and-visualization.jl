@@ -4259,6 +4259,408 @@ function visualize_hierarchical_heatmap(
         legend_title,
         framevisible = true
     )
-    
+
     return fig
+end
+
+# =============================================================================
+# Unified Microbiome Visualization System
+# =============================================================================
+# These structs and functions provide a consistent, publication-quality
+# visualization system for microbiome abundance data across large sample sets.
+# Handles 300-600+ samples with adaptive sizing and automatic view selection.
+# =============================================================================
+
+"""
+    AxisOrdering
+
+Specification for ordering samples or taxa in microbiome plots.
+
+# Fields
+- `method::Symbol`: Ordering method - `:hclust`, `:preordered`, `:sort`, `:alphabetical`
+- `preordered_labels::Union{Vector{String}, Nothing}`: Labels in desired order (for `:preordered`)
+- `sort_by::Union{Symbol, Function, Nothing}`: Column or function for sorting (for `:sort`)
+- `distance_metric::Symbol`: Distance metric for clustering - `:braycurtis`, `:euclidean`, `:cosine`
+- `linkage::Symbol`: Linkage method for clustering - `:single`, `:complete`, `:average`, `:ward`
+
+# Examples
+```julia
+# Hierarchical clustering with Bray-Curtis (default)
+ordering = AxisOrdering()
+
+# Pre-specified order
+ordering = AxisOrdering(method=:preordered, preordered_labels=["Sample1", "Sample2", "Sample3"])
+
+# Sort by mean abundance
+ordering = AxisOrdering(method=:sort, sort_by=:mean_abundance)
+
+# Alphabetical
+ordering = AxisOrdering(method=:alphabetical)
+```
+"""
+Base.@kwdef struct AxisOrdering
+    method::Symbol = :hclust
+    preordered_labels::Union{Vector{String}, Nothing} = nothing
+    sort_by::Union{Symbol, Function, Nothing} = nothing
+    distance_metric::Symbol = :braycurtis
+    linkage::Symbol = :average
+end
+
+"""
+    MicrobiomePlotConfig
+
+Configuration for microbiome abundance visualizations.
+Provides consistent defaults across all visualization functions.
+
+# Figure Dimensions
+- `max_width::Int`: Maximum figure width in pixels (default: 1600)
+- `min_height::Int`: Minimum figure height in pixels (default: 800)
+- `pixels_per_sample::Int`: Height per sample in portrait mode (default: 12)
+- `orientation::Symbol`: `:auto`, `:landscape`, or `:portrait` (default: :auto)
+
+# X-axis Labels
+- `min_label_fontsize::Float64`: Minimum label font size (default: 6.0)
+- `max_label_fontsize::Float64`: Maximum label font size (default: 12.0)
+- `label_rotation::Float64`: Label rotation in degrees (default: 90.0)
+
+# Taxa and Legend
+- `top_n_taxa::Int`: Number of top taxa to show individually (default: 25)
+- `legend_fontsize::Float64`: Legend text font size (default: 8.0)
+- `legend_position::Symbol`: Legend position (default: :right)
+
+# Margins (pixels)
+- `left_margin::Int`: Left margin (default: 80)
+- `bottom_margin::Int`: Bottom margin (default: 120)
+- `right_margin::Int`: Right margin for legend (default: 150)
+- `top_margin::Int`: Top margin (default: 40)
+
+# Ordering
+- `sample_ordering::AxisOrdering`: How to order samples (default: hierarchical clustering)
+- `taxa_ordering::AxisOrdering`: How to order taxa (default: sort by mean abundance)
+
+# Dendrograms
+- `show_sample_dendrogram::Bool`: Show dendrogram for samples (default: false)
+- `show_taxa_dendrogram::Bool`: Show dendrogram for taxa (default: false)
+- `dendrogram_width::Int`: Dendrogram width in pixels (default: 100)
+- `color_branches_by_cluster::Bool`: Color branches by cluster assignment (default: false)
+- `n_clusters::Union{Int, Nothing}`: Number of clusters for branch coloring (default: nothing)
+
+# Colors
+- `color_palette::Symbol`: Color palette - `:maximally_distinguishable`, `:viridis`, etc.
+- `custom_colors::Union{Vector, Nothing}`: Custom color vector (default: nothing)
+
+# Large Dataset Handling
+- `large_dataset_view::Symbol`: View type - `:auto`, `:tall`, `:paginated`, `:heatmap`, `:all`
+- `samples_per_page::Int`: Samples per page in paginated view (default: 150)
+- `heatmap_threshold::Int`: Switch to heatmap above this sample count (default: 300)
+
+# Output
+- `output_formats::Vector{Symbol}`: Output formats (default: [:png, :svg])
+- `dpi::Int`: Output resolution (default: 300)
+
+# Examples
+```julia
+# Default configuration
+config = MicrobiomePlotConfig()
+
+# Portrait orientation for many samples
+config = MicrobiomePlotConfig(orientation=:portrait, pixels_per_sample=10)
+
+# Show dendrograms with 5 clusters
+config = MicrobiomePlotConfig(
+    show_sample_dendrogram=true,
+    color_branches_by_cluster=true,
+    n_clusters=5
+)
+```
+"""
+Base.@kwdef struct MicrobiomePlotConfig
+    # Figure dimensions
+    max_width::Int = 1600
+    min_height::Int = 800
+    pixels_per_sample::Int = 12
+    orientation::Symbol = :auto
+
+    # X-axis label sizing
+    min_label_fontsize::Float64 = 6.0
+    max_label_fontsize::Float64 = 12.0
+    label_rotation::Float64 = 90.0
+
+    # Taxa/legend
+    top_n_taxa::Int = 25
+    legend_fontsize::Float64 = 8.0
+    legend_position::Symbol = :right
+
+    # Margins (pixels)
+    left_margin::Int = 80
+    bottom_margin::Int = 120
+    right_margin::Int = 150
+    top_margin::Int = 40
+
+    # Ordering
+    sample_ordering::AxisOrdering = AxisOrdering()
+    taxa_ordering::AxisOrdering = AxisOrdering(method=:sort, sort_by=:mean_abundance)
+
+    # Dendrogram options
+    show_sample_dendrogram::Bool = false
+    show_taxa_dendrogram::Bool = false
+    dendrogram_width::Int = 100
+    color_branches_by_cluster::Bool = false
+    n_clusters::Union{Int, Nothing} = nothing
+
+    # Color scheme
+    color_palette::Symbol = :maximally_distinguishable
+    custom_colors::Union{Vector, Nothing} = nothing
+
+    # View type for large datasets
+    large_dataset_view::Symbol = :auto
+    samples_per_page::Int = 150
+    heatmap_threshold::Int = 300
+
+    # Output
+    output_formats::Vector{Symbol} = [:png, :svg]
+    dpi::Int = 300
+end
+
+"""
+    adaptive_label_fontsize(n_samples::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+
+Calculate adaptive font size for x-tick labels based on sample count.
+Prevents label overlap while maintaining readability.
+
+Uses linear interpolation between `config.max_label_fontsize` (for ≤50 samples)
+and `config.min_label_fontsize` (for ≥500 samples).
+
+# Arguments
+- `n_samples::Int`: Number of samples to display
+- `config::MicrobiomePlotConfig`: Configuration with font size bounds
+
+# Returns
+- `Float64`: Recommended font size in points
+
+# Examples
+```julia
+adaptive_label_fontsize(30)   # Returns 12.0 (max)
+adaptive_label_fontsize(275)  # Returns 9.0 (midpoint)
+adaptive_label_fontsize(600)  # Returns 6.0 (min)
+```
+"""
+function adaptive_label_fontsize(n_samples::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+    if n_samples <= 50
+        return config.max_label_fontsize
+    elseif n_samples >= 500
+        return config.min_label_fontsize
+    else
+        # Linear interpolation
+        ratio = (n_samples - 50) / (500 - 50)
+        return config.max_label_fontsize - ratio * (config.max_label_fontsize - config.min_label_fontsize)
+    end
+end
+
+"""
+    calculate_figure_size(n_samples::Int, n_taxa::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+
+Calculate figure dimensions for abundance plots.
+Automatically selects orientation based on sample count when `config.orientation == :auto`.
+
+# Arguments
+- `n_samples::Int`: Number of samples to display
+- `n_taxa::Int`: Number of taxa (affects legend height)
+- `config::MicrobiomePlotConfig`: Configuration with dimension parameters
+
+# Returns
+- `Tuple{Int, Int}`: (width, height) in pixels
+
+# Sizing Strategy
+| Samples | Orientation | Width | Height |
+|---------|-------------|-------|--------|
+| 1-50 | Landscape | 800-1200 | 600-800 |
+| 50-150 | Square | 1200-1400 | 800-1000 |
+| 150-300 | Portrait | 1400-1600 | 1200-2000 |
+| 300-600 | Portrait | 1600 | 2000-3600 |
+| 600+ | Portrait | 1600 | 4000 (max) |
+
+# Examples
+```julia
+calculate_figure_size(30, 15)   # (900, 800) landscape
+calculate_figure_size(200, 25)  # (1600, 2400) portrait
+calculate_figure_size(500, 30)  # (1600, 4000) portrait
+```
+"""
+function calculate_figure_size(n_samples::Int, n_taxa::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+    orientation = config.orientation
+    if orientation == :auto
+        orientation = n_samples > 100 ? :portrait : :landscape
+    end
+
+    if orientation == :portrait
+        # Portrait: fixed width, variable height based on samples
+        width = config.max_width
+        sample_height = n_samples * config.pixels_per_sample
+        taxa_legend_height = n_taxa * 18  # Approximate height per taxa in legend
+        height = max(config.min_height, sample_height, taxa_legend_height)
+        height = min(height, 4000)  # Cap at reasonable maximum
+    else
+        # Landscape: fixed height, variable width based on samples
+        height = config.min_height
+        width = max(800, n_samples * 8 + config.right_margin + config.left_margin)
+        width = min(width, 3000)  # Cap at reasonable maximum
+    end
+
+    return (width, height)
+end
+
+"""
+    compute_axis_ordering(data_matrix::Matrix, labels::Vector{String}; ordering::AxisOrdering=AxisOrdering())
+
+Order samples or taxa using the specified method.
+
+# Arguments
+- `data_matrix::Matrix`: Abundance matrix (rows=items to order, cols=features)
+- `labels::Vector{String}`: Labels for each row
+- `ordering::AxisOrdering`: Ordering specification
+
+# Returns
+- `Tuple{Vector{Int}, Union{Clustering.Hclust, Nothing}}`: (ordered_indices, hclust_result_or_nothing)
+
+# Ordering Methods
+- `:hclust`: Hierarchical clustering with specified distance metric and linkage
+- `:preordered`: Use provided label order from `ordering.preordered_labels`
+- `:sort`: Sort by computed values (e.g., mean abundance)
+- `:alphabetical`: Alphabetical sorting of labels
+
+# Examples
+```julia
+# Hierarchical clustering (default)
+indices, hclust = compute_axis_ordering(matrix, labels)
+
+# Alphabetical
+indices, _ = compute_axis_ordering(matrix, labels, ordering=AxisOrdering(method=:alphabetical))
+
+# Pre-specified order
+ordered = AxisOrdering(method=:preordered, preordered_labels=["B", "A", "C"])
+indices, _ = compute_axis_ordering(matrix, labels, ordering=ordered)
+```
+"""
+function compute_axis_ordering(data_matrix::Matrix, labels::Vector{String}; ordering::AxisOrdering=AxisOrdering())
+    if ordering.method == :preordered && !isnothing(ordering.preordered_labels)
+        # Use provided order
+        label_to_idx = Dict(l => i for (i, l) in enumerate(labels))
+        ordered_indices = [label_to_idx[l] for l in ordering.preordered_labels if haskey(label_to_idx, l)]
+        return (ordered_indices, nothing)
+
+    elseif ordering.method == :alphabetical
+        perm = sortperm(labels)
+        return (perm, nothing)
+
+    elseif ordering.method == :sort && !isnothing(ordering.sort_by)
+        # Sort by computed values (e.g., mean abundance)
+        if ordering.sort_by isa Symbol
+            # Default: mean across rows
+            values = vec(Statistics.mean(data_matrix, dims=2))
+        else
+            # Custom function
+            values = [ordering.sort_by(row) for row in eachrow(data_matrix)]
+        end
+        perm = sortperm(values, rev=true)
+        return (perm, nothing)
+
+    else  # :hclust (default)
+        dist_func = if ordering.distance_metric == :braycurtis
+            Distances.BrayCurtis()
+        elseif ordering.distance_metric == :cosine
+            Distances.CosineDist()
+        else
+            Distances.Euclidean()
+        end
+
+        # Compute pairwise distance matrix
+        dist_matrix = Distances.pairwise(dist_func, data_matrix, dims=1)
+
+        # Handle NaN/Inf values that can occur with zero vectors
+        dist_matrix = replace(dist_matrix, NaN => 0.0, Inf => 1.0)
+
+        # Convert to symmetric matrix and perform hierarchical clustering
+        linkage_method = if ordering.linkage == :single
+            :single
+        elseif ordering.linkage == :complete
+            :complete
+        elseif ordering.linkage == :ward
+            :ward
+        else
+            :average
+        end
+
+        hcl = Clustering.hclust(dist_matrix, linkage=linkage_method)
+        return (hcl.order, hcl)
+    end
+end
+
+"""
+    determine_view_types(n_samples::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+
+Determine which visualization types to generate based on sample count.
+
+# Arguments
+- `n_samples::Int`: Number of samples
+- `config::MicrobiomePlotConfig`: Configuration with view preferences
+
+# Returns
+- `Vector{Symbol}`: List of view types to generate (`:barplot`, `:heatmap`, `:paginated`)
+
+# Auto-selection Logic
+| Samples | Views Generated |
+|---------|-----------------|
+| ≤150 | [:barplot] |
+| 150-300 | [:barplot, :heatmap] |
+| >300 | [:heatmap, :paginated] |
+
+# Examples
+```julia
+determine_view_types(50)   # [:barplot]
+determine_view_types(200)  # [:barplot, :heatmap]
+determine_view_types(500)  # [:heatmap, :paginated]
+```
+"""
+function determine_view_types(n_samples::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+    if config.large_dataset_view == :auto
+        if n_samples <= 150
+            return [:barplot]
+        elseif n_samples <= config.heatmap_threshold
+            return [:barplot, :heatmap]
+        else
+            return [:heatmap, :paginated]
+        end
+    elseif config.large_dataset_view == :all
+        return [:barplot, :heatmap, :paginated]
+    else
+        return [config.large_dataset_view]
+    end
+end
+
+"""
+    calculate_tick_step(n_samples::Int; max_labels::Int=100)
+
+Calculate step size for showing every Nth label to prevent overlap.
+
+# Arguments
+- `n_samples::Int`: Total number of samples
+- `max_labels::Int`: Maximum number of labels to show (default: 100)
+
+# Returns
+- `Int`: Step size (1 means show all labels)
+
+# Examples
+```julia
+calculate_tick_step(50)   # 1 (show all)
+calculate_tick_step(200)  # 2 (show every 2nd)
+calculate_tick_step(500)  # 5 (show every 5th)
+```
+"""
+function calculate_tick_step(n_samples::Int; max_labels::Int=100)
+    if n_samples <= max_labels
+        return 1
+    else
+        return ceil(Int, n_samples / max_labels)
+    end
 end
