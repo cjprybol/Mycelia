@@ -1345,3 +1345,748 @@ function cluster_summary(
 
     return DataFrames.DataFrame(rows)
 end
+
+
+# =============================================================================
+# Cluster Comparison Methods
+# =============================================================================
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build a contingency matrix from two clusterings of the same samples.
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+
+# Returns
+- `NamedTuple` with fields:
+  - `matrix::Matrix{Int}`: Contingency matrix (rows = labels1, cols = labels2)
+  - `labels1::Vector`: Sorted unique labels from first clustering
+  - `labels2::Vector`: Sorted unique labels from second clustering
+
+# Example
+```julia
+labels_a = [1, 1, 2, 2, 3]
+labels_b = [1, 1, 1, 2, 2]
+result = Mycelia.contingency_matrix(labels_a, labels_b)
+```
+"""
+function contingency_matrix(labels1::AbstractVector, labels2::AbstractVector)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length (got $(length(labels1)) and $(length(labels2)))"))
+    end
+
+    unique1 = sort(unique(labels1))
+    unique2 = sort(unique(labels2))
+
+    matrix = zeros(Int, length(unique1), length(unique2))
+    idx1 = Dict(l => i for (i, l) in enumerate(unique1))
+    idx2 = Dict(l => i for (i, l) in enumerate(unique2))
+
+    for (l1, l2) in zip(labels1, labels2)
+        matrix[idx1[l1], idx2[l2]] += 1
+    end
+
+    return (matrix = matrix, labels1 = unique1, labels2 = unique2)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the Adjusted Rand Index (ARI) between two clusterings.
+
+The ARI is a measure of similarity between two clusterings, adjusted for chance.
+It ranges from -1 to 1, where:
+- 1 indicates perfect agreement
+- 0 indicates agreement no better than random chance
+- Negative values indicate agreement worse than random
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+
+# Returns
+- `Float64`: The Adjusted Rand Index
+
+# References
+- Hubert, L. and Arabie, P. (1985). Comparing partitions. Journal of Classification.
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2]
+labels_b = [1, 1, 2, 2, 2, 2]
+ari = Mycelia.adjusted_rand_index(labels_a, labels_b)
+```
+"""
+function adjusted_rand_index(labels1::AbstractVector, labels2::AbstractVector)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n < 2
+        return 1.0  ## Trivial case
+    end
+
+    cont = contingency_matrix(labels1, labels2)
+    nij = cont.matrix
+
+    ## Sum of combinations C(n_ij, 2) for all cells
+    sum_comb_nij = sum((binomial(Int(cell), 2) for cell in nij if cell >= 2), init=0)
+
+    ## Row and column sums
+    row_sums = vec(sum(nij, dims=2))
+    col_sums = vec(sum(nij, dims=1))
+
+    ## Sum of combinations for row sums
+    sum_comb_ai = sum((binomial(Int(ai), 2) for ai in row_sums if ai >= 2), init=0)
+
+    ## Sum of combinations for column sums
+    sum_comb_bj = sum((binomial(Int(bj), 2) for bj in col_sums if bj >= 2), init=0)
+
+    ## Total combinations
+    total_comb = binomial(n, 2)
+
+    if total_comb == 0
+        return 1.0
+    end
+
+    ## Expected index under random permutation
+    expected = (sum_comb_ai * sum_comb_bj) / total_comb
+
+    ## Maximum index
+    max_index = 0.5 * (sum_comb_ai + sum_comb_bj)
+
+    ## Adjusted Rand Index
+    if max_index == expected
+        return 1.0  ## Perfect agreement when both sums are 0
+    end
+
+    ari = (sum_comb_nij - expected) / (max_index - expected)
+    return ari
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the Normalized Mutual Information (NMI) between two clusterings.
+
+NMI is an information-theoretic measure of clustering similarity, normalized
+by the geometric mean of the entropies. It ranges from 0 to 1, where:
+- 1 indicates perfect agreement
+- 0 indicates no mutual information
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+
+# Returns
+- `Float64`: The Normalized Mutual Information
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2]
+labels_b = [1, 1, 2, 2, 2, 2]
+nmi = Mycelia.normalized_mutual_information(labels_a, labels_b)
+```
+"""
+function normalized_mutual_information(labels1::AbstractVector, labels2::AbstractVector)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n == 0
+        return 1.0
+    end
+
+    ## Calculate cluster counts
+    counts1 = StatsBase.countmap(labels1)
+    counts2 = StatsBase.countmap(labels2)
+    joint_counts = StatsBase.countmap(collect(zip(labels1, labels2)))
+
+    ## Entropy of clustering 1
+    H1 = 0.0
+    for c in values(counts1)
+        p = c / n
+        if p > 0
+            H1 -= p * log(p)
+        end
+    end
+
+    ## Entropy of clustering 2
+    H2 = 0.0
+    for c in values(counts2)
+        p = c / n
+        if p > 0
+            H2 -= p * log(p)
+        end
+    end
+
+    ## Mutual information
+    MI = 0.0
+    for ((l1, l2), nij) in joint_counts
+        if nij > 0
+            p_ij = nij / n
+            p_i = counts1[l1] / n
+            p_j = counts2[l2] / n
+            MI += p_ij * log(p_ij / (p_i * p_j))
+        end
+    end
+
+    ## Normalize by geometric mean of entropies
+    if H1 == 0.0 || H2 == 0.0
+        return H1 == H2 ? 1.0 : 0.0
+    end
+
+    nmi = MI / sqrt(H1 * H2)
+    return nmi
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the Adjusted Mutual Information (AMI) between two clusterings.
+
+AMI is the mutual information adjusted for chance, similar to how ARI adjusts
+the Rand Index. It ranges from 0 to 1 (approximately), where:
+- 1 indicates perfect agreement
+- 0 indicates agreement no better than random chance
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+
+# Returns
+- `Float64`: The Adjusted Mutual Information
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2]
+labels_b = [1, 1, 2, 2, 2, 2]
+ami = Mycelia.adjusted_mutual_information(labels_a, labels_b)
+```
+"""
+function adjusted_mutual_information(labels1::AbstractVector, labels2::AbstractVector)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n == 0
+        return 1.0
+    end
+
+    cont = contingency_matrix(labels1, labels2)
+    nij = cont.matrix
+
+    ## Row and column sums
+    a = vec(sum(nij, dims=2))  ## row sums
+    b = vec(sum(nij, dims=1))  ## column sums
+
+    R = length(a)  ## number of clusters in labels1
+    C = length(b)  ## number of clusters in labels2
+
+    ## Entropies
+    H_U = -sum(ai/n * log(ai/n) for ai in a if ai > 0)
+    H_V = -sum(bj/n * log(bj/n) for bj in b if bj > 0)
+
+    ## Mutual information
+    MI = 0.0
+    for i in 1:R
+        for j in 1:C
+            if nij[i, j] > 0
+                MI += (nij[i, j] / n) * log((n * nij[i, j]) / (a[i] * b[j]))
+            end
+        end
+    end
+
+    ## Expected mutual information (approximate)
+    ## This is a simplified computation; exact EMI requires summing over hypergeometric
+    EMI = 0.0
+    for i in 1:R
+        for j in 1:C
+            for nij_val in max(1, a[i] + b[j] - n):min(a[i], b[j])
+                ## Hypergeometric probability
+                numerator = binomial(Int(a[i]), Int(nij_val)) * binomial(Int(n - a[i]), Int(b[j] - nij_val))
+                denominator = binomial(Int(n), Int(b[j]))
+                if denominator > 0
+                    p_nij = numerator / denominator
+                    if nij_val > 0 && p_nij > 0
+                        EMI += (nij_val / n) * log((n * nij_val) / (a[i] * b[j])) * p_nij
+                    end
+                end
+            end
+        end
+    end
+
+    ## Adjusted Mutual Information
+    max_MI = (H_U + H_V) / 2
+
+    if max_MI == EMI
+        return 1.0
+    end
+
+    ami = (MI - EMI) / (max_MI - EMI)
+    return ami
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the V-measure between two clusterings.
+
+V-measure is the harmonic mean of homogeneity and completeness:
+- Homogeneity: each cluster contains only members of a single class
+- Completeness: all members of a class are assigned to the same cluster
+
+# Arguments
+- `labels_true::AbstractVector`: Ground truth cluster assignments
+- `labels_pred::AbstractVector`: Predicted cluster assignments
+
+# Returns
+- `NamedTuple` with fields:
+  - `homogeneity::Float64`: Homogeneity score (0 to 1)
+  - `completeness::Float64`: Completeness score (0 to 1)
+  - `v_measure::Float64`: V-measure (harmonic mean, 0 to 1)
+
+# Example
+```julia
+labels_true = [1, 1, 1, 2, 2, 2]
+labels_pred = [1, 1, 2, 2, 2, 2]
+result = Mycelia.v_measure(labels_true, labels_pred)
+println("V-measure: ", result.v_measure)
+```
+"""
+function v_measure(labels_true::AbstractVector, labels_pred::AbstractVector)
+    n = length(labels_true)
+    if length(labels_pred) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n == 0
+        return (homogeneity = 1.0, completeness = 1.0, v_measure = 1.0)
+    end
+
+    counts_true = StatsBase.countmap(labels_true)
+    counts_pred = StatsBase.countmap(labels_pred)
+    joint_counts = StatsBase.countmap(collect(zip(labels_true, labels_pred)))
+
+    ## Entropies
+    H_true = -sum((c/n) * log(c/n) for c in values(counts_true) if c > 0)
+    H_pred = -sum((c/n) * log(c/n) for c in values(counts_pred) if c > 0)
+
+    ## Conditional entropy H(true | pred)
+    H_true_given_pred = 0.0
+    for (l_pred, n_pred) in counts_pred
+        for l_true in keys(counts_true)
+            n_joint = get(joint_counts, (l_true, l_pred), 0)
+            if n_joint > 0
+                H_true_given_pred -= (n_joint / n) * log(n_joint / n_pred)
+            end
+        end
+    end
+
+    ## Conditional entropy H(pred | true)
+    H_pred_given_true = 0.0
+    for (l_true, n_true) in counts_true
+        for l_pred in keys(counts_pred)
+            n_joint = get(joint_counts, (l_true, l_pred), 0)
+            if n_joint > 0
+                H_pred_given_true -= (n_joint / n) * log(n_joint / n_true)
+            end
+        end
+    end
+
+    ## Homogeneity: 1 - H(true | pred) / H(true)
+    homogeneity = H_true == 0.0 ? 1.0 : 1.0 - H_true_given_pred / H_true
+
+    ## Completeness: 1 - H(pred | true) / H(pred)
+    completeness = H_pred == 0.0 ? 1.0 : 1.0 - H_pred_given_true / H_pred
+
+    ## V-measure: harmonic mean
+    if homogeneity + completeness == 0.0
+        v = 0.0
+    else
+        v = 2.0 * homogeneity * completeness / (homogeneity + completeness)
+    end
+
+    return (homogeneity = homogeneity, completeness = completeness, v_measure = v)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the Fowlkes-Mallows Index (FMI) between two clusterings.
+
+FMI is the geometric mean of precision and recall computed from pair counting.
+It ranges from 0 to 1, where 1 indicates perfect agreement.
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+
+# Returns
+- `Float64`: The Fowlkes-Mallows Index
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2]
+labels_b = [1, 1, 2, 2, 2, 2]
+fmi = Mycelia.fowlkes_mallows_index(labels_a, labels_b)
+```
+"""
+function fowlkes_mallows_index(labels1::AbstractVector, labels2::AbstractVector)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n < 2
+        return 1.0
+    end
+
+    ## Count pairs
+    TP = 0  ## True positives: same cluster in both
+    FP = 0  ## False positives: same in 1, different in 2
+    FN = 0  ## False negatives: different in 1, same in 2
+
+    for i in 1:(n-1)
+        for j in (i+1):n
+            same1 = labels1[i] == labels1[j]
+            same2 = labels2[i] == labels2[j]
+
+            if same1 && same2
+                TP += 1
+            elseif same1 && !same2
+                FP += 1
+            elseif !same1 && same2
+                FN += 1
+            end
+        end
+    end
+
+    if TP == 0
+        return 0.0
+    end
+
+    precision = TP / (TP + FP)
+    recall = TP / (TP + FN)
+
+    fmi = sqrt(precision * recall)
+    return fmi
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute cluster purity between true and predicted clusterings.
+
+Purity measures the extent to which clusters contain a single class.
+For each predicted cluster, the majority true class is found, and
+the proportion of correctly assigned samples is computed.
+
+# Arguments
+- `labels_true::AbstractVector`: Ground truth cluster assignments
+- `labels_pred::AbstractVector`: Predicted cluster assignments
+
+# Returns
+- `NamedTuple` with fields:
+  - `overall_purity::Float64`: Overall purity (0 to 1)
+  - `cluster_purities::Dict`: Purity for each predicted cluster
+
+# Example
+```julia
+labels_true = [1, 1, 1, 2, 2, 2]
+labels_pred = [1, 1, 2, 2, 2, 2]
+result = Mycelia.cluster_purity(labels_true, labels_pred)
+println("Overall purity: ", result.overall_purity)
+```
+"""
+function cluster_purity(labels_true::AbstractVector, labels_pred::AbstractVector)
+    n = length(labels_true)
+    if length(labels_pred) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n == 0
+        return (overall_purity = 1.0, cluster_purities = Dict())
+    end
+
+    joint_counts = StatsBase.countmap(collect(zip(labels_pred, labels_true)))
+    pred_clusters = unique(labels_pred)
+
+    total_correct = 0
+    cluster_purities = Dict{eltype(labels_pred), Float64}()
+
+    for pred_c in pred_clusters
+        ## Find counts of true labels for this predicted cluster
+        true_counts = Dict{eltype(labels_true), Int}()
+        for ((pc, tc), count) in joint_counts
+            if pc == pred_c
+                true_counts[tc] = count
+            end
+        end
+
+        if !isempty(true_counts)
+            max_count = maximum(values(true_counts))
+            total_correct += max_count
+            cluster_size = sum(values(true_counts))
+            cluster_purities[pred_c] = max_count / cluster_size
+        end
+    end
+
+    overall_purity = total_correct / n
+    return (overall_purity = overall_purity, cluster_purities = cluster_purities)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compute the Jaccard Index between two clusterings based on pair counting.
+
+The Jaccard Index measures agreement by comparing pairs of samples that are
+clustered together. It ranges from 0 to 1, where 1 indicates perfect agreement.
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+
+# Returns
+- `Float64`: The Jaccard Index
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2]
+labels_b = [1, 1, 2, 2, 2, 2]
+jaccard = Mycelia.jaccard_index(labels_a, labels_b)
+```
+"""
+function jaccard_index(labels1::AbstractVector, labels2::AbstractVector)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    if n < 2
+        return 1.0
+    end
+
+    ## Count pairs
+    a = 0  ## Pairs together in both
+    b = 0  ## Pairs together in 1 only
+    c = 0  ## Pairs together in 2 only
+
+    for i in 1:(n-1)
+        for j in (i+1):n
+            same1 = labels1[i] == labels1[j]
+            same2 = labels2[i] == labels2[j]
+
+            if same1 && same2
+                a += 1
+            elseif same1 && !same2
+                b += 1
+            elseif !same1 && same2
+                c += 1
+            end
+        end
+    end
+
+    if a + b + c == 0
+        return 1.0
+    end
+
+    return a / (a + b + c)
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Generate a comprehensive summary comparing two clusterings.
+
+Computes multiple comparison metrics and returns them in a single report.
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+- `name1::String`: Name for the first clustering (default: "Clustering1")
+- `name2::String`: Name for the second clustering (default: "Clustering2")
+
+# Returns
+- `NamedTuple` with all comparison metrics:
+  - `n_samples`: Number of samples
+  - `n_clusters1`: Number of clusters in first clustering
+  - `n_clusters2`: Number of clusters in second clustering
+  - `adjusted_rand_index`: ARI score
+  - `normalized_mutual_information`: NMI score
+  - `adjusted_mutual_information`: AMI score
+  - `v_measure`: V-measure results (homogeneity, completeness, v_measure)
+  - `fowlkes_mallows_index`: FMI score
+  - `jaccard_index`: Jaccard Index
+  - `purity_1_to_2`: Purity treating labels1 as ground truth
+  - `purity_2_to_1`: Purity treating labels2 as ground truth
+  - `contingency`: Contingency matrix result
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2, 3, 3]
+labels_b = [1, 1, 2, 2, 2, 3, 3, 3]
+summary = Mycelia.clustering_comparison_summary(labels_a, labels_b)
+println("ARI: ", summary.adjusted_rand_index)
+println("NMI: ", summary.normalized_mutual_information)
+```
+"""
+function clustering_comparison_summary(
+    labels1::AbstractVector,
+    labels2::AbstractVector;
+    name1::String = "Clustering1",
+    name2::String = "Clustering2"
+)
+    n = length(labels1)
+    if length(labels2) != n
+        throw(ArgumentError("Label vectors must have the same length"))
+    end
+
+    ## Compute all metrics
+    ari = adjusted_rand_index(labels1, labels2)
+    nmi = normalized_mutual_information(labels1, labels2)
+    ami = adjusted_mutual_information(labels1, labels2)
+    vm = v_measure(labels1, labels2)
+    fmi = fowlkes_mallows_index(labels1, labels2)
+    ji = jaccard_index(labels1, labels2)
+    purity_1_to_2 = cluster_purity(labels1, labels2)
+    purity_2_to_1 = cluster_purity(labels2, labels1)
+    cont = contingency_matrix(labels1, labels2)
+
+    return (
+        name1 = name1,
+        name2 = name2,
+        n_samples = n,
+        n_clusters1 = length(unique(labels1)),
+        n_clusters2 = length(unique(labels2)),
+        adjusted_rand_index = ari,
+        normalized_mutual_information = nmi,
+        adjusted_mutual_information = ami,
+        v_measure = vm,
+        fowlkes_mallows_index = fmi,
+        jaccard_index = ji,
+        purity_1_to_2 = purity_1_to_2,
+        purity_2_to_1 = purity_2_to_1,
+        contingency = cont
+    )
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Print a formatted comparison report for two clusterings.
+
+# Arguments
+- `labels1::AbstractVector`: Cluster assignments from first clustering
+- `labels2::AbstractVector`: Cluster assignments from second clustering
+- `name1::String`: Name for the first clustering (default: "Clustering1")
+- `name2::String`: Name for the second clustering (default: "Clustering2")
+- `io::IO`: Output stream (default: stdout)
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2, 3, 3]
+labels_b = [1, 1, 2, 2, 2, 3, 3, 3]
+Mycelia.print_clustering_comparison(labels_a, labels_b; name1="K-means", name2="DBSCAN")
+```
+"""
+function print_clustering_comparison(
+    labels1::AbstractVector,
+    labels2::AbstractVector;
+    name1::String = "Clustering1",
+    name2::String = "Clustering2",
+    io::IO = stdout
+)
+    summary = clustering_comparison_summary(labels1, labels2; name1=name1, name2=name2)
+
+    println(io, "")
+    println(io, "=" ^ 60)
+    println(io, "CLUSTERING COMPARISON REPORT")
+    println(io, "=" ^ 60)
+    println(io, "")
+    println(io, "Datasets:")
+    println(io, "  - $(name1): $(summary.n_clusters1) clusters")
+    println(io, "  - $(name2): $(summary.n_clusters2) clusters")
+    println(io, "  - Common samples: $(summary.n_samples)")
+    println(io, "")
+    println(io, "Agreement Metrics:")
+    println(io, "  Adjusted Rand Index (ARI):       $(round(summary.adjusted_rand_index, digits=4))")
+    println(io, "  Normalized Mutual Info (NMI):    $(round(summary.normalized_mutual_information, digits=4))")
+    println(io, "  Adjusted Mutual Info (AMI):      $(round(summary.adjusted_mutual_information, digits=4))")
+    println(io, "  V-measure:                       $(round(summary.v_measure.v_measure, digits=4))")
+    println(io, "    - Homogeneity:                 $(round(summary.v_measure.homogeneity, digits=4))")
+    println(io, "    - Completeness:                $(round(summary.v_measure.completeness, digits=4))")
+    println(io, "  Fowlkes-Mallows Index (FMI):     $(round(summary.fowlkes_mallows_index, digits=4))")
+    println(io, "  Jaccard Index:                   $(round(summary.jaccard_index, digits=4))")
+    println(io, "")
+    println(io, "Purity Scores:")
+    println(io, "  $(name1) -> $(name2): $(round(summary.purity_1_to_2.overall_purity, digits=4))")
+    println(io, "  $(name2) -> $(name1): $(round(summary.purity_2_to_1.overall_purity, digits=4))")
+    println(io, "")
+    println(io, "Interpretation Guidelines:")
+    println(io, "  Score > 0.9:  Excellent agreement")
+    println(io, "  Score 0.7-0.9: Good agreement")
+    println(io, "  Score 0.5-0.7: Moderate agreement")
+    println(io, "  Score 0.3-0.5: Weak agreement")
+    println(io, "  Score < 0.3:  Poor agreement")
+    println(io, "")
+
+    return summary
+end
+
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Convert a clustering comparison summary to a DataFrame for easy export.
+
+# Arguments
+- `summary::NamedTuple`: Result from `clustering_comparison_summary`
+
+# Returns
+- `DataFrames.DataFrame`: Single-row DataFrame with all metrics
+
+# Example
+```julia
+labels_a = [1, 1, 1, 2, 2, 2]
+labels_b = [1, 1, 2, 2, 2, 2]
+summary = Mycelia.clustering_comparison_summary(labels_a, labels_b)
+df = Mycelia.comparison_summary_to_dataframe(summary)
+```
+"""
+function comparison_summary_to_dataframe(summary::NamedTuple)
+    return DataFrames.DataFrame(
+        name1 = [summary.name1],
+        name2 = [summary.name2],
+        n_samples = [summary.n_samples],
+        n_clusters1 = [summary.n_clusters1],
+        n_clusters2 = [summary.n_clusters2],
+        adjusted_rand_index = [summary.adjusted_rand_index],
+        normalized_mutual_information = [summary.normalized_mutual_information],
+        adjusted_mutual_information = [summary.adjusted_mutual_information],
+        homogeneity = [summary.v_measure.homogeneity],
+        completeness = [summary.v_measure.completeness],
+        v_measure = [summary.v_measure.v_measure],
+        fowlkes_mallows_index = [summary.fowlkes_mallows_index],
+        jaccard_index = [summary.jaccard_index],
+        purity_1_to_2 = [summary.purity_1_to_2.overall_purity],
+        purity_2_to_1 = [summary.purity_2_to_1.overall_purity]
+    )
+end
