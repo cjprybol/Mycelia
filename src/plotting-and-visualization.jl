@@ -4664,3 +4664,725 @@ function calculate_tick_step(n_samples::Int; max_labels::Int=100)
         return ceil(Int, n_samples / max_labels)
     end
 end
+
+"""
+    _prepare_abundance_data(
+        abundance_df::DataFrames.DataFrame;
+        sample_col::Symbol,
+        taxon_col::Symbol,
+        abundance_col::Symbol,
+        top_n::Int,
+        config::MicrobiomePlotConfig
+    )
+
+Internal function to prepare abundance data for visualization.
+Converts long-format DataFrame to matrix form and computes ordering.
+
+# Returns
+Named tuple with:
+- `samples`: Vector of ordered sample names
+- `taxa`: Vector of ordered taxa names (including "Other", "Unclassified")
+- `matrix`: Abundance matrix (taxa × samples)
+- `colors`: Vector of colors for each taxon
+- `sample_hclust`: Hierarchical clustering result for samples (or nothing)
+- `taxa_hclust`: Hierarchical clustering result for taxa (or nothing)
+"""
+function _prepare_abundance_data(
+    abundance_df::DataFrames.DataFrame;
+    sample_col::Symbol,
+    taxon_col::Symbol,
+    abundance_col::Symbol,
+    top_n::Int,
+    config::MicrobiomePlotConfig
+)
+    # Get unique samples and taxa
+    all_samples = unique(abundance_df[!, sample_col])
+    all_taxa = unique(abundance_df[!, taxon_col])
+
+    # Calculate total abundance per taxon to find top N
+    taxa_totals = DataFrames.combine(
+        DataFrames.groupby(abundance_df, taxon_col),
+        abundance_col => sum => :total
+    )
+    DataFrames.sort!(taxa_totals, :total, rev=true)
+
+    # Identify top taxa, treating missing/unclassified specially
+    is_special = x -> ismissing(x) || lowercase(string(x)) in ["unclassified", "missing", "unknown", "other"]
+    regular_taxa = filter(row -> !is_special(row[taxon_col]), taxa_totals)
+    top_taxa = regular_taxa[1:min(top_n, DataFrames.nrow(regular_taxa)), taxon_col]
+
+    # Build sample × taxon matrix for ordering
+    n_samples = length(all_samples)
+    sample_to_idx = Dict(s => i for (i, s) in enumerate(all_samples))
+
+    # Create wide-format matrix for all taxa (for clustering)
+    n_all_taxa = length(all_taxa)
+    taxa_to_idx = Dict(t => i for (i, t) in enumerate(all_taxa))
+    full_matrix = zeros(n_samples, n_all_taxa)
+
+    for row in eachrow(abundance_df)
+        si = sample_to_idx[row[sample_col]]
+        ti = taxa_to_idx[row[taxon_col]]
+        full_matrix[si, ti] = row[abundance_col]
+    end
+
+    # Order samples
+    sample_order, sample_hclust = compute_axis_ordering(
+        full_matrix,
+        string.(all_samples),
+        ordering=config.sample_ordering
+    )
+    ordered_samples = all_samples[sample_order]
+
+    # Create final matrix with top taxa + Other + Unclassified
+    final_taxa = Vector{String}()
+    for t in top_taxa
+        push!(final_taxa, string(t))
+    end
+
+    # Calculate "Other" (sum of non-top regular taxa)
+    other_taxa = setdiff(regular_taxa[!, taxon_col], top_taxa)
+    has_other = !isempty(other_taxa)
+    if has_other
+        push!(final_taxa, "Other")
+    end
+
+    # Check for unclassified/missing
+    special_taxa = filter(row -> is_special(row[taxon_col]), taxa_totals)
+    has_unclassified = DataFrames.nrow(special_taxa) > 0
+    if has_unclassified
+        push!(final_taxa, "Unclassified")
+    end
+
+    # Build final abundance matrix (taxa × samples)
+    n_final_taxa = length(final_taxa)
+    n_ordered_samples = length(ordered_samples)
+    abundance_matrix = zeros(n_final_taxa, n_ordered_samples)
+
+    for (col_idx, sample) in enumerate(ordered_samples)
+        sample_data = filter(row -> row[sample_col] == sample, abundance_df)
+
+        for row in eachrow(sample_data)
+            taxon = row[taxon_col]
+            abundance = row[abundance_col]
+
+            if is_special(taxon)
+                # Add to Unclassified
+                if has_unclassified
+                    tidx = findfirst(==("Unclassified"), final_taxa)
+                    abundance_matrix[tidx, col_idx] += abundance
+                end
+            elseif string(taxon) in final_taxa[1:length(top_taxa)]
+                # Add to specific taxon
+                tidx = findfirst(==(string(taxon)), final_taxa)
+                abundance_matrix[tidx, col_idx] += abundance
+            else
+                # Add to Other
+                if has_other
+                    tidx = findfirst(==("Other"), final_taxa)
+                    abundance_matrix[tidx, col_idx] += abundance
+                end
+            end
+        end
+    end
+
+    # Generate colors
+    n_colors = length(final_taxa)
+    if !isnothing(config.custom_colors) && length(config.custom_colors) >= n_colors
+        colors = config.custom_colors[1:n_colors]
+    elseif config.color_palette == :maximally_distinguishable
+        colors = Mycelia.n_maximally_distinguishable_colors(n_colors)
+    else
+        # Use ColorSchemes
+        colors = [ColorSchemes.get(ColorSchemes.colorschemes[config.color_palette], i / n_colors) for i in 1:n_colors]
+    end
+
+    # Override colors for special categories
+    if has_other
+        other_idx = findfirst(==("Other"), final_taxa)
+        colors[other_idx] = Colors.RGB(0.7, 0.7, 0.7)  # Light gray
+    end
+    if has_unclassified
+        unclass_idx = findfirst(==("Unclassified"), final_taxa)
+        colors[unclass_idx] = Colors.RGB(0.4, 0.4, 0.4)  # Dark gray
+    end
+
+    return (
+        samples = string.(ordered_samples),
+        taxa = final_taxa,
+        matrix = abundance_matrix,
+        colors = colors,
+        sample_hclust = sample_hclust,
+        taxa_hclust = nothing  # Could add taxa clustering if needed
+    )
+end
+
+"""
+    _create_barplot(
+        data::NamedTuple;
+        config::MicrobiomePlotConfig,
+        title::String,
+        rank::String
+    )
+
+Create a stacked barplot of microbiome abundances with adaptive sizing.
+
+# Arguments
+- `data::NamedTuple`: Prepared data from `_prepare_abundance_data`
+- `config::MicrobiomePlotConfig`: Visualization configuration
+- `title::String`: Plot title
+- `rank::String`: Taxonomic rank for axis labels
+
+# Returns
+- `CairoMakie.Figure`: The generated figure
+"""
+function _create_barplot(
+    data::NamedTuple;
+    config::MicrobiomePlotConfig,
+    title::String = "",
+    rank::String = "taxon"
+)
+    samples = data.samples
+    taxa = data.taxa
+    matrix = data.matrix
+    colors = data.colors
+
+    n_samples = length(samples)
+    n_taxa = length(taxa)
+
+    # Calculate figure size
+    width, height = calculate_figure_size(n_samples, n_taxa, config=config)
+
+    # Determine orientation
+    orientation = config.orientation
+    if orientation == :auto
+        orientation = n_samples > 100 ? :portrait : :landscape
+    end
+
+    # Calculate adaptive font size and tick step
+    label_fontsize = adaptive_label_fontsize(n_samples, config=config)
+    tick_step = calculate_tick_step(n_samples)
+
+    # Create figure
+    fig = CairoMakie.Figure(size=(width, height), fontsize=12)
+
+    # Determine plot title
+    plot_title = if isempty(title)
+        "$(titlecase(rank)) Relative Abundance (top $(length(taxa) - count(t -> t in ["Other", "Unclassified"], taxa)))"
+    else
+        title
+    end
+
+    if orientation == :portrait
+        # Portrait: samples on Y axis, abundance on X axis (horizontal bars)
+        ax = CairoMakie.Axis(
+            fig[1, 1],
+            xlabel = "Relative Abundance",
+            ylabel = "Sample",
+            title = plot_title,
+            yticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
+            yticklabelsize = label_fontsize,
+            yreversed = true  # First sample at top
+        )
+
+        # Plot horizontal stacked bars
+        x_positions = 1:n_samples
+        previous_widths = zeros(n_samples)
+
+        for (i, taxon) in enumerate(taxa)
+            widths = matrix[i, :]
+
+            CairoMakie.barplot!(
+                ax,
+                x_positions,
+                widths,
+                offset = previous_widths,
+                color = colors[i],
+                direction = :x,  # Horizontal bars
+                label = taxon
+            )
+
+            previous_widths .+= widths
+        end
+
+        CairoMakie.xlims!(ax, 0, 1.05)
+
+    else
+        # Landscape: samples on X axis (traditional vertical bars)
+        ax = CairoMakie.Axis(
+            fig[1, 1],
+            xlabel = "Sample",
+            ylabel = "Relative Abundance",
+            title = plot_title,
+            xticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
+            xticklabelrotation = deg2rad(config.label_rotation),
+            xticklabelsize = label_fontsize
+        )
+
+        # Plot vertical stacked bars
+        x_positions = 1:n_samples
+        previous_heights = zeros(n_samples)
+
+        for (i, taxon) in enumerate(taxa)
+            heights = matrix[i, :]
+
+            CairoMakie.barplot!(
+                ax,
+                x_positions,
+                heights,
+                offset = previous_heights,
+                color = colors[i],
+                label = taxon
+            )
+
+            previous_heights .+= heights
+        end
+
+        CairoMakie.ylims!(ax, 0, 1.05)
+    end
+
+    # Add legend
+    legend_nbanks = n_taxa > 15 ? 2 : 1
+    fig[1, 2] = CairoMakie.Legend(
+        fig,
+        ax,
+        titlecase(rank),
+        framevisible = true,
+        labelsize = config.legend_fontsize,
+        titlesize = config.legend_fontsize + 2,
+        patchsize = (12, 12),
+        nbanks = legend_nbanks
+    )
+
+    return fig
+end
+
+"""
+    _create_heatmap_with_dendrograms(
+        data::NamedTuple;
+        config::MicrobiomePlotConfig,
+        title::String,
+        rank::String
+    )
+
+Create a heatmap visualization with optional dendrograms.
+
+# Arguments
+- `data::NamedTuple`: Prepared data from `_prepare_abundance_data`
+- `config::MicrobiomePlotConfig`: Visualization configuration
+- `title::String`: Plot title
+- `rank::String`: Taxonomic rank for axis labels
+
+# Returns
+- `CairoMakie.Figure`: The generated figure
+"""
+function _create_heatmap_with_dendrograms(
+    data::NamedTuple;
+    config::MicrobiomePlotConfig,
+    title::String = "",
+    rank::String = "taxon"
+)
+    samples = data.samples
+    taxa = data.taxa
+    matrix = data.matrix
+    sample_hclust = data.sample_hclust
+
+    n_samples = length(samples)
+    n_taxa = length(taxa)
+
+    # Calculate figure size (heatmaps can be taller)
+    width = min(config.max_width, 1400)
+    height = max(config.min_height, n_samples * 4 + 200)
+    height = min(height, 3000)
+
+    # Calculate tick step for sample labels
+    tick_step = calculate_tick_step(n_samples, max_labels=50)
+    label_fontsize = adaptive_label_fontsize(n_samples, config=config)
+
+    # Determine grid layout based on dendrogram settings
+    show_sample_dendro = config.show_sample_dendrogram && !isnothing(sample_hclust)
+
+    # Create figure
+    fig = CairoMakie.Figure(size=(width, height), fontsize=10)
+
+    # Determine column positions
+    hm_col = show_sample_dendro ? 2 : 1
+    legend_col = hm_col + 1
+
+    # Plot title
+    plot_title = if isempty(title)
+        "$(titlecase(rank)) Abundance Heatmap (n=$n_samples samples)"
+    else
+        title
+    end
+
+    # Create heatmap axis
+    ax_hm = CairoMakie.Axis(
+        fig[1, hm_col],
+        xlabel = titlecase(rank),
+        ylabel = "Sample",
+        title = plot_title,
+        xticks = (1:n_taxa, taxa),
+        xticklabelrotation = deg2rad(45),
+        xticklabelsize = 8,
+        yticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
+        yticklabelsize = label_fontsize,
+        yreversed = true
+    )
+
+    # Create heatmap (transpose so taxa are columns, samples are rows)
+    hm = CairoMakie.heatmap!(
+        ax_hm,
+        1:n_taxa,
+        1:n_samples,
+        matrix',  # Transpose: now (n_samples × n_taxa)
+        colormap = :viridis
+    )
+
+    # Add colorbar
+    CairoMakie.Colorbar(
+        fig[1, legend_col],
+        hm,
+        label = "Relative Abundance"
+    )
+
+    # Add sample dendrogram if requested
+    if show_sample_dendro
+        ax_dendro = CairoMakie.Axis(
+            fig[1, 1],
+            xlabel = "Height",
+            xgridvisible = false,
+            ygridvisible = false,
+            yticklabelsvisible = false,
+            yticksvisible = false,
+            rightspinevisible = false
+        )
+
+        # Plot dendrogram using existing function if available
+        if isdefined(Mycelia, :plot_dendrogram_from_hclust!)
+            Mycelia.plot_dendrogram_from_hclust!(
+                ax_dendro,
+                sample_hclust,
+                orientation = :horizontal
+            )
+        end
+
+        CairoMakie.xreverse!(ax_dendro)
+        CairoMakie.linkyaxes!(ax_hm, ax_dendro)
+        CairoMakie.colsize!(fig.layout, 1, CairoMakie.Relative(0.15))
+    end
+
+    return fig
+end
+
+"""
+    _create_paginated_barplots(
+        data::NamedTuple;
+        config::MicrobiomePlotConfig,
+        title::String,
+        rank::String
+    )
+
+Create paginated barplots for large datasets (600+ samples).
+
+# Arguments
+- `data::NamedTuple`: Prepared data from `_prepare_abundance_data`
+- `config::MicrobiomePlotConfig`: Visualization configuration
+- `title::String`: Plot title
+- `rank::String`: Taxonomic rank for axis labels
+
+# Returns
+- `Vector{CairoMakie.Figure}`: Vector of figures, one per page
+"""
+function _create_paginated_barplots(
+    data::NamedTuple;
+    config::MicrobiomePlotConfig,
+    title::String = "",
+    rank::String = "taxon"
+)
+    samples = data.samples
+    taxa = data.taxa
+    matrix = data.matrix
+    colors = data.colors
+
+    n_samples = length(samples)
+    n_taxa = length(taxa)
+    samples_per_page = config.samples_per_page
+
+    # Calculate number of pages
+    n_pages = ceil(Int, n_samples / samples_per_page)
+
+    figures = CairoMakie.Figure[]
+
+    for page in 1:n_pages
+        # Calculate sample range for this page
+        start_idx = (page - 1) * samples_per_page + 1
+        end_idx = min(page * samples_per_page, n_samples)
+        page_samples = samples[start_idx:end_idx]
+        page_matrix = matrix[:, start_idx:end_idx]
+
+        n_page_samples = length(page_samples)
+
+        # Create page-specific data
+        page_data = (
+            samples = page_samples,
+            taxa = taxa,
+            matrix = page_matrix,
+            colors = colors,
+            sample_hclust = nothing,
+            taxa_hclust = nothing
+        )
+
+        # Create page title
+        page_title = if isempty(title)
+            "$(titlecase(rank)) Abundance (Page $page/$n_pages, samples $start_idx-$end_idx)"
+        else
+            "$title (Page $page/$n_pages)"
+        end
+
+        # Use portrait orientation for paginated views
+        page_config = MicrobiomePlotConfig(
+            max_width = config.max_width,
+            min_height = config.min_height,
+            pixels_per_sample = config.pixels_per_sample,
+            orientation = :portrait,
+            min_label_fontsize = config.min_label_fontsize,
+            max_label_fontsize = config.max_label_fontsize,
+            label_rotation = config.label_rotation,
+            top_n_taxa = config.top_n_taxa,
+            legend_fontsize = config.legend_fontsize,
+            legend_position = config.legend_position,
+            color_palette = config.color_palette,
+            custom_colors = config.custom_colors
+        )
+
+        fig = _create_barplot(
+            page_data,
+            config = page_config,
+            title = page_title,
+            rank = rank
+        )
+
+        push!(figures, fig)
+    end
+
+    return figures
+end
+
+"""
+    save_microbiome_plot(
+        fig,
+        base_path::String;
+        formats::Vector{Symbol} = [:png, :svg],
+        dpi::Int = 300
+    )
+
+Save a microbiome plot in multiple formats.
+
+# Arguments
+- `fig`: CairoMakie figure to save
+- `base_path::String`: Base path without extension (e.g., "output/genus_barplot")
+- `formats::Vector{Symbol}`: Output formats (default: [:png, :svg])
+- `dpi::Int`: Resolution in dots per inch (default: 300)
+
+# Returns
+- `Dict{Symbol, String}`: Mapping of format to saved file path
+
+# Examples
+```julia
+paths = save_microbiome_plot(fig, "results/genus_abundance")
+# Returns: Dict(:png => "results/genus_abundance.png", :svg => "results/genus_abundance.svg")
+```
+"""
+function save_microbiome_plot(
+    fig,
+    base_path::String;
+    formats::Vector{Symbol} = [:png, :svg],
+    dpi::Int = 300
+)
+    paths = Dict{Symbol, String}()
+
+    for fmt in formats
+        path = "$(base_path).$(fmt)"
+
+        # Create directory if it doesn't exist
+        dir = dirname(path)
+        if !isempty(dir) && !isdir(dir)
+            mkpath(dir)
+        end
+
+        # Save with appropriate settings
+        if fmt == :png
+            CairoMakie.save(path, fig, px_per_unit=dpi/72)
+        elseif fmt == :svg
+            CairoMakie.save(path, fig)
+        elseif fmt == :pdf
+            CairoMakie.save(path, fig)
+        else
+            @warn "Unknown format: $fmt, skipping"
+            continue
+        end
+
+        paths[fmt] = path
+        @info "Saved: $path"
+    end
+
+    return paths
+end
+
+"""
+    plot_microbiome_abundance(
+        abundance_df::DataFrames.DataFrame;
+        sample_col::Symbol = :sample,
+        taxon_col::Symbol = :taxon,
+        abundance_col::Symbol = :relative_abundance,
+        rank::String = "genus",
+        config::MicrobiomePlotConfig = MicrobiomePlotConfig(),
+        title::String = "",
+        output_dir::Union{String, Nothing} = nothing
+    )
+
+Create publication-quality microbiome abundance visualizations.
+Automatically selects the best view type(s) based on sample count.
+
+# Arguments
+- `abundance_df::DataFrames.DataFrame`: Long-format abundance data
+- `sample_col::Symbol`: Column containing sample identifiers
+- `taxon_col::Symbol`: Column containing taxon names
+- `abundance_col::Symbol`: Column containing abundance values (0-1 scale)
+- `rank::String`: Taxonomic rank name for labels
+- `config::MicrobiomePlotConfig`: Visualization configuration
+- `title::String`: Optional plot title
+- `output_dir::Union{String, Nothing}`: Directory to save plots (optional)
+
+# Returns
+- `Dict{Symbol, Any}`: Dictionary with visualization results:
+  - `:barplot` => CairoMakie.Figure (if generated)
+  - `:heatmap` => CairoMakie.Figure (if generated)
+  - `:paginated` => Vector{CairoMakie.Figure} (if generated)
+  - `:data` => Prepared data NamedTuple
+
+# View Selection (when `config.large_dataset_view == :auto`)
+| Sample Count | Views Generated |
+|--------------|-----------------|
+| ≤150 | barplot only |
+| 150-300 | barplot + heatmap |
+| >300 | heatmap + paginated |
+
+# Examples
+```julia
+# Basic usage
+results = plot_microbiome_abundance(df, sample_col=:sample_id, taxon_col=:genus)
+
+# With custom configuration for many samples
+config = MicrobiomePlotConfig(
+    orientation = :portrait,
+    show_sample_dendrogram = true,
+    top_n_taxa = 20
+)
+results = plot_microbiome_abundance(df, config=config, output_dir="figures/")
+
+# Access specific views
+barplot_fig = results[:barplot]
+heatmap_fig = results[:heatmap]
+```
+"""
+function plot_microbiome_abundance(
+    abundance_df::DataFrames.DataFrame;
+    sample_col::Symbol = :sample,
+    taxon_col::Symbol = :taxon,
+    abundance_col::Symbol = :relative_abundance,
+    rank::String = "genus",
+    config::MicrobiomePlotConfig = MicrobiomePlotConfig(),
+    title::String = "",
+    output_dir::Union{String, Nothing} = nothing
+)
+    # Validate input columns exist
+    for col in [sample_col, taxon_col, abundance_col]
+        if !DataFrames.hasproperty(abundance_df, col)
+            error("DataFrame must have column: $col")
+        end
+    end
+
+    n_samples = length(unique(abundance_df[!, sample_col]))
+    @info "Processing $n_samples samples for microbiome visualization"
+
+    # Prepare data
+    data = _prepare_abundance_data(
+        abundance_df,
+        sample_col = sample_col,
+        taxon_col = taxon_col,
+        abundance_col = abundance_col,
+        top_n = config.top_n_taxa,
+        config = config
+    )
+
+    # Determine which views to generate
+    view_types = determine_view_types(n_samples, config=config)
+    @info "Generating views: $(join(string.(view_types), ", "))"
+
+    results = Dict{Symbol, Any}()
+    results[:data] = data
+
+    # Generate each view type
+    for view_type in view_types
+        if view_type == :barplot
+            fig = _create_barplot(
+                data,
+                config = config,
+                title = title,
+                rank = rank
+            )
+            results[:barplot] = fig
+
+            if !isnothing(output_dir)
+                save_microbiome_plot(
+                    fig,
+                    joinpath(output_dir, "$(rank)_barplot"),
+                    formats = config.output_formats,
+                    dpi = config.dpi
+                )
+            end
+
+        elseif view_type == :heatmap
+            fig = _create_heatmap_with_dendrograms(
+                data,
+                config = config,
+                title = title,
+                rank = rank
+            )
+            results[:heatmap] = fig
+
+            if !isnothing(output_dir)
+                save_microbiome_plot(
+                    fig,
+                    joinpath(output_dir, "$(rank)_heatmap"),
+                    formats = config.output_formats,
+                    dpi = config.dpi
+                )
+            end
+
+        elseif view_type == :paginated
+            figures = _create_paginated_barplots(
+                data,
+                config = config,
+                title = title,
+                rank = rank
+            )
+            results[:paginated] = figures
+
+            if !isnothing(output_dir)
+                for (i, fig) in enumerate(figures)
+                    save_microbiome_plot(
+                        fig,
+                        joinpath(output_dir, "$(rank)_barplot_page$(lpad(i, 2, '0'))"),
+                        formats = config.output_formats,
+                        dpi = config.dpi
+                    )
+                end
+            end
+        end
+    end
+
+    return results
+end
