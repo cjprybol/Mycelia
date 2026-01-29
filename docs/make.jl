@@ -167,6 +167,7 @@ Documenter.makedocs(
         "Concepts" => "concepts.md",
         "Workflow Map" => "workflow-map.md",
         "Metagenomic Workflow" => "metagenomic-workflow.md",
+        "Microbiome Visualization" => "microbiome-visualization.md",
         "Tutorials" => vcat(
             ["Overview" => "tutorials.md"],
             tutorial_pages,
