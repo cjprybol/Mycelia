@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Cluster Comparison · Mycelia</title><meta name="title" content="Cluster Comparison · Mycelia"/><meta property="og:title" content="Cluster Comparison · Mycelia"/><meta property="twitter:title" content="Cluster Comparison · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><a class="tocitem" href="../../../microbiome-visualization/">Microbiome Visualization</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Step 4b: Graph Type Tutorials</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs</a></li><li><a class="tocitem" href="../09_round_trip_02_ngram_to_string/">Round-Trip 02: N-gram to String</a></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round-Trip 03: FASTA Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round-Trip 04: K-mer to Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round-Trip 05: FASTQ Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round-Trip 06: Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Step 10: Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Step 11: Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Step 12: CoverM Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Step 13: Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 14a: Binning Workflow</a></li><li><a class="tocitem" href="../14_mash_classification/">Step 14b: Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Step 15: Round Trip Benchmarking</a></li><li><a class="tocitem" href="../16_un_corpus_ngram_vs_token_graphs/">Step 16: UN Corpus Ngram vs Token Graphs</a></li><li><a class="tocitem" href="../17_viroid_sketch_round_trip/">Step 17: Viroid Sketch Round Trip</a></li><li><a class="tocitem" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice</a></li><li><a class="tocitem" href="../19_relational_clustering/">Step 19: Relational Clustering</a></li><li><a class="tocitem" href="../20_microbiome_visualization/">Step 20: Microbiome Visualization</a></li><li class="is-active"><a class="tocitem" href>Cluster Comparison</a><ul class="internal"><li><a class="tocitem" href="#Learning-Objectives"><span>Learning Objectives</span></a></li><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Part-1:-Introduction-to-Cluster-Comparison"><span>Part 1: Introduction to Cluster Comparison</span></a></li><li><a class="tocitem" href="#Available-Metrics-in-Mycelia"><span>Available Metrics in Mycelia</span></a></li><li><a class="tocitem" href="#Part-2:-Creating-Example-Clusterings"><span>Part 2: Creating Example Clusterings</span></a></li><li><a class="tocitem" href="#Part-3:-Computing-Individual-Metrics"><span>Part 3: Computing Individual Metrics</span></a></li><li><a class="tocitem" href="#Part-4:-Contingency-Matrix"><span>Part 4: Contingency Matrix</span></a></li><li><a class="tocitem" href="#Part-5:-Comprehensive-Comparison-Summary"><span>Part 5: Comprehensive Comparison Summary</span></a></li><li><a class="tocitem" href="#Part-6:-Comparing-Multiple-Clustering-Methods"><span>Part 6: Comparing Multiple Clustering Methods</span></a></li><li><a class="tocitem" href="#Part-7:-Practical-Considerations"><span>Part 7: Practical Considerations</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li><li><a class="tocitem" href="#Key-Functions-Used"><span>Key Functions Used</span></a></li></ul></li><li><a class="tocitem" href="../conceptual_figures/">Conceptual Figures</a></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../references/">References</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Cluster Comparison</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Cluster Comparison</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/21_cluster_comparison.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-21:-Cluster-Comparison-Methods"><a class="docs-heading-anchor" href="#Tutorial-21:-Cluster-Comparison-Methods">Tutorial 21: Cluster Comparison Methods</a><a id="Tutorial-21:-Cluster-Comparison-Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-21:-Cluster-Comparison-Methods" title="Permalink"></a></h1><p>This tutorial demonstrates how to compare two different clusterings of the same data using various similarity metrics. This is essential for:</p><ul><li>Evaluating clustering algorithm performance against ground truth</li><li>Comparing results from different clustering methods</li><li>Assessing clustering reproducibility across runs</li><li>Validating clustering consistency under parameter changes</li></ul><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will understand:</p><ul><li>How to use multiple cluster comparison metrics (ARI, NMI, V-measure, etc.)</li><li>When to use each metric and their properties</li><li>How to interpret metric values and their ranges</li><li>How to generate comprehensive comparison reports</li><li>Practical considerations for comparing real-world clusterings</li></ul><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><p>From the Mycelia base directory, convert this tutorial to a notebook:</p><pre><code class="language-bash hljs">julia --project=. -e &#39;import Literate; Literate.notebook(&quot;tutorials/21_cluster_comparison.jl&quot;, &quot;tutorials/notebooks&quot;, execute=false)&#39;</code></pre><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import Mycelia
+import DataFrames
+import Random
+import Statistics
+
+Random.seed!(42)
+
+println(&quot;=&quot; ^ 60)
+println(&quot;Tutorial 21: Cluster Comparison Methods&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h2 id="Part-1:-Introduction-to-Cluster-Comparison"><a class="docs-heading-anchor" href="#Part-1:-Introduction-to-Cluster-Comparison">Part 1: Introduction to Cluster Comparison</a><a id="Part-1:-Introduction-to-Cluster-Comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Part-1:-Introduction-to-Cluster-Comparison" title="Permalink"></a></h2><p>When comparing clusterings, we have two vectors of cluster assignments for the same set of samples. The key insight is that we care about the <em>partition structure</em>, not the actual label values. Two clusterings that group samples identically but use different labels (e.g., [1,1,2,2] vs [A,A,B,B]) should be considered identical.</p><h2 id="Available-Metrics-in-Mycelia"><a class="docs-heading-anchor" href="#Available-Metrics-in-Mycelia">Available Metrics in Mycelia</a><a id="Available-Metrics-in-Mycelia-1"></a><a class="docs-heading-anchor-permalink" href="#Available-Metrics-in-Mycelia" title="Permalink"></a></h2><table><tr><th style="text-align: right">Metric</th><th style="text-align: right">Range</th><th style="text-align: right">Properties</th></tr><tr><td style="text-align: right">Adjusted Rand Index (ARI)</td><td style="text-align: right">-1 to 1</td><td style="text-align: right">Corrected for chance, gold standard</td></tr><tr><td style="text-align: right">Normalized Mutual Information (NMI)</td><td style="text-align: right">0 to 1</td><td style="text-align: right">Information-theoretic</td></tr><tr><td style="text-align: right">Adjusted Mutual Information (AMI)</td><td style="text-align: right">~0 to 1</td><td style="text-align: right">NMI corrected for chance</td></tr><tr><td style="text-align: right">V-measure</td><td style="text-align: right">0 to 1</td><td style="text-align: right">Homogeneity + completeness</td></tr><tr><td style="text-align: right">Fowlkes-Mallows Index (FMI)</td><td style="text-align: right">0 to 1</td><td style="text-align: right">Geometric mean of precision/recall</td></tr><tr><td style="text-align: right">Jaccard Index</td><td style="text-align: right">0 to 1</td><td style="text-align: right">Pair-based similarity</td></tr><tr><td style="text-align: right">Cluster Purity</td><td style="text-align: right">0 to 1</td><td style="text-align: right">Majority class proportion (asymmetric)</td></tr></table><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 1: Introduction to Cluster Comparison&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h2 id="Part-2:-Creating-Example-Clusterings"><a class="docs-heading-anchor" href="#Part-2:-Creating-Example-Clusterings">Part 2: Creating Example Clusterings</a><a id="Part-2:-Creating-Example-Clusterings-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Creating-Example-Clusterings" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 2: Creating Example Clusterings&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h3 id="Perfect-Agreement"><a class="docs-heading-anchor" href="#Perfect-Agreement">Perfect Agreement</a><a id="Perfect-Agreement-1"></a><a class="docs-heading-anchor-permalink" href="#Perfect-Agreement" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Two identical clusterings (possibly with different labels)
+labels_true = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+labels_pred = [1, 1, 1, 2, 2, 2, 3, 3, 3]
+
+println(&quot;\nExample 1: Perfect Agreement&quot;)
+println(&quot;  True:      &quot;, labels_true)
+println(&quot;  Predicted: &quot;, labels_pred)</code></pre><h3 id="Same-Structure,-Different-Labels"><a class="docs-heading-anchor" href="#Same-Structure,-Different-Labels">Same Structure, Different Labels</a><a id="Same-Structure,-Different-Labels-1"></a><a class="docs-heading-anchor-permalink" href="#Same-Structure,-Different-Labels" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Same partition structure but relabeled
+labels_relabeled = [3, 3, 3, 1, 1, 1, 2, 2, 2]  ## Same structure, different labels
+
+println(&quot;\nExample 2: Same Structure, Different Labels&quot;)
+println(&quot;  True:      &quot;, labels_true)
+println(&quot;  Relabeled: &quot;, labels_relabeled)</code></pre><h3 id="Partial-Agreement"><a class="docs-heading-anchor" href="#Partial-Agreement">Partial Agreement</a><a id="Partial-Agreement-1"></a><a class="docs-heading-anchor-permalink" href="#Partial-Agreement" title="Permalink"></a></h3><pre><code class="language-julia hljs"># One sample misassigned
+labels_partial = [1, 1, 2, 2, 2, 2, 3, 3, 3]
+
+println(&quot;\nExample 3: Partial Agreement&quot;)
+println(&quot;  True:    &quot;, labels_true)
+println(&quot;  Partial: &quot;, labels_partial)</code></pre><h3 id="Low-Agreement"><a class="docs-heading-anchor" href="#Low-Agreement">Low Agreement</a><a id="Low-Agreement-1"></a><a class="docs-heading-anchor-permalink" href="#Low-Agreement" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Different structure
+labels_different = [1, 2, 1, 2, 1, 2, 1, 2, 1]
+
+println(&quot;\nExample 4: Low Agreement&quot;)
+println(&quot;  True:      &quot;, labels_true)
+println(&quot;  Different: &quot;, labels_different)</code></pre><h2 id="Part-3:-Computing-Individual-Metrics"><a class="docs-heading-anchor" href="#Part-3:-Computing-Individual-Metrics">Part 3: Computing Individual Metrics</a><a id="Part-3:-Computing-Individual-Metrics-1"></a><a class="docs-heading-anchor-permalink" href="#Part-3:-Computing-Individual-Metrics" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 3: Computing Individual Metrics&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h3 id="Adjusted-Rand-Index-(ARI)"><a class="docs-heading-anchor" href="#Adjusted-Rand-Index-(ARI)">Adjusted Rand Index (ARI)</a><a id="Adjusted-Rand-Index-(ARI)-1"></a><a class="docs-heading-anchor-permalink" href="#Adjusted-Rand-Index-(ARI)" title="Permalink"></a></h3><p>The ARI is the most commonly used metric for cluster comparison. It measures agreement between two clusterings while correcting for chance:</p><ul><li>1.0 = perfect agreement</li><li>0.0 = agreement no better than random</li><li>&lt; 0 = agreement worse than random</li></ul><pre><code class="language-julia hljs">println(&quot;\n--- Adjusted Rand Index (ARI) ---&quot;)
+
+ari_perfect = Mycelia.adjusted_rand_index(labels_true, labels_pred)
+ari_relabeled = Mycelia.adjusted_rand_index(labels_true, labels_relabeled)
+ari_partial = Mycelia.adjusted_rand_index(labels_true, labels_partial)
+ari_different = Mycelia.adjusted_rand_index(labels_true, labels_different)
+
+println(&quot;Perfect agreement:    ARI = $(round(ari_perfect, digits=4))&quot;)
+println(&quot;Relabeled (same):     ARI = $(round(ari_relabeled, digits=4))&quot;)
+println(&quot;Partial agreement:    ARI = $(round(ari_partial, digits=4))&quot;)
+println(&quot;Different structure:  ARI = $(round(ari_different, digits=4))&quot;)</code></pre><h3 id="Normalized-Mutual-Information-(NMI)"><a class="docs-heading-anchor" href="#Normalized-Mutual-Information-(NMI)">Normalized Mutual Information (NMI)</a><a id="Normalized-Mutual-Information-(NMI)-1"></a><a class="docs-heading-anchor-permalink" href="#Normalized-Mutual-Information-(NMI)" title="Permalink"></a></h3><p>NMI is an information-theoretic measure based on entropy:</p><ul><li>1.0 = perfect agreement (complete mutual information)</li><li>0.0 = no mutual information</li></ul><pre><code class="language-julia hljs">println(&quot;\n--- Normalized Mutual Information (NMI) ---&quot;)
+
+nmi_perfect = Mycelia.normalized_mutual_information(labels_true, labels_pred)
+nmi_relabeled = Mycelia.normalized_mutual_information(labels_true, labels_relabeled)
+nmi_partial = Mycelia.normalized_mutual_information(labels_true, labels_partial)
+nmi_different = Mycelia.normalized_mutual_information(labels_true, labels_different)
+
+println(&quot;Perfect agreement:    NMI = $(round(nmi_perfect, digits=4))&quot;)
+println(&quot;Relabeled (same):     NMI = $(round(nmi_relabeled, digits=4))&quot;)
+println(&quot;Partial agreement:    NMI = $(round(nmi_partial, digits=4))&quot;)
+println(&quot;Different structure:  NMI = $(round(nmi_different, digits=4))&quot;)</code></pre><h3 id="V-Measure-(Homogeneity-and-Completeness)"><a class="docs-heading-anchor" href="#V-Measure-(Homogeneity-and-Completeness)">V-Measure (Homogeneity and Completeness)</a><a id="V-Measure-(Homogeneity-and-Completeness)-1"></a><a class="docs-heading-anchor-permalink" href="#V-Measure-(Homogeneity-and-Completeness)" title="Permalink"></a></h3><p>V-measure is the harmonic mean of two complementary metrics:</p><ul><li>Homogeneity: each predicted cluster contains only members of a single true class</li><li>Completeness: all members of a true class are assigned to the same predicted cluster</li></ul><pre><code class="language-julia hljs">println(&quot;\n--- V-Measure ---&quot;)
+
+vm_perfect = Mycelia.v_measure(labels_true, labels_pred)
+vm_partial = Mycelia.v_measure(labels_true, labels_partial)
+
+println(&quot;Perfect agreement:&quot;)
+println(&quot;  Homogeneity:  $(round(vm_perfect.homogeneity, digits=4))&quot;)
+println(&quot;  Completeness: $(round(vm_perfect.completeness, digits=4))&quot;)
+println(&quot;  V-measure:    $(round(vm_perfect.v_measure, digits=4))&quot;)
+
+println(&quot;\nPartial agreement:&quot;)
+println(&quot;  Homogeneity:  $(round(vm_partial.homogeneity, digits=4))&quot;)
+println(&quot;  Completeness: $(round(vm_partial.completeness, digits=4))&quot;)
+println(&quot;  V-measure:    $(round(vm_partial.v_measure, digits=4))&quot;)</code></pre><h3 id="Fowlkes-Mallows-Index-(FMI)"><a class="docs-heading-anchor" href="#Fowlkes-Mallows-Index-(FMI)">Fowlkes-Mallows Index (FMI)</a><a id="Fowlkes-Mallows-Index-(FMI)-1"></a><a class="docs-heading-anchor-permalink" href="#Fowlkes-Mallows-Index-(FMI)" title="Permalink"></a></h3><p>FMI is the geometric mean of precision and recall computed from pair counting:</p><ul><li>Precision: TP / (TP + FP)</li><li>Recall: TP / (TP + FN)</li><li>FMI = sqrt(Precision * Recall)</li></ul><pre><code class="language-julia hljs">println(&quot;\n--- Fowlkes-Mallows Index (FMI) ---&quot;)
+
+fmi_perfect = Mycelia.fowlkes_mallows_index(labels_true, labels_pred)
+fmi_partial = Mycelia.fowlkes_mallows_index(labels_true, labels_partial)
+fmi_different = Mycelia.fowlkes_mallows_index(labels_true, labels_different)
+
+println(&quot;Perfect agreement:    FMI = $(round(fmi_perfect, digits=4))&quot;)
+println(&quot;Partial agreement:    FMI = $(round(fmi_partial, digits=4))&quot;)
+println(&quot;Different structure:  FMI = $(round(fmi_different, digits=4))&quot;)</code></pre><h3 id="Jaccard-Index"><a class="docs-heading-anchor" href="#Jaccard-Index">Jaccard Index</a><a id="Jaccard-Index-1"></a><a class="docs-heading-anchor-permalink" href="#Jaccard-Index" title="Permalink"></a></h3><p>The Jaccard Index for clusterings measures agreement based on pairs: J = TP / (TP + FP + FN)</p><pre><code class="language-julia hljs">println(&quot;\n--- Jaccard Index ---&quot;)
+
+ji_perfect = Mycelia.jaccard_index(labels_true, labels_pred)
+ji_partial = Mycelia.jaccard_index(labels_true, labels_partial)
+ji_different = Mycelia.jaccard_index(labels_true, labels_different)
+
+println(&quot;Perfect agreement:    Jaccard = $(round(ji_perfect, digits=4))&quot;)
+println(&quot;Partial agreement:    Jaccard = $(round(ji_partial, digits=4))&quot;)
+println(&quot;Different structure:  Jaccard = $(round(ji_different, digits=4))&quot;)</code></pre><h3 id="Cluster-Purity"><a class="docs-heading-anchor" href="#Cluster-Purity">Cluster Purity</a><a id="Cluster-Purity-1"></a><a class="docs-heading-anchor-permalink" href="#Cluster-Purity" title="Permalink"></a></h3><p>Purity measures how pure each cluster is with respect to a reference clustering. NOTE: Purity is asymmetric - the order of arguments matters!</p><pre><code class="language-julia hljs">println(&quot;\n--- Cluster Purity (Asymmetric) ---&quot;)
+
+purity_result = Mycelia.cluster_purity(labels_true, labels_partial)
+
+println(&quot;Purity (true -&gt; partial): $(round(purity_result.overall_purity, digits=4))&quot;)
+println(&quot;Per-cluster purities:&quot;)
+for (cluster, purity) in purity_result.cluster_purities
+    println(&quot;  Cluster $cluster: $(round(purity, digits=4))&quot;)
+end</code></pre><h2 id="Part-4:-Contingency-Matrix"><a class="docs-heading-anchor" href="#Part-4:-Contingency-Matrix">Part 4: Contingency Matrix</a><a id="Part-4:-Contingency-Matrix-1"></a><a class="docs-heading-anchor-permalink" href="#Part-4:-Contingency-Matrix" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 4: Contingency Matrix&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><p>The contingency matrix shows the overlap between clusters from two clusterings. It&#39;s the foundation for computing many comparison metrics.</p><pre><code class="language-julia hljs">cont = Mycelia.contingency_matrix(labels_true, labels_partial)
+
+println(&quot;\nContingency Matrix:&quot;)
+println(&quot;  Rows (labels_true): &quot;, cont.labels1)
+println(&quot;  Cols (labels_partial): &quot;, cont.labels2)
+println(&quot;  Matrix:&quot;)
+for i in 1:size(cont.matrix, 1)
+    println(&quot;    &quot;, cont.matrix[i, :])
+end</code></pre><h2 id="Part-5:-Comprehensive-Comparison-Summary"><a class="docs-heading-anchor" href="#Part-5:-Comprehensive-Comparison-Summary">Part 5: Comprehensive Comparison Summary</a><a id="Part-5:-Comprehensive-Comparison-Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Part-5:-Comprehensive-Comparison-Summary" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 5: Comprehensive Comparison Summary&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><p>Mycelia provides convenience functions to compute all metrics at once and generate formatted reports.</p><pre><code class="language-julia hljs"># Generate comprehensive summary
+summary = Mycelia.clustering_comparison_summary(
+    labels_true, labels_partial;
+    name1 = &quot;Ground Truth&quot;,
+    name2 = &quot;K-means Result&quot;
+)
+
+println(&quot;\nSummary fields available:&quot;)
+for field in keys(summary)
+    println(&quot;  - $field&quot;)
+end</code></pre><h3 id="Print-Formatted-Report"><a class="docs-heading-anchor" href="#Print-Formatted-Report">Print Formatted Report</a><a id="Print-Formatted-Report-1"></a><a class="docs-heading-anchor-permalink" href="#Print-Formatted-Report" title="Permalink"></a></h3><pre><code class="language-julia hljs">Mycelia.print_clustering_comparison(
+    labels_true, labels_partial;
+    name1 = &quot;Ground Truth&quot;,
+    name2 = &quot;K-means Result&quot;
+)</code></pre><h3 id="Export-to-DataFrame"><a class="docs-heading-anchor" href="#Export-to-DataFrame">Export to DataFrame</a><a id="Export-to-DataFrame-1"></a><a class="docs-heading-anchor-permalink" href="#Export-to-DataFrame" title="Permalink"></a></h3><pre><code class="language-julia hljs">df = Mycelia.comparison_summary_to_dataframe(summary)
+println(&quot;\nDataFrame export:&quot;)
+println(df)</code></pre><h2 id="Part-6:-Comparing-Multiple-Clustering-Methods"><a class="docs-heading-anchor" href="#Part-6:-Comparing-Multiple-Clustering-Methods">Part 6: Comparing Multiple Clustering Methods</a><a id="Part-6:-Comparing-Multiple-Clustering-Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Part-6:-Comparing-Multiple-Clustering-Methods" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 6: Comparing Multiple Clustering Methods&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><p>A common use case is comparing multiple clustering methods against a reference.</p><pre><code class="language-julia hljs"># Simulate different clustering &quot;methods&quot;
+Random.seed!(42)
+n_samples = 50
+
+# Ground truth: 5 clusters of 10 samples each
+ground_truth = repeat(1:5, inner=10)
+
+# Method A: Almost perfect (1 error per cluster)
+method_a = copy(ground_truth)
+method_a[10] = 2  ## One swap
+method_a[20] = 3
+
+# Method B: Merges two clusters
+method_b = copy(ground_truth)
+method_b[method_b .== 2] .= 1  ## Merge cluster 2 into cluster 1
+
+# Method C: Random-ish
+method_c = rand(1:5, 50)
+
+# Compare all methods to ground truth
+methods = [
+    (&quot;Method A (minor errors)&quot;, method_a),
+    (&quot;Method B (merged clusters)&quot;, method_b),
+    (&quot;Method C (random)&quot;, method_c)
+]
+
+println(&quot;\nComparing clustering methods to ground truth:&quot;)
+println(&quot;-&quot; ^ 70)
+println(rpad(&quot;Method&quot;, 30), rpad(&quot;ARI&quot;, 10), rpad(&quot;NMI&quot;, 10), rpad(&quot;V-measure&quot;, 10))
+println(&quot;-&quot; ^ 70)
+
+for (name, labels) in methods
+    ari = Mycelia.adjusted_rand_index(ground_truth, labels)
+    nmi = Mycelia.normalized_mutual_information(ground_truth, labels)
+    vm = Mycelia.v_measure(ground_truth, labels)
+    println(
+        rpad(name, 30),
+        rpad(round(ari, digits=4), 10),
+        rpad(round(nmi, digits=4), 10),
+        rpad(round(vm.v_measure, digits=4), 10)
+    )
+end
+println(&quot;-&quot; ^ 70)</code></pre><h2 id="Part-7:-Practical-Considerations"><a class="docs-heading-anchor" href="#Part-7:-Practical-Considerations">Part 7: Practical Considerations</a><a id="Part-7:-Practical-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Part-7:-Practical-Considerations" title="Permalink"></a></h2><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Part 7: Practical Considerations&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h3 id="When-to-Use-Each-Metric"><a class="docs-heading-anchor" href="#When-to-Use-Each-Metric">When to Use Each Metric</a><a id="When-to-Use-Each-Metric-1"></a><a class="docs-heading-anchor-permalink" href="#When-to-Use-Each-Metric" title="Permalink"></a></h3><table><tr><th style="text-align: right">Metric</th><th style="text-align: right">Best For</th></tr><tr><td style="text-align: right">ARI</td><td style="text-align: right">General-purpose, corrected for chance, gold standard</td></tr><tr><td style="text-align: right">NMI</td><td style="text-align: right">When you want information-theoretic interpretation</td></tr><tr><td style="text-align: right">AMI</td><td style="text-align: right">When NMI seems inflated (chance correction)</td></tr><tr><td style="text-align: right">V-measure</td><td style="text-align: right">When homogeneity vs completeness tradeoff matters</td></tr><tr><td style="text-align: right">FMI</td><td style="text-align: right">Alternative to ARI with geometric mean interpretation</td></tr><tr><td style="text-align: right">Jaccard</td><td style="text-align: right">Simple, intuitive pair-based similarity</td></tr><tr><td style="text-align: right">Purity</td><td style="text-align: right">One-directional quality assessment</td></tr></table><pre><code class="language-julia hljs">println(&quot;\nMetric Selection Guidelines:&quot;)
+println(&quot;  - Use ARI as your primary metric (most widely accepted)&quot;)
+println(&quot;  - Add NMI for information-theoretic perspective&quot;)
+println(&quot;  - Use V-measure when you need homogeneity/completeness breakdown&quot;)
+println(&quot;  - Purity is useful but be aware it&#39;s asymmetric&quot;)</code></pre><h3 id="Interpretation-Guidelines"><a class="docs-heading-anchor" href="#Interpretation-Guidelines">Interpretation Guidelines</a><a id="Interpretation-Guidelines-1"></a><a class="docs-heading-anchor-permalink" href="#Interpretation-Guidelines" title="Permalink"></a></h3><table><tr><th style="text-align: right">Score Range</th><th style="text-align: right">Interpretation</th></tr><tr><td style="text-align: right">&gt; 0.9</td><td style="text-align: right">Excellent agreement (nearly identical)</td></tr><tr><td style="text-align: right">0.7 - 0.9</td><td style="text-align: right">Good agreement</td></tr><tr><td style="text-align: right">0.5 - 0.7</td><td style="text-align: right">Moderate agreement</td></tr><tr><td style="text-align: right">0.3 - 0.5</td><td style="text-align: right">Weak agreement</td></tr><tr><td style="text-align: right">&lt; 0.3</td><td style="text-align: right">Poor agreement</td></tr></table><pre><code class="language-julia hljs">println(&quot;\n&quot; * &quot;=&quot; ^ 60)
+println(&quot;Tutorial 21 Complete!&quot;)
+println(&quot;=&quot; ^ 60)</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>This tutorial covered:</p><ol><li>The concept of cluster comparison and why label values don&#39;t matter</li><li>Individual metrics: ARI, NMI, AMI, V-measure, FMI, Jaccard, Purity</li><li>Contingency matrices as the foundation for comparison</li><li>Comprehensive comparison reports using <code>clustering_comparison_summary</code></li><li>Practical guidelines for metric selection and interpretation</li></ol><h2 id="Key-Functions-Used"><a class="docs-heading-anchor" href="#Key-Functions-Used">Key Functions Used</a><a id="Key-Functions-Used-1"></a><a class="docs-heading-anchor-permalink" href="#Key-Functions-Used" title="Permalink"></a></h2><ul><li><code>Mycelia.contingency_matrix(labels1, labels2)</code> - Build contingency matrix</li><li><code>Mycelia.adjusted_rand_index(labels1, labels2)</code> - Compute ARI</li><li><code>Mycelia.normalized_mutual_information(labels1, labels2)</code> - Compute NMI</li><li><code>Mycelia.adjusted_mutual_information(labels1, labels2)</code> - Compute AMI</li><li><code>Mycelia.v_measure(labels_true, labels_pred)</code> - Compute V-measure</li><li><code>Mycelia.fowlkes_mallows_index(labels1, labels2)</code> - Compute FMI</li><li><code>Mycelia.jaccard_index(labels1, labels2)</code> - Compute Jaccard</li><li><code>Mycelia.cluster_purity(labels_true, labels_pred)</code> - Compute purity</li><li><code>Mycelia.clustering_comparison_summary(...)</code> - All metrics at once</li><li><code>Mycelia.print_clustering_comparison(...)</code> - Formatted report</li><li><code>Mycelia.comparison_summary_to_dataframe(...)</code> - Export to DataFrame</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../20_microbiome_visualization/">« Step 20: Microbiome Visualization</a><a class="docs-footer-nextpage" href="../conceptual_figures/">Conceptual Figures »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 30 January 2026 00:55">Friday 30 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
