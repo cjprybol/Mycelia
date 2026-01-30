@@ -4666,6 +4666,52 @@ function calculate_tick_step(n_samples::Int; max_labels::Int=100)
 end
 
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract short sample identifier from full sample name using a regex pattern.
+
+Useful for making x-axis labels more readable when sample names contain
+barcode sequences, UUIDs, or other long suffixes.
+
+# Arguments
+- `sample_id::AbstractString`: Full sample identifier
+- `pattern::Regex`: Pattern with a capture group for the short ID portion.
+  The first capture group is returned as the short ID.
+- `max_length::Int`: Maximum length before truncation with ellipsis (default: 16)
+
+# Returns
+- `String`: Short sample identifier (first capture group, or truncated original)
+
+# Examples
+```julia
+# Extract prefix before barcode sequence
+extract_short_sample_id("Sample-01-ACGTACGT-TGCATGCA"; pattern=r"(Sample-\\d+).*")
+# => "Sample-01"
+
+# Extract numeric portion
+extract_short_sample_id("experiment_12345_replicate_A"; pattern=r"experiment_(\\d+)")
+# => "12345"
+
+# Fallback truncation when pattern doesn't match
+extract_short_sample_id("VeryLongSampleNameWithoutPattern"; pattern=r"(NoMatch)")
+# => "VeryLongSampleN…"
+```
+"""
+function extract_short_sample_id(sample_id::AbstractString;
+                                  pattern::Regex=r"(.+)",
+                                  max_length::Int=16)
+    m = match(pattern, sample_id)
+    if m !== nothing && length(m.captures) >= 1
+        return m.captures[1]
+    end
+    # Fallback: truncate with ellipsis
+    return length(sample_id) > max_length ? sample_id[1:max_length] * "…" : sample_id
+end
+
+# Broadcast-friendly vector version
+extract_short_sample_id(ids::AbstractVector; kwargs...) = [extract_short_sample_id(id; kwargs...) for id in ids]
+
+"""
     _prepare_abundance_data(
         abundance_df::DataFrames.DataFrame;
         sample_col::Symbol,
@@ -5989,4 +6035,98 @@ function mmseqs_coverage_abundance(
     )
 
     return abundance
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Create violin plots for alpha diversity metrics comparison across methods or groups.
+
+Generates a 2x2 grid showing Shannon index, Simpson's index, species richness,
+and Pielou's evenness as violin plots with overlaid scatter points.
+
+# Arguments
+- `alpha_df::DataFrames.DataFrame`: DataFrame with alpha diversity metrics.
+  Required columns: `sample`, `shannon`, `simpsons`, `richness`, `evenness`.
+  Optional column: `method` or `group` for grouping (uses first found, or "All" if neither exists).
+- `figsize::Tuple{Int,Int}`: Figure dimensions in pixels (default: (1000, 800))
+- `color`: Color for violins and points (default: :teal)
+- `group_col::Symbol`: Column to use for grouping (default: auto-detect :method or :group)
+
+# Returns
+- `CairoMakie.Figure`: Figure with 2x2 grid of violin plots
+
+# Examples
+```julia
+# Single method/group
+alpha_df = calculate_alpha_diversity(abundance_matrix, samples)
+fig = plot_alpha_diversity_violins(alpha_df)
+
+# Multiple methods for comparison
+combined_df = vcat(
+    insertcols!(alpha_df1, :method => "Method A"),
+    insertcols!(alpha_df2, :method => "Method B")
+)
+fig = plot_alpha_diversity_violins(combined_df)
+```
+"""
+function plot_alpha_diversity_violins(alpha_df::DataFrames.DataFrame;
+                                       figsize::Tuple{Int,Int}=(1000, 800),
+                                       color=:teal,
+                                       group_col::Union{Symbol,Nothing}=nothing)
+    fig = CairoMakie.Figure(size=figsize)
+
+    metrics = [(:shannon, "Shannon Index"),
+               (:simpsons, "Simpson's Index"),
+               (:richness, "Species Richness"),
+               (:evenness, "Pielou's Evenness")]
+
+    # Auto-detect grouping column
+    if group_col === nothing
+        if DataFrames.hasproperty(alpha_df, :method)
+            group_col = :method
+        elseif DataFrames.hasproperty(alpha_df, :group)
+            group_col = :group
+        else
+            # No grouping - add a dummy column
+            alpha_df = DataFrames.copy(alpha_df)
+            alpha_df[!, :_group] = fill("All", DataFrames.nrow(alpha_df))
+            group_col = :_group
+        end
+    end
+
+    groups = sort(unique(alpha_df[!, group_col]))
+    n_groups = length(groups)
+
+    for (i, (metric, title)) in enumerate(metrics)
+        row = div(i - 1, 2) + 1
+        col = mod(i - 1, 2) + 1
+        ax = CairoMakie.Axis(fig[row, col],
+            title = title,
+            xlabel = n_groups > 1 ? string(titlecase(string(group_col))) : "",
+            ylabel = title
+        )
+
+        for (j, grp) in enumerate(groups)
+            group_data = DataFrames.filter(r -> r[group_col] == grp, alpha_df)
+            values = group_data[!, metric]
+
+            # Filter out missing/NaN values
+            valid_values = collect(skipmissing(filter(!isnan, values)))
+
+            if length(valid_values) > 1
+                CairoMakie.violin!(ax, fill(j, length(valid_values)), valid_values,
+                    color = (color, 0.5), strokewidth = 1)
+            end
+            # Always show individual points
+            if !isempty(valid_values)
+                CairoMakie.scatter!(ax, fill(j, length(valid_values)), valid_values,
+                    color = color, markersize = 4, alpha = 0.6)
+            end
+        end
+
+        ax.xticks = (1:n_groups, string.(groups))
+    end
+
+    return fig
 end
