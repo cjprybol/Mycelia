@@ -4990,10 +4990,11 @@ function _create_heatmap_with_dendrograms(
     n_samples = length(samples)
     n_taxa = length(taxa)
 
-    # Calculate figure size (heatmaps can be taller)
-    width = min(config.max_width, 1400)
-    height = max(config.min_height, n_samples * 4 + 200)
-    height = min(height, 3000)
+    # Calculate figure size (samples on X-axis, taxa on Y-axis)
+    width = max(800, n_samples * 4 + 200)
+    width = min(width, config.max_width, 3000)
+    height = max(config.min_height, n_taxa * 15 + 200)
+    height = min(height, 1400)
 
     # Calculate tick step for sample labels
     tick_step = calculate_tick_step(n_samples, max_labels=50)
@@ -5005,9 +5006,9 @@ function _create_heatmap_with_dendrograms(
     # Create figure
     fig = CairoMakie.Figure(size=(width, height), fontsize=10)
 
-    # Determine column positions
-    hm_col = show_sample_dendro ? 2 : 1
-    legend_col = hm_col + 1
+    # Determine column positions (dendrogram is now above, not to the left)
+    hm_col = 1
+    legend_col = 2
 
     # Plot title
     plot_title = if isempty(title)
@@ -5016,26 +5017,26 @@ function _create_heatmap_with_dendrograms(
         title
     end
 
-    # Create heatmap axis
+    # Create heatmap axis (samples on X, taxa on Y)
     ax_hm = CairoMakie.Axis(
         fig[1, hm_col],
-        xlabel = titlecase(rank),
-        ylabel = "Sample",
+        xlabel = "Sample",
+        ylabel = titlecase(rank),
         title = plot_title,
-        xticks = (1:n_taxa, taxa),
+        xticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
         xticklabelrotation = deg2rad(45),
-        xticklabelsize = 8,
-        yticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
-        yticklabelsize = label_fontsize,
+        xticklabelsize = label_fontsize,
+        yticks = (1:n_taxa, taxa),
+        yticklabelsize = 8,
         yreversed = true
     )
 
-    # Create heatmap (transpose so taxa are columns, samples are rows)
+    # Create heatmap (samples on X, taxa on Y - no transpose needed)
     hm = CairoMakie.heatmap!(
         ax_hm,
-        1:n_taxa,
         1:n_samples,
-        matrix',  # Transpose: now (n_samples × n_taxa)
+        1:n_taxa,
+        matrix,  # (n_taxa × n_samples), rows=taxa, cols=samples
         colormap = :viridis
     )
 
@@ -5046,16 +5047,16 @@ function _create_heatmap_with_dendrograms(
         label = "Relative Abundance"
     )
 
-    # Add sample dendrogram if requested
+    # Add sample dendrogram if requested (above heatmap, samples on X-axis)
     if show_sample_dendro
         ax_dendro = CairoMakie.Axis(
-            fig[1, 1],
-            xlabel = "Height",
+            fig[0, hm_col],  # Row 0 = above heatmap
+            ylabel = "Height",
             xgridvisible = false,
             ygridvisible = false,
-            yticklabelsvisible = false,
-            yticksvisible = false,
-            rightspinevisible = false
+            xticklabelsvisible = false,
+            xticksvisible = false,
+            bottomspinevisible = false
         )
 
         # Plot dendrogram using existing function if available
@@ -5063,13 +5064,13 @@ function _create_heatmap_with_dendrograms(
             Mycelia.plot_dendrogram_from_hclust!(
                 ax_dendro,
                 sample_hclust,
-                orientation = :horizontal
+                orientation = :vertical
             )
         end
 
-        CairoMakie.xreverse!(ax_dendro)
-        CairoMakie.linkyaxes!(ax_hm, ax_dendro)
-        CairoMakie.colsize!(fig.layout, 1, CairoMakie.Relative(0.15))
+        CairoMakie.yreverse!(ax_dendro)
+        CairoMakie.linkxaxes!(ax_hm, ax_dendro)
+        CairoMakie.rowsize!(fig.layout, 0, CairoMakie.Relative(0.15))
     end
 
     return fig
