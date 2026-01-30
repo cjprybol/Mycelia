@@ -5031,12 +5031,14 @@ function _create_heatmap_with_dendrograms(
         yreversed = true
     )
 
-    # Create heatmap (samples on X, taxa on Y - no transpose needed)
+    # Create heatmap (samples on X, taxa on Y)
+    # CairoMakie.heatmap!(ax, x, y, values) expects values[i,j] at (x[i], y[j])
+    # So we need shape (n_samples × n_taxa), but matrix is (n_taxa × n_samples)
     hm = CairoMakie.heatmap!(
         ax_hm,
         1:n_samples,
         1:n_taxa,
-        matrix,  # (n_taxa × n_samples), rows=taxa, cols=samples
+        matrix',  # Transpose: (n_samples × n_taxa) to match axis order
         colormap = :viridis
     )
 
@@ -5215,8 +5217,10 @@ function save_plot(
         mkpath(dir)
     end
 
-    # Detect figure type
-    is_makie = fig isa CairoMakie.Figure || fig isa CairoMakie.FigureAxisPlot
+    # Detect figure type - check for CairoMakie.Figure directly or via .figure property
+    # (FigureAxisPlot has a .figure field that contains a CairoMakie.Figure)
+    is_makie = fig isa CairoMakie.Figure ||
+               (hasproperty(fig, :figure) && fig.figure isa CairoMakie.Figure)
     is_plots = isdefined(Main, :Plots) && fig isa Main.Plots.Plot ||
                isdefined(Mycelia, :StatsPlots) && (
                    typeof(fig) <: StatsPlots.Plots.Plot ||
