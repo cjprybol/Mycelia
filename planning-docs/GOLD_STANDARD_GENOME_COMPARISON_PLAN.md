@@ -8,7 +8,7 @@ Build a rigorous whole-genome comparison suite that:
 - produces standardized, cacheable outputs.
 
 ## Status legend
-- [ ] not started
+- not started
 - [~] in progress
 - [x] done
 - [!] blocked
@@ -75,7 +75,7 @@ Build a rigorous whole-genome comparison suite that:
   PyOrthoANI; expected: summary fields `pocp`, `pocpu_besthit`, `pocpu_rbh`, `pyorthoani_ani`.
 - [x] `src/sequence-comparison.jl`: add stable report writer (TSV/JSON) with tool versions,
   params, and directional metrics.
-- [ ] `test/7_comparative_pangenomics/gold_standard_genome_comparison.jl`: add POCP tests
+- `test/7_comparative_pangenomics/gold_standard_genome_comparison.jl`: add POCP tests
   and strict ANIb default regression checks; expected: gated external tests pass.
 
 ### Phase 2 - MUMmer core (ANIm and alignment parsing)
@@ -85,20 +85,20 @@ Build a rigorous whole-genome comparison suite that:
 - [~] Implement ANIm report extraction with aligned fractions and QC fields.
 
 ### Phase 3 - Eukaryotic WGA and SV
-- [ ] Add AnchorWave wrapper (proali and genoali) and anchor prep helper (GFF + FASTA).
-- [ ] Add LAST wrapper (`lastdb`, `lastal`, `last-split`) for sensitive distant homology.
-- [ ] Add SyRI wrapper (consume MUMmer delta).
-- [ ] Add Assemblytics wrapper (delta input) for variant size summaries.
+- Add AnchorWave wrapper (proali and genoali) and anchor prep helper (GFF + FASTA).
+- Add LAST wrapper (`lastdb`, `lastal`, `last-split`) for sensitive distant homology.
+- Add SyRI wrapper (consume MUMmer delta).
+- Add Assemblytics wrapper (delta input) for variant size summaries.
 
 ### Phase 4 - Visualization
-- [ ] Wrap plotsr for SyRI outputs.
-- [ ] Provide dotplot CLI option (dotPlotly or dnadotplot); keep D-GENIES as optional
+- Wrap plotsr for SyRI outputs.
+- Provide dotplot CLI option (dotPlotly or dnadotplot); keep D-GENIES as optional
   heavy dependency.
-- [ ] Add small Julia-native plot helper for quick diagnostics (CairoMakie).
+- Add small Julia-native plot helper for quick diagnostics (CairoMakie).
 
 ### Phase 5 - Performance and scale
-- [ ] Add skani wrapper and set as default fast ANI (keep ANIb and ANIm as gold standard).
-- [ ] Add MMseqs2 wrappers for protein clustering at pangenome scale.
+- Add skani wrapper and set as default fast ANI (keep ANIb and ANIm as gold standard).
+- Add MMseqs2 wrappers for protein clustering at pangenome scale.
 
 ### Phase 6 - Orchestration and caching
 - [~] `compare_genomes_gold` orchestrator supports ANIm/ANIb/AAI/POCP/PyOrthoANI;
@@ -111,7 +111,7 @@ Build a rigorous whole-genome comparison suite that:
 - [x] Small fixture tests for ANIb and AAI thresholds exist; POCP tests and strict ANIb
   default regression checks added.
 - [x] External tool tests gated by `MYCELIA_RUN_EXTERNAL=true` exist for ANIb/ANIm/AAI/RBH/POCP.
-- [ ] Tutorial and docs updates (WGA, SV, and metrics workflow).
+- Tutorial and docs updates (WGA, SV, and metrics workflow).
 
 ## Notes
 - Do not re-import dependencies in leaf files; use full qualification as per repo guidelines.

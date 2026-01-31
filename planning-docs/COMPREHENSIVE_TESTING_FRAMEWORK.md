@@ -980,33 +980,33 @@ end
 
 ### ✅ **Required Validations (All 24 Files)**
 
-- [ ] **Pathological Suite Coverage** - Passes all standard pathological graph tests.
-- [ ] **Graph Construction** - Exact topology validation
-- [ ] **I/O Round-Trip** - Graph serialization and deserialization is lossless.
-- [ ] **Type Safety** - No inappropriate string conversions
-- [ ] **Coverage Tracking** - Complete provenance and accuracy
-- [ ] **Strand Handling** - Correct SingleStrand vs DoubleStrand behavior
-- [ ] **Path Reconstruction** - Type-stable sequence recovery
-- [ ] **Performance Bounds** - Reasonable time/memory complexity
-- [ ] **Error Handling** - Graceful failure modes
+- **Pathological Suite Coverage** - Passes all standard pathological graph tests.
+- **Graph Construction** - Exact topology validation
+- **I/O Round-Trip** - Graph serialization and deserialization is lossless.
+- **Type Safety** - No inappropriate string conversions
+- **Coverage Tracking** - Complete provenance and accuracy
+- **Strand Handling** - Correct SingleStrand vs DoubleStrand behavior
+- **Path Reconstruction** - Type-stable sequence recovery
+- **Performance Bounds** - Reasonable time/memory complexity
+- **Error Handling** - Graceful failure modes
 
 ### ✅ **Quality-Aware Graph Additional Validations**
 
-- [ ] **Phred Score Accuracy** - Strict 0-60 range validation
-- [ ] **Quality Aggregation** - Mathematically correct mean calculations
-- [ ] **Provenance Tracking** - Source-to-vertex quality traceability
+- **Phred Score Accuracy** - Strict 0-60 range validation
+- **Quality Aggregation** - Mathematically correct mean calculations
+- **Provenance Tracking** - Source-to-vertex quality traceability
 
 ### ✅ **DoubleStrand Graph Additional Validations**
 
-- [ ] **Canonicalization Correctness** - Proper reverse complement handling
-- [ ] **Strand Orientation Evidence** - Both orientations tracked
-- [ ] **Traversal Validity** - Biologically valid transitions
+- **Canonicalization Correctness** - Proper reverse complement handling
+- **Strand Orientation Evidence** - Both orientations tracked
+- **Traversal Validity** - Biologically valid transitions
 
 ### ✅ **String Graph Additional Validations**
 
-- [ ] **Text Processing Accuracy** - Proper n-gram extraction
-- [ ] **Variable Length Handling** - Alignment-based edge detection
-- [ ] **Unicode Support** - Character handling correctness
+- **Text Processing Accuracy** - Proper n-gram extraction
+- **Variable Length Handling** - Alignment-based edge detection
+- **Unicode Support** - Character handling correctness
 
 ---
 

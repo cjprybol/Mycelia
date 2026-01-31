@@ -54,9 +54,9 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** Add an optional PH backend (planned: Ripserer.jl) behind the same Mycelia API.
 
-- [ ] Add Ripserer as an optional dependency (prefer Julia extensions / weakdeps).
-- [ ] Implement backend dispatch in `tda_on_graph` / `tda_*` functions.
-- [ ] Add toy PH tests (circle vs noise; cycle graph vs path graph).
+- Add Ripserer as an optional dependency (prefer Julia extensions / weakdeps).
+- Implement backend dispatch in `tda_on_graph` / `tda_*` functions.
+- Add toy PH tests (circle vs noise; cycle graph vs path graph).
 
 **Acceptance:** Core tests pass without Ripserer; PH tests run only when the backend is available.
 
@@ -64,10 +64,10 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** For any assembly graph snapshot, compute topology summaries across thresholds.
 
-- [ ] Implement coverage/quality/confidence vertex-weight extraction adapters for:
+- Implement coverage/quality/confidence vertex-weight extraction adapters for:
   - qualmer graphs (old pipeline: `coverage`, `joint_probability`)
   - Rhizomorph graphs (new pipeline: coverage computed from evidence)
-- [ ] Define standard “filtration recipes” per graph type (what weight drives thresholding).
+- Define standard “filtration recipes” per graph type (what weight drives thresholding).
 
 **Acceptance:** Tutorials can print a `TDARunSummary` alongside existing QC metrics on small datasets.
 
@@ -75,9 +75,9 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** Replace ad-hoc threshold loops with a topology objective.
 
-- [ ] Implement `choose_threshold_via_tda(g; cfg, vertex_weights)` returning best threshold + summary.
-- [ ] Replace heuristic “increase coverage threshold until topology changes” loops with the above.
-- [ ] Add synthetic regression tests: noisy spur removal without fragmenting the main contig.
+- Implement `choose_threshold_via_tda(g; cfg, vertex_weights)` returning best threshold + summary.
+- Replace heuristic “increase coverage threshold until topology changes” loops with the above.
+- Add synthetic regression tests: noisy spur removal without fragmenting the main contig.
 
 **Acceptance:** Existing assembly/QC metrics do not regress on synthetic fixtures; graph cleaning behavior is deterministic.
 
@@ -85,9 +85,9 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** Use TDA metrics in the scalar objective for parameter search/learning.
 
-- [ ] Extend assembly result logging to record `TDARunSummary` (stored in `Mycelia.Rhizomorph.AssemblyResult.assembly_stats` initially).
-- [ ] Define an `assembly_objective(result; weights)` that mixes classical QC metrics and TDA simplicity.
-- [ ] Add a simple black-box search driver (random / Latin hypercube) over `Mycelia.Rhizomorph.AssemblyConfig`.
+- Extend assembly result logging to record `TDARunSummary` (stored in `Mycelia.Rhizomorph.AssemblyResult.assembly_stats` initially).
+- Define an `assembly_objective(result; weights)` that mixes classical QC metrics and TDA simplicity.
+- Add a simple black-box search driver (random / Latin hypercube) over `Mycelia.Rhizomorph.AssemblyConfig`.
 
 **Acceptance:** `optimize_assembly` returns the best config on small simulated datasets and logs topology metrics.
 
@@ -95,8 +95,8 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** Use topology in *local subgraphs* to guide bubble/repeat resolution.
 
-- [ ] Bubble extraction API returns subgraphs suitable for per-bubble scoring.
-- [ ] Local TDA scoring combined with read support / quality to pick resolutions or report multi-allelic outputs.
+- Bubble extraction API returns subgraphs suitable for per-bubble scoring.
+- Local TDA scoring combined with read support / quality to pick resolutions or report multi-allelic outputs.
 
 **Acceptance:** Synthetic bubble fixtures show improved path choice vs coverage-only heuristics.
 
@@ -104,9 +104,9 @@ Implemented as a new core file: `src/tda.jl`.
 
 **Outcome:** Make TDA discoverable and reproducible.
 
-- [ ] Add a tutorial: “TDA for Qualmer Graphs”
-- [ ] Add a narrative doc page: “Topological Assembly Optimization in Mycelia”
-- [ ] Document all new TDA APIs and their intended usage
+- Add a tutorial: “TDA for Qualmer Graphs”
+- Add a narrative doc page: “Topological Assembly Optimization in Mycelia”
+- Document all new TDA APIs and their intended usage
 
 ## Implementation Status (as of this doc)
 

@@ -243,24 +243,31 @@ julia --project=. -e "import Runic; Runic.format(\"src/\")"
 
 ---
 
-## Planning Documents Index
+## Planning Documents & Beads
 
-Located in `planning-docs/`:
+### Task Tracking
 
-| Document | Purpose | Lines |
-|----------|---------|-------|
-| `TODO.md` | Active execution roadmap, checkbox items | 889 |
-| `COMPREHENSIVE_ROADMAP.md` | Strategic 5-phase vision | 486 |
-| `DEVELOPMENT_TRIAGE.md` | Code promotion decisions | 84 |
-| `COMPREHENSIVE_TESTING_FRAMEWORK.md` | Test organization spec | 1049 |
-| `FUNCTION_COVERAGE_AUDIT.md` | Module→doc mapping | 113 |
-| `TOOL_WRAPPER_STATUS.md` | External tool coverage | 443 |
-| `RHIZOMORPH_SUPPORT_MATRIX.md` | Graph type × alphabet matrix | - |
-| `rhizomorph-graph-ecosystem-plan.md` | Deep technical spec | 4101 |
-| `HPC_CI_PLAN.md` | SLURM CI/CD strategy | - |
-| `TDA_INTEGRATION_PLAN.md` | Topology data analysis | - |
+Mycelia work is tracked in Beads at `~/workspace/todo/.beads/`. Filter by `[B]` prefix.
 
-**Key finding from TODO.md**: Test-first approach discovered real bugs (4/42 path-finding failures initially). All 302 assembly tests now pass after fixes.
+```bash
+cd ~/workspace/todo && bd list --json | jq '.[] | select(.title | test("\\[B\\]"))'
+```
+
+### Reference Documents (planning-docs/)
+
+| Document | Purpose |
+|----------|---------|
+| `RHIZOMORPH_SUPPORT_MATRIX.md` | Graph type × alphabet × strand matrix |
+| `FUNCTION_COVERAGE_AUDIT.md` | Module→doc mapping (auto-generated) |
+| `TOOL_WRAPPER_STATUS.md` | External tool coverage table |
+| `COMPREHENSIVE_TESTING_FRAMEWORK.md` | Test organization spec |
+| `COMPREHENSIVE_ROADMAP.md` | Strategic 5-phase vision |
+| `rhizomorph-graph-ecosystem-plan.md` | Deep Rhizomorph technical spec |
+| `TDA_INTEGRATION_PLAN.md` | TDA design (beads: td-mncc → td-q5qa) |
+| `GOLD_STANDARD_GENOME_COMPARISON_PLAN.md` | Comparison design (beads: td-guxl, td-5xxf) |
+| `HPC_CI_PLAN.md` | SLURM CI/CD architecture |
+
+**Deleted (2026-01-30)**: TODO.md, DEVELOPMENT_TRIAGE.md, STARTUP_PERFORMANCE_PLAN.md, WORKFLOW_COVERAGE_NOTES.md (migrated to beads)
 
 ---
 

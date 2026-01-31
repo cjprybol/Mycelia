@@ -3939,54 +3939,54 @@ After implementing this plan:
 - [x] Consolidate vertex data structures with double-nested evidence dictionaries
 - [x] Consolidate edge data structures with double-nested evidence dictionaries
 - [x] Implement evidence manipulation helper functions (add, query, filter, merge, stats)
-- [ ] Implement strand specificity interconversion functions (strand-specific ↔ non-strand-specific) **(missing public API)**
+- Implement strand specificity interconversion functions (strand-specific ↔ non-strand-specific) **(missing public API)**
 - [x] Implement strand representation interconversion functions (single-stranded ↔ double-stranded)
-- [ ] Implement graph type interconversion functions:
-  - [ ] Fixed-length → Variable-length (collapse unbranching paths) **(planned)**
-  - [ ] Variable-length → Fixed-length (fragment sequences) **(planned)**
-  - [ ] Quality-aware → Quality-unaware (remove quality scores) **(planned)**
+- Implement graph type interconversion functions:
+  - Fixed-length → Variable-length (collapse unbranching paths) **(planned)**
+  - Variable-length → Fixed-length (fragment sequences) **(planned)**
+  - Quality-aware → Quality-unaware (remove quality scores) **(planned)**
 - [x] Implement shared graph construction patterns
 
 ### Phase 2: Fixed-Length Graphs
 - [x] Migrate k-mer graphs with SingleStrand-first approach (singlestrand/doublestrand/canonical)
 - [x] Fix qualmer graphs with proper Phred handling (singlestrand/doublestrand/canonical)
 - [x] Create separate n-gram graphs module (singlestrand only)
-- [ ] Update all imports and exports **(needs compatibility shims + legacy removal plan)**
+- Update all imports and exports **(needs compatibility shims + legacy removal plan)**
 
 ### Phase 3: Variable-Length Graphs
 - [x] Consolidate FASTA graph functionality (singlestrand with DNA/RNA double/canonical conversions)
 - [x] Fix FASTQ graphs with quality handling (singlestrand with DNA/RNA double/canonical conversions)
 - [x] Separate variable-length string graphs (singlestrand only)
-- [ ] Implement alignment-based edge detection **(planned)**
+- Implement alignment-based edge detection **(planned)**
 
 ### Phase 4: Algorithms & Utilities
 - [x] Move path finding algorithms
 - [x] Implement canonicalization as post-processing
 - [x] Consolidate I/O functionality
-- [ ] Implement Read-Centric Probabilistic Correction Model (Primary Strategy):
-  - [ ] Quality-aware mode: Joint probability from Phred scores
-  - [ ] Coverage-only mode: Evidence depth-based likelihood
-  - [ ] Probabilistic path selection: P(alt) / P(current)
-  - [ ] Iterative refinement with graph rebuilding
-  - [ ] K-fold cross-validation with random seeds
-  - [ ] Coverage-based confidence adjustments for high observation counts
-- [ ] Implement Inferred Error Rate Modeling:
-  - [ ] Identify consensus/highway paths vs alternate/back-road paths
-  - [ ] Classify alternatives: insertions, deletions, substitutions
-  - [ ] Estimate rates from graph structure
-  - [ ] Future: Pre-trained error models from gold-standard sequences
-- [ ] Implement Graph-Based Simplification (Supplementary Tools):
-  - [ ] Tip Removal (Clipping) with configurable thresholds **(missing)**
-  - [ ] Bubble Popping and Variant Calling (FreeBayes/GATK-style) **(partial; detection exists, lacks tests)**
-  - [ ] Cycle/Repeat Resolution **(planned)**
-- [ ] Future: Reinforcement Learning framework (post-publication)
+- Implement Read-Centric Probabilistic Correction Model (Primary Strategy):
+  - Quality-aware mode: Joint probability from Phred scores
+  - Coverage-only mode: Evidence depth-based likelihood
+  - Probabilistic path selection: P(alt) / P(current)
+  - Iterative refinement with graph rebuilding
+  - K-fold cross-validation with random seeds
+  - Coverage-based confidence adjustments for high observation counts
+- Implement Inferred Error Rate Modeling:
+  - Identify consensus/highway paths vs alternate/back-road paths
+  - Classify alternatives: insertions, deletions, substitutions
+  - Estimate rates from graph structure
+  - Future: Pre-trained error models from gold-standard sequences
+- Implement Graph-Based Simplification (Supplementary Tools):
+  - Tip Removal (Clipping) with configurable thresholds **(missing)**
+  - Bubble Popping and Variant Calling (FreeBayes/GATK-style) **(partial; detection exists, lacks tests)**
+  - Cycle/Repeat Resolution **(planned)**
+- Future: Reinforcement Learning framework (post-publication)
 
 ### Phase 5: Integration & Testing
-- [ ] Update main module integration **(needs legacy graph includes removed after shims/tests)**
-- [ ] Update all 24 test files **(legacy tests must migrate to rhizomorph APIs)**
-- [ ] Run comprehensive validation suite
-- [ ] Performance benchmarking
-- [ ] Documentation updates
+- Update main module integration **(needs legacy graph includes removed after shims/tests)**
+- Update all 24 test files **(legacy tests must migrate to rhizomorph APIs)**
+- Run comprehensive validation suite
+- Performance benchmarking
+- Documentation updates
 
 ---
 
