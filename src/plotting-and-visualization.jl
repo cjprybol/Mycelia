@@ -3048,7 +3048,6 @@ function plot_optimal_cluster_assessment_results(clustering_results)
         legend=false
     )
     StatsPlots.vline!(p2, [optimal_number_of_clusters])
-    # TODO write me out
     display(p2)
     StatsPlots.savefig(p1, "$DIR/wcss.svg")
     display(p1)

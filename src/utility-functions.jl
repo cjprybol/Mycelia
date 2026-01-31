@@ -1022,11 +1022,12 @@ function JLD2_read_table(filename::String)
         end
         
         # Otherwise search for any DataFrame
-        # TODO warn if we find more than one
-        for key in keys(file)
-            if typeof(file[key]) <: DataFrames.DataFrame
-                return file[key]
-            end
+        dataframe_keys = [key for key in keys(file) if typeof(file[key]) <: DataFrames.DataFrame]
+        if length(dataframe_keys) > 1
+            Logging.@warn "Multiple DataFrames found in $filename: $(dataframe_keys). Returning first one: $(first(dataframe_keys))"
+        end
+        for key in dataframe_keys
+            return file[key]
         end
         
         # No DataFrame found
