@@ -53,3 +53,6 @@ node_modules/*
 hpc-ci/coverage
 hpc-ci/logs
 hpc-ci/hpc-results.json
+
+# Agent worktrees
+trees/
