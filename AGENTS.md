@@ -1,80 +1,446 @@
-# Repository Guidelines
+# AGENTS.md - Mycelia Agent Navigation Guide
 
-## Overview
-Mycelia is a Julia package for bioinformatics and computational biology, providing tools for sequence analysis, genome assembly, annotation, and comparative genomics.
+Comprehensive guidance for AI agents working in this repository.
 
-## Project Structure & Module Organization
-- `src/` holds the Mycelia module (`Mycelia.jl`) plus domain-specific files and experimental `src/rhizomorph/` work.
-- Source files are auto-included from `src/`; add new files with clear names and they will load via `Mycelia.jl`.
-- Key domain modules include `fastx.jl`, `assembly.jl`, `annotation.jl`, `alignments-and-mapping.jl`, `kmer-analysis.jl`, `clustering.jl`, `classification.jl`, `quality-control-and-benchmarking.jl`, `plotting-and-visualization.jl`, `utility-functions.jl`, `reference-databases.jl`, `taxonomy-and-trees.jl`, and `variant-analysis.jl`.
-- `test/` is tiered by workflow stage; `runtests.jl` pulls in Aqua/JET checks and staged suites. Add new coverage to the closest stage folder.
-- Current test stages: `1_data_acquisition/`, `2_preprocessing_qc/`, `3_feature_extraction_kmer/`, `4_assembly/`, `5_validation/`, `6_annotation/`, `7_comparative_pangenomics/`, `8_tool_integration/`. Optional suites live in `in_development/` and `deprecated/`.
-- `tutorials/` contains Literate.jl walkthroughs; `benchmarking/` carries heavy scripts; `results/` stores generated artifacts; `docs/` builds the Documenter.jl site; `assembly_test_data/` and `test/metadata/` hold fixtures.
+## Quick Reference
 
-## Build, Test, and Development Commands
-- Install deps: `julia --project=. -e "import Pkg; Pkg.instantiate()"`
-- Core tests: `julia --project=. -e "import Pkg; Pkg.test()"` (runs Aqua and optional JET).
-- Full pipeline tests: `MYCELIA_RUN_ALL=true julia --project=. -e "import Pkg; Pkg.test()"`.
-- External tool tests: `MYCELIA_RUN_EXTERNAL=true julia --project=. -e "import Pkg; Pkg.test()"` (no extra flags required).
-- Coverage: `julia --project=. --code-coverage=user -e "import Pkg; Pkg.test()"`.
-- Static analysis (JET): `julia --project=. test/jet.jl`.
-- Docs: `julia --project=docs -e 'include("docs/make.jl")'` (builds into `docs/build`).
-- Tutorials sweep: `julia --project=. tutorials/run_all_tutorials.jl` (manual; can be slow).
-- Benchmarks: `julia --project=. benchmarking/benchmark_runner.jl small|medium|large` or `sbatch benchmarking/run_all_benchmarks.sh` for SLURM (resource-intensive).
+| Task | Command |
+|------|---------|
+| Run tests | `julia --project=. -e "import Pkg; Pkg.test()"` |
+| Run all tests | `MYCELIA_RUN_ALL=true julia --project=. -e "import Pkg; Pkg.test()"` |
+| Build docs | `julia --project=docs -e 'include("docs/make.jl")'` |
+| Static analysis | `julia --project=. test/jet.jl` |
+| Install deps | `julia --project=. -e "import Pkg; Pkg.instantiate()"` |
 
-## Coding Style & Naming Conventions
-- Follow standard Julia style: 4-space indentation, clear docstrings (`"""signature..."""`), favor pure functions and explicit keyword arguments.
-- Names: modules in CamelCase, functions/variables in `snake_case`, constants in `SCREAMING_SNAKE_CASE`; no emojis.
-- Imports are strict: never use `using` or import specific functions. Mycelia code should be fully qualified (e.g., `Mycelia.Rhizomorph`). For third-party libraries used by Mycelia, you may either `import` the package directly in the file or reference it via the `Mycelia` namespace (more verbose but acceptable).
-- Do not introduce shorthand module aliases as constants (e.g., avoid `R = Mycelia.Rhizomorph`); call modules/functions by their full qualified names to keep tests and sources explicit.
-- Prefer `joinpath` for portability, avoid type piracy, and keep external tool calls isolated in helpers under `src/`.
+---
 
-## Sequence Type Guidelines
-- Always use BioSequences types: `BioSequences.LongDNA{4}`, `BioSequences.LongRNA{4}`, `BioSequences.LongAA`.
-- Extract sequences from FASTQ records with types: `FASTX.sequence(BioSequences.LongDNA{4}, record)`.
-- Avoid string conversions in k-mer graphs, qualmer graphs, and assembly algorithms; use `string()` only when interfacing with external tools or final output.
+## Repository Overview
 
-## Architecture & Dependencies
-- The main module uses dynamic file inclusion; all `.jl` files in `src/` are automatically included.
-- All package dependencies are imported at the top-level in `src/Mycelia.jl` and are available in all source files.
-- Key dependencies include BioSequences.jl, FASTX.jl, BioAlignments.jl, Graphs.jl, DataFrames.jl, Makie.jl/Plots.jl, Arrow.jl/JLD2.jl, and XAM.jl.
-- Memory estimation/checking utilities live in `utility-functions.jl`; use them for large-scale analyses.
+Mycelia is a Julia package for bioinformatics and computational biology, providing tools for sequence analysis, genome assembly, annotation, and comparative genomics. The core assembly system is **Rhizomorph** - a probabilistic graph-based genome assembler.
 
-## Tutorial & Benchmark Guidelines
-- Do not add generally useful functions inside `tutorials/`, `test/`, or `benchmarking/`. If a helper is broadly useful, add it under `src/` and use it from the tutorial.
-- Tutorials should demonstrate core Mycelia functionality; avoid defining new helper functions except true one-offs that only support the tutorial narrative.
-- Prefer Rhizomorph graph/assembly functionality when newer variants exist; avoid legacy base-graph/assembly APIs in tutorials unless explicitly requested.
-- Literate.jl comment rules: `#` starts markdown, `##` remains a code comment. Use `##` for inline comments inside code blocks.
+### Key Architectural Principles
 
-## Reusable Code Principle
-- **Mycelia is the library; notebooks are consumers.** When implementing functionality in external notebooks and/or repositories, always ask: "Is this broadly useful for genomics/metagenomics workflows?"
-- If yes, add the function to Mycelia under `src/` with proper documentation and tests, then call `Mycelia.function_name()` from the notebook.
-- This applies to: diversity metrics, distance calculations, ordination methods, parsing utilities, visualization helpers, and any other analysis functions that could benefit multiple workflows.
-- **Do not duplicate functionality.** Before writing a custom implementation in a notebook, check if Mycelia already has the capability (e.g., `Mycelia.bray_curtis_distance`, `Mycelia.pcoa_from_dist`).
-- One-offs specific to a particular dataset or Locus-proprietary logic may remain in notebooks, but general-purpose bioinformatics functions belong in Mycelia.
-- When in doubt, add to Mycelia. It's easier to use a library function than to copy-paste between notebooks.
+1. **No `using` statements** - Always `import Package` and use qualified names (`DataFrames.DataFrame()`)
+2. **No exports** - All symbols accessed via `Mycelia.function_name()` or `Mycelia.Rhizomorph.function_name()`
+3. **Avoid unnecessary type conversions** - Use BioSequences for DNA/RNA/protein; plain strings for NLP/text
+4. **Test-first development** - All features require tests before claiming completion
 
-## Testing Guidelines
-- Place new tests in the relevant stage directory; name files after the feature (e.g., `assembly_merging.jl`). Use `Test.@testset` with descriptive labels.
-- Never disable or skip tests because functionality is broken; fix the implementation first. Use `Test.@test_skip` only for explicitly planned features.
-- Use small fixtures from `assembly_test_data/` and deterministic seeds (`StableRNGs`) for reproducibility.
-- External tool tests must run when `MYCELIA_RUN_EXTERNAL=true` without requiring extra tool-specific flags; use simulated inputs and default database paths where possible.
-- Extended tutorials/benchmarks are opt-in; note runtime or external-tool needs.
+---
 
-## External Tool Integration
-- The package integrates with external tools and infrastructure such as Bioconda, SLURM, and Rclone. Keep tool-specific logic isolated in helper modules under `src/`.
+## Codebase Map
 
-## Communication and Documentation Standards
-- Be conservative and understated in all statements and claims; avoid overpromising or marketing language.
-- Back performance claims with benchmarks and clearly distinguish between completed and planned features.
-- Use clear, professional language with plain text markers like "NOTE:" or "WARNING:" and never use emojis.
+### Source Files (`src/`) - 53 modules
 
-## Collaboration Notes
-- Before large deletions or restructures, explain why the deletion is necessary and what logic is being kept/replaced, then proceed once agreed.
-- Do not re-enable deprecated/removed code or revert deprecations without explicit approval.
-- Rhizomorph and Mycelia do not export symbols by design; tests and callers must use fully qualified names.
+#### Core Infrastructure
+| Module | Purpose | Functions |
+|--------|---------|-----------|
+| `Mycelia.jl` | Main module, auto-includes all files | 2 |
+| `constants.jl` | Shared constants | 1 |
+| `alphabets.jl` | Sequence alphabet utilities | 4 |
+| `utility-functions.jl` | Shared helpers, memory estimation | 160 |
+| `checkpointing.jl` | JLD2-based stage caching for workflows | 5 |
 
-## Commit & Pull Request Guidelines
-- Commits: short, present-tense subjects (~72 chars) similar to recent history (e.g., "Refactor path-finding algorithms"). Keep scopes focused.
-- PRs: include what/why, tests run (`Pkg.test`, tutorials/benchmarks if applicable), linked issues, and screenshots for plots/notebooks when relevant.
-- Note external tool or dataset requirements explicitly; avoid committing generated outputs or large files; keep claims measured and backed by tests/benchmarks.
+#### Sequence I/O & Processing
+| Module | Purpose | Functions |
+|--------|---------|-----------|
+| `fastx.jl` | FASTA/FASTQ reading, normalization | 85 |
+| `xam.jl` | BAM/CRAM processing, coverage | 37 |
+| `genome-features.jl` | GFF/GTF parsing | 18 |
+
+#### K-mer & Graph Analysis
+| Module | Purpose | Functions |
+|--------|---------|-----------|
+| `kmer-analysis.jl` | K-mer counting, spectrum analysis | 58 |
+| `kmer-saturation-analysis.jl` | Sequencing depth estimation | 8 |
+| `qualmer-analysis.jl` | Quality-weighted k-mers | 21 |
+| `distance-metrics.jl` | Mash, Jaccard, JS divergence | 21 |
+| `coverage-clustering.jl` | Coverage-based binning | 7 |
+
+#### Assembly (Rhizomorph System)
+| Module | Purpose | Functions |
+|--------|---------|-----------|
+| `rhizomorph/rhizomorph.jl` | Submodule entry point | 2 |
+| `rhizomorph/core/*.jl` | Graph types, evidence, quality | ~120 |
+| `rhizomorph/fixed-length/*.jl` | K-mer, qualmer, n-gram graphs | ~30 |
+| `rhizomorph/variable-length/*.jl` | OLC graphs from FASTA/FASTQ | ~30 |
+| `rhizomorph/algorithms/*.jl` | Path-finding, simplification, repeats | ~80 |
+| `rhizomorph/assembly.jl` | High-level assembly orchestration | 54 |
+| `assembly.jl` | External assembler wrappers | 62 |
+| `graph-cleanup.jl` | Graph simplification utilities | 22 |
+| `iterative-assembly.jl` | Iterative refinement methods | 70 |
+
+#### External Tool Wrappers
+| Module | Tool(s) | Status |
+|--------|---------|--------|
+| `alignments-and-mapping.jl` | BLAST, DIAMOND, MMSeqs2, minimap2 | Tested |
+| `annotation.jl` | Prokka, Bakta, eggNOG-mapper | Tested |
+| `quality-control-and-benchmarking.jl` | QUAST, BUSCO, fastp | Tested |
+| `classification.jl` | Kraken2, MetaPhlAn, Sylph | Tested |
+| `binning.jl` | MetaBAT2, CONCOCT, SemiBin | Tested |
+| `pangenome-analysis.jl` | PGGB, Cactus | Tested |
+| `autocycler.jl`, `bcalm.jl`, `ggcat.jl` | Specialized assemblers | Opt-in |
+
+#### Analysis & Visualization
+| Module | Purpose | Functions |
+|--------|---------|-----------|
+| `clustering.jl` | Sequence clustering | 21 |
+| `dimensionality-reduction.jl` | PCA, UMAP, t-SNE | 8 |
+| `taxonomy-and-trees.jl` | Taxonomy classification, trees | 52 |
+| `plotting-and-visualization.jl` | Makie/Plots visualization | 68 |
+| `simulation.jl` | Read simulation | 73 |
+
+#### Infrastructure
+| Module | Purpose | Functions |
+|--------|---------|-----------|
+| `reference-databases.jl` | NCBI/SRA downloads, database setup | 84 |
+| `ncbi-datasets-cli.jl` | NCBI datasets API | 44 |
+| `bioconda.jl` | Conda environment management | 10 |
+| `slurm-sbatch.jl` | SLURM job submission | 8 |
+| `rclone.jl` | Cloud storage sync | 9 |
+
+---
+
+## Test Structure
+
+Tests are organized by workflow stage (8 tiers):
+
+```
+test/
+├── 1_data_acquisition/      # NCBI downloads, read simulation
+├── 2_preprocessing_qc/      # Alphabet handling, QC filtering
+├── 3_feature_extraction_kmer/  # K-mer analysis, saturation
+├── 4_assembly/              # 100 test files - core assembly tests
+├── 5_validation/            # QUAST, BUSCO validation
+├── 6_annotation/            # Gene prediction tests
+├── 7_comparative_pangenomics/  # Comparative analysis
+├── 8_tool_integration/      # External tool wrapper tests
+├── in_development/          # Experimental tests (opt-in)
+└── deprecated/              # Legacy tests
+```
+
+### Test Categories
+
+**Julia-Only (Fast, Local)** - Safe for parallel agents:
+- `test/2_preprocessing_qc/alphabets.jl`
+- `test/2_preprocessing_qc/constants.jl`
+- `test/3_feature_extraction_kmer/*.jl`
+- `test/4_assembly/path_finding_test.jl`
+- `test/4_assembly/graph_cleanup_test.jl`
+- `test/4_assembly/rhizomorph_*_test.jl` (most)
+- `test/4_assembly/dna_kmer_*_test.jl`
+
+**External Tool Required** - Need `MYCELIA_RUN_EXTERNAL=true`:
+- `test/5_validation/*.jl` (QUAST, BUSCO)
+- `test/6_annotation/*.jl` (Prokka, Bakta)
+- `test/8_tool_integration/*.jl` (all wrapper tests)
+
+**Identifying Julia-Only Tests**:
+- No `run_*` wrapper functions (e.g., `run_megahit`, `run_minimap2`)
+- No `Base.run` or `Mycelia.run` calls
+- Only Julia stdlib + registered packages
+
+---
+
+## Common Agent Tasks
+
+### 1. TODO Comment Cleanup
+
+**Find TODOs:**
+```bash
+grep -r "TODO\|FIXME\|XXX\|HACK" src/ --include="*.jl"
+```
+
+**Current TODOs (17 across 11 files):**
+- `sequence-comparison.jl` (4) - Use constants instead of hardcoding
+- `kmer-analysis.jl` (2) - Ambiguity handling, sequence type inference
+- `annotation.jl` (1) - EGAPx wrapper placeholder
+- `bioconda.jl` (2) - Stub module
+- `rclone.jl` (1) - Stub module
+- `plotting-and-visualization.jl` (1) - Incomplete write function
+
+**Approach:**
+1. Simple TODOs: Resolve directly
+2. Complex TODOs: Create Beads issue with `workspace:mycelia` label
+3. Stale TODOs: Remove if already implemented
+
+### 2. Test Expansion
+
+**Run existing tests:**
+```bash
+julia --project=. -e "import Pkg; Pkg.test()"
+```
+
+**Add new test:**
+1. Create file in appropriate stage directory (e.g., `test/4_assembly/`)
+2. Use `Test.@testset` with descriptive name
+3. Use small fixtures from `assembly_test_data/` or `test/metadata/`
+4. Use `StableRNGs` for deterministic seeds
+
+**Test template:**
+```julia
+import Test
+import StableRNGs
+import Mycelia
+
+Test.@testset "Feature Name Tests" begin
+    rng = StableRNGs.StableRNG(42)
+
+    Test.@testset "specific behavior" begin
+        # Test code here
+        Test.@test expected == actual
+    end
+end
+```
+
+### 3. Documentation Updates
+
+**Build docs:**
+```bash
+julia --project=docs -e 'include("docs/make.jl")'
+```
+
+**Documentation structure:**
+- `docs/src/tutorials/` - Literate.jl tutorials (8 stages)
+- `docs/src/api/` - API reference (auto-generated)
+- `docs/src/workflow-map.md` - Tool/capability matrix
+
+**Docstring format:**
+```julia
+"""
+    function_name(arg1, arg2; kwarg=default)
+
+Brief description of what the function does.
+
+# Arguments
+- `arg1`: Description
+- `arg2`: Description
+
+# Returns
+- Description of return value
+
+# Example
+```julia
+result = Mycelia.function_name(x, y)
+```
+"""
+function function_name(arg1, arg2; kwarg=default)
+    # implementation
+end
+```
+
+### 4. Code Formatting
+
+**Check style:** Follow BlueStyle conventions
+- 4-space indentation
+- `snake_case` for functions/variables
+- `CamelCase` for types/modules
+- `SCREAMING_SNAKE_CASE` for constants
+
+**Apply Runic formatting (if configured):**
+```bash
+julia --project=. -e "import Runic; Runic.format(\"src/\")"
+```
+
+---
+
+## Planning Documents Index
+
+Located in `planning-docs/`:
+
+| Document | Purpose | Lines |
+|----------|---------|-------|
+| `TODO.md` | Active execution roadmap, checkbox items | 889 |
+| `COMPREHENSIVE_ROADMAP.md` | Strategic 5-phase vision | 486 |
+| `DEVELOPMENT_TRIAGE.md` | Code promotion decisions | 84 |
+| `COMPREHENSIVE_TESTING_FRAMEWORK.md` | Test organization spec | 1049 |
+| `FUNCTION_COVERAGE_AUDIT.md` | Module→doc mapping | 113 |
+| `TOOL_WRAPPER_STATUS.md` | External tool coverage | 443 |
+| `RHIZOMORPH_SUPPORT_MATRIX.md` | Graph type × alphabet matrix | - |
+| `rhizomorph-graph-ecosystem-plan.md` | Deep technical spec | 4101 |
+| `HPC_CI_PLAN.md` | SLURM CI/CD strategy | - |
+| `TDA_INTEGRATION_PLAN.md` | Topology data analysis | - |
+
+**Key finding from TODO.md**: Test-first approach discovered real bugs (4/42 path-finding failures initially). All 302 assembly tests now pass after fixes.
+
+---
+
+## Rhizomorph Graph System
+
+### Graph Type Hierarchy
+
+```
+                        Graph Types
+                             │
+            ┌────────────────┴────────────────┐
+            ▼                                 ▼
+      Fixed-Length                     Variable-Length (OLC)
+            │                                 │
+    ┌───────┼───────┐             ┌───────────┼───────────┐
+    ▼       ▼       ▼             ▼           ▼           ▼
+  K-mer  Qualmer  N-gram       FASTA       FASTQ       String
+                              (DNA/RNA)   (DNA/RNA)   (Unicode)
+```
+
+**Fixed-Length**: Unit size determined by k (k-mers) or n (n-grams)
+**Variable-Length**: Overlap-Layout-Consensus from full sequences
+
+### Strand Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| SingleStrand | Forward only | Proteins, directed graphs, text/NLP |
+| DoubleStrand | Forward + RC separate | Strand-specific RNA-seq |
+| Canonical | Forward + RC merged | DNA assembly (default) |
+
+### Support Matrix (Graph × Alphabet × Strand)
+
+| Graph Type | DNA | RNA | AA | String/Unicode |
+|------------|-----|-----|-----|----------------|
+| **K-mer** | S/D/C | S/D/C | S only | - |
+| **Qualmer** | S/D/C | S/D/C | - | - |
+| **N-gram** | - | - | - | S only |
+| **FASTA OLC** | S/D/C | S/D/C | S only | S only |
+| **FASTQ OLC** | S/D/C | S/D/C | - | - |
+| **String OLC** | - | - | - | S only |
+
+*S = SingleStrand, D = DoubleStrand, C = Canonical*
+*Reverse complement only applies to DNA/RNA; AA and String use SingleStrand only*
+
+### Key API Patterns
+
+```julia
+# Build a k-mer graph
+graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(sequences, k)
+graph = Mycelia.Rhizomorph.build_kmer_graph_canonical(sequences, k)
+
+# Find paths
+paths = Mycelia.Rhizomorph.find_eulerian_paths(graph)
+sequence = Mycelia.Rhizomorph.path_to_sequence(path, graph)
+
+# Simplify
+simplified = Mycelia.Rhizomorph.simplify_graph(graph)
+```
+
+---
+
+## Coding Conventions
+
+### Import Style (Strict)
+```julia
+# CORRECT
+import BioSequences
+import DataFrames
+seq = BioSequences.LongDNA{4}("ACGT")
+df = DataFrames.DataFrame(a=[1,2,3])
+
+# WRONG - Never use `using`
+using BioSequences
+using DataFrames: DataFrame
+```
+
+### Sequence Types
+
+**Principle:** Avoid unnecessary conversions. Use the appropriate type for the domain.
+
+```julia
+# DNA/RNA sequences - Use BioSequences for efficiency
+seq = BioSequences.LongDNA{4}("ACGT")
+seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
+
+# N-grams / Natural language - Use plain strings
+text = "The quick brown fox"
+ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([text], n=3)
+
+# String OLC graphs - Use plain strings for Unicode text
+string_graph = Mycelia.Rhizomorph.build_string_graph(sentences)
+```
+
+**When to use BioSequences:** DNA, RNA, protein sequences where k-mer operations, reverse complement, or biological alphabet constraints apply.
+
+**When to use strings:** N-gram graphs for NLP, text analysis, or any non-biological sequence data.
+
+### Function Calls
+```julia
+# CORRECT - Fully qualified
+result = Mycelia.function_name(args...)
+graph = Mycelia.Rhizomorph.build_kmer_graph_canonical(seqs, k)
+
+# WRONG - No aliases
+R = Mycelia.Rhizomorph  # Don't do this
+result = R.build_kmer_graph_canonical(seqs, k)
+```
+
+---
+
+## Commit Guidelines
+
+**Format:** `<type>: <description>`
+
+Types: `add`, `fix`, `update`, `remove`, `refactor`
+
+**Examples:**
+```
+add: checkpointing utilities for JLD2-based stage caching
+fix: path_to_sequence API mismatch in Rhizomorph
+update: improve heatmap visualization layout
+refactor: extract validation logic to separate module
+```
+
+**Rules:**
+- Short present-tense subjects (~72 chars)
+- Include what/why in body if needed
+- Link related issues
+- No co-author lines
+
+---
+
+## Beads Integration
+
+Mycelia tasks are tracked in the central todo repo (`~/workspace/todo/.beads/`).
+
+**Labels:**
+- `workspace:mycelia` - All Mycelia tasks
+- `compute:local` - Can run on laptop
+- `compute:scg|lrc|nersc` - Needs HPC
+
+**Finding Mycelia work:**
+```bash
+cd ~/workspace/todo
+bd ready --json | jq '.[] | select(.title | test("Mycelia|\\[B\\]"))'
+```
+
+**Existing issues:**
+- `td-29s` - Add comprehensive AGENTS.md (this task)
+- `td-mqo` - Systematize work tracking from planning docs
+- `td-q5f` - Systematic test coverage expansion
+- `td-a1b` - Fix broken/skipped tests
+- `td-8p0` - Apply Runic/SciML formatting
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**"Function not found"**
+- Check you're using fully qualified name: `Mycelia.function_name()`
+- Check the function is included in `src/Mycelia.jl`
+
+**"Type mismatch with BioSequences"**
+- Ensure using `BioSequences.LongDNA{4}`, not `LongDNA`
+- For FASTQ: `FASTX.sequence(BioSequences.LongDNA{4}, record)`
+
+**"Tests pass locally but fail in CI"**
+- Check if test needs `MYCELIA_RUN_EXTERNAL=true`
+- Check for hardcoded paths
+- Use `StableRNGs` for determinism
+
+**"External tool not found"**
+- Install via Bioconda: `Mycelia.ensure_conda_environment()`
+- Or use system install and update PATH
+
+### Getting Help
+
+- Check `planning-docs/` for architectural context
+- Run `julia --project=. -e "?Mycelia.function_name"` for docstrings
+- See `docs/src/workflow-map.md` for capability matrix
