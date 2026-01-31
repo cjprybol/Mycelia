@@ -136,6 +136,7 @@ include("viterbi-next.jl")
 remaining_files = [
     "alignments-and-mapping.jl",
     "amino-acid-analysis.jl",
+    "checkpointing.jl",
     "annotation.jl",
     "autocycler.jl",
     "bcalm.jl",
