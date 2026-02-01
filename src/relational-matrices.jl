@@ -443,6 +443,7 @@ Clusters entity_a based on their profiles across entity_b (or vice versa).
 - `min_k::Union{Nothing, Int}`: Minimum k (used if ks is nothing)
 - `max_k::Union{Nothing, Int}`: Maximum k (used if ks is nothing)
 - `plot_backend::Symbol`: Visualization backend (`:cairomakie` or `:statsplots`). Default: `:cairomakie`
+- `display_plot::Bool`: Whether to display the plot (default: true). Automatically suppressed in CI environments.
 
 # Returns
 - `NamedTuple` with:
@@ -474,7 +475,8 @@ function relational_clustering_pipeline(
         ks::Union{Nothing, AbstractRange} = nothing,
         min_k::Union{Nothing, Int} = nothing,
         max_k::Union{Nothing, Int} = nothing,
-        plot_backend::Symbol = :cairomakie
+        plot_backend::Symbol = :cairomakie,
+        display_plot::Bool = true
 ) where {T}
     println("=" ^ 60)
     println("Relational Clustering Pipeline")
@@ -583,7 +585,8 @@ function relational_clustering_pipeline(
         ks = ks,
         min_k = min_k,
         max_k = max_k,
-        plot_backend = plot_backend
+        plot_backend = plot_backend,
+        display_plot = display_plot
     )
 
     optimal_k = cluster_result.optimal_number_of_clusters

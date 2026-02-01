@@ -428,6 +428,7 @@ Args:
     min_k: Minimum number of clusters to test (default: max(floor(log10(n)), 2)).
     max_k: Maximum number of clusters to test (default: min(n, ceil(sqrt(n)))).
     plot_backend: Either :cairomakie (default) or :statsplots for visualization.
+    display_plot: Whether to display the plot (default: true). Automatically suppressed in CI environments.
 
 Returns:
     A named tuple containing:
@@ -443,7 +444,8 @@ function identify_optimal_number_of_clusters(
         ks = nothing,
         min_k = nothing,
         max_k = nothing,
-        plot_backend = :cairomakie
+        plot_backend = :cairomakie,
+        display_plot::Bool = true
 )
     # Validate that user doesn't pass both ks and min_k/max_k
     if !isnothing(ks) && (!isnothing(min_k) || !isnothing(max_k))
@@ -544,7 +546,10 @@ function identify_optimal_number_of_clusters(
         error("Unknown plot_backend: $(plot_backend). Choose :cairomakie or :statsplots.")
     end
 
-    display(fig)
+    is_ci = get(ENV, "CI", "") == "true" || get(ENV, "GITHUB_ACTIONS", "") == "true"
+    if display_plot && !is_ci
+        display(fig)
+    end
 
     return (
         hcl = hcl,
