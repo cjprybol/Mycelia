@@ -7,68 +7,79 @@ Panel 2: Read Count Distribution.
 Panel 3: Read Length Distributions.
 Panel 4: Base Quality Distribution.
 """
-function plot_batch_qc_distributions(df::DataFrames.DataFrame; title="Cohort QC Overview")
+function plot_batch_qc_distributions(df::DataFrames.DataFrame; title = "Cohort QC Overview")
     # Filter for clean data only
     clean_df = filter(row -> row.stage == "after_filtering", df)
-    
+
     n_samples = DataFrames.nrow(clean_df)
     if n_samples == 0
         @warn "No 'after_filtering' data found."
         return CairoMakie.Figure()
     end
 
-    fig = CairoMakie.Figure(size = (1200, 900), fontsize=18)
-    
+    fig = CairoMakie.Figure(size = (1200, 900), fontsize = 18)
+
     # UPDATED: Added halign=:center to center the title
-    CairoMakie.Label(fig[0, :], "$title (N=$n_samples)", fontsize=24, font=:bold, halign=:center)
+    CairoMakie.Label(
+        fig[0, :], "$title (N=$n_samples)", fontsize = 24, font = :bold, halign = :center)
 
     # --- Panel 1: Yield Rank (Knee Plot) ---
-    ax1 = CairoMakie.Axis(fig[1, 1], 
-        title="Yield per Sample (Ranked)", 
-        xlabel="Sample Rank", 
-        ylabel="Yield (Gb)")
-    
+    ax1 = CairoMakie.Axis(fig[1, 1],
+        title = "Yield per Sample (Ranked)",
+        xlabel = "Sample Rank",
+        ylabel = "Yield (Gb)")
+
     sorted_yields = sort(clean_df.yield_gb)
-    CairoMakie.barplot!(ax1, 1:length(sorted_yields), sorted_yields, 
-        color=sorted_yields, colormap=:plasma, strokewidth=0.5)
+    CairoMakie.barplot!(ax1, 1:length(sorted_yields), sorted_yields,
+        color = sorted_yields, colormap = :plasma, strokewidth = 0.5)
 
     # --- Panel 2: Read Count Distribution ---
-    ax2 = CairoMakie.Axis(fig[1, 2], 
-        title="Read Count Distribution", 
-        ylabel="Number of Reads",
-        xticksvisible=false, xticklabelsvisible=false)
-    
-    CairoMakie.violin!(ax2, fill(1, n_samples), clean_df.total_reads, color=(:teal, 0.5), show_median=true)
-    CairoMakie.boxplot!(ax2, fill(1, n_samples), clean_df.total_reads, color=:black, width=0.1)
+    ax2 = CairoMakie.Axis(fig[1, 2],
+        title = "Read Count Distribution",
+        ylabel = "Number of Reads",
+        xticksvisible = false, xticklabelsvisible = false)
+
+    CairoMakie.violin!(ax2, fill(1, n_samples), clean_df.total_reads,
+        color = (:teal, 0.5), show_median = true)
+    CairoMakie.boxplot!(
+        ax2, fill(1, n_samples), clean_df.total_reads, color = :black, width = 0.1)
 
     # --- Panel 3: Read Length Distributions ---
-    ax3 = CairoMakie.Axis(fig[2, 1], 
-        title="Read Length Distributions", 
-        ylabel="Length (bp)", 
-        xticks=([1, 2], ["Mean", "N50"]))
-    
-    CairoMakie.violin!(ax3, fill(1, n_samples), clean_df.mean_length, color=(:dodgerblue, 0.5), show_median=true)
-    CairoMakie.boxplot!(ax3, fill(1, n_samples), clean_df.mean_length, color=:black, width=0.1)
+    ax3 = CairoMakie.Axis(fig[2, 1],
+        title = "Read Length Distributions",
+        ylabel = "Length (bp)",
+        xticks = ([1, 2], ["Mean", "N50"]))
+
+    CairoMakie.violin!(ax3, fill(1, n_samples), clean_df.mean_length,
+        color = (:dodgerblue, 0.5), show_median = true)
+    CairoMakie.boxplot!(
+        ax3, fill(1, n_samples), clean_df.mean_length, color = :black, width = 0.1)
 
     if "n50" in names(clean_df) && any(clean_df.n50 .> 0)
-        CairoMakie.violin!(ax3, fill(2, n_samples), clean_df.n50, color=(:orange, 0.5), show_median=true)
-        CairoMakie.boxplot!(ax3, fill(2, n_samples), clean_df.n50, color=:black, width=0.1)
+        CairoMakie.violin!(ax3, fill(2, n_samples), clean_df.n50,
+            color = (:orange, 0.5), show_median = true)
+        CairoMakie.boxplot!(
+            ax3, fill(2, n_samples), clean_df.n50, color = :black, width = 0.1)
     end
 
     # --- Panel 4: Quality Distribution ---
-    ax4 = CairoMakie.Axis(fig[2, 2], 
-        title="Base Quality Distribution", 
-        ylabel="Percentage (%)", 
-        limits=(nothing, nothing, 0, 100),
-        xticks=([1, 2], ["Q20%", "Q30%"]))
-    
-    CairoMakie.violin!(ax4, fill(1, n_samples), clean_df.q20_percent, color=(:lightgreen, 0.5), show_median=true)
-    CairoMakie.violin!(ax4, fill(2, n_samples), clean_df.q30_percent, color=(:forestgreen, 0.5), show_median=true)
-    
-    CairoMakie.boxplot!(ax4, fill(1, n_samples), clean_df.q20_percent, color=:black, width=0.1)
-    CairoMakie.boxplot!(ax4, fill(2, n_samples), clean_df.q30_percent, color=:black, width=0.1)
-    
-    CairoMakie.hlines!(ax4, [90], color=:red, linestyle=:dash)
+    ax4 = CairoMakie.Axis(fig[2, 2],
+        title = "Base Quality Distribution",
+        ylabel = "Percentage (%)",
+        limits = (nothing, nothing, 0, 100),
+        xticks = ([1, 2], ["Q20%", "Q30%"]))
+
+    CairoMakie.violin!(ax4, fill(1, n_samples), clean_df.q20_percent,
+        color = (:lightgreen, 0.5), show_median = true)
+    CairoMakie.violin!(ax4, fill(2, n_samples), clean_df.q30_percent,
+        color = (:forestgreen, 0.5), show_median = true)
+
+    CairoMakie.boxplot!(
+        ax4, fill(1, n_samples), clean_df.q20_percent, color = :black, width = 0.1)
+    CairoMakie.boxplot!(
+        ax4, fill(2, n_samples), clean_df.q30_percent, color = :black, width = 0.1)
+
+    CairoMakie.hlines!(ax4, [90], color = :red, linestyle = :dash)
 
     return fig
 end
@@ -79,70 +90,85 @@ end
 Create a detailed QC report for a single sample.
 Includes: Yield, Lengths, Quality (no GC), and Filtering Stats.
 """
-function visualize_fastplong_single(data; title=nothing)
+function visualize_fastplong_single(data; title = nothing)
     if isnothing(data)
         return CairoMakie.Figure()
     end
-    
+
     df = data.summary
     sample_name = isnothing(title) ? data.sample_id : title
-    
-    fig = CairoMakie.Figure(size = (1200, 800), fontsize=18)
-    
+
+    fig = CairoMakie.Figure(size = (1200, 800), fontsize = 18)
+
     # UPDATED: Added halign=:center to center the title
-    CairoMakie.Label(fig[0, :], "QC Report: $sample_name", fontsize=24, font=:bold, halign=:center)
+    CairoMakie.Label(
+        fig[0, :], "QC Report: $sample_name", fontsize = 24, font = :bold, halign = :center)
 
     colors = [:grey80, :dodgerblue]
     stages = ["Raw", "Filtered"]
 
     # --- Panel 1: Reads & Yield ---
-    ax1 = CairoMakie.Axis(fig[1, 1], title="Sequencing Yield", ylabel="Reads", xticks=(1:2, stages))
-    CairoMakie.barplot!(ax1, 1:2, df.total_reads, color=colors, strokewidth=1)
-    
-    ax1_r = CairoMakie.Axis(fig[1, 1], yaxisposition=:right, ylabel="Yield (Gb)")
-    CairoMakie.hidespines!(ax1_r); CairoMakie.hidexdecorations!(ax1_r)
-    CairoMakie.scatter!(ax1_r, 1:2, df.yield_gb, color=:orange, markersize=15, label="Gb")
-    CairoMakie.axislegend(ax1_r, position=:rt)
+    ax1 = CairoMakie.Axis(fig[1, 1], title = "Sequencing Yield", ylabel = "Reads", xticks = (
+        1:2, stages))
+    CairoMakie.barplot!(ax1, 1:2, df.total_reads, color = colors, strokewidth = 1)
+
+    ax1_r = CairoMakie.Axis(fig[1, 1], yaxisposition = :right, ylabel = "Yield (Gb)")
+    CairoMakie.hidespines!(ax1_r);
+    CairoMakie.hidexdecorations!(ax1_r)
+    CairoMakie.scatter!(
+        ax1_r, 1:2, df.yield_gb, color = :orange, markersize = 15, label = "Gb")
+    CairoMakie.axislegend(ax1_r, position = :rt)
 
     # --- Panel 2: Read Lengths ---
     has_n50 = any(df.n50 .> 0)
-    
-    ax2 = CairoMakie.Axis(fig[1, 2], title="Read Lengths", ylabel="Base Pairs (bp)", xticks=(1:2, stages))
-    
+
+    ax2 = CairoMakie.Axis(fig[1, 2], title = "Read Lengths", ylabel = "Base Pairs (bp)", xticks = (
+        1:2, stages))
+
     if has_n50
-        CairoMakie.barplot!(ax2, [0.85, 1.85], df.mean_length, width=0.3, color=colors, label="Mean")
-        CairoMakie.barplot!(ax2, [1.15, 2.15], df.n50, width=0.3, color=colors, gap=0, hatch=:x, label="N50")
-        CairoMakie.axislegend(ax2, position=:lt)
+        CairoMakie.barplot!(
+            ax2, [0.85, 1.85], df.mean_length, width = 0.3, color = colors, label = "Mean")
+        CairoMakie.barplot!(ax2, [1.15, 2.15], df.n50, width = 0.3,
+            color = colors, gap = 0, hatch = :x, label = "N50")
+        CairoMakie.axislegend(ax2, position = :lt)
     else
-        CairoMakie.barplot!(ax2, 1:2, df.mean_length, width=0.5, color=colors, label="Mean")
-        CairoMakie.text!(ax2, 1.5, maximum(df.mean_length)*0.5, text="N50 not available", align=(:center, :center))
+        CairoMakie.barplot!(
+            ax2, 1:2, df.mean_length, width = 0.5, color = colors, label = "Mean")
+        CairoMakie.text!(ax2, 1.5, maximum(df.mean_length)*0.5,
+            text = "N50 not available", align = (:center, :center))
     end
 
     # --- Panel 3: Base Quality ---
-    ax3 = CairoMakie.Axis(fig[2, 1], title="Base Quality", ylabel="Percentage (%)", limits=(nothing, nothing, 0, 100), xticks=(1:2, stages))
-    CairoMakie.barplot!(ax3, [0.85, 1.85], df.q20_percent, width=0.3, color=colors, label="Q20%")
-    CairoMakie.barplot!(ax3, [1.15, 2.15], df.q30_percent, width=0.3, color=colors, hatch=:/, label="Q30%")
-    CairoMakie.hlines!(ax3, [90], color=:gray, linestyle=:dash)
-    CairoMakie.axislegend(ax3, position=:rb)
+    ax3 = CairoMakie.Axis(fig[2, 1], title = "Base Quality", ylabel = "Percentage (%)",
+        limits = (nothing, nothing, 0, 100), xticks = (1:2, stages))
+    CairoMakie.barplot!(
+        ax3, [0.85, 1.85], df.q20_percent, width = 0.3, color = colors, label = "Q20%")
+    CairoMakie.barplot!(ax3, [1.15, 2.15], df.q30_percent, width = 0.3,
+        color = colors, hatch = :/, label = "Q30%")
+    CairoMakie.hlines!(ax3, [90], color = :gray, linestyle = :dash)
+    CairoMakie.axislegend(ax3, position = :rb)
 
     # --- Panel 4: Filtering Stats ---
-    ax4 = CairoMakie.Axis(fig[2, 2], title="Filtering Reasons", ylabel="Reads Dropped", xticklabelrotation=π/4)
-    
+    ax4 = CairoMakie.Axis(fig[2, 2], title = "Filtering Reasons",
+        ylabel = "Reads Dropped", xticklabelrotation = π/4)
+
     if !isempty(data.filtering_stats)
         drop_reasons = filter(p -> p.first != "passed_filter_reads" && p.second > 0, data.filtering_stats)
-        
+
         if !isempty(drop_reasons)
             reasons = collect(keys(drop_reasons))
             counts = collect(values(drop_reasons))
             labels = replace.(reasons, "_reads" => "", "_" => " ")
-            
-            CairoMakie.barplot!(ax4, 1:length(counts), counts, color=:firebrick)
+
+            CairoMakie.barplot!(ax4, 1:length(counts), counts, color = :firebrick)
             ax4.xticks = (1:length(counts), labels)
         else
-            CairoMakie.text!(ax4, 0.5, 0.5, text="No reads dropped!", align=(:center, :center))
+            CairoMakie.text!(
+                ax4, 0.5, 0.5, text = "No reads dropped!", align = (:center, :center))
         end
     else
-        CairoMakie.text!(ax4, 0.5, 0.5, text="No filtering data", align=(:center, :center))
+        CairoMakie.text!(
+            ax4, 0.5, 0.5, text = "No filtering data", align = (:center, :center))
     end
 
     return fig
@@ -155,31 +181,30 @@ Returns a CairoMakie Figure object showing consensus agreement across taxonomic 
 Samples data before aggregation for improved performance on large datasets.
 """
 function create_rank_consensus_plot(
-    df::DataFrames.DataFrame;
-    taxonomic_ranks::Vector{String} = [
-        "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
-    ],
-    figure_size::Tuple{Int,Int} = (1200, 700),
-    max_samples::Int = 10_000,
-    perfect_threshold::Float64 = 0.999,
-    title::String = "Mapping Alignment Consensus Agreement Across Taxonomic Ranks",
-    sample_id::Union{String, Nothing} = nothing,
-    title_fontsize::Int = 16,
-    label_fontsize::Int = 16,
-    tick_fontsize::Int = 16,
-    legend_fontsize::Int = 16,
-    include_n_observations::Bool = true
+        df::DataFrames.DataFrame;
+        taxonomic_ranks::Vector{String} = [
+            "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
+        ],
+        figure_size::Tuple{Int, Int} = (1200, 700),
+        max_samples::Int = 10_000,
+        perfect_threshold::Float64 = 0.999,
+        title::String = "Mapping Alignment Consensus Agreement Across Taxonomic Ranks",
+        sample_id::Union{String, Nothing} = nothing,
+        title_fontsize::Int = 16,
+        label_fontsize::Int = 16,
+        tick_fontsize::Int = 16,
+        legend_fontsize::Int = 16,
+        include_n_observations::Bool = true
 )
-
     function monotonicize_agreement(ys::Vector{<:Union{Missing, Float64}})
         n = length(ys)
         # Work from the end backwards
-        for i in (n-1):-1:1
-            if !ismissing(ys[i+1])
+        for i in (n - 1):-1:1
+            if !ismissing(ys[i + 1])
                 if ismissing(ys[i])
-                    ys[i] = ys[i+1]
+                    ys[i] = ys[i + 1]
                 else
-                    ys[i] = max(ys[i], ys[i+1])
+                    ys[i] = max(ys[i], ys[i + 1])
                 end
             end
         end
@@ -192,7 +217,7 @@ function create_rank_consensus_plot(
 
     # Add diagnostics at the beginning
     # println("Input DataFrame: $(DataFrames.nrow(df)) total rows")
-    
+
     unique_templates = unique(df.template)
     n_total_observations = length(unique_templates)
     println("Unique templates in input: $(n_total_observations)")
@@ -201,57 +226,59 @@ function create_rank_consensus_plot(
     total_reads_mapped = count(unique_read_mapping_results.ismapped)
     println("total_reads_mapped = $(total_reads_mapped)")
     println("total_reads = $(n_total_observations)")
-    percent_reads_mapped = round(total_reads_mapped / n_total_observations * 100, digits=3)
+    percent_reads_mapped = round(total_reads_mapped / n_total_observations * 100, digits = 3)
     println("percentage_of_reads_mapped = $(percent_reads_mapped)")
 
     mapped_df = df[df.ismapped, :]
     unique_mapped_templates = unique(mapped_df.template)
 
     # println(count(df.ismapped) / DataFrames.nrow(df)
-    
+
     # After sampling
     n_samples_to_take = min(length(unique_mapped_templates), max_samples)
-    sampled_templates = Set(StatsBase.sample(unique_mapped_templates, n_samples_to_take, replace=false))
+    sampled_templates = Set(StatsBase.sample(unique_mapped_templates, n_samples_to_take, replace = false))
     println("Templates sampled: $(length(sampled_templates))")
-    
+
     # sampled_df = DataFrames.filter(row -> row.template in sampled_templates, df)
     # println("Rows after template sampling: $(DataFrames.nrow(sampled_df))")
-    
+
     # Filter dataframe to only include sampled templates
     sampled_df = DataFrames.filter(row -> row.template in sampled_templates, mapped_df)
-    
+
     # NOW aggregate only the sampled data
     aggregated = aggregate_by_rank_nonmissing(sampled_df, taxonomic_ranks)
-    
+
     # APPLY THE FIX: Get the maximum alignment proportion for each template-rank combination
     max_aggregated = DataFrames.combine(
         DataFrames.first,
         DataFrames.groupby(
             DataFrames.sort(
                 aggregated,
-                [:template, :rank, DataFrames.order(:total_relative_alignment_proportion, rev=true)]
+                [:template, :rank,
+                    DataFrames.order(:total_relative_alignment_proportion, rev = true)]
             ),
             [:template, :rank]
         )
     )
     println("Rows after taking max per template-rank: $(DataFrames.nrow(max_aggregated))")
-    
+
     # Group by template (this will be much smaller now)
     template_grouped_aggregated = DataFrames.groupby(max_aggregated, "template")
-    
+
     numbered_ranks = ["$(i)_$(rank)" for (i, rank) in enumerate(taxonomic_ranks)]
     all_ys = []
     n_unmapped = 0
-    
+
     # Process all groups (since we already sampled at the template level)
     for this_group in template_grouped_aggregated
         this_sorted_group = DataFrames.sort(this_group, :rank)
         # Now this dictionary creation is safe - each rank appears only once per template
-        template_values_dict = Dict(row.rank => row.total_relative_alignment_proportion for row in DataFrames.eachrow(this_sorted_group))
+        template_values_dict = Dict(row.rank => row.total_relative_alignment_proportion
+        for row in DataFrames.eachrow(this_sorted_group))
         ys = [get(template_values_dict, this_rank, missing) for this_rank in numbered_ranks]
         # Make ys monotonically non-increasing
         ys = monotonicize_agreement(ys)
-        
+
         # Only include reads that have at least one non-missing value
         if has_any_non_missing(ys)
             push!(all_ys, ys)
@@ -285,29 +312,29 @@ function create_rank_consensus_plot(
     end
 
     # Create the figure
-    fig = CairoMakie.Figure(size=figure_size)
+    fig = CairoMakie.Figure(size = figure_size)
 
     # Title across the top
     fig[1, 1:2] = CairoMakie.Label(fig, full_title;
-        fontsize=title_fontsize, font="bold", halign=:center)
+        fontsize = title_fontsize, font = "bold", halign = :center)
 
     # Main plot
     ax = CairoMakie.Axis(
         fig[2, 1];
-        xlabel="Taxonomic Rank (High to Low)",
-        ylabel="Cumulative Relative Alignment Proportion",
-        xticks=(1:length(taxonomic_ranks), taxonomic_ranks),
-        yticks=0:0.1:1.0,
-        limits=(0.2, length(taxonomic_ranks)+0.8, -0.01, 1.01),
-        xlabelsize=label_fontsize,
-        ylabelsize=label_fontsize,
-        xticklabelsize=tick_fontsize,
-        yticklabelsize=tick_fontsize,
-        xticklabelrotation=π/4,
-        xgridcolor=(:gray, 0.3),
-        ygridcolor=(:gray, 0.3),
-        xgridwidth=1.2,
-        ygridwidth=1.2
+        xlabel = "Taxonomic Rank (High to Low)",
+        ylabel = "Cumulative Relative Alignment Proportion",
+        xticks = (1:length(taxonomic_ranks), taxonomic_ranks),
+        yticks = 0:0.1:1.0,
+        limits = (0.2, length(taxonomic_ranks)+0.8, -0.01, 1.01),
+        xlabelsize = label_fontsize,
+        ylabelsize = label_fontsize,
+        xticklabelsize = tick_fontsize,
+        yticklabelsize = tick_fontsize,
+        xticklabelrotation = π/4,
+        xgridcolor = (:gray, 0.3),
+        ygridcolor = (:gray, 0.3),
+        xgridwidth = 1.2,
+        ygridwidth = 1.2
     )
 
     # Barplot for perfect consensus
@@ -315,41 +342,46 @@ function create_rank_consensus_plot(
         ax,
         1:n_ranks,
         perfect_consensus_props;
-        color=(:gray, 0.4),
-        width=0.7,
-        strokewidth=0,
-        label="Perfect consensus"
+        color = (:gray, 0.4),
+        width = 0.7,
+        strokewidth = 0,
+        label = "Perfect consensus"
     )
 
     # Individual read traces - plot first one with label for legend
     if !isempty(all_ys)
-        CairoMakie.lines!(ax, all_ys[1]; color=:blue, linewidth=0.4, alpha=0.22, label="Individual reads")
+        CairoMakie.lines!(ax, all_ys[1]; color = :blue, linewidth = 0.4,
+            alpha = 0.22, label = "Individual reads")
         for ys in all_ys[2:end]
-            CairoMakie.lines!(ax, ys; color=:blue, linewidth=0.4, alpha=0.22)
+            CairoMakie.lines!(ax, ys; color = :blue, linewidth = 0.4, alpha = 0.22)
         end
     end
 
     # Only compute and plot summary statistics if we have data
     if !isempty(all_ys)
-        median_ys = [Statistics.median([ys[i] for ys in all_ys if !ismissing(ys[i])]) for i in 1:n_ranks]
-        CairoMakie.lines!(ax, median_ys; color=:orange, linewidth=3, label="Median trajectory")
+        median_ys = [Statistics.median([ys[i] for ys in all_ys if !ismissing(ys[i])])
+                     for i in 1:n_ranks]
+        CairoMakie.lines!(
+            ax, median_ys; color = :orange, linewidth = 3, label = "Median trajectory")
 
-        mean_ys = [Statistics.mean([ys[i] for ys in all_ys if !ismissing(ys[i])]) for i in 1:n_ranks]
-        CairoMakie.lines!(ax, mean_ys; color=:green, linewidth=3, linestyle=:dash, label="Mean trajectory")
+        mean_ys = [Statistics.mean([ys[i] for ys in all_ys if !ismissing(ys[i])])
+                   for i in 1:n_ranks]
+        CairoMakie.lines!(ax, mean_ys; color = :green, linewidth = 3,
+            linestyle = :dash, label = "Mean trajectory")
     end
 
     # Legend that automatically sizes itself
     fig[2, 2] = CairoMakie.Legend(
         fig, ax;
-        tellwidth=true,  # Let it tell the layout how much width it needs
-        tellheight=false,
-        valign=:center,
-        framevisible=true,
-        labelsize=legend_fontsize
+        tellwidth = true,  # Let it tell the layout how much width it needs
+        tellheight = false,
+        valign = :center,
+        framevisible = true,
+        labelsize = legend_fontsize
     )
 
     CairoMakie.resize!(fig.scene, figure_size...)
-    
+
     return fig
 end
 
@@ -360,17 +392,19 @@ Loads data from the specified Arrow file, creates the visualization, and saves i
 Output files are named based on the input file path with "_rank-level-confidences" suffix by default.
 """
 function generate_rank_consensus_plots(
-    inputfile_path::String;
-    png_output_path::Union{String, Nothing} = nothing,
-    svg_output_path::Union{String, Nothing} = nothing,
-    force=false,
-    kwargs...  # Pass through any arguments to create_rank_consensus_plot
+        inputfile_path::String;
+        png_output_path::Union{String, Nothing} = nothing,
+        svg_output_path::Union{String, Nothing} = nothing,
+        force = false,
+        kwargs...  # Pass through any arguments to create_rank_consensus_plot
 )
     fig = nothing
     # Determine output paths
     base_path = splitext(inputfile_path)[1]  # Remove extension
-    png_path = png_output_path !== nothing ? png_output_path : "$(base_path)_rank-level-confidences.png"
-    svg_path = svg_output_path !== nothing ? svg_output_path : "$(base_path)_rank-level-confidences.svg"
+    png_path = png_output_path !== nothing ? png_output_path :
+               "$(base_path)_rank-level-confidences.png"
+    svg_path = svg_output_path !== nothing ? svg_output_path :
+               "$(base_path)_rank-level-confidences.svg"
 
     if (!isfile(png_path) && !isfile(svg_path)) || force
         # Load the data
@@ -382,30 +416,30 @@ function generate_rank_consensus_plots(
             error()
         end
         display(size(df))
-        
+
         # Create the figure
-        fig = create_rank_consensus_plot(df; sample_id=basename(inputfile_path), kwargs...)
-        
+        fig = create_rank_consensus_plot(df; sample_id = basename(inputfile_path), kwargs...)
+
         # Save the figures
         CairoMakie.save(png_path, fig)
         CairoMakie.save(svg_path, fig)
-    
+
         println("Saved PNG: $(png_path)")
         println("Saved SVG: $(svg_path)")
     end
-    
-    return (;fig, png_path, svg_path)
+
+    return (; fig, png_path, svg_path)
 end
 
 function visualize_many_timeseries(
-    time_series_data::Vector{Vector{Float64}};
-    title::String = "High-Density Time Series Visualization",
-    # many-trace panel controls
-    many_trace_count::Int = 2000,
-    trace_alpha::Float64 = 0.03,
-    trace_color = :black,
-    trace_linewidth::Float64 = 0.6,
-    rng::Random.AbstractRNG = Random.default_rng()
+        time_series_data::Vector{Vector{Float64}};
+        title::String = "High-Density Time Series Visualization",
+        # many-trace panel controls
+        many_trace_count::Int = 2000,
+        trace_alpha::Float64 = 0.03,
+        trace_color = :black,
+        trace_linewidth::Float64 = 0.6,
+        rng::Random.AbstractRNG = Random.default_rng()
 )
     # Create x-axis values (assuming equal length for all series)
     n_points = length(time_series_data[1])
@@ -431,7 +465,7 @@ function visualize_many_timeseries(
     end
 
     # Figure with three rows now (density, bands, many-trace)
-    fig = CairoMakie.Figure(size=(1200, 1200), fontsize=18)
+    fig = CairoMakie.Figure(size = (1200, 1200), fontsize = 18)
 
     # 1) Density heatmap
     ax1 = CairoMakie.Axis(fig[1, 1],
@@ -460,14 +494,16 @@ function visualize_many_timeseries(
     for i in 1:length(x_coords)
         x = x_coords[i]
         y = y_coords[i]
-        x_bin = max(1, min(bins_x, Int(floor((x - x_range[1]) / (x_range[2] - x_range[1]) * bins_x)) + 1))
-        y_bin = max(1, min(bins_y, Int(floor((y - y_range[1]) / (y_range[2] - y_range[1]) * bins_y)) + 1))
+        x_bin = max(1, min(bins_x, Int(floor((x - x_range[1]) / (x_range[2] - x_range[1]) *
+                                             bins_x)) + 1))
+        y_bin = max(1, min(bins_y, Int(floor((y - y_range[1]) / (y_range[2] - y_range[1]) *
+                                             bins_y)) + 1))
         histogram[x_bin, y_bin] += 1
     end
 
     hmap = CairoMakie.heatmap!(ax1,
-        x_edges[1:end-1],
-        y_edges[1:end-1],
+        x_edges[1:(end - 1)],
+        y_edges[1:(end - 1)],
         histogram,
         colormap = :viridis)
 
@@ -552,37 +588,50 @@ with legend outside, and color by fit labels, shape by true labels.
 # Returns
 - `Makie.Figure`: Figure object that can be displayed or saved
 """
-function plot_embeddings(embeddings; title="", xlabel="", ylabel="", true_labels=nothing, fit_labels=nothing)
-    fig = CairoMakie.Figure(size=(900, 450))
-    ax = CairoMakie.Axis(fig[1, 1], title=title, xlabel=xlabel, ylabel=ylabel)
+function plot_embeddings(embeddings; title = "", xlabel = "", ylabel = "",
+        true_labels = nothing, fit_labels = nothing)
+    fig = CairoMakie.Figure(size = (900, 450))
+    ax = CairoMakie.Axis(fig[1, 1], title = title, xlabel = xlabel, ylabel = ylabel)
     npoints = size(embeddings, 2)
 
-    fit_palette = fit_labels !== nothing ? Mycelia.n_maximally_distinguishable_colors(length(unique(fit_labels))) : [:gray]
-    true_markers = true_labels !== nothing ? Mycelia.choose_top_n_markers(length(unique(true_labels))) : [:circle]
-    fit_label_to_color = fit_labels !== nothing ? Dict(lbl => fit_palette[i] for (i, lbl) in enumerate(unique(fit_labels))) : Dict()
-    true_label_to_marker = true_labels !== nothing ? Dict(lbl => true_markers[i] for (i, lbl) in enumerate(unique(true_labels))) : Dict()
+    fit_palette = fit_labels !== nothing ?
+                  Mycelia.n_maximally_distinguishable_colors(length(unique(fit_labels))) :
+                  [:gray]
+    true_markers = true_labels !== nothing ?
+                   Mycelia.choose_top_n_markers(length(unique(true_labels))) : [:circle]
+    fit_label_to_color = fit_labels !== nothing ?
+                         Dict(lbl => fit_palette[i]
+    for (i, lbl) in enumerate(unique(fit_labels))) : Dict()
+    true_label_to_marker = true_labels !== nothing ?
+                           Dict(lbl => true_markers[i]
+    for (i, lbl) in enumerate(unique(true_labels))) : Dict()
 
     xs = embeddings[1, :]
     ys = embeddings[2, :]
-    colors = [fit_labels !== nothing ? fit_label_to_color[fit_labels[i]] : :gray for i in 1:npoints]
-    markers = [true_labels !== nothing ? true_label_to_marker[true_labels[i]] : :circle for i in 1:npoints]
-    CairoMakie.scatter!(ax, xs, ys; color=colors, marker=markers, markersize=14, strokewidth=1, strokecolor=:black, label="")
+    colors = [fit_labels !== nothing ? fit_label_to_color[fit_labels[i]] : :gray
+              for i in 1:npoints]
+    markers = [true_labels !== nothing ? true_label_to_marker[true_labels[i]] : :circle
+               for i in 1:npoints]
+    CairoMakie.scatter!(ax, xs, ys; color = colors, marker = markers, markersize = 14,
+        strokewidth = 1, strokecolor = :black, label = "")
 
     # Legend entries (as before) ...
     if fit_labels !== nothing
         for (i, lbl) in enumerate(unique(fit_labels))
-            CairoMakie.scatter!(ax, [NaN], [NaN]; color=fit_palette[i], marker=:circle, markersize=14, label="Fit Cluster $lbl")
+            CairoMakie.scatter!(ax, [NaN], [NaN]; color = fit_palette[i], marker = :circle,
+                markersize = 14, label = "Fit Cluster $lbl")
         end
     end
     if true_labels !== nothing
         for (i, lbl) in enumerate(unique(true_labels))
-            CairoMakie.scatter!(ax, [NaN], [NaN]; color=:gray, marker=true_markers[i], markersize=14, label="True Cluster $lbl")
+            CairoMakie.scatter!(ax, [NaN], [NaN]; color = :gray, marker = true_markers[i],
+                markersize = 14, label = "True Cluster $lbl")
         end
     end
 
     # Place legend outside
-    CairoMakie.axislegend(ax; position=(1.25, 0.5), nbanks=1)
-    
+    CairoMakie.axislegend(ax; position = (1.25, 0.5), nbanks = 1)
+
     # Print ranges for debugging
     println("x range: ", minimum(xs), " to ", maximum(xs))
     println("y range: ", minimum(ys), " to ", maximum(ys))
@@ -640,24 +689,24 @@ Create a stacked bar chart showing taxa relative abundances for each sample.
 - `taxa_colors`: Dictionary mapping taxa to their assigned colors
 """
 function plot_taxa_abundances(
-    df::DataFrames.DataFrame, 
-    taxa_level::String; 
-    top_n::Int = 10,
-    sample_id_col::String = "sample_id",
-    filter_taxa::Union{Vector{Union{String, Missing}}, Nothing} = nothing,
-    figure_width::Int = 1500,
-    figure_height::Int = 1000,
-    bar_width::Float64 = 0.7,
-    x_rotation::Int = 45,
-    sort_samples::Bool = true,
-    color_seed::Union{Int, Nothing} = nothing,
-    legend_fontsize::Float64 = 12.0,
-    legend_itemsize::Float64 = 12.0,
-    legend_padding::Float64 = 5.0,
-    legend_rowgap::Float64 = 1.0,
-    legend_labelwidth::Union{Nothing, Float64} = nothing,
-    legend_titlesize::Float64 = 15.0,
-    legend_nbanks::Int = 1
+        df::DataFrames.DataFrame,
+        taxa_level::String;
+        top_n::Int = 10,
+        sample_id_col::String = "sample_id",
+        filter_taxa::Union{Vector{Union{String, Missing}}, Nothing} = nothing,
+        figure_width::Int = 1500,
+        figure_height::Int = 1000,
+        bar_width::Float64 = 0.7,
+        x_rotation::Int = 45,
+        sort_samples::Bool = true,
+        color_seed::Union{Int, Nothing} = nothing,
+        legend_fontsize::Float64 = 12.0,
+        legend_itemsize::Float64 = 12.0,
+        legend_padding::Float64 = 5.0,
+        legend_rowgap::Float64 = 1.0,
+        legend_labelwidth::Union{Nothing, Float64} = nothing,
+        legend_titlesize::Float64 = 15.0,
+        legend_nbanks::Int = 1
 )
     # Validate inputs
     if !DataFrames.hasproperty(df, Symbol(sample_id_col))
@@ -666,23 +715,23 @@ function plot_taxa_abundances(
     if !DataFrames.hasproperty(df, Symbol(taxa_level))
         error("DataFrame must have a column named '$(taxa_level)'")
     end
-    
+
     # Helper function to check if a value represents "missing" in either format
     is_missing_value = x -> x === missing || x == "missing"
-    
+
     # Step 1: Group by sample_id and count taxa at the specified level
     samples = unique(df[:, sample_id_col])
     n_samples = length(samples)
-    
+
     # Create ordered dictionary to store taxa counts for each sample
     sample_to_taxa_counts = OrderedCollections.OrderedDict{String, Dict{Any, Int}}()
-    
+
     # Count occurrences of each taxon within each sample
     for sample in samples
         sample_data = df[df[:, sample_id_col] .== sample, :]
         sample_to_taxa_counts[string(sample)] = StatsBase.countmap(sample_data[:, taxa_level])
     end
-    
+
     # Step 2: Calculate joint counts across all samples to identify top taxa
     joint_counts = Dict{Any, Int}()
     for (_, counts) in sample_to_taxa_counts
@@ -690,58 +739,58 @@ function plot_taxa_abundances(
             joint_counts[taxon] = get(joint_counts, taxon, 0) + count
         end
     end
-    
+
     # Filter out specified taxa if filter_taxa is provided
     if !isnothing(filter_taxa)
         for taxon in filter_taxa
             delete!(joint_counts, taxon)
         end
     end
-    
+
     # Collect all missing-like values (both actual missing and "missing" string)
     missing_keys = filter(is_missing_value, keys(joint_counts))
     missing_count = 0
     if !isempty(missing_keys)
         missing_count = sum(joint_counts[k] for k in missing_keys)
     end
-    
+
     # Remove all missing-like values from joint_counts for sorting
     for k in missing_keys
         delete!(joint_counts, k)
     end
-    
+
     # Sort taxa by joint counts (descending)
-    sorted_taxa = sort(collect(keys(joint_counts)), by=x -> joint_counts[x], rev=true)
-    
+    sorted_taxa = sort(collect(keys(joint_counts)), by = x -> joint_counts[x], rev = true)
+
     # Identify top N taxa, the rest will be grouped as "Other"
     top_taxa = sorted_taxa[1:min(top_n, length(sorted_taxa))]
-    
+
     # Step 3: Normalize counts to get relative abundances for each sample
-    sample_to_taxa_relative_abundances = OrderedCollections.OrderedDict{String, Dict{String, Float64}}()
-    
+    sample_to_taxa_relative_abundances = OrderedCollections.OrderedDict{
+        String, Dict{String, Float64}}()
+
     for (sample, counts) in sample_to_taxa_counts
         # Initialize relative abundances
         abundances = Dict{String, Float64}()
-        
+
         # Calculate total counts (excluding filtered taxa)
         if isnothing(filter_taxa)
             total_counts = sum(values(counts))
         else
-            total_counts = sum([
-                count for (taxon, count) in counts 
-                if !(taxon in filter_taxa)
-            ])
+            total_counts = sum([count
+                                for (taxon, count) in counts
+                                if !(taxon in filter_taxa)])
         end
-        
+
         # Skip samples with no valid counts
         if total_counts == 0
             continue
         end
-        
+
         # Calculate relative abundances for top taxa, "Other", and "Missing"
         other_abundance = 0.0
         missing_abundance = 0.0
-        
+
         for (taxon, count) in counts
             if !isnothing(filter_taxa) && taxon in filter_taxa
                 continue
@@ -753,27 +802,27 @@ function plot_taxa_abundances(
                 other_abundance += count / total_counts
             end
         end
-        
+
         # Add "Other" category if needed
         if other_abundance > 0
             abundances["Other"] = other_abundance
         end
-        
+
         # Add "Missing" category if needed
         if missing_abundance > 0
             abundances["Missing"] = missing_abundance
         end
-        
+
         # Ensure all top taxa are represented in each sample (even if absent)
         for taxon in top_taxa
             if !haskey(abundances, string(taxon))
                 abundances[string(taxon)] = 0.0
             end
         end
-        
+
         sample_to_taxa_relative_abundances[sample] = abundances
     end
-    
+
     # Step 4: Prepare data for visualization
     # Sort samples if requested
     if sort_samples
@@ -781,27 +830,29 @@ function plot_taxa_abundances(
     else
         samples = collect(keys(sample_to_taxa_relative_abundances))
     end
-    
+
     # Prepare final set of taxa in desired order (most abundant at bottom)
     # This will hold our ordered taxa categories: top taxa, "Other", and "Missing" (in that order)
     final_taxa = copy(top_taxa)
-    
+
     # Check if any sample has "Other" category
-    has_other = any(haskey(abundances, "Other") for (_, abundances) in sample_to_taxa_relative_abundances)
+    has_other = any(haskey(abundances, "Other")
+    for (_, abundances) in sample_to_taxa_relative_abundances)
     if has_other
         push!(final_taxa, "Other")
     end
-    
+
     # Check if any sample has "Missing" category
-    has_missing_category = any(haskey(abundances, "Missing") for (_, abundances) in sample_to_taxa_relative_abundances)
+    has_missing_category = any(haskey(abundances, "Missing")
+    for (_, abundances) in sample_to_taxa_relative_abundances)
     if has_missing_category
         push!(final_taxa, "Missing")
     end
-    
+
     # Create matrix for stacked bars
     # Dimensions: [taxa, samples]
     abundance_matrix = zeros(length(final_taxa), length(samples))
-    
+
     # Fill the matrix with relative abundances
     for (col_idx, sample) in enumerate(samples)
         abundances = sample_to_taxa_relative_abundances[sample]
@@ -810,23 +861,23 @@ function plot_taxa_abundances(
             abundance_matrix[row_idx, col_idx] = get(abundances, taxon_str, 0.0)
         end
     end
-    
+
     # Step 5: Create stacked bar chart visualization with CairoMakie
-    
+
     # # Set reproducible colors if seed is provided
     # if !isnothing(color_seed)
     #     Random.seed!(color_seed)
     # end
-    
+
     # Generate distinctive colors, reserving specific colors for "Other" and "Missing"
     n_colors_needed = length(final_taxa)
-    
+
     # Generate base colors for all taxa except special categories
     if n_colors_needed > 0
         # colorscheme = Colors.distinguishable_colors(n_colors_needed, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=true)
         colorscheme = Mycelia.n_maximally_distinguishable_colors(n_colors_needed)
         # colorscheme = reverse(colorscheme)  # Reverse to match original behavior
-        
+
         # Use light gray for "Other" and dark gray for "Missing" if they exist
         if has_other
             other_idx = findfirst(x -> x == "Other", final_taxa)
@@ -834,7 +885,7 @@ function plot_taxa_abundances(
                 colorscheme[other_idx] = Colors.RGB(0.7, 0.7, 0.7)  # Light gray for "Other"
             end
         end
-        
+
         if has_missing_category
             missing_idx = findfirst(x -> x == "Missing", final_taxa)
             if !isnothing(missing_idx)
@@ -844,35 +895,35 @@ function plot_taxa_abundances(
     else
         colorscheme = Colors.RGB[]
     end
-    
+
     # Create mapping of taxa to colors for legend
     taxa_colors = Dict(taxon => colorscheme[i] for (i, taxon) in enumerate(final_taxa))
-    
+
     # Create the figure with appropriate size ratio for legend
     # Make the figure wider if using more banks
     adjusted_width = figure_width + (legend_nbanks > 1 ? 250 * (legend_nbanks - 1) : 0)
-    fig = CairoMakie.Figure(size=(adjusted_width, figure_height))
-    
+    fig = CairoMakie.Figure(size = (adjusted_width, figure_height))
+
     # Create the main axis for the plot
     ax = CairoMakie.Axis(
         fig[1, 1],
-        xlabel="Sample",
-        ylabel="Relative Abundance",
-        title="$(titlecase(taxa_level)) Relative Abundance (top $(length(top_taxa)) classified)",
-        xticks=(1:length(samples), samples),
-        xticklabelrotation=x_rotation
+        xlabel = "Sample",
+        ylabel = "Relative Abundance",
+        title = "$(titlecase(taxa_level)) Relative Abundance (top $(length(top_taxa)) classified)",
+        xticks = (1:length(samples), samples),
+        xticklabelrotation = x_rotation
     )
-    
+
     # Plot stacked bars - CairoMakie style
     # In CairoMakie, we need to create stacked bars manually
     x_positions = 1:length(samples)
-    
+
     # Start from the bottom of the stack
     previous_heights = zeros(length(samples))
-    
+
     for (i, taxon) in enumerate(final_taxa)
         heights = abundance_matrix[i, :]
-        
+
         # CairoMakie uses 'offset' parameter for stacking
         CairoMakie.barplot!(
             ax,
@@ -883,11 +934,11 @@ function plot_taxa_abundances(
             label = string(taxon),
             width = bar_width
         )
-        
+
         # Update heights for next layer
         previous_heights .+= heights
     end
-    
+
     # Add compact legend with smaller items and text
     fig[1, 2] = CairoMakie.Legend(
         fig,
@@ -902,7 +953,7 @@ function plot_taxa_abundances(
         labelwidth = legend_labelwidth,     # Optional truncation of long labels
         nbanks = legend_nbanks              # Multiple columns if needed
     )
-    
+
     # Return the figure, axis, and color mapping for further customization if needed
     return fig, ax, taxa_colors
 end
@@ -930,50 +981,52 @@ with default parameters and save to a file if requested.
 - `taxa_colors`: Dictionary mapping taxa to their assigned colors
 """
 function generate_taxa_abundances_plot(
-    joint_reads_to_taxon_lineage_table::DataFrames.DataFrame;
-    taxa_level::String,
-    top_n::Int = 30,
-    save_path::Union{String, Nothing} = nothing,
-    adjust_legend_for_taxa_count::Bool = true,
-    kwargs...
+        joint_reads_to_taxon_lineage_table::DataFrames.DataFrame;
+        taxa_level::String,
+        top_n::Int = 30,
+        save_path::Union{String, Nothing} = nothing,
+        adjust_legend_for_taxa_count::Bool = true,
+        kwargs...
 )
     # Automatically adjust legend parameters based on taxa count
     legend_params = Dict()
-    
+
     if adjust_legend_for_taxa_count && top_n > 30
         # For large numbers of taxa, make legend more compact
         legend_params = Dict(
             :legend_fontsize => 10.0,
-            :legend_itemsize => 10.0, 
+            :legend_itemsize => 10.0,
             :legend_padding => 5.0,
             :legend_rowgap => 0.5,
             :legend_titlesize => 12.0,
             :legend_nbanks => top_n > 50 ? 2 : 1  # Use 2 columns for very large legends
         )
     end
-    
+
     # Merge automatically determined legend parameters with any user-provided ones
     merged_kwargs = merge(legend_params, kwargs)
-    
-    fig, ax, taxa_colors = plot_taxa_abundances(
+
+    fig, ax,
+    taxa_colors = plot_taxa_abundances(
         joint_reads_to_taxon_lineage_table,
         taxa_level;
-        top_n=top_n,
+        top_n = top_n,
         merged_kwargs...
     )
-    
+
     # Save figure if path is provided
     if !isnothing(save_path)
         CairoMakie.save(save_path, fig)
     end
-    
+
     return fig, ax, taxa_colors
 end
 
-function visualize_xam_classifications(;xam, sample_id, accession_to_taxid_table)
+function visualize_xam_classifications(; xam, sample_id, accession_to_taxid_table)
     xam_classification_table_file = xam * ".classification_table.arrow"
     if !isfile(xam_classification_table_file)
-        @time classification_table = Mycelia.classify_xam_with_blast_taxonomies(xam=xam, accession_to_taxid_table=accession_to_taxid_table)
+        @time classification_table = Mycelia.classify_xam_with_blast_taxonomies(
+            xam = xam, accession_to_taxid_table = accession_to_taxid_table)
         Arrow.write(xam_classification_table_file, classification_table)
     else
         classification_table = DataFrames.DataFrame(Arrow.Table(xam_classification_table_file))
@@ -981,25 +1034,32 @@ function visualize_xam_classifications(;xam, sample_id, accession_to_taxid_table
 
     unique_taxids = filter(x -> x > 0, sort(unique(classification_table[!, "final_assignment"])))
     taxid_lineage_table = Mycelia.taxids2taxonkit_summarized_lineage_table(unique_taxids)
-    reads_to_taxon_lineage_table = DataFrames.leftjoin(classification_table, taxid_lineage_table, on="final_assignment" => "taxid")
+    reads_to_taxon_lineage_table = DataFrames.leftjoin(
+        classification_table, taxid_lineage_table, on = "final_assignment" => "taxid")
     reads_to_taxon_lineage_table = Mycelia.assign_lowest_rank_to_reads_to_taxon_lineage_table(reads_to_taxon_lineage_table)
-    p = Mycelia.sankey_visualize_reads_lowest_rank(reads_to_taxon_lineage_table[!, "lowest_rank"]; title="$sample_id")
+    p = Mycelia.sankey_visualize_reads_lowest_rank(
+        reads_to_taxon_lineage_table[!, "lowest_rank"]; title = "$sample_id")
     StatsPlots.savefig(p, xam * ".$(sample_id).sankey.png")
     StatsPlots.savefig(p, xam * ".$(sample_id).sankey.svg")
     StatsPlots.savefig(p, xam * ".$(sample_id).sankey.pdf")
     display(p)
 
     for taxa_level in ["domain", "family", "genus", "species"]
-        taxa_counts = sort(collect(StatsBase.countmap(filter(!ismissing, reads_to_taxon_lineage_table[!, taxa_level]))), by=x->x[2], rev=true)
+        taxa_counts = sort(
+            collect(StatsBase.countmap(filter(!ismissing, reads_to_taxon_lineage_table[!, taxa_level]))),
+            by = x->x[2],
+            rev = true)
         taxa_count_pairs = Mycelia.streamline_counts(taxa_counts)
 
-        fig = Mycelia.visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
+        fig = Mycelia.visualize_single_sample_taxa_count_pairs(taxa_count_pairs;
+            title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.png", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.svg", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.pdf", fig)
         display(fig)
 
-        fig = Mycelia.visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs, title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
+        fig = Mycelia.visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs,
+            title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.png", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.svg", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.pdf", fig)
@@ -1007,15 +1067,16 @@ function visualize_xam_classifications(;xam, sample_id, accession_to_taxid_table
     end
 end
 
-function visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs; title = "Distribution of Relative Abundance by Taxa")
+function visualize_single_sample_taxa_count_pair_proportions(
+        taxa_count_pairs; title = "Distribution of Relative Abundance by Taxa")
     df = DataFrames.DataFrame(
         taxa = first.(taxa_count_pairs),
         count = last.(taxa_count_pairs)
     )
-    df[!, "proportion"] .= round.(df[!, "count"] ./ sum(df[!, "count"]), digits=3)
+    df[!, "proportion"] .= round.(df[!, "count"] ./ sum(df[!, "count"]), digits = 3)
 
     # Create the plot
-    fig = CairoMakie.Figure(size=(800, 500), fontsize=12)
+    fig = CairoMakie.Figure(size = (800, 500), fontsize = 12)
     ax = CairoMakie.Axis(
         fig[1, 1],
         xlabel = "Taxa",
@@ -1062,11 +1123,9 @@ function visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs; t
 
     # Save the figure
 
-
     # Display the figure
     fig
 end
-
 
 function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Distribution of Counts by Taxa")
     # Convert to DataFrame for easier plotting
@@ -1076,7 +1135,7 @@ function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Dis
     )
 
     # Create the plot
-    fig = CairoMakie.Figure(size=(800, 500), fontsize=12)
+    fig = CairoMakie.Figure(size = (800, 500), fontsize = 12)
     ax = CairoMakie.Axis(
         fig[1, 1],
         xlabel = "Taxa",
@@ -1123,7 +1182,7 @@ function visualize_single_sample_taxa_count_pairs(taxa_count_pairs; title = "Dis
     fig
 end
 
-function sankey_visualize_reads_lowest_rank(lowest_ranks; title="")
+function sankey_visualize_reads_lowest_rank(lowest_ranks; title = "")
     level_hits = [sum(lowest_ranks .>= i) for i in 1:9]
     connections = [(a, b, c) for (a, b, c) in zip(1:10, 2:11, level_hits)]
     push!(connections, (1, 11, sum(lowest_ranks .== 0)))
@@ -1145,22 +1204,23 @@ function sankey_visualize_reads_lowest_rank(lowest_ranks; title="")
 
     counts = vcat(total_count, [c[3] for c in connections])
 
-    percentages = round.(counts ./ total_count * 100, digits=1)
+    percentages = round.(counts ./ total_count * 100, digits = 1)
 
-    labels = [label * "\n$(count)\n$(percentage)%" for (label, count, percentage) in zip(labels, counts, percentages)]
+    labels = [label * "\n$(count)\n$(percentage)%"
+              for (label, count, percentage) in zip(labels, counts, percentages)]
 
     p = SankeyPlots.sankey(
         title = title,
         [c[1] for c in connections],
         [c[2] for c in connections],
         [c[3] for c in connections],
-        node_labels=labels,
-        edge_color=:gradient,
-        label_position=:bottom,
-        label_size=7,
-        compact=true,
-        size=(1200,800),
-        dpi=100
+        node_labels = labels,
+        edge_color = :gradient,
+        label_position = :bottom,
+        label_size = 7,
+        compact = true,
+        size = (1200, 800),
+        dpi = 100
     )
     return p
 end
@@ -1193,20 +1253,20 @@ The plot is displayed and saved in PNG, PDF, and SVG formats.
 - Any other keyword arguments will be passed to `Makie.Axis`.
 """
 function plot_kmer_rarefaction(
-    rarefaction_data_path::AbstractString;
-    output_dir::AbstractString = dirname(rarefaction_data_path),
-    output_basename::AbstractString = first(Base.Filesystem.splitext(basename(rarefaction_data_path))),
-    display_plot::Bool = true,
-    # Makie specific customizations
-    fig_size::Tuple{Int, Int} = (1000, 750),
-    title::AbstractString = "K-mer Rarefaction Curve",
-    xlabel::AbstractString = "Number of FASTA Files Processed",
-    ylabel::AbstractString = "Cumulative Unique K-mers",
-    line_color = :blue,
-    line_style = nothing,
-    marker = nothing,
-    markersize::Number = 10,
-    axis_kwargs... # Capture other axis properties
+        rarefaction_data_path::AbstractString;
+        output_dir::AbstractString = dirname(rarefaction_data_path),
+        output_basename::AbstractString = first(Base.Filesystem.splitext(basename(rarefaction_data_path))),
+        display_plot::Bool = true,
+        # Makie specific customizations
+        fig_size::Tuple{Int, Int} = (1000, 750),
+        title::AbstractString = "K-mer Rarefaction Curve",
+        xlabel::AbstractString = "Number of FASTA Files Processed",
+        ylabel::AbstractString = "Cumulative Unique K-mers",
+        line_color = :blue,
+        line_style = nothing,
+        marker = nothing,
+        markersize::Number = 10,
+        axis_kwargs... # Capture other axis properties
 )
     if !isfile(rarefaction_data_path)
         Base.@error "Rarefaction data file not found: $rarefaction_data_path"
@@ -1214,7 +1274,7 @@ function plot_kmer_rarefaction(
     end
 
     data = try
-        DelimitedFiles.readdlm(rarefaction_data_path, '\t', Int, header=false)
+        DelimitedFiles.readdlm(rarefaction_data_path, '\t', Int, header = false)
     catch e
         Base.@error "Failed to read rarefaction data from $rarefaction_data_path: $e"
         return nothing
@@ -1233,7 +1293,7 @@ function plot_kmer_rarefaction(
     sort_indices = sortperm(files_processed)
     files_processed = files_processed[sort_indices]
     unique_kmers = unique_kmers[sort_indices]
-    
+
     Base.mkpath(output_dir) # Ensure output directory exists
 
     fig = Makie.Figure(size = fig_size)
@@ -1245,11 +1305,12 @@ function plot_kmer_rarefaction(
         axis_kwargs... # Pass through other axis settings
     )
 
-    Makie.lines!(ax, files_processed, unique_kmers, color = line_color, linestyle = line_style)
+    Makie.lines!(
+        ax, files_processed, unique_kmers, color = line_color, linestyle = line_style)
     if !isnothing(marker)
-        Makie.scatter!(ax, files_processed, unique_kmers, color = line_color, marker = marker, markersize = markersize)
+        Makie.scatter!(ax, files_processed, unique_kmers, color = line_color,
+            marker = marker, markersize = markersize)
     end
-
 
     if display_plot
         Base.@info "Displaying rarefaction plot..."
@@ -1270,7 +1331,7 @@ function plot_kmer_rarefaction(
     catch e
         Base.@error "Failed to save plot: $e. Make sure a Makie backend (e.g., CairoMakie for saving, GLMakie for display) is active and correctly configured in your environment."
     end
-    
+
     return fig # Return the figure object
 end
 
@@ -1305,13 +1366,14 @@ length, p = optimal_subsequence_length(error_rate=0.01, plot_result=true)
 Plots.display(p)
 ```
 """
-function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Real}},
-                                   threshold::Float64=0.95,
-                                   sequence_length::Union{Nothing, Int}=nothing,
-                                   plot_result::Bool=false)
+function optimal_subsequence_length(; error_rate::Union{Real, AbstractArray{<:Real}},
+        threshold::Float64 = 0.95,
+        sequence_length::Union{Nothing, Int} = nothing,
+        plot_result::Bool = false)
     # Handle array input by calculating mean error rate
-    avg_error_rate = isa(error_rate, AbstractArray) ? Statistics.mean(error_rate) : error_rate
-    
+    avg_error_rate = isa(error_rate, AbstractArray) ? Statistics.mean(error_rate) :
+                     error_rate
+
     # Validate inputs
     if avg_error_rate <= 0
         optimal_length = typemax(Int)
@@ -1327,14 +1389,14 @@ function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Rea
     if !plot_result
         return optimal_length
     end
-    
+
     # For plotting, determine sequence length to display
     max_length = isnothing(sequence_length) ? 2 * optimal_length : sequence_length
-    
+
     # Calculate probabilities for different lengths
     lengths = 1:max_length
     probabilities = [(1 - avg_error_rate)^len for len in lengths]
-    
+
     # Create DataFrame for plotting
     df = DataFrames.DataFrame(
         Length = collect(lengths),
@@ -1344,37 +1406,38 @@ function optimal_subsequence_length(;error_rate::Union{Real, AbstractArray{<:Rea
 
     quality_score = Mycelia.error_rate_to_q_value(error_rate)
     rounded_quality_score = Int(floor(quality_score))
-    rounded_error_rate = round(avg_error_rate, digits=4)
-    rounded_threshold_rate = round(threshold, digits=2)
-    plot_title = 
-    """
-    Optimal Kmer Length Inference
-    Error Rate: $(rounded_error_rate * 100)%≈Q$(rounded_quality_score)
-    Threshold: $(rounded_threshold_rate * 100)% of kmers expected to be correct
-    """
-    
+    rounded_error_rate = round(avg_error_rate, digits = 4)
+    rounded_threshold_rate = round(threshold, digits = 2)
+    plot_title = """
+                 Optimal Kmer Length Inference
+                 Error Rate: $(rounded_error_rate * 100)%≈Q$(rounded_quality_score)
+                 Threshold: $(rounded_threshold_rate * 100)% of kmers expected to be correct
+                 """
+
     # Create plot
     p = Plots.plot(
         df.Length, df.Probability,
-        linewidth=2, 
-        label="P(error-free)",
-        xlabel="Subsequence Length",
-        ylabel="Probability of Error-free Match",
-        title=plot_title,
-        grid=true,
-        ylims=(0,1),
-        alpha=0.8
+        linewidth = 2,
+        label = "P(error-free)",
+        xlabel = "Subsequence Length",
+        ylabel = "Probability of Error-free Match",
+        title = plot_title,
+        grid = true,
+        ylims = (0, 1),
+        alpha = 0.8
     )
-    
+
     # Add horizontal line for threshold
-    Plots.hline!([threshold], linestyle=:dash, color=:red, label="Threshold")
-    
+    Plots.hline!([threshold], linestyle = :dash, color = :red, label = "Threshold")
+
     # Add vertical line for optimal length
-    Plots.vline!([optimal_length], linestyle=:dash, color=:green, label="Optimal length: $optimal_length")
-    
+    Plots.vline!([optimal_length], linestyle = :dash, color = :green,
+        label = "Optimal length: $optimal_length")
+
     # Highlight optimal point
-    Plots.scatter!([optimal_length], [threshold], color=:orange, markersize=8, label="")
-    
+    Plots.scatter!(
+        [optimal_length], [threshold], color = :orange, markersize = 8, label = "")
+
     return optimal_length, p
 end
 
@@ -1412,7 +1475,8 @@ Generate a visualization of a genome assembly graph using Bandage.
 # Returns
 - Path to the generated image file
 """
-function bandage_visualize(; gfa, img=nothing, format::Union{Nothing, String}=nothing, extra_args::AbstractVector{<:AbstractString}=String[], force::Bool=false)
+function bandage_visualize(; gfa, img = nothing, format::Union{Nothing, String} = nothing,
+        extra_args::AbstractVector{<:AbstractString} = String[], force::Bool = false)
     # run(`$(bandage) image --helpall`)
     bandage = Mycelia.download_bandage()
     target_img = something(img, gfa * "." * (format === nothing ? "png" : format))
@@ -1436,7 +1500,7 @@ Reduce a FASTG to a simplified GFA using Bandage.
 # Returns
 - Path to the reduced GFA file
 """
-function bandage_reduce(;fastg, gfa=fastg*".gfa")
+function bandage_reduce(; fastg, gfa = fastg*".gfa")
     bandage = Mycelia.download_bandage()
     if !isfile(gfa)
         run(`$(bandage) reduce $(fastg) $(gfa)`)
@@ -1457,7 +1521,8 @@ A vector of `n` RGB colors that are optimized for maximum perceptual distinction
 using white (RGB(1,1,1)) and black (RGB(0,0,0)) as anchor colors.
 """
 function n_maximally_distinguishable_colors(n)
-    color_spectrum = Colors.distinguishable_colors(n+3, [Colors.RGB(1,1,1), Colors.RGB(0,0,0)], dropseed=false)
+    color_spectrum = Colors.distinguishable_colors(
+        n+3, [Colors.RGB(1, 1, 1), Colors.RGB(0, 0, 0)], dropseed = false)
     filtered_color_spectrum = color_spectrum[[2, 5:length(color_spectrum)...]]
     return filtered_color_spectrum
 end
@@ -1520,17 +1585,16 @@ Nothing, but saves dendrogram image to disk and displays preview.
 """
 function draw_dendrogram_tree(
         mg::MetaGraphsNext.MetaGraph;
-        width=500,
-        height=500,
-        fontsize=12,
+        width = 500,
+        height = 500,
+        fontsize = 12,
         # margins=min(width, height)/25,
-        margins=min(width, height)/20,
+        margins = min(width, height)/20,
         # margins=20,
-        mergenodesize=1,
-        lineweight=1,
-        filename=Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".dendrogram.png"
-    )
-
+        mergenodesize = 1,
+        lineweight = 1,
+        filename = Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".dendrogram.png"
+)
     fontsizebuffer = points_to_pixels(fontsize) / 3
     available_width = width - 2 * margins
     available_height = height - 2 * margins
@@ -1550,11 +1614,12 @@ function draw_dendrogram_tree(
         y = mg.vprops[ordered_leaf_node][:y] * available_height + margins
         Luxor.circle(x, y, mergenodesize, :fill)
         # Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y), halign=:center, valign=:middle)
-        Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y + fontsizebuffer), halign=:center, valign=:top)
+        Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y + fontsizebuffer),
+            halign = :center, valign = :top)
     end
     for (i, (left, right)) in enumerate(eachrow(mg.gprops[:hcl].merges))
         parent_vertex = mg[string(i), :hclust_id]
-                                        
+
         x = mg.vprops[parent_vertex][:x] * available_width + margins
         y = mg.vprops[parent_vertex][:y] * available_height + margins
         # Luxor.text(string(ordered_leaf_node), Luxor.Point(x, y), halign=:center, valign=:middle)
@@ -1564,17 +1629,18 @@ function draw_dendrogram_tree(
         left_child_x = mg.vprops[left_child_vertex][:x] * available_width + margins
         left_child_y = mg.vprops[left_child_vertex][:y] * available_height + margins
         # draw horizontal bar
-        Luxor.line(Luxor.Point(left_child_x, y), Luxor.Point(x, y), action=:stroke)
+        Luxor.line(Luxor.Point(left_child_x, y), Luxor.Point(x, y), action = :stroke)
         # draw vertical bar
-        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(left_child_x, y), action=:stroke)
+        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(left_child_x, y), action = :stroke)
 
         right_child_vertex = mg[string(right), :hclust_id]
         right_child_x = mg.vprops[right_child_vertex][:x] * available_width + margins
         right_child_y = mg.vprops[right_child_vertex][:y] * available_height + margins
         # draw horizontal bar
-        Luxor.line(Luxor.Point(x, y), Luxor.Point(right_child_x, y), action=:stroke)
+        Luxor.line(Luxor.Point(x, y), Luxor.Point(right_child_x, y), action = :stroke)
         # draw vertical bar
-        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(right_child_x, y), action=:stroke)
+        Luxor.line(Luxor.Point(right_child_x, right_child_y),
+            Luxor.Point(right_child_x, y), action = :stroke)
     end
 
     # Finish the drawing and save the file
@@ -1618,16 +1684,16 @@ The input graph must have:
 """
 function draw_radial_tree(
         mg::MetaGraphsNext.MetaGraph;
-        width=500,
-        height=500,
-        fontsize=12,
+        width = 500,
+        height = 500,
+        fontsize = 12,
         # margins=min(width, height)/25,
-        margins=min(width, height)/20,
+        margins = min(width, height)/20,
         # margins=20,
-        mergenodesize=1,
-        lineweight=1,
-        filename=Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".radial.png"
-    )
+        mergenodesize = 1,
+        lineweight = 1,
+        filename = Dates.format(Dates.now(), "yyyymmddTHHMMSS") * ".radial.png"
+)
 
     # check max label size against margin and update as necessary
     max_radius = (min(width, height) - (margins * 2)) / 2
@@ -1655,7 +1721,8 @@ function draw_radial_tree(
         Luxor.circle(x, y, mergenodesize, :fill)
         text_x = cos(polar_radian) * (max_radius + 10)
         text_y = sin(polar_radian) * (max_radius + 10)
-        Luxor.text(string(ordered_leaf_node), Luxor.Point(text_x, text_y), angle=polar_radian, halign=:left, valign=:middle)
+        Luxor.text(string(ordered_leaf_node), Luxor.Point(text_x, text_y),
+            angle = polar_radian, halign = :left, valign = :middle)
     end
     for (i, (left, right)) in enumerate(eachrow(mg.gprops[:hcl].merges))
         parent_vertex = mg[string(i), :hclust_id]
@@ -1678,11 +1745,12 @@ function draw_radial_tree(
         left_child_x = cos(left_child_polar_radian) * left_child_adjusted_radius
         left_child_y = sin(left_child_polar_radian) * left_child_adjusted_radius
         # # draw horizontal bar
-        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, left_child_polar_radian, polar_radian, action=:stroke)
+        Luxor.arc(Luxor.Point(0, 0), adjusted_radius,
+            left_child_polar_radian, polar_radian, action = :stroke)
         # draw vertical bar
         join_x = cos(left_child_polar_radian) * adjusted_radius
         join_y = sin(left_child_polar_radian) * adjusted_radius
-        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(join_x, join_y), action=:stroke)
+        Luxor.line(Luxor.Point(left_child_x, left_child_y), Luxor.Point(join_x, join_y), action = :stroke)
 
         # right child
         right_child_vertex = mg[string(right), :hclust_id]
@@ -1693,18 +1761,18 @@ function draw_radial_tree(
         right_child_x = cos(right_child_polar_radian) * right_child_adjusted_radius
         right_child_y = sin(right_child_polar_radian) * right_child_adjusted_radius
         # # draw horizontal bar
-        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, polar_radian, right_child_polar_radian, action=:stroke)
+        Luxor.arc(Luxor.Point(0, 0), adjusted_radius, polar_radian,
+            right_child_polar_radian, action = :stroke)
         # draw vertical bar
         join_x = cos(right_child_polar_radian) * adjusted_radius
         join_y = sin(right_child_polar_radian) * adjusted_radius
-        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(join_x, join_y), action=:stroke)
+        Luxor.line(Luxor.Point(right_child_x, right_child_y), Luxor.Point(join_x, join_y), action = :stroke)
     end
 
     # Finish the drawing and save the file
     Luxor.finish()
     Luxor.preview()
 end
-
 
 # -----------------------------------------------------------------------------
 # Radial Dendrogram Visualization
@@ -1730,29 +1798,29 @@ function hclust_to_radial_tree(hclust::Clustering.Hclust)
     n = length(hclust.order)
     merges = hclust.merges
     heights = hclust.heights
-    
+
     nodes = Dict{Int, RadialNode}()
-    
+
     # Initialize leaves
     for i in 1:n
         nodes[-i] = RadialNode(nothing, nothing, 0.0, 0.0, i)
     end
-    
+
     # Build tree from merges
     root_node = nothing
     for i in 1:size(merges, 1)
         left_idx = merges[i, 1]
         right_idx = merges[i, 2]
         height = heights[i]
-        
+
         left_node = nodes[left_idx]
         right_node = nodes[right_idx]
-        
+
         parent_node = RadialNode(left_node, right_node, height, 0.0, -1)
         nodes[i] = parent_node
         root_node = parent_node
     end
-    
+
     return root_node
 end
 
@@ -1762,17 +1830,17 @@ end
 Recursively assign angular positions to nodes based on the number of leaves in their subtrees.
 """
 function assign_radial_angles!(
-    node::RadialNode,
-    leaf_order_map::Dict{Int, Int},
-    angle_map::Dict{Int, Float64},
-    start_angle::Float64,
-    end_angle::Float64
+        node::RadialNode,
+        leaf_order_map::Dict{Int, Int},
+        angle_map::Dict{Int, Float64},
+        start_angle::Float64,
+        end_angle::Float64
 )
     if isnothing(node.left) && isnothing(node.right)
         # It's a leaf
         leaf_pos = leaf_order_map[node.leaf_index]
         n_leaves = length(leaf_order_map)
-        
+
         # Calculate angle based on position in the optimal ordering
         # Using (leaf_pos - 1) / (n_leaves - 1) spreads leaves exactly from start to end
         angle_fraction = n_leaves > 1 ? (leaf_pos - 1) / (n_leaves - 1) : 0.5
@@ -1783,13 +1851,13 @@ function assign_radial_angles!(
         left_leaves = count_leaves(node.left)
         right_leaves = count_leaves(node.right)
         total_leaves = left_leaves + right_leaves
-        
+
         # Proportional split of the angular wedge
         mid_angle = start_angle + (left_leaves / total_leaves) * (end_angle - start_angle)
-        
+
         assign_radial_angles!(node.left, leaf_order_map, angle_map, start_angle, mid_angle)
         assign_radial_angles!(node.right, leaf_order_map, angle_map, mid_angle, end_angle)
-        
+
         # Parent angle is the midpoint of children angles
         node.angle = (node.left.angle + node.right.angle) / 2
     end
@@ -1812,27 +1880,27 @@ end
 Recursively plot the lines (arcs and radials) of the dendrogram.
 """
 function plot_radial_dendrogram_branches!(
-    ax,
-    node::RadialNode,
-    max_height::Float64,
-    inner_radius::Float64,
-    outer_radius::Float64;
-    line_color=(:black, 0.4),
-    linewidth=1.0
+        ax,
+        node::RadialNode,
+        max_height::Float64,
+        inner_radius::Float64,
+        outer_radius::Float64;
+        line_color = (:black, 0.4),
+        linewidth = 1.0
 )
     if isnothing(node.left) || isnothing(node.right)
         return
     end
-    
+
     # Calculate radius r based on height (inverted: root is at inner_radius, leaves at outer_radius is standard,
     # but dendrograms usually have root at center (0 height) or outside. 
     # Standard dendrogram: leaves are at height 0, root at max_height.
     # Here we map height 0 (leaves) to outer_radius, and max_height (root) to inner_radius.
-    
+
     # Normalize height: 0.0 (leaves) -> 1.0 (tips), max_height -> 0.0 (root)
     # Actually, hclust heights go from small (leaves merged) to large (root).
     # We want root at center (inner) and leaves at periphery (outer).
-    
+
     function get_r(h)
         # Linear interpolation
         # h=0 (leaves) => outer_radius
@@ -1843,57 +1911,62 @@ function plot_radial_dendrogram_branches!(
     parent_r = get_r(node.height)
     left_r = get_r(node.left.height)
     right_r = get_r(node.right.height)
-    
+
     # Polar to Cartesian
     px, py = parent_r .* (cos(node.angle), sin(node.angle))
     lx, ly = left_r .* (cos(node.left.angle), sin(node.left.angle))
     rx, ry = right_r .* (cos(node.right.angle), sin(node.right.angle))
-    
+
     # Draw arcs between children angles at parent radius
     # We need to draw the crossbar at the parent's radius spanning from left child angle to right child angle
-    
+
     theta_left = node.left.angle
     theta_right = node.right.angle
-    
+
     # Ensure we take the shortest path around circle? 
     # For dendrograms, we usually strictly follow the wedge.
     # Just ensure ordering for range
     if theta_left > theta_right
         theta_left, theta_right = theta_right, theta_left
     end
-    
+
     n_arc = max(2, Int(floor(50 * abs(theta_right - theta_left))))
-    arc_angles = range(theta_left, theta_right, length=n_arc)
-    
+    arc_angles = range(theta_left, theta_right, length = n_arc)
+
     arc_x = [parent_r * cos(a) for a in arc_angles]
     arc_y = [parent_r * sin(a) for a in arc_angles]
-    
+
     # Plot the "crossbar" arc
-    CairoMakie.lines!(ax, arc_x, arc_y, color=line_color, linewidth=linewidth)
-    
+    CairoMakie.lines!(ax, arc_x, arc_y, color = line_color, linewidth = linewidth)
+
     # Plot the "drops" to children
     # Line from left child's radius to parent's radius at left child's angle
     # Wait, standard dendrograms usually:
     # 1. Draw stems from children up to parent height.
     # 2. Draw crossbar at parent height.
-    
+
     # Stem for left child
     l_stem_start_x = left_r * cos(node.left.angle)
     l_stem_start_y = left_r * sin(node.left.angle)
     l_stem_end_x = parent_r * cos(node.left.angle)
     l_stem_end_y = parent_r * sin(node.left.angle)
-    CairoMakie.lines!(ax, [l_stem_start_x, l_stem_end_x], [l_stem_start_y, l_stem_end_y], color=line_color, linewidth=linewidth)
+    CairoMakie.lines!(ax, [l_stem_start_x, l_stem_end_x], [l_stem_start_y, l_stem_end_y],
+        color = line_color, linewidth = linewidth)
 
     # Stem for right child
     r_stem_start_x = right_r * cos(node.right.angle)
     r_stem_start_y = right_r * sin(node.right.angle)
     r_stem_end_x = parent_r * cos(node.right.angle)
     r_stem_end_y = parent_r * sin(node.right.angle)
-    CairoMakie.lines!(ax, [r_stem_start_x, r_stem_end_x], [r_stem_start_y, r_stem_end_y], color=line_color, linewidth=linewidth)
-    
+    CairoMakie.lines!(ax, [r_stem_start_x, r_stem_end_x], [r_stem_start_y, r_stem_end_y],
+        color = line_color, linewidth = linewidth)
+
     # Recurse
-    plot_radial_dendrogram_branches!(ax, node.left, max_height, inner_radius, outer_radius; line_color=line_color, linewidth=linewidth)
-    plot_radial_dendrogram_branches!(ax, node.right, max_height, inner_radius, outer_radius; line_color=line_color, linewidth=linewidth)
+    plot_radial_dendrogram_branches!(ax, node.left, max_height, inner_radius, outer_radius;
+        line_color = line_color, linewidth = linewidth)
+    plot_radial_dendrogram_branches!(
+        ax, node.right, max_height, inner_radius, outer_radius;
+        line_color = line_color, linewidth = linewidth)
 end
 
 """
@@ -1921,54 +1994,54 @@ Generate a generalized radial dendrogram with optional concentric annotation rin
 - `CairoMakie.Figure`
 """
 function plot_radial_dendrogram(
-    hclust::Clustering.Hclust;
-    rings::Vector = [], # Vector of NamedTuples/Dicts
-    title::String = "",
-    figure_size::Tuple{Int,Int} = (1000, 1000),
-    inner_radius::Float64 = 0.0, # Tree root
-    outer_radius::Float64 = 0.8, # Tree tips
-    ring_start_radius::Union{Float64, Nothing} = nothing,
-    ring_spacing::Float64 = 0.05,
-    line_color = (:black, 0.5),
-    line_width = 1.0,
-    legend_title = "Legend"
+        hclust::Clustering.Hclust;
+        rings::Vector = [], # Vector of NamedTuples/Dicts
+        title::String = "",
+        figure_size::Tuple{Int, Int} = (1000, 1000),
+        inner_radius::Float64 = 0.0, # Tree root
+        outer_radius::Float64 = 0.8, # Tree tips
+        ring_start_radius::Union{Float64, Nothing} = nothing,
+        ring_spacing::Float64 = 0.05,
+        line_color = (:black, 0.5),
+        line_width = 1.0,
+        legend_title = "Legend"
 )
     # 1. Build Radial Tree
     root = hclust_to_radial_tree(hclust)
     n_leaves = length(hclust.order)
-    
+
     # 2. Assign Angles (Optimized)
     # Map leaf index to its position in the sort order (1..N)
-    leaf_order_map = Dict{Int,Int}(idx => pos for (pos, idx) in enumerate(hclust.order))
+    leaf_order_map = Dict{Int, Int}(idx => pos for (pos, idx) in enumerate(hclust.order))
     angle_map = Dict{Int, Float64}()
-    
+
     start_angle = -π/2
     end_angle = start_angle + 2π
-    
+
     assign_radial_angles!(root, leaf_order_map, angle_map, start_angle, end_angle)
     max_height = maximum(hclust.heights)
 
     # 3. Setup Figure
-    fig = CairoMakie.Figure(size=figure_size)
-    ax = CairoMakie.Axis(fig[1, 1], aspect=CairoMakie.DataAspect(), title=title)
+    fig = CairoMakie.Figure(size = figure_size)
+    ax = CairoMakie.Axis(fig[1, 1], aspect = CairoMakie.DataAspect(), title = title)
     CairoMakie.hidedecorations!(ax)
     CairoMakie.hidespines!(ax)
 
     # 4. Plot Tree
     plot_radial_dendrogram_branches!(
-        ax, root, max_height, inner_radius, outer_radius; 
-        line_color=line_color, linewidth=line_width
+        ax, root, max_height, inner_radius, outer_radius;
+        line_color = line_color, linewidth = line_width
     )
 
     # 5. Plot Rings
     current_radius = isnothing(ring_start_radius) ? outer_radius + 0.02 : ring_start_radius
-    
+
     legend_entries = []
     legend_labels = []
-    
+
     # Default palettes
     default_colors = Mycelia.n_maximally_distinguishable_colors(max(length(rings), 3))
-    
+
     for (i, ring_data) in enumerate(rings)
         # normalize inputs to ensure fields exist
         indices = get(ring_data, :indices, Int[])
@@ -1976,12 +2049,12 @@ function plot_radial_dendrogram(
         color = get(ring_data, :color, default_colors[mod1(i, length(default_colors))])
         marker = get(ring_data, :marker, :circle)
         msize = get(ring_data, :size, 10.0)
-        
+
         xs = Float64[]
         ys = Float64[]
-        
+
         indices_set = Set(indices)
-        
+
         for leaf_idx in hclust.order
             if leaf_idx in indices_set
                 ang = angle_map[leaf_idx]
@@ -1989,15 +2062,18 @@ function plot_radial_dendrogram(
                 push!(ys, current_radius * sin(ang))
             end
         end
-        
+
         if !isempty(xs)
-            CairoMakie.scatter!(ax, xs, ys; color=color, marker=marker, markersize=msize, strokewidth=0.5, strokecolor=:black)
-            
+            CairoMakie.scatter!(ax, xs, ys; color = color, marker = marker,
+                markersize = msize, strokewidth = 0.5, strokecolor = :black)
+
             # Add to legend
-            push!(legend_entries, CairoMakie.MarkerElement(color=color, marker=marker, markersize=15, strokecolor=:black, strokewidth=0.5))
+            push!(legend_entries,
+                CairoMakie.MarkerElement(color = color, marker = marker, markersize = 15,
+                    strokecolor = :black, strokewidth = 0.5))
             push!(legend_labels, label)
         end
-        
+
         current_radius += ring_spacing
     end
 
@@ -2008,18 +2084,17 @@ function plot_radial_dendrogram(
             legend_entries,
             legend_labels,
             legend_title,
-            framevisible=true
+            framevisible = true
         )
     end
-    
+
     # Adjust limits to fit everything
     limit_radius = current_radius + 0.05
     CairoMakie.xlims!(ax, -limit_radius, limit_radius)
     CairoMakie.ylims!(ax, -limit_radius, limit_radius)
-    
+
     return fig
 end
-
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2138,7 +2213,7 @@ end
 #         fontsize = 14,
 #         figure_padding = (20, 80, 20, 20)  # left, right, bottom, top
 #     )
-    
+
 #     # Create axis with proper margins
 #     ax = CairoMakie.Axis(
 #         fig[1, 1],
@@ -2162,7 +2237,7 @@ end
 #     for r in find_true_ranges(is_3sigma_above; min_length=1000)
 #         CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
 #     end
-    
+
 #     is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
 #     for r in find_true_ranges(is_3sigma_below; min_length=1000)
 #         CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
@@ -2170,7 +2245,7 @@ end
 
 #     # Create rainbow color scheme
 #     color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-    
+
 #     # Plot main coverage line
 #     CairoMakie.lines!(ax, 
 #         equally_spaced_samples(cdf[!, "index"], 10_000), 
@@ -2191,7 +2266,7 @@ end
 #         (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
 #         (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
 #     ]
-    
+
 #     for (y_val, label, color) in threshold_lines
 #         CairoMakie.hlines!(ax, y_val, 
 #             color = color, 
@@ -2214,13 +2289,14 @@ end
 
 #     # Adjust layout to prevent label cutoff
 #     CairoMakie.resize_to_layout!(fig)
-    
+
 #     return fig
 # end
 
 function visualize_genome_coverage(path_to_coverage_table::AbstractString; kwargs...)
     return visualize_genome_coverage(
-        CSV.read(path_to_coverage_table, DataFrames.DataFrame, delim='\t', header=["chromosome", "index", "depth"]);
+        CSV.read(path_to_coverage_table, DataFrames.DataFrame,
+            delim = '\t', header = ["chromosome", "index", "depth"]);
         kwargs...
     )
 end
@@ -2243,17 +2319,18 @@ Creates a multi-panel visualization of genome coverage across chromosomes.
 Generates one subplot per chromosome, arranged vertically. Each subplot shows the coverage 
 distribution across genomic positions for that chromosome.
 """
-function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame; entity::Union{String, Nothing} = nothing)
+function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame;
+        entity::Union{String, Nothing} = nothing)
     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
     num_plots = length(chromosome_groups)
-    
+
     # Create main figure with appropriate size and spacing
     fig = CairoMakie.Figure(
         size = (1400, 400 * num_plots),
         fontsize = 12,
         figure_padding = (20, 40, 20, 20)  # left, right, bottom, top
     )
-    
+
     for (i, cdf) in enumerate(chromosome_groups)
         mean_coverage = Statistics.mean(cdf[!, "depth"])
         median_coverage = Statistics.median(cdf[!, "depth"])
@@ -2266,7 +2343,8 @@ function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame;
         # Create axis for this chromosome
         ax = CairoMakie.Axis(
             fig[i, 1],
-            limits = (extrema(cdf[!, "index"])..., 0, max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
+            limits = (extrema(cdf[!, "index"])..., 0,
+                max(maximum(cdf[!, "depth"]), mean_coverage + 3 * stddev_coverage) * 1.1),
             title = subplot_title,
             xlabel = i == num_plots ? "chromosome index" : "",  # Only show xlabel on bottom plot
             ylabel = "depth",
@@ -2285,24 +2363,24 @@ function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame;
 
         # Add highlighted regions for 3σ outliers
         is_3sigma_above = cdf[!, "depth"] .> mean_coverage + 3 * stddev_coverage
-        for r in find_true_ranges(is_3sigma_above; min_length=1000)
+        for r in find_true_ranges(is_3sigma_above; min_length = 1000)
             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 01.0))
             println("$(r[1]) - $(r[2]) > +3σ")
         end
-        
+
         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
-        for r in find_true_ranges(is_3sigma_below; min_length=1000)
+        for r in find_true_ranges(is_3sigma_below; min_length = 1000)
             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 1.0))
             println("$(r[1]) - $(r[2]) < -3σ")
         end
 
         # Create rainbow color scheme
         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-        
+
         # Plot main coverage line
-        CairoMakie.lines!(ax, 
-            equally_spaced_samples(cdf[!, "index"], 10_000), 
-            equally_spaced_samples(cdf[!, "depth"], 10_000), 
+        CairoMakie.lines!(ax,
+            equally_spaced_samples(cdf[!, "index"], 10_000),
+            equally_spaced_samples(cdf[!, "depth"], 10_000),
             color = :black,
             linewidth = 1.5,
             label = "coverage"
@@ -2319,10 +2397,10 @@ function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame;
             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
         ]
-        
+
         for (y_val, label, color) in threshold_lines
-            CairoMakie.hlines!(ax, y_val, 
-                color = color, 
+            CairoMakie.hlines!(ax, y_val,
+                color = color,
                 linewidth = 2,
                 linestyle = :dash,
                 label = label
@@ -2331,8 +2409,8 @@ function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame;
 
         # Create individual legend for this subplot
         CairoMakie.Legend(
-            fig[i, 2], 
-            ax, 
+            fig[i, 2],
+            ax,
             framevisible = true,
             backgroundcolor = (:white, 0.9),
             labelsize = 12,
@@ -2349,7 +2427,7 @@ function visualize_genome_coverage(coverage_table::DataFrames.AbstractDataFrame;
 
     # Adjust layout to prevent cutoff
     CairoMakie.resize_to_layout!(fig)
-    
+
     return fig
 end
 
@@ -2374,18 +2452,18 @@ end
 # function visualize_genome_coverage(coverage_table; entity::Union{String, Nothing} = nothing)
 #     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
 #     num_plots = length(chromosome_groups)
-    
+
 #     # Create main figure with appropriate size and spacing
 #     fig = CairoMakie.Figure(
 #         size = (1400, 400 * num_plots),
 #         fontsize = 12,
 #         figure_padding = (20, 40, 20, 20)  # left, right, bottom, top
 #     )
-    
+
 #     # Set column ratios - give much more space to plots than legends
 #     CairoMakie.colsize!(fig.layout, 1, CairoMakie.Relative(0.75))  # 75% for plots
 #     CairoMakie.colsize!(fig.layout, 2, CairoMakie.Relative(0.25))  # 25% for legends
-    
+
 #     for (i, cdf) in enumerate(chromosome_groups)
 #         mean_coverage = Statistics.mean(cdf[!, "depth"])
 #         median_coverage = Statistics.median(cdf[!, "depth"])
@@ -2418,7 +2496,7 @@ end
 #         for r in find_true_ranges(is_3sigma_above; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
 #         end
-        
+
 #         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
 #         for r in find_true_ranges(is_3sigma_below; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
@@ -2426,7 +2504,7 @@ end
 
 #         # Create rainbow color scheme
 #         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-        
+
 #         # Plot main coverage line
 #         CairoMakie.lines!(ax, 
 #             equally_spaced_samples(cdf[!, "index"], 10_000), 
@@ -2447,7 +2525,7 @@ end
 #             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
 #             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
 #         ]
-        
+
 #         for (y_val, label, color) in threshold_lines
 #             CairoMakie.hlines!(ax, y_val, 
 #                 color = color, 
@@ -2473,7 +2551,7 @@ end
 
 #     # Adjust layout to prevent cutoff
 #     CairoMakie.resize_to_layout!(fig)
-    
+
 #     return fig
 # end
 
@@ -2498,20 +2576,20 @@ end
 # function visualize_genome_coverage(coverage_table; entity::Union{String, Nothing} = nothing)
 #     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
 #     num_plots = length(chromosome_groups)
-    
+
 #     # Determine figure title
 #     fig_title = isnothing(entity) ? "Genome coverage" : "Genome coverage of $(entity)"
-    
+
 #     # Create main figure with appropriate size and spacing
 #     fig = CairoMakie.Figure(
 #         size = (1400, 400 * num_plots + 60),  # Extra space for main title
 #         fontsize = 12,
 #         figure_padding = (20, 120, 20, 40)  # left, right, bottom, top (increased top for title)
 #     )
-    
+
 #     # Add main figure title
 #     CairoMakie.Label(fig[0, :], fig_title, fontsize = 18, font = :bold)
-    
+
 #     for (i, cdf) in enumerate(chromosome_groups)
 #         mean_coverage = Statistics.mean(cdf[!, "depth"])
 #         median_coverage = Statistics.median(cdf[!, "depth"])
@@ -2540,7 +2618,7 @@ end
 #         for r in find_true_ranges(is_3sigma_above; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
 #         end
-        
+
 #         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
 #         for r in find_true_ranges(is_3sigma_below; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
@@ -2548,7 +2626,7 @@ end
 
 #         # Create rainbow color scheme
 #         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-        
+
 #         # Plot main coverage line
 #         CairoMakie.lines!(ax, 
 #             equally_spaced_samples(cdf[!, "index"], 10_000), 
@@ -2569,7 +2647,7 @@ end
 #             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
 #             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
 #         ]
-        
+
 #         for (y_val, label, color) in threshold_lines
 #             CairoMakie.hlines!(ax, y_val, 
 #                 color = color, 
@@ -2594,7 +2672,7 @@ end
 
 #     # Adjust layout to prevent cutoff
 #     CairoMakie.resize_to_layout!(fig)
-    
+
 #     return fig
 # end
 
@@ -2619,20 +2697,20 @@ end
 # function visualize_genome_coverage(coverage_table; entity::Union{String, Nothing} = nothing)
 #     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
 #     num_plots = length(chromosome_groups)
-    
+
 #     # Determine figure title
 #     fig_title = isnothing(entity) ? "Genome coverage" : "Genome coverage of $(entity)"
-    
+
 #     # Create main figure with appropriate size and spacing
 #     fig = CairoMakie.Figure(
 #         size = (1400, 400 * num_plots + 60),  # Extra space for main title
 #         fontsize = 12,
 #         figure_padding = (20, 120, 20, 40)  # left, right, bottom, top (increased top for title)
 #     )
-    
+
 #     # Add main figure title
 #     CairoMakie.Label(fig[0, :], fig_title, fontsize = 18, font = :bold)
-    
+
 #     for (i, cdf) in enumerate(chromosome_groups)
 #         mean_coverage = Statistics.mean(cdf[!, "depth"])
 #         median_coverage = Statistics.median(cdf[!, "depth"])
@@ -2661,7 +2739,7 @@ end
 #         for r in find_true_ranges(is_3sigma_above; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
 #         end
-        
+
 #         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
 #         for r in find_true_ranges(is_3sigma_below; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
@@ -2669,7 +2747,7 @@ end
 
 #         # Create rainbow color scheme
 #         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-        
+
 #         # Plot main coverage line
 #         CairoMakie.lines!(ax, 
 #             equally_spaced_samples(cdf[!, "index"], 10_000), 
@@ -2690,7 +2768,7 @@ end
 #             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
 #             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
 #         ]
-        
+
 #         for (y_val, label, color) in threshold_lines
 #             CairoMakie.hlines!(ax, y_val, 
 #                 color = color, 
@@ -2715,7 +2793,7 @@ end
 
 #     # Adjust layout to prevent cutoff
 #     CairoMakie.resize_to_layout!(fig)
-    
+
 #     return fig
 # end
 
@@ -2737,14 +2815,14 @@ end
 # function visualize_genome_coverage(coverage_table)
 #     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
 #     num_plots = length(chromosome_groups)
-    
+
 #     # Create main figure with appropriate size and spacing
 #     fig = CairoMakie.Figure(
 #         size = (1400, 400 * num_plots),
 #         fontsize = 12,
 #         figure_padding = (20, 120, 20, 20)  # left, right, bottom, top
 #     )
-    
+
 #     for (i, cdf) in enumerate(chromosome_groups)
 #         mean_coverage = Statistics.mean(cdf[!, "depth"])
 #         median_coverage = Statistics.median(cdf[!, "depth"])
@@ -2773,7 +2851,7 @@ end
 #         for r in find_true_ranges(is_3sigma_above; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
 #         end
-        
+
 #         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
 #         for r in find_true_ranges(is_3sigma_below; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
@@ -2781,7 +2859,7 @@ end
 
 #         # Create rainbow color scheme
 #         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-        
+
 #         # Plot main coverage line
 #         CairoMakie.lines!(ax, 
 #             equally_spaced_samples(cdf[!, "index"], 10_000), 
@@ -2802,7 +2880,7 @@ end
 #             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
 #             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
 #         ]
-        
+
 #         for (y_val, label, color) in threshold_lines
 #             CairoMakie.hlines!(ax, y_val, 
 #                 color = color, 
@@ -2827,7 +2905,7 @@ end
 
 #     # Adjust layout to prevent cutoff
 #     CairoMakie.resize_to_layout!(fig)
-    
+
 #     return fig
 # end
 
@@ -2849,17 +2927,17 @@ end
 # function visualize_genome_coverage(coverage_table)
 #     chromosome_groups = DataFrames.groupby(coverage_table, "chromosome")
 #     num_plots = length(chromosome_groups)
-    
+
 #     # Create main figure with appropriate size and spacing
 #     fig = CairoMakie.Figure(
 #         resolution = (1200, 400 * num_plots),
 #         fontsize = 12,
 #         figure_padding = (20, 100, 20, 20)  # left, right, bottom, top
 #     )
-    
+
 #     # Store all axes for shared legend
 #     all_axes = []
-    
+
 #     for (i, cdf) in enumerate(chromosome_groups)
 #         mean_coverage = Statistics.mean(cdf[!, "depth"])
 #         median_coverage = Statistics.median(cdf[!, "depth"])
@@ -2882,7 +2960,7 @@ end
 #             topspinevisible = false,
 #             rightspinevisible = false
 #         )
-        
+
 #         push!(all_axes, ax)
 
 #         # Add highlighted regions for 3σ outliers
@@ -2890,7 +2968,7 @@ end
 #         for r in find_true_ranges(is_3sigma_above; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.1))
 #         end
-        
+
 #         is_3sigma_below = cdf[!, "depth"] .< mean_coverage - 3 * stddev_coverage
 #         for r in find_true_ranges(is_3sigma_below; min_length=1000)
 #             CairoMakie.vspan!(ax, r[1], r[2], color = (:red, 0.33))
@@ -2898,7 +2976,7 @@ end
 
 #         # Create rainbow color scheme
 #         color_vec = CairoMakie.cgrad(:rainbow, 8, categorical = true)
-        
+
 #         # Plot main coverage line
 #         CairoMakie.lines!(ax, 
 #             equally_spaced_samples(cdf[!, "index"], 10_000), 
@@ -2919,7 +2997,7 @@ end
 #             (mean_coverage - 2 * stddev_coverage, "-2σ", color_vec[2]),
 #             (mean_coverage - 3 * stddev_coverage, "-3σ", color_vec[1])
 #         ]
-        
+
 #         for (y_val, label, color) in threshold_lines
 #             CairoMakie.hlines!(ax, y_val, 
 #                 color = color, 
@@ -2944,7 +3022,7 @@ end
 
 #     # Adjust layout to prevent cutoff
 #     CairoMakie.resize_to_layout!(fig)
-    
+
 #     return fig
 # end
 
@@ -3036,7 +3114,7 @@ function plot_optimal_cluster_assessment_results(clustering_results)
         within_cluster_sum_of_squares,
         ylabel = "within cluster sum of squares\n(lower is better)",
         xlabel = "n clusters",
-        legend=false
+        legend = false
     )
     StatsPlots.vline!(p1, [optimal_number_of_clusters])
     p2 = StatsPlots.plot(
@@ -3045,7 +3123,7 @@ function plot_optimal_cluster_assessment_results(clustering_results)
         ylabel = "silhouette scores\n(higher is better)",
         xlabel = "n clusters",
         title = "Optimal n clusters = $(optimal_number_of_clusters)",
-        legend=false
+        legend = false
     )
     StatsPlots.vline!(p2, [optimal_number_of_clusters])
     display(p2)
@@ -3090,16 +3168,16 @@ Creates a visualization of a kmer graph where nodes represent kmers and their si
 - Each node is labeled with its kmer sequence
 """
 function plot_graph(graph)
-    
-#     kmer_counts = MetaGraphsNext.get_prop(graph, :kmer_counts)
+
+    #     kmer_counts = MetaGraphsNext.get_prop(graph, :kmer_counts)
     kmers = [MetaGraphsNext.get_prop(graph, v, :kmer) for v in Graphs.vertices(graph)]
     counts = [MetaGraphsNext.get_prop(graph, v, :count) for v in Graphs.vertices(graph)]
     scale = 150
-    
+
     n = Graphs.nv(graph)
     p = GraphRecipes.graphplot(
         graph,
-#         markersize = 1/log2(n),
+        #         markersize = 1/log2(n),
         markersize = 1/2^2,
         size = (2 * scale * log(n), scale * log(n)),
         node_weights = counts,
@@ -3138,7 +3216,7 @@ function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
         xs = log_scale.(xs)
         ys = log_scale.(ys)
     end
-    
+
     p = StatsPlots.plot(
         xs,
         ys,
@@ -3146,9 +3224,11 @@ function plot_kmer_frequency_spectra(counts; log_scale = log2, kwargs...)
         ylims = (0, maximum(ys) + max(1, ceil(0.1 * maximum(ys)))),
         seriestype = :scatter,
         legend = false,
-        xlabel = isa(log_scale, Function) ? "$(log_scale)(observed frequency)" : "observed frequency",
-        ylabel = isa(log_scale, Function) ? "$(log_scale)(# of kmers)" : "observed frequency",
-        ;kwargs...
+        xlabel = isa(log_scale, Function) ? "$(log_scale)(observed frequency)" :
+                 "observed frequency",
+        ylabel = isa(log_scale, Function) ? "$(log_scale)(# of kmers)" :
+                 "observed frequency",
+        ; kwargs...
     )
     return p
 end
@@ -3182,10 +3262,9 @@ p = Mycelia.plot_per_base_quality("reads.fastq", max_position=100, sample_size=1
 - Red zone: Q<20 (low quality)
 - For large files, consider using sample_size to improve performance
 """
-function plot_per_base_quality(fastq_file::String; 
-                              max_position::Union{Int,Nothing}=nothing, 
-                              sample_size::Union{Int,Nothing}=nothing)
-    
+function plot_per_base_quality(fastq_file::String;
+        max_position::Union{Int, Nothing} = nothing,
+        sample_size::Union{Int, Nothing} = nothing)
     if !isfile(fastq_file)
         error("FASTQ file does not exist: $(fastq_file)")
     end
@@ -3196,23 +3275,24 @@ function plot_per_base_quality(fastq_file::String;
     max_read_length = 0
 
     reader = FASTX.FASTQ.Reader(open(fastq_file, "r"))
-    
+
     try
         for record in reader
             read_count += 1
-            
+
             # Sample reads if requested
             if sample_size !== nothing && read_count > sample_size
                 break
             end
-            
+
             quality_scores = FASTX.quality_scores(record)
             read_length = length(quality_scores)
             max_read_length = max(max_read_length, read_length)
-            
+
             # Apply position limit if specified
-            end_pos = max_position !== nothing ? min(max_position, read_length) : read_length
-            
+            end_pos = max_position !== nothing ? min(max_position, read_length) :
+                      read_length
+
             for (pos, qual) in enumerate(quality_scores[1:end_pos])
                 if !haskey(position_qualities, pos)
                     position_qualities[pos] = Int[]
@@ -3223,19 +3303,19 @@ function plot_per_base_quality(fastq_file::String;
     finally
         close(reader)
     end
-    
+
     if read_count == 0
         error("No reads found in FASTQ file: $(fastq_file)")
     end
-    
+
     # Determine plotting range
     max_pos_to_plot = max_position !== nothing ? max_position : max_read_length
     positions = 1:max_pos_to_plot
-    
+
     # Prepare data for boxplot
     plot_data = []
     plot_positions = []
-    
+
     for pos in positions
         if haskey(position_qualities, pos) && !isempty(position_qualities[pos])
             quals = position_qualities[pos]
@@ -3243,73 +3323,76 @@ function plot_per_base_quality(fastq_file::String;
             append!(plot_positions, fill(pos, length(quals)))
         end
     end
-    
+
     if isempty(plot_data)
         error("No quality data found for specified position range")
     end
-    
+
     # Create the boxplot
     p = StatsPlots.boxplot(
         plot_positions,
         plot_data,
-        xlabel="Position in Read",
-        ylabel="Quality Score (Phred)",
-        title="Per-Base Sequence Quality",
-        legend=false,
-        fillalpha=0.7,
-        linewidth=1.5,
-        outliers=false  # Don't show outliers to reduce clutter
+        xlabel = "Position in Read",
+        ylabel = "Quality Score (Phred)",
+        title = "Per-Base Sequence Quality",
+        legend = false,
+        fillalpha = 0.7,
+        linewidth = 1.5,
+        outliers = false  # Don't show outliers to reduce clutter
     )
-    
+
     # Add quality zone background colors
     max_qual = maximum(plot_data)
     min_qual = minimum(plot_data)
     y_range = max_qual - min_qual
-    
+
     # High quality zone (Q>=30) - green background
     if max_qual >= 30
-        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [30, 30], 
-                        fillrange=[max_qual+1, max_qual+1], 
-                        fillalpha=0.1, fillcolor=:green, 
-                        linealpha=0, label=nothing)
+        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [30, 30],
+            fillrange = [max_qual+1, max_qual+1],
+            fillalpha = 0.1, fillcolor = :green,
+            linealpha = 0, label = nothing)
     end
-    
+
     # Medium quality zone (Q20-29) - yellow background  
     if max_qual >= 20
         y_top = min(29, max_qual)
-        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [20, 20], 
-                        fillrange=[y_top, y_top], 
-                        fillalpha=0.1, fillcolor=:yellow, 
-                        linealpha=0, label=nothing)
+        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [20, 20],
+            fillrange = [y_top, y_top],
+            fillalpha = 0.1, fillcolor = :yellow,
+            linealpha = 0, label = nothing)
     end
-    
+
     # Low quality zone (Q<20) - red background
     if min_qual < 20
         y_top = min(19, max_qual)
-        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [min_qual-1, min_qual-1], 
-                        fillrange=[y_top, y_top], 
-                        fillalpha=0.1, fillcolor=:red, 
-                        linealpha=0, label=nothing)
+        StatsPlots.plot!(p, [0, max_pos_to_plot+1], [min_qual-1, min_qual-1],
+            fillrange = [y_top, y_top],
+            fillalpha = 0.1, fillcolor = :red,
+            linealpha = 0, label = nothing)
     end
-    
+
     # Add quality threshold lines
-    StatsPlots.hline!(p, [20], linestyle=:dash, color=:orange, linewidth=1, alpha=0.7, label=nothing)
-    StatsPlots.hline!(p, [30], linestyle=:dash, color=:green, linewidth=1, alpha=0.7, label=nothing)
-    
+    StatsPlots.hline!(p, [20], linestyle = :dash, color = :orange,
+        linewidth = 1, alpha = 0.7, label = nothing)
+    StatsPlots.hline!(p, [30], linestyle = :dash, color = :green,
+        linewidth = 1, alpha = 0.7, label = nothing)
+
     # Set reasonable axis limits
-    StatsPlots.plot!(p, 
-                    xlims=(0.5, max_pos_to_plot + 0.5),
-                    ylims=(max(0, min_qual - 2), max_qual + 2))
-    
+    StatsPlots.plot!(p,
+        xlims = (0.5, max_pos_to_plot + 0.5),
+        ylims = (max(0, min_qual - 2), max_qual + 2))
+
     # Add summary information
-    avg_qual_per_pos = [Statistics.mean(position_qualities[pos]) for pos in positions if haskey(position_qualities, pos)]
+    avg_qual_per_pos = [Statistics.mean(position_qualities[pos])
+                        for pos in positions if haskey(position_qualities, pos)]
     overall_avg_qual = Statistics.mean(avg_qual_per_pos)
-    
-    StatsPlots.annotate!(p, max_pos_to_plot * 0.7, max_qual * 0.95, 
-                        Plots.text("Avg Quality: $(round(overall_avg_qual, digits=1))", 10, :black))
-    StatsPlots.annotate!(p, max_pos_to_plot * 0.7, max_qual * 0.90, 
-                        Plots.text("Reads: $(read_count)", 10, :black))
-    
+
+    StatsPlots.annotate!(p, max_pos_to_plot * 0.7, max_qual * 0.95,
+        Plots.text("Avg Quality: $(round(overall_avg_qual, digits=1))", 10, :black))
+    StatsPlots.annotate!(p, max_pos_to_plot * 0.7, max_qual * 0.90,
+        Plots.text("Reads: $(read_count)", 10, :black))
+
     return p
 end
 
@@ -3347,186 +3430,196 @@ This visualization helps assess "saturation"—whether sampling more data yields
 - `figure_size`: Tuple (width, height).
 """
 function plot_diversity_saturation(
-    diversity_counts::Union{AbstractVector{<:Real}, AbstractVector{<:AbstractVector{<:Real}}};
-    # Data context
-    x_values::Union{Nothing, AbstractVector} = nothing,
-    labels::Union{Nothing, String, Vector{String}} = nothing,
-    # Segmentation / Waves
-    grouping_values::Union{Nothing, AbstractVector} = nothing,
-    grouping_colors::Union{Nothing, AbstractVector} = nothing,
-    # Reference Lines
-    reference_values::AbstractVector{<:Real} = Float64[],
-    reference_labels::AbstractVector{String} = String[],
-    reference_colors::Union{Nothing, AbstractVector} = nothing,
+        diversity_counts::Union{
+            AbstractVector{<:Real}, AbstractVector{<:AbstractVector{<:Real}}};
+        # Data context
+        x_values::Union{Nothing, AbstractVector} = nothing,
+        labels::Union{Nothing, String, Vector{String}} = nothing,
+        # Segmentation / Waves
+        grouping_values::Union{Nothing, AbstractVector} = nothing,
+        grouping_colors::Union{Nothing, AbstractVector} = nothing,
+        # Reference Lines
+        reference_values::AbstractVector{<:Real} = Float64[],
+        reference_labels::AbstractVector{String} = String[],
+        reference_colors::Union{Nothing, AbstractVector} = nothing,
 
-    # Styling
-    title::String = "Diversity Saturation Analysis",
-    xlabel::String = "Samples Processed",
-    ylabel::String = "Cumulative Unique Features",
-    figure_size::Tuple{Int, Int} = (1200, 700),
-    linewidth::Real = 3.0,
-    base_color = :blue # Default color if no grouping is used
-  )
-  # Normalize input to vector of vectors
-  series_list = eltype(diversity_counts) <: Real ? [diversity_counts] : diversity_counts
-  n_series = length(series_list)
-  # Normalize labels
-  series_labels = if isnothing(labels)
-      n_series == 1 ? ["Diversity"] : ["Series $i" for i in 1:n_series]
-  elseif labels isa String
-      [labels]
-  else
-      labels
-  end
+        # Styling
+        title::String = "Diversity Saturation Analysis",
+        xlabel::String = "Samples Processed",
+        ylabel::String = "Cumulative Unique Features",
+        figure_size::Tuple{Int, Int} = (1200, 700),
+        linewidth::Real = 3.0,
+        base_color = :blue # Default color if no grouping is used
+)
+    # Normalize input to vector of vectors
+    series_list = eltype(diversity_counts) <: Real ? [diversity_counts] : diversity_counts
+    n_series = length(series_list)
+    # Normalize labels
+    series_labels = if isnothing(labels)
+        n_series == 1 ? ["Diversity"] : ["Series $i" for i in 1:n_series]
+    elseif labels isa String
+        [labels]
+    else
+        labels
+    end
 
-  # Determine X values (assume all series share the same X if not specified, or match length)
-  # If x_values not provided, use 1:N of the first series
-  xs = isnothing(x_values) ? collect(1:length(series_list[1])) : x_values
+    # Determine X values (assume all series share the same X if not specified, or match length)
+    # If x_values not provided, use 1:N of the first series
+    xs = isnothing(x_values) ? collect(1:length(series_list[1])) : x_values
 
-  # Setup Colors
-  # Default wave colors: Progressive gradient from Drab/Gray (Wave 1) to Vivid Blue (Wave N)
-  # If user didn't provide colors, we generate them based on the number of unique groups
-  unique_groups = isnothing(grouping_values) ? [] : sort(unique(grouping_values))
-  n_groups = length(unique_groups)
+    # Setup Colors
+    # Default wave colors: Progressive gradient from Drab/Gray (Wave 1) to Vivid Blue (Wave N)
+    # If user didn't provide colors, we generate them based on the number of unique groups
+    unique_groups = isnothing(grouping_values) ? [] : sort(unique(grouping_values))
+    n_groups = length(unique_groups)
 
-  segment_palette = if !isnothing(grouping_colors)
-      grouping_colors
-  elseif n_groups > 0
-      # Generate a custom blue-ish gradient similar to the user's example
-      # Interpolate between Gray-Blue and Vivid Blue
-      c1 = Colors.RGB(0.65, 0.67, 0.70)
-      c2 = Colors.RGB(0.00, 0.30, 0.90)
-      Colors.range(c1, stop=c2, length=n_groups)
-  else
-      [base_color]
-  end
+    segment_palette = if !isnothing(grouping_colors)
+        grouping_colors
+    elseif n_groups > 0
+        # Generate a custom blue-ish gradient similar to the user's example
+        # Interpolate between Gray-Blue and Vivid Blue
+        c1 = Colors.RGB(0.65, 0.67, 0.70)
+        c2 = Colors.RGB(0.00, 0.30, 0.90)
+        Colors.range(c1, stop = c2, length = n_groups)
+    else
+        [base_color]
+    end
 
-  # Reference colors
-  ref_palette = isnothing(reference_colors) ? 
-      [Colors.RGB(0.4, 0.4, 0.4) for _ in 1:length(reference_values)] : 
-      reference_colors
+    # Reference colors
+    ref_palette = isnothing(reference_colors) ?
+                  [Colors.RGB(0.4, 0.4, 0.4) for _ in 1:length(reference_values)] :
+                  reference_colors
 
-  # --- Plotting ---
-  fig = CairoMakie.Figure(size = figure_size, fontsize = 14, backgroundcolor = :white)
+    # --- Plotting ---
+    fig = CairoMakie.Figure(size = figure_size, fontsize = 14, backgroundcolor = :white)
 
-  ax = CairoMakie.Axis(
-      fig[1, 1],
-      xlabel = xlabel,
-      ylabel = ylabel,
-      title = title,
-      titlesize = 18,
-      xlabelsize = 16,
-      ylabelsize = 16,
-      xticklabelsize = 12,
-      yticklabelsize = 12,
-      xgridvisible = false, # Turn OFF vertical grid lines (standard for saturation plots)
-      ygridvisible = true,
-      ygridcolor = Colors.RGB(0.9, 0.9, 0.9)
-  )
+    ax = CairoMakie.Axis(
+        fig[1, 1],
+        xlabel = xlabel,
+        ylabel = ylabel,
+        title = title,
+        titlesize = 18,
+        xlabelsize = 16,
+        ylabelsize = 16,
+        xticklabelsize = 12,
+        yticklabelsize = 12,
+        xgridvisible = false, # Turn OFF vertical grid lines (standard for saturation plots)
+        ygridvisible = true,
+        ygridcolor = Colors.RGB(0.9, 0.9, 0.9)
+    )
 
-  legend_elements = []
-  legend_entries = String[]
+    legend_elements = []
+    legend_entries = String[]
 
-  # 1. Plot Data Series
-  for (si, y_data) in enumerate(series_list)
-      current_x = xs[1:length(y_data)] # Handle if x is longer than y
-      
-      if !isnothing(grouping_values) && n_groups > 0
-          # --- Segmented Plotting ---
-          # We assume grouping_values corresponds to the X axis
-          
-          # Find transitions for vertical lines
-          transitions = Int[]
-          for i in 2:length(grouping_values)
-              if grouping_values[i] != grouping_values[i-1]
-                  push!(transitions, i)
-              end
-          end
-          
-          # Add vertical lines at transitions
-          if !isempty(transitions)
-              CairoMakie.vlines!(ax, current_x[transitions],
-                  color = Colors.RGB(0.5, 0.5, 0.5),
-                  linewidth = 1.5,
-                  linestyle = :dash
-              )
-          end
+    # 1. Plot Data Series
+    for (si, y_data) in enumerate(series_list)
+        current_x = xs[1:length(y_data)] # Handle if x is longer than y
 
-          # Plot segments
-          for (gi, group_val) in enumerate(unique_groups)
-              mask = grouping_values .== group_val
-              indices = findall(mask)
-              
-              if isempty(indices); continue; end
+        if !isnothing(grouping_values) && n_groups > 0
+            # --- Segmented Plotting ---
+            # We assume grouping_values corresponds to the X axis
 
-              # Extend segment to overlap with next for continuity (visual gap closing)
-              if maximum(indices) < length(current_x)
-                  # Only extend if the NEXT point exists in data
-                  push!(indices, maximum(indices) + 1)
-              end
-              
-              # Safety for color indexing
-              c_idx = mod1(gi, length(segment_palette))
-              color = segment_palette[c_idx]
-              
-              CairoMakie.lines!(ax, current_x[indices], y_data[indices],
-                  color = color,
-                  linewidth = linewidth
-              )
-              
-              # Add to legend only once (for the first series, if multiple)
-              if si == 1
-                  push!(legend_elements, CairoMakie.LineElement(color = color, linewidth = linewidth))
-                  push!(legend_entries, "Group: $group_val")
-              end
-          end
-      else
-          # --- Continuous Plotting ---
-          # If no grouping, just plot the line
-          color = n_series > 1 ? Mycelia.n_maximally_distinguishable_colors(n_series)[si] : segment_palette[1]
-          
-          CairoMakie.lines!(ax, current_x, y_data,
-              color = color,
-              linewidth = linewidth
-          )
-          
-          push!(legend_elements, CairoMakie.LineElement(color = color, linewidth = linewidth))
-          push!(legend_entries, series_labels[si])
-      end
-  end
+            # Find transitions for vertical lines
+            transitions = Int[]
+            for i in 2:length(grouping_values)
+                if grouping_values[i] != grouping_values[i - 1]
+                    push!(transitions, i)
+                end
+            end
 
-  # 2. Plot References
-  for (i, val) in enumerate(reference_values)
-      if i > length(reference_labels); break; end
-      
-      c = ref_palette[mod1(i, length(ref_palette))]
-      
-      CairoMakie.hlines!(ax, [val],
-          color = c,
-          linewidth = linewidth,
-          linestyle = :dashdot
-      )
-      
-      push!(legend_elements, CairoMakie.LineElement(color = c, linewidth = linewidth, linestyle = :dashdot))
-      push!(legend_entries, reference_labels[i])
-  end
+            # Add vertical lines at transitions
+            if !isempty(transitions)
+                CairoMakie.vlines!(ax, current_x[transitions],
+                    color = Colors.RGB(0.5, 0.5, 0.5),
+                    linewidth = 1.5,
+                    linestyle = :dash
+                )
+            end
 
-  # 3. Create Legend
-  if !isempty(legend_elements)
-      CairoMakie.Legend(
-          fig[1, 2],
-          legend_elements,
-          legend_entries,
-          framevisible = true,
-          framecolor = Colors.RGB(0.8, 0.8, 0.8),
-          backgroundcolor = Colors.RGB(0.98, 0.98, 0.98),
-          labelsize = 12,
-          rowgap = 5
-      )
-  end
+            # Plot segments
+            for (gi, group_val) in enumerate(unique_groups)
+                mask = grouping_values .== group_val
+                indices = findall(mask)
 
-  CairoMakie.resize_to_layout!(fig)
-  return fig
+                if isempty(indices)
+                    ;
+                    continue;
+                end
+
+                # Extend segment to overlap with next for continuity (visual gap closing)
+                if maximum(indices) < length(current_x)
+                    # Only extend if the NEXT point exists in data
+                    push!(indices, maximum(indices) + 1)
+                end
+
+                # Safety for color indexing
+                c_idx = mod1(gi, length(segment_palette))
+                color = segment_palette[c_idx]
+
+                CairoMakie.lines!(ax, current_x[indices], y_data[indices],
+                    color = color,
+                    linewidth = linewidth
+                )
+
+                # Add to legend only once (for the first series, if multiple)
+                if si == 1
+                    push!(legend_elements, CairoMakie.LineElement(color = color, linewidth = linewidth))
+                    push!(legend_entries, "Group: $group_val")
+                end
+            end
+        else
+            # --- Continuous Plotting ---
+            # If no grouping, just plot the line
+            color = n_series > 1 ?
+                    Mycelia.n_maximally_distinguishable_colors(n_series)[si] :
+                    segment_palette[1]
+
+            CairoMakie.lines!(ax, current_x, y_data,
+                color = color,
+                linewidth = linewidth
+            )
+
+            push!(legend_elements, CairoMakie.LineElement(color = color, linewidth = linewidth))
+            push!(legend_entries, series_labels[si])
+        end
+    end
+
+    # 2. Plot References
+    for (i, val) in enumerate(reference_values)
+        if i > length(reference_labels)
+            ;
+            break;
+        end
+
+        c = ref_palette[mod1(i, length(ref_palette))]
+
+        CairoMakie.hlines!(ax, [val],
+            color = c,
+            linewidth = linewidth,
+            linestyle = :dashdot
+        )
+
+        push!(legend_elements,
+            CairoMakie.LineElement(color = c, linewidth = linewidth, linestyle = :dashdot))
+        push!(legend_entries, reference_labels[i])
+    end
+
+    # 3. Create Legend
+    if !isempty(legend_elements)
+        CairoMakie.Legend(
+            fig[1, 2],
+            legend_elements,
+            legend_entries,
+            framevisible = true,
+            framecolor = Colors.RGB(0.8, 0.8, 0.8),
+            backgroundcolor = Colors.RGB(0.98, 0.98, 0.98),
+            labelsize = 12,
+            rowgap = 5
+        )
+    end
+
+    CairoMakie.resize_to_layout!(fig)
+    return fig
 end
 
 import CairoMakie
@@ -3552,8 +3645,9 @@ struct PointSeries
 end
 
 # Constructor with keywords
-PointSeries(idx, lbl, col; marker=:circle, size=10.0, z_order=1) = 
+function PointSeries(idx, lbl, col; marker = :circle, size = 10.0, z_order = 1)
     PointSeries(idx, lbl, col, marker, size, z_order)
+end
 
 """
     EllipseConfig(indices, label, color; anchor=:top, align=(:center, :bottom), offset=(0.0, 5.0))
@@ -3562,21 +3656,20 @@ Defines a target for drawing a confidence ellipse and its label.
 """
 struct EllipseConfig
     indices::Vector{Int}
-    label::String          
-    color::Any             
+    label::String
+    color::Any
     label_anchor::Symbol   # :top, :bottom, :left, :right
-    label_align::Tuple{Symbol, Symbol} 
+    label_align::Tuple{Symbol, Symbol}
     label_offset::Tuple{Float64, Float64}
 end
 
 # Constructor with keywords
-function EllipseConfig(indices, label, color; 
-                       anchor=:top, 
-                       align=(:center, :bottom), 
-                       offset=(0.0, 5.0))
+function EllipseConfig(indices, label, color;
+        anchor = :top,
+        align = (:center, :bottom),
+        offset = (0.0, 5.0))
     return EllipseConfig(indices, label, color, anchor, align, offset)
 end
-
 
 # --- Helper Functions ---
 
@@ -3586,47 +3679,46 @@ end
 Calculates the boundary points of a confidence ellipse for a set of 2D coordinates.
 Returns a vector of `CairoMakie.Point2f` and a dictionary of anchor points for labeling.
 """
-function get_ellipse_points(x_coords, y_coords; scale=3.5)
+function get_ellipse_points(x_coords, y_coords; scale = 3.5)
     # Need at least 3 points to define a covariance
     if length(x_coords) < 3
         return CairoMakie.Point2f[], Dict{Symbol, CairoMakie.Point2f}()
     end
-    
+
     # Calculate Covariance and Mean
     cov_matrix = Statistics.cov(hcat(x_coords, y_coords))
     mean_vec = [Statistics.mean(x_coords), Statistics.mean(y_coords)]
-    
+
     # Eigen decomposition for axis lengths and rotation
     eigen_decomp = LinearAlgebra.eigen(cov_matrix)
     vals, vecs = eigen_decomp.values, eigen_decomp.vectors
-    
+
     # Calculate angle and axis lengths
     angle = atan(vecs[2, 2], vecs[1, 2])
     major_axis = scale * sqrt(vals[2])
     minor_axis = scale * sqrt(vals[1])
-    
+
     # Generate parametric points
-    t = range(0, 2π, length=100)
+    t = range(0, 2π, length = 100)
     ellipse_x = major_axis .* cos.(t)
     ellipse_y = minor_axis .* sin.(t)
-    
+
     # Rotate and translate points
     rotated_x = ellipse_x .* cos(angle) .- ellipse_y .* sin(angle) .+ mean_vec[1]
     rotated_y = ellipse_x .* sin(angle) .+ ellipse_y .* cos(angle) .+ mean_vec[2]
-    
+
     points = [CairoMakie.Point2f(x, y) for (x, y) in zip(rotated_x, rotated_y)]
-    
+
     # Define anchors for text placement
     anchors = Dict(
-        :top    => points[argmax(rotated_y)],
+        :top => points[argmax(rotated_y)],
         :bottom => points[argmin(rotated_y)],
-        :left   => points[argmin(rotated_x)],
-        :right  => points[argmax(rotated_x)]
+        :left => points[argmin(rotated_x)],
+        :right => points[argmax(rotated_x)]
     )
-    
+
     return points, anchors
 end
-
 
 # --- Main Plotting Function ---
 
@@ -3648,37 +3740,37 @@ Separates data logic from drawing logic using `PointSeries` and `EllipseConfig`.
 - `layout_target`: Optional Makie layout location (e.g. `fig[1,1]`) for subplots.
 """
 function plot_generalized_pcoa(
-    x_all::AbstractVector, 
-    y_all::AbstractVector, 
-    series_list::Vector{PointSeries};
-    species_map::Dict = Dict(), # Index -> String
-    marker_map::AbstractDict = Dict(), # String -> Symbol
-    ellipses::Vector{EllipseConfig} = EllipseConfig[],
-    title::String = "Principal Coordinate Analysis",
-    xlabel::String = "PC1",
-    ylabel::String = "PC2",
-    output_file::String = "",
-    figure_size = (1000, 750),
-    layout_target = nothing
+        x_all::AbstractVector,
+        y_all::AbstractVector,
+        series_list::Vector{PointSeries};
+        species_map::Dict = Dict(), # Index -> String
+        marker_map::AbstractDict = Dict(), # String -> Symbol
+        ellipses::Vector{EllipseConfig} = EllipseConfig[],
+        title::String = "Principal Coordinate Analysis",
+        xlabel::String = "PC1",
+        ylabel::String = "PC2",
+        output_file::String = "",
+        figure_size = (1000, 750),
+        layout_target = nothing
 )
     # 1. Initialize Figure or Layout
     if isnothing(layout_target)
-        fig = CairoMakie.Figure(size=figure_size)
+        fig = CairoMakie.Figure(size = figure_size)
         ax = CairoMakie.Axis(
-            fig[1, 1], 
-            title=title, 
-            xlabel=xlabel, 
-            ylabel=ylabel,
-            titlesize=16, xlabelsize=14, ylabelsize=14
+            fig[1, 1],
+            title = title,
+            xlabel = xlabel,
+            ylabel = ylabel,
+            titlesize = 16, xlabelsize = 14, ylabelsize = 14
         )
         legend_layout = fig[1, 2] = CairoMakie.GridLayout()
     else
         # Subplot mode
         ax = CairoMakie.Axis(
-            layout_target, 
-            title=title, 
-            xlabel=xlabel, 
-            ylabel=ylabel
+            layout_target,
+            title = title,
+            xlabel = xlabel,
+            ylabel = ylabel
         )
         legend_layout = nothing # Legends handled externally or manually for subplots
     end
@@ -3690,7 +3782,7 @@ function plot_generalized_pcoa(
     plot_markers = Vector{Symbol}(fill(:circle, n))
     plot_sizes = Vector{Float64}(fill(6.0, n))
     plot_z_orders = Vector{Int}(fill(0, n))
-    
+
     # 3. Apply Series Configurations
     # Last series in the list takes precedence if indices overlap
     for series in series_list
@@ -3699,11 +3791,11 @@ function plot_generalized_pcoa(
                 plot_colors[idx] = series.color
                 plot_sizes[idx] = series.size
                 plot_z_orders[idx] = series.z_order
-                
+
                 # Assign marker:
                 # 1. Default to series marker
                 plot_markers[idx] = series.marker
-                
+
                 # 2. If species logic exists, override it
                 if !isempty(species_map) && haskey(species_map, idx)
                     sp = species_map[idx]
@@ -3718,7 +3810,7 @@ function plot_generalized_pcoa(
     # 4. Sort indices by z-order to ensure correct layering
     # Stable sort preserves order of series definition for equal z-orders
     draw_order = sortperm(plot_z_orders)
-    
+
     x_sorted = x_all[draw_order]
     y_sorted = y_all[draw_order]
     c_sorted = plot_colors[draw_order]
@@ -3727,41 +3819,43 @@ function plot_generalized_pcoa(
 
     # 5. Draw the Scatter Plot
     CairoMakie.scatter!(
-        ax, 
-        x_sorted, 
-        y_sorted, 
-        color=c_sorted, 
-        marker=m_sorted, 
-        markersize=s_sorted, 
-        strokewidth=0.5,
-        strokecolor=:black
+        ax,
+        x_sorted,
+        y_sorted,
+        color = c_sorted,
+        marker = m_sorted,
+        markersize = s_sorted,
+        strokewidth = 0.5,
+        strokecolor = :black
     )
 
     # 6. Draw Ellipses and Labels
     for ell in ellipses
         # Filter indices that exist in the current dataset
         valid_indices = filter(i -> 1 <= i <= n, ell.indices)
-        if isempty(valid_indices) continue end
-        
+        if isempty(valid_indices)
+            continue
+        end
+
         ex = x_all[valid_indices]
         ey = y_all[valid_indices]
-        
+
         pts, anchors = get_ellipse_points(ex, ey)
-        
+
         if !isempty(pts)
             # Draw ellipse outline
             CairoMakie.poly!(
-                ax, 
-                pts, 
-                color=:transparent, 
-                strokecolor=ell.color, 
-                strokewidth=1.5
+                ax,
+                pts,
+                color = :transparent,
+                strokecolor = ell.color,
+                strokewidth = 1.5
             )
-            
+
             # Draw label if anchor exists
             if haskey(anchors, ell.label_anchor)
                 CairoMakie.text!(
-                    ax, 
+                    ax,
                     ell.label,
                     position = anchors[ell.label_anchor],
                     fontsize = 14,
@@ -3777,48 +3871,46 @@ function plot_generalized_pcoa(
     # 7. Set Axis Limits with Padding
     x_span = maximum(x_sorted) - minimum(x_sorted)
     y_span = maximum(y_sorted) - minimum(y_sorted)
-    
+
     CairoMakie.xlims!(ax, minimum(x_sorted) - x_span*0.1, maximum(x_sorted) + x_span*0.1)
     CairoMakie.ylims!(ax, minimum(y_sorted) - y_span*0.1, maximum(y_sorted) + y_span*0.1)
 
     # 8. Generate Legends (Only if not in subplot mode)
     if !isnothing(legend_layout)
         # -- Source/Group Legend --
-        group_elements = [
-            CairoMakie.MarkerElement(color=s.color, marker=:circle, markersize=10, strokewidth=0.5, strokecolor=:black) 
-            for s in series_list
-        ]
+        group_elements = [CairoMakie.MarkerElement(
+                              color = s.color, marker = :circle, markersize = 10,
+                              strokewidth = 0.5, strokecolor = :black)
+                          for s in series_list]
         group_labels = [s.label for s in series_list]
-        
+
         CairoMakie.Legend(
-            legend_layout[1, 1], 
-            group_elements, 
-            group_labels, 
-            "Source", 
-            halign=:left, valign=:top, framevisible=false
+            legend_layout[1, 1],
+            group_elements,
+            group_labels,
+            "Source",
+            halign = :left, valign = :top, framevisible = false
         )
-        
+
         # -- Species/Shape Legend (if used) --
         if !isempty(marker_map)
             # Create a sorted list of species for consistent legend order
             sorted_species = sort(collect(keys(marker_map)))
-            
-            shape_elements = [
-                CairoMakie.MarkerElement(color=:black, marker=marker_map[s], markersize=10) 
-                for s in sorted_species
-            ]
+
+            shape_elements = [CairoMakie.MarkerElement(color = :black, marker = marker_map[s], markersize = 10)
+                              for s in sorted_species]
             # Helper to abbreviate Genus
             abbrev_labels = [replace(s, r"^(\w)\w+\s" => s"\1. ") for s in sorted_species]
-            
+
             CairoMakie.Legend(
-                legend_layout[2, 1], 
-                shape_elements, 
-                abbrev_labels, 
-                "Species", 
-                halign=:left, valign=:top, framevisible=false
+                legend_layout[2, 1],
+                shape_elements,
+                abbrev_labels,
+                "Species",
+                halign = :left, valign = :top, framevisible = false
             )
         end
-        
+
         if !isempty(marker_map)
             CairoMakie.rowgap!(legend_layout, 1, 20)
         end
@@ -3853,29 +3945,30 @@ function hclust_to_tree(hclust::Clustering.Hclust)
     n = length(hclust.order)
     merges = hclust.merges
     heights = hclust.heights
-    
+
     nodes = Dict{Int, ClusterNode}()
-    
+
     for i in 1:n
         nodes[-i] = ClusterNode(nothing, nothing, 0.0, 0.0, i)
     end
-    
+
     for i in 1:size(merges, 1)
         left_idx = merges[i, 1]
         right_idx = merges[i, 2]
         height = heights[i]
-        
+
         left_node = nodes[left_idx]
         right_node = nodes[right_idx]
-        
+
         parent_node = ClusterNode(left_node, right_node, height, 0.0, -1)
         nodes[i] = parent_node
     end
-    
+
     return nodes[size(merges, 1)]
 end
 
-function assign_x_coordinates!(node::ClusterNode, order::Vector{Int}, position_map::Dict{Int, Float64})
+function assign_x_coordinates!(node::ClusterNode, order::Vector{Int}, position_map::Dict{
+        Int, Float64})
     if isnothing(node.left) && isnothing(node.right)
         # It's a leaf
         leaf_pos = findfirst(==(node.leaf_index), order)
@@ -3892,63 +3985,71 @@ function plot_dendrogram!(ax, node::ClusterNode, scale_func::Function, orientati
     if isnothing(node.left) || isnothing(node.right)
         return
     end
-    
+
     parent_h = scale_func(node.height)
     left_h = scale_func(node.left.height)
     right_h = scale_func(node.right.height)
-    
+
     if orientation == :vertical
         # Standard dendrogram (top/bottom)
         # Vertical lines
-        CairoMakie.lines!(ax, [node.left.x, node.left.x], [left_h, parent_h], color=:black, linewidth=1)
-        CairoMakie.lines!(ax, [node.right.x, node.right.x], [right_h, parent_h], color=:black, linewidth=1)
+        CairoMakie.lines!(ax, [node.left.x, node.left.x],
+            [left_h, parent_h], color = :black, linewidth = 1)
+        CairoMakie.lines!(ax, [node.right.x, node.right.x],
+            [right_h, parent_h], color = :black, linewidth = 1)
         # Horizontal bar
-        CairoMakie.lines!(ax, [node.left.x, node.right.x], [parent_h, parent_h], color=:black, linewidth=1)
+        CairoMakie.lines!(ax, [node.left.x, node.right.x],
+            [parent_h, parent_h], color = :black, linewidth = 1)
     else
         # Horizontal dendrogram (left/right)
         # Horizontal lines (height is x-axis now)
-        CairoMakie.lines!(ax, [left_h, parent_h], [node.left.x, node.left.x], color=:black, linewidth=1)
-        CairoMakie.lines!(ax, [right_h, parent_h], [node.right.x, node.right.x], color=:black, linewidth=1)
+        CairoMakie.lines!(ax, [left_h, parent_h], [node.left.x, node.left.x],
+            color = :black, linewidth = 1)
+        CairoMakie.lines!(ax, [right_h, parent_h], [node.right.x, node.right.x],
+            color = :black, linewidth = 1)
         # Vertical bar
-        CairoMakie.lines!(ax, [parent_h, parent_h], [node.left.x, node.right.x], color=:black, linewidth=1)
+        CairoMakie.lines!(ax, [parent_h, parent_h], [node.left.x, node.right.x],
+            color = :black, linewidth = 1)
     end
-    
+
     plot_dendrogram!(ax, node.left, scale_func, orientation)
     plot_dendrogram!(ax, node.right, scale_func, orientation)
 end
 
-function plot_dendrogram_from_hclust!(ax, hclust::Clustering.Hclust; 
-                                      scale_func=sqrt, 
-                                      orientation=:vertical, 
-                                      cut_height=nothing)
+function plot_dendrogram_from_hclust!(ax, hclust::Clustering.Hclust;
+        scale_func = sqrt,
+        orientation = :vertical,
+        cut_height = nothing)
     root = hclust_to_tree(hclust)
     position_map = Dict{Int, Float64}()
     assign_x_coordinates!(root, hclust.order, position_map)
-    
+
     # Ensure min height isn't negative for log scales or sqrt
     min_h = minimum(hclust.heights)
     offset = max(0.001, min_h * 0.1)
     safe_scale(h) = scale_func(h + offset)
-    
+
     plot_dendrogram!(ax, root, safe_scale, orientation)
-    
+
     n = length(hclust.order)
-    
+
     # Set axis limits
     if orientation == :vertical
         CairoMakie.xlims!(ax, 0.5, n + 0.5)
         if !isnothing(cut_height)
-            CairoMakie.hlines!(ax, [safe_scale(cut_height)], color=:red, linestyle=:dash, linewidth=2)
+            CairoMakie.hlines!(ax, [safe_scale(cut_height)], color = :red,
+                linestyle = :dash, linewidth = 2)
         end
     else
         CairoMakie.ylims!(ax, 0.5, n + 0.5)
         CairoMakie.hidedecorations!(ax) # Usually hide axis for side dendrogram
         CairoMakie.xlims!(ax, nothing, nothing) # Let autoscaling handle height width
         if !isnothing(cut_height)
-            CairoMakie.vlines!(ax, [safe_scale(cut_height)], color=:red, linestyle=:dash, linewidth=2)
+            CairoMakie.vlines!(ax, [safe_scale(cut_height)], color = :red,
+                linestyle = :dash, linewidth = 2)
         end
     end
-    
+
     return ax
 end
 
@@ -3996,31 +4097,33 @@ Supports "collapsed" clusters where the heatmap cells represent groups of leaves
   - `:global`: Max value in entire matrix.
 """
 function visualize_hierarchical_heatmap(
-    data_matrix::AbstractMatrix;
-    
-    # X-axis (Columns) config
-    x_labels::Union{Nothing, Vector{String}} = nothing,
-    x_hclust::Union{Nothing, Clustering.Hclust} = nothing,
-    x_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
-    
-    # Y-axis (Rows) config
-    y_labels::Union{Nothing, Vector{String}} = nothing,
-    y_hclust::Union{Nothing, Clustering.Hclust} = nothing,
-    y_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
-    
-    # Options
-    color_normalization::Symbol = :row,
-    dendrogram_scale_func::Function = sqrt,
-    color_func::Function = (val, max_val) -> CairoMakie.RGBAf(0.0, 0.0, 1.0, 0.2 + 0.8 * (val / max(1e-10, max_val))),
-    cut_height_x::Union{Nothing, Real} = nothing,
-    cut_height_y::Union{Nothing, Real} = nothing,
-    
-    title::String = "",
-    show_values::Bool = true,
-    figure_size::Tuple{Int, Int} = (1600, 1000)
+        data_matrix::AbstractMatrix;
+
+        # X-axis (Columns) config
+        x_labels::Union{Nothing, Vector{String}} = nothing,
+        x_hclust::Union{Nothing, Clustering.Hclust} = nothing,
+        x_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
+
+        # Y-axis (Rows) config
+        y_labels::Union{Nothing, Vector{String}} = nothing,
+        y_hclust::Union{Nothing, Clustering.Hclust} = nothing,
+        y_cluster_assignments::Union{Nothing, Vector{Int}} = nothing,
+
+        # Options
+        color_normalization::Symbol = :row,
+        dendrogram_scale_func::Function = sqrt,
+        color_func::Function = (val,
+            max_val) -> CairoMakie.RGBAf(0.0, 0.0, 1.0, 0.2 +
+                                                        0.8 * (val / max(1e-10, max_val))),
+        cut_height_x::Union{Nothing, Real} = nothing,
+        cut_height_y::Union{Nothing, Real} = nothing,
+
+        title::String = "",
+        show_values::Bool = true,
+        figure_size::Tuple{Int, Int} = (1600, 1000)
 )
     # --- 1. Compute Layout Geometries ---
-    
+
     # Helper to calculate cell positions and sizes based on trees/clusters
     function calculate_axis_geometry(n_items, hclust, assignments)
         if isnothing(hclust)
@@ -4041,26 +4144,26 @@ function visualize_hierarchical_heatmap(
                 # Collapsing: Clusters have variable widths
                 # Identify unique clusters in tree order
                 tree_ordered_assignments = assignments[hclust.order]
-                
+
                 # We assume the data_matrix is ordered such that column j corresponds to 
                 # the j-th unique cluster encountered when traversing the tree leaves.
                 # If your data_matrix is ordered differently, you must reorder it before calling this.
                 unique_clusters_ordered = unique(tree_ordered_assignments)
-                
+
                 centers = Float64[]
                 widths = Float64[]
-                
+
                 # Calculate span for each cluster
                 for cluster_id in unique_clusters_ordered
                     # Find indices in the *ordered* list
                     indices = findall(==(cluster_id), tree_ordered_assignments)
                     min_pos = minimum(indices)
                     max_pos = maximum(indices)
-                    
+
                     push!(centers, (min_pos + max_pos) / 2.0)
                     push!(widths, max_pos - min_pos + 1.0)
                 end
-                
+
                 ordering = 1:length(unique_clusters_ordered) # 1..N_Clusters
                 total_span = length(hclust.order)
             end
@@ -4069,32 +4172,34 @@ function visualize_hierarchical_heatmap(
     end
 
     n_rows, n_cols = size(data_matrix)
-    
+
     # Calculate X geometries
-    x_centers, x_widths, x_ordering, x_span = calculate_axis_geometry(
+    x_centers, x_widths,
+    x_ordering, x_span = calculate_axis_geometry(
         n_cols, x_hclust, x_cluster_assignments
     )
-    
+
     # Calculate Y geometries
-    y_centers, y_widths, y_ordering, y_span = calculate_axis_geometry(
+    y_centers, y_widths,
+    y_ordering, y_span = calculate_axis_geometry(
         n_rows, y_hclust, y_cluster_assignments
     )
-    
+
     # --- 2. Setup Figure and Layout ---
-    
+
     fig = CairoMakie.Figure(size = figure_size)
-    
+
     # Layout definition
     # Col 1: Y-Dendrogram (optional)
     # Col 2: Heatmap
     # Col 3: Legend
     # Row 1: X-Dendrogram (optional)
     # Row 2: Heatmap
-    
+
     hm_row, hm_col = 2, 2
-    
+
     # --- 3. Draw Heatmap ---
-    
+
     ax_hm = CairoMakie.Axis(
         fig[hm_row, hm_col],
         title = isnothing(x_hclust) && isnothing(y_hclust) ? title : "",
@@ -4103,42 +4208,42 @@ function visualize_hierarchical_heatmap(
         xgridvisible = false,
         ygridvisible = false
     )
-    
+
     # Apply labels if provided
     if !isnothing(x_labels)
         ax_hm.xticks = (x_centers, x_labels)
     end
-    
+
     if !isnothing(y_labels)
         ax_hm.yticks = (y_centers, y_labels)
     end
-    
+
     # Set limits based on the total span of the trees (or count)
     CairoMakie.xlims!(ax_hm, 0.5, x_span + 0.5)
     CairoMakie.ylims!(ax_hm, 0.5, y_span + 0.5)
-    
+
     # Draw Cells
     global_max = maximum(data_matrix)
-    
+
     for r_idx in 1:n_rows
         # Get visual Y coordinates
         y_c = y_centers[r_idx]
         y_w = y_widths[r_idx]
         y_min = y_c - y_w/2
         y_max = y_c + y_w/2
-        
+
         # Calculate normalization factor for this row
         row_max = maximum(data_matrix[r_idx, :])
-        
+
         for c_idx in 1:n_cols
             # Get visual X coordinates
             x_c = x_centers[c_idx]
             x_w = x_widths[c_idx]
             x_min = x_c - x_w/2
             x_max = x_c + x_w/2
-            
+
             val = data_matrix[r_idx, c_idx]
-            
+
             # Determine max for normalization
             norm_max = if color_normalization == :row
                 row_max
@@ -4147,10 +4252,10 @@ function visualize_hierarchical_heatmap(
             else
                 global_max
             end
-            
+
             if val > 0
                 color = color_func(val, norm_max)
-                
+
                 CairoMakie.poly!(ax_hm,
                     CairoMakie.Point2f[
                         (x_min, y_min), (x_max, y_min),
@@ -4160,13 +4265,13 @@ function visualize_hierarchical_heatmap(
                     strokecolor = :black,
                     strokewidth = 0.5
                 )
-                
+
                 if show_values
                     # Contrast text color check
                     text_color = val > (norm_max * 0.5) ? :white : :black
-                    CairoMakie.text!(ax_hm, x_c, y_c, 
-                        text = string(val), 
-                        align = (:center, :center), 
+                    CairoMakie.text!(ax_hm, x_c, y_c,
+                        text = string(val),
+                        align = (:center, :center),
                         color = text_color,
                         fontsize = 12
                     )
@@ -4174,7 +4279,7 @@ function visualize_hierarchical_heatmap(
             end
         end
     end
-    
+
     # --- 4. Draw X-Axis Dendrogram (Top) ---
     if !isnothing(x_hclust)
         ax_dendro_x = CairoMakie.Axis(
@@ -4188,19 +4293,19 @@ function visualize_hierarchical_heatmap(
             xticksvisible = false,
             bottomspinevisible = false
         )
-        
+
         plot_dendrogram_from_hclust!(
-            ax_dendro_x, x_hclust, 
-            scale_func=dendrogram_scale_func, 
-            orientation=:vertical,
-            cut_height=cut_height_x
+            ax_dendro_x, x_hclust,
+            scale_func = dendrogram_scale_func,
+            orientation = :vertical,
+            cut_height = cut_height_x
         )
-        
+
         # Link X axis
         CairoMakie.linkxaxes!(ax_hm, ax_dendro_x)
         CairoMakie.rowsize!(fig.layout, hm_row - 1, CairoMakie.Relative(0.2))
     end
-    
+
     # --- 5. Draw Y-Axis Dendrogram (Left) ---
     if !isnothing(y_hclust)
         ax_dendro_y = CairoMakie.Axis(
@@ -4212,37 +4317,35 @@ function visualize_hierarchical_heatmap(
             yticksvisible = false,
             rightspinevisible = false
         )
-        
+
         plot_dendrogram_from_hclust!(
-            ax_dendro_y, y_hclust, 
-            scale_func=dendrogram_scale_func, 
-            orientation=:horizontal,
-            cut_height=cut_height_y
+            ax_dendro_y, y_hclust,
+            scale_func = dendrogram_scale_func,
+            orientation = :horizontal,
+            cut_height = cut_height_y
         )
-        
+
         # Invert X axis for the side dendrogram so root is left/top depending on preference?
         # Usually roots are far away from the map.
-        CairoMakie.xreverse!(ax_dendro_y) 
-        
+        CairoMakie.xreverse!(ax_dendro_y)
+
         # Link Y axis
         CairoMakie.linkyaxes!(ax_hm, ax_dendro_y)
         CairoMakie.colsize!(fig.layout, hm_col - 1, CairoMakie.Relative(0.15))
     end
-    
+
     # --- 6. Legend ---
     # Construct a representative legend based on the normalization
     legend_labels = ["20%", "40%", "60%", "80%", "100%"]
     legend_vals = [0.2, 0.4, 0.6, 0.8, 1.0]
-    
+
     # Dummy max for legend generation
     dummy_max = 100.0
-    legend_elements = [
-        CairoMakie.PolyElement(
-            color = color_func(v * dummy_max, dummy_max), 
-            strokecolor = :black
-        ) for v in legend_vals
-    ]
-    
+    legend_elements = [CairoMakie.PolyElement(
+                           color = color_func(v * dummy_max, dummy_max),
+                           strokecolor = :black
+                       ) for v in legend_vals]
+
     legend_title = if color_normalization == :row
         "Relative Proportion\n(within row)"
     elseif color_normalization == :col
@@ -4250,7 +4353,7 @@ function visualize_hierarchical_heatmap(
     else
         "Relative Proportion\n(global)"
     end
-    
+
     CairoMakie.Legend(
         fig[hm_row, hm_col + 1],
         legend_elements,
@@ -4398,7 +4501,7 @@ Base.@kwdef struct MicrobiomePlotConfig
 
     # Ordering
     sample_ordering::AxisOrdering = AxisOrdering()
-    taxa_ordering::AxisOrdering = AxisOrdering(method=:sort, sort_by=:mean_abundance)
+    taxa_ordering::AxisOrdering = AxisOrdering(method = :sort, sort_by = :mean_abundance)
 
     # Dendrogram options
     show_sample_dendrogram::Bool = false
@@ -4415,6 +4518,7 @@ Base.@kwdef struct MicrobiomePlotConfig
     large_dataset_view::Symbol = :auto
     samples_per_page::Int = 150
     heatmap_threshold::Int = 300
+    heatmap_max_labels::Union{Int, Nothing} = nothing  # nothing = show all labels
 
     # Output
     output_formats::Vector{Symbol} = [:png, :svg]
@@ -4444,7 +4548,7 @@ adaptive_label_fontsize(275)  # Returns 9.0 (midpoint)
 adaptive_label_fontsize(600)  # Returns 6.0 (min)
 ```
 """
-function adaptive_label_fontsize(n_samples::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+function adaptive_label_fontsize(n_samples::Int; config::MicrobiomePlotConfig = MicrobiomePlotConfig())
     if n_samples <= 50
         return config.max_label_fontsize
     elseif n_samples >= 500
@@ -4452,7 +4556,8 @@ function adaptive_label_fontsize(n_samples::Int; config::MicrobiomePlotConfig=Mi
     else
         # Linear interpolation
         ratio = (n_samples - 50) / (500 - 50)
-        return config.max_label_fontsize - ratio * (config.max_label_fontsize - config.min_label_fontsize)
+        return config.max_label_fontsize -
+               ratio * (config.max_label_fontsize - config.min_label_fontsize)
     end
 end
 
@@ -4486,7 +4591,8 @@ calculate_figure_size(200, 25)  # (1600, 2400) portrait
 calculate_figure_size(500, 30)  # (1600, 4000) portrait
 ```
 """
-function calculate_figure_size(n_samples::Int, n_taxa::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+function calculate_figure_size(
+        n_samples::Int, n_taxa::Int; config::MicrobiomePlotConfig = MicrobiomePlotConfig())
     orientation = config.orientation
     if orientation == :auto
         orientation = n_samples > 100 ? :portrait : :landscape
@@ -4541,11 +4647,13 @@ ordered = AxisOrdering(method=:preordered, preordered_labels=["B", "A", "C"])
 indices, _ = compute_axis_ordering(matrix, labels, ordering=ordered)
 ```
 """
-function compute_axis_ordering(data_matrix::Matrix, labels::Vector{String}; ordering::AxisOrdering=AxisOrdering())
+function compute_axis_ordering(data_matrix::Matrix, labels::Vector{String};
+        ordering::AxisOrdering = AxisOrdering())
     if ordering.method == :preordered && !isnothing(ordering.preordered_labels)
         # Use provided order
         label_to_idx = Dict(l => i for (i, l) in enumerate(labels))
-        ordered_indices = [label_to_idx[l] for l in ordering.preordered_labels if haskey(label_to_idx, l)]
+        ordered_indices = [label_to_idx[l]
+                           for l in ordering.preordered_labels if haskey(label_to_idx, l)]
         return (ordered_indices, nothing)
 
     elseif ordering.method == :alphabetical
@@ -4556,12 +4664,12 @@ function compute_axis_ordering(data_matrix::Matrix, labels::Vector{String}; orde
         # Sort by computed values (e.g., mean abundance)
         if ordering.sort_by isa Symbol
             # Default: mean across rows
-            values = vec(Statistics.mean(data_matrix, dims=2))
+            values = vec(Statistics.mean(data_matrix, dims = 2))
         else
             # Custom function
             values = [ordering.sort_by(row) for row in eachrow(data_matrix)]
         end
-        perm = sortperm(values, rev=true)
+        perm = sortperm(values, rev = true)
         return (perm, nothing)
 
     else  # :hclust (default)
@@ -4574,7 +4682,7 @@ function compute_axis_ordering(data_matrix::Matrix, labels::Vector{String}; orde
         end
 
         # Compute pairwise distance matrix
-        dist_matrix = Distances.pairwise(dist_func, data_matrix, dims=1)
+        dist_matrix = Distances.pairwise(dist_func, data_matrix, dims = 1)
 
         # Handle NaN/Inf values that can occur with zero vectors
         dist_matrix = replace(dist_matrix, NaN => 0.0, Inf => 1.0)
@@ -4590,7 +4698,7 @@ function compute_axis_ordering(data_matrix::Matrix, labels::Vector{String}; orde
             :average
         end
 
-        hcl = Clustering.hclust(dist_matrix, linkage=linkage_method)
+        hcl = Clustering.hclust(dist_matrix, linkage = linkage_method)
         return (hcl.order, hcl)
     end
 end
@@ -4621,7 +4729,7 @@ determine_view_types(200)  # [:barplot, :heatmap]
 determine_view_types(500)  # [:heatmap, :paginated]
 ```
 """
-function determine_view_types(n_samples::Int; config::MicrobiomePlotConfig=MicrobiomePlotConfig())
+function determine_view_types(n_samples::Int; config::MicrobiomePlotConfig = MicrobiomePlotConfig())
     if config.large_dataset_view == :auto
         if n_samples <= 150
             return [:barplot]
@@ -4656,7 +4764,7 @@ calculate_tick_step(200)  # 2 (show every 2nd)
 calculate_tick_step(500)  # 5 (show every 5th)
 ```
 """
-function calculate_tick_step(n_samples::Int; max_labels::Int=100)
+function calculate_tick_step(n_samples::Int; max_labels::Int = 100)
     if n_samples <= max_labels
         return 1
     else
@@ -4697,8 +4805,8 @@ extract_short_sample_id("VeryLongSampleNameWithoutPattern"; pattern=r"(NoMatch)"
 ```
 """
 function extract_short_sample_id(sample_id::AbstractString;
-                                  pattern::Regex=r"(.+)",
-                                  max_length::Int=16)
+        pattern::Regex = r"(.+)",
+        max_length::Int = 16)
     m = match(pattern, sample_id)
     if m !== nothing && length(m.captures) >= 1
         return m.captures[1]
@@ -4708,7 +4816,9 @@ function extract_short_sample_id(sample_id::AbstractString;
 end
 
 # Broadcast-friendly vector version
-extract_short_sample_id(ids::AbstractVector; kwargs...) = [extract_short_sample_id(id; kwargs...) for id in ids]
+function extract_short_sample_id(ids::AbstractVector; kwargs...)
+    [extract_short_sample_id(id; kwargs...) for id in ids]
+end
 
 """
     _prepare_abundance_data(
@@ -4733,12 +4843,12 @@ Named tuple with:
 - `taxa_hclust`: Hierarchical clustering result for taxa (or nothing)
 """
 function _prepare_abundance_data(
-    abundance_df::DataFrames.DataFrame;
-    sample_col::Symbol,
-    taxon_col::Symbol,
-    abundance_col::Symbol,
-    top_n::Int,
-    config::MicrobiomePlotConfig
+        abundance_df::DataFrames.DataFrame;
+        sample_col::Symbol,
+        taxon_col::Symbol,
+        abundance_col::Symbol,
+        top_n::Int,
+        config::MicrobiomePlotConfig
 )
     # Get unique samples and taxa
     all_samples = unique(abundance_df[!, sample_col])
@@ -4749,10 +4859,11 @@ function _prepare_abundance_data(
         DataFrames.groupby(abundance_df, taxon_col),
         abundance_col => sum => :total
     )
-    DataFrames.sort!(taxa_totals, :total, rev=true)
+    DataFrames.sort!(taxa_totals, :total, rev = true)
 
     # Identify top taxa, treating missing/unclassified specially
-    is_special = x -> ismissing(x) || lowercase(string(x)) in ["unclassified", "missing", "unknown", "other"]
+    is_special = x -> ismissing(x) || lowercase(string(x)) in [
+        "unclassified", "missing", "unknown", "other"]
     regular_taxa = filter(row -> !is_special(row[taxon_col]), taxa_totals)
     top_taxa = regular_taxa[1:min(top_n, DataFrames.nrow(regular_taxa)), taxon_col]
 
@@ -4772,10 +4883,11 @@ function _prepare_abundance_data(
     end
 
     # Order samples
-    sample_order, sample_hclust = compute_axis_ordering(
+    sample_order,
+    sample_hclust = compute_axis_ordering(
         full_matrix,
         string.(all_samples),
-        ordering=config.sample_ordering
+        ordering = config.sample_ordering
     )
     ordered_samples = all_samples[sample_order]
 
@@ -4839,7 +4951,9 @@ function _prepare_abundance_data(
         colors = Mycelia.n_maximally_distinguishable_colors(n_colors)
     else
         # Use ColorSchemes
-        colors = [ColorSchemes.get(ColorSchemes.colorschemes[config.color_palette], i / n_colors) for i in 1:n_colors]
+        colors = [ColorSchemes.get(ColorSchemes.colorschemes[config.color_palette], i /
+                                                                                    n_colors)
+                  for i in 1:n_colors]
     end
 
     # Override colors for special categories
@@ -4882,10 +4996,10 @@ Create a stacked barplot of microbiome abundances with adaptive sizing.
 - `CairoMakie.Figure`: The generated figure
 """
 function _create_barplot(
-    data::NamedTuple;
-    config::MicrobiomePlotConfig,
-    title::String = "",
-    rank::String = "taxon"
+        data::NamedTuple;
+        config::MicrobiomePlotConfig,
+        title::String = "",
+        rank::String = "taxon"
 )
     samples = data.samples
     taxa = data.taxa
@@ -4896,7 +5010,7 @@ function _create_barplot(
     n_taxa = length(taxa)
 
     # Calculate figure size
-    width, height = calculate_figure_size(n_samples, n_taxa, config=config)
+    width, height = calculate_figure_size(n_samples, n_taxa, config = config)
 
     # Determine orientation
     orientation = config.orientation
@@ -4905,11 +5019,11 @@ function _create_barplot(
     end
 
     # Calculate adaptive font size and tick step
-    label_fontsize = adaptive_label_fontsize(n_samples, config=config)
+    label_fontsize = adaptive_label_fontsize(n_samples, config = config)
     tick_step = calculate_tick_step(n_samples)
 
     # Create figure
-    fig = CairoMakie.Figure(size=(width, height), fontsize=12)
+    fig = CairoMakie.Figure(size = (width, height), fontsize = 12)
 
     # Determine plot title
     plot_title = if isempty(title)
@@ -5022,10 +5136,10 @@ Create a heatmap visualization with optional dendrograms.
 - `CairoMakie.Figure`: The generated figure
 """
 function _create_heatmap_with_dendrograms(
-    data::NamedTuple;
-    config::MicrobiomePlotConfig,
-    title::String = "",
-    rank::String = "taxon"
+        data::NamedTuple;
+        config::MicrobiomePlotConfig,
+        title::String = "",
+        rank::String = "taxon"
 )
     samples = data.samples
     taxa = data.taxa
@@ -5042,14 +5156,18 @@ function _create_heatmap_with_dendrograms(
     height = min(height, 1400)
 
     # Calculate tick step for sample labels
-    tick_step = calculate_tick_step(n_samples, max_labels=50)
-    label_fontsize = adaptive_label_fontsize(n_samples, config=config)
+    tick_step = if isnothing(config.heatmap_max_labels)
+        1  # Show all labels by default
+    else
+        calculate_tick_step(n_samples, max_labels = config.heatmap_max_labels)
+    end
+    label_fontsize = adaptive_label_fontsize(n_samples, config = config)
 
     # Determine grid layout based on dendrogram settings
     show_sample_dendro = config.show_sample_dendrogram && !isnothing(sample_hclust)
 
     # Create figure
-    fig = CairoMakie.Figure(size=(width, height), fontsize=10)
+    fig = CairoMakie.Figure(size = (width, height), fontsize = 10)
 
     # Determine column positions (dendrogram is now above, not to the left)
     hm_col = 1
@@ -5143,10 +5261,10 @@ Create paginated barplots for large datasets (600+ samples).
 - `Vector{CairoMakie.Figure}`: Vector of figures, one per page
 """
 function _create_paginated_barplots(
-    data::NamedTuple;
-    config::MicrobiomePlotConfig,
-    title::String = "",
-    rank::String = "taxon"
+        data::NamedTuple;
+        config::MicrobiomePlotConfig,
+        title::String = "",
+        rank::String = "taxon"
 )
     samples = data.samples
     taxa = data.taxa
@@ -5249,10 +5367,10 @@ paths = save_plot(statsplots_p, "results/barplot")
 ```
 """
 function save_plot(
-    fig,
-    base_path::String;
-    formats::Vector{Symbol} = [:png, :svg],
-    dpi::Int = 300
+        fig,
+        base_path::String;
+        formats::Vector{Symbol} = [:png, :svg],
+        dpi::Int = 300
 )
     paths = Dict{Symbol, String}()
 
@@ -5268,9 +5386,9 @@ function save_plot(
                (hasproperty(fig, :figure) && fig.figure isa CairoMakie.Figure)
     is_plots = isdefined(Main, :Plots) && fig isa Main.Plots.Plot ||
                isdefined(Mycelia, :StatsPlots) && (
-                   typeof(fig) <: StatsPlots.Plots.Plot ||
-                   string(typeof(fig)) |> t -> occursin("Plot{", t)
-               )
+        typeof(fig) <: StatsPlots.Plots.Plot ||
+        string(typeof(fig)) |> t -> occursin("Plot{", t)
+    )
 
     for fmt in formats
         path = "$(base_path).$(fmt)"
@@ -5279,7 +5397,7 @@ function save_plot(
             if is_makie
                 # CairoMakie figure
                 if fmt == :png
-                    CairoMakie.save(path, fig, px_per_unit=dpi/72)
+                    CairoMakie.save(path, fig, px_per_unit = dpi/72)
                 elseif fmt in [:svg, :pdf]
                     CairoMakie.save(path, fig)
                 else
@@ -5362,14 +5480,14 @@ heatmap_fig = results[:heatmap]
 ```
 """
 function plot_microbiome_abundance(
-    abundance_df::DataFrames.DataFrame;
-    sample_col::Symbol = :sample,
-    taxon_col::Symbol = :taxon,
-    abundance_col::Symbol = :relative_abundance,
-    rank::String = "genus",
-    config::MicrobiomePlotConfig = MicrobiomePlotConfig(),
-    title::String = "",
-    output_dir::Union{String, Nothing} = nothing
+        abundance_df::DataFrames.DataFrame;
+        sample_col::Symbol = :sample,
+        taxon_col::Symbol = :taxon,
+        abundance_col::Symbol = :relative_abundance,
+        rank::String = "genus",
+        config::MicrobiomePlotConfig = MicrobiomePlotConfig(),
+        title::String = "",
+        output_dir::Union{String, Nothing} = nothing
 )
     # Validate input columns exist
     for col in [sample_col, taxon_col, abundance_col]
@@ -5392,7 +5510,7 @@ function plot_microbiome_abundance(
     )
 
     # Determine which views to generate
-    view_types = determine_view_types(n_samples, config=config)
+    view_types = determine_view_types(n_samples, config = config)
     @info "Generating views: $(join(string.(view_types), ", "))"
 
     results = Dict{Symbol, Any}()
@@ -5502,13 +5620,13 @@ merged = Mycelia.merge_coverage_with_taxonomy(
 ```
 """
 function merge_coverage_with_taxonomy(
-    coverage_df::DataFrames.DataFrame,
-    taxonomy_df::DataFrames.DataFrame;
-    contig_col::Symbol = :contig_id,
-    coverage_col::Symbol = :mean,
-    coverage_contig_col::Symbol = :chrom,
-    min_coverage::Float64 = 0.0,
-    min_length::Int = 0
+        coverage_df::DataFrames.DataFrame,
+        taxonomy_df::DataFrames.DataFrame;
+        contig_col::Symbol = :contig_id,
+        coverage_col::Symbol = :mean,
+        coverage_contig_col::Symbol = :chrom,
+        min_coverage::Float64 = 0.0,
+        min_length::Int = 0
 )
     # Validate required columns in coverage_df
     if !DataFrames.hasproperty(coverage_df, coverage_contig_col)
@@ -5547,7 +5665,8 @@ function merge_coverage_with_taxonomy(
         n_with_taxonomy = sum(!ismissing, merged[!, :domain])
     else
         # Try to count based on any taxonomy column present
-        taxonomy_cols = [:species, :genus, :family, :order, :class, :phylum, :kingdom, :domain]
+        taxonomy_cols = [
+            :species, :genus, :family, :order, :class, :phylum, :kingdom, :domain]
         for col in taxonomy_cols
             if DataFrames.hasproperty(merged, col)
                 n_with_taxonomy = sum(!ismissing, merged[!, col])
@@ -5606,12 +5725,12 @@ results = Mycelia.plot_microbiome_abundance(
 ```
 """
 function compute_coverage_weighted_abundance(
-    merged_df::DataFrames.DataFrame,
-    sample_id::String;
-    rank::Symbol = :genus,
-    coverage_col::Symbol = :mean,
-    include_unclassified::Bool = true,
-    unclassified_label::String = "Unclassified"
+        merged_df::DataFrames.DataFrame,
+        sample_id::String;
+        rank::Symbol = :genus,
+        coverage_col::Symbol = :mean,
+        include_unclassified::Bool = true,
+        unclassified_label::String = "Unclassified"
 )
     # Validate rank column exists
     if !DataFrames.hasproperty(merged_df, rank)
@@ -5654,10 +5773,11 @@ function compute_coverage_weighted_abundance(
     aggregated.sample = fill(sample_id, DataFrames.nrow(aggregated))
 
     # Reorder columns
-    result = DataFrames.select(aggregated, :sample, :taxon, :relative_abundance, :total_coverage, :n_contigs)
+    result = DataFrames.select(
+        aggregated, :sample, :taxon, :relative_abundance, :total_coverage, :n_contigs)
 
     # Sort by abundance descending
-    DataFrames.sort!(result, :relative_abundance, rev=true)
+    DataFrames.sort!(result, :relative_abundance, rev = true)
 
     @info "Aggregated to $(DataFrames.nrow(result)) taxa at $rank level for $sample_id"
 
@@ -5710,12 +5830,12 @@ results = Mycelia.plot_microbiome_abundance(combined)
 ```
 """
 function process_samples_coverage_abundance(
-    sample_data::Vector{<:NamedTuple};
-    rank::Symbol = :genus,
-    min_coverage::Float64 = 0.0,
-    min_length::Int = 0,
-    include_unclassified::Bool = true,
-    taxonomy_format::Symbol = :auto
+        sample_data::Vector{<:NamedTuple};
+        rank::Symbol = :genus,
+        min_coverage::Float64 = 0.0,
+        min_length::Int = 0,
+        include_unclassified::Bool = true,
+        taxonomy_format::Symbol = :auto
 )
     all_abundances = DataFrames.DataFrame()
 
@@ -5732,7 +5852,8 @@ function process_samples_coverage_abundance(
         )
 
         # Get contig column name (default or from sample tuple)
-        contig_col = haskey(sample, :contig_col) ? sample.contig_col : _detect_contig_column(taxonomy_df)
+        contig_col = haskey(sample, :contig_col) ? sample.contig_col :
+                     _detect_contig_column(taxonomy_df)
 
         # Merge coverage with taxonomy
         merged = merge_coverage_with_taxonomy(
@@ -5764,8 +5885,8 @@ end
 Internal helper to load taxonomy files in various formats.
 """
 function _load_taxonomy_file(
-    filepath::String;
-    format::Symbol = :auto
+        filepath::String;
+        format::Symbol = :auto
 )
     # Auto-detect format
     if format == :auto
@@ -5868,14 +5989,14 @@ results = Mycelia.plot_microbiome_abundance(all_abundances, rank = "family")
 ```
 """
 function blast_coverage_abundance(
-    blast_file::String,
-    mosdepth_summary::String,
-    sample_id::String;
-    rank::Symbol = :genus,
-    min_coverage::Float64 = 1.0,
-    min_length::Int = 0,
-    evalue_max::Float64 = 1e-10,
-    include_unclassified::Bool = true
+        blast_file::String,
+        mosdepth_summary::String,
+        sample_id::String;
+        rank::Symbol = :genus,
+        min_coverage::Float64 = 1.0,
+        min_length::Int = 0,
+        evalue_max::Float64 = 1e-10,
+        include_unclassified::Bool = true
 )
     @info "Processing BLAST coverage abundance for $sample_id"
 
@@ -5884,7 +6005,8 @@ function blast_coverage_abundance(
     @info "Loaded $(DataFrames.nrow(blast_df)) BLAST hits"
 
     # Filter by e-value if column exists
-    if DataFrames.hasproperty(blast_df, :evalue) || DataFrames.hasproperty(blast_df, Symbol("evalue"))
+    if DataFrames.hasproperty(blast_df, :evalue) ||
+       DataFrames.hasproperty(blast_df, Symbol("evalue"))
         evalue_col = DataFrames.hasproperty(blast_df, :evalue) ? :evalue : Symbol("evalue")
         blast_df = blast_df[blast_df[!, evalue_col] .<= evalue_max, :]
         @info "After e-value filter (≤$evalue_max): $(DataFrames.nrow(blast_df)) hits"
@@ -5981,14 +6103,14 @@ uniref90_abundance = Mycelia.mmseqs_coverage_abundance(
 ```
 """
 function mmseqs_coverage_abundance(
-    mmseqs_lca_file::String,
-    mosdepth_summary::String,
-    sample_id::String;
-    rank::Symbol = :genus,
-    min_coverage::Float64 = 1.0,
-    min_length::Int = 0,
-    min_support::Float64 = 0.0,
-    include_unclassified::Bool = true
+        mmseqs_lca_file::String,
+        mosdepth_summary::String,
+        sample_id::String;
+        rank::Symbol = :genus,
+        min_coverage::Float64 = 1.0,
+        min_length::Int = 0,
+        min_support::Float64 = 0.0,
+        include_unclassified::Bool = true
 )
     @info "Processing mmseqs2 coverage abundance for $sample_id"
 
@@ -6004,7 +6126,8 @@ function mmseqs_coverage_abundance(
     end
 
     # Add full lineage columns from taxon_id
-    if DataFrames.hasproperty(mmseqs_df, :taxon_id) && !DataFrames.hasproperty(mmseqs_df, :domain)
+    if DataFrames.hasproperty(mmseqs_df, :taxon_id) &&
+       !DataFrames.hasproperty(mmseqs_df, :domain)
         taxids = collect(skipmissing(mmseqs_df.taxon_id))
         if !isempty(taxids)
             @info "Looking up lineage for $(length(taxids)) unique taxids"
@@ -6070,15 +6193,15 @@ fig = plot_alpha_diversity_violins(combined_df)
 ```
 """
 function plot_alpha_diversity_violins(alpha_df::DataFrames.DataFrame;
-                                       figsize::Tuple{Int,Int}=(1000, 800),
-                                       color=:teal,
-                                       group_col::Union{Symbol,Nothing}=nothing)
-    fig = CairoMakie.Figure(size=figsize)
+        figsize::Tuple{Int, Int} = (1000, 800),
+        color = :teal,
+        group_col::Union{Symbol, Nothing} = nothing)
+    fig = CairoMakie.Figure(size = figsize)
 
     metrics = [(:shannon, "Shannon Index"),
-               (:simpsons, "Simpson's Index"),
-               (:richness, "Species Richness"),
-               (:evenness, "Pielou's Evenness")]
+        (:simpsons, "Simpson's Index"),
+        (:richness, "Species Richness"),
+        (:evenness, "Pielou's Evenness")]
 
     # Auto-detect grouping column
     if group_col === nothing
