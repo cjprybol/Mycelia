@@ -133,64 +133,49 @@ include("viterbi-next.jl")
 # include("reinforcement-learning-comparison.jl")
 
 # Load remaining files in alphabetical order (no critical dependencies)
-remaining_files = [
-    "alignments-and-mapping.jl",
-    "amino-acid-analysis.jl",
-    "checkpointing.jl",
-    "annotation.jl",
-    "autocycler.jl",
-    "bcalm.jl",
-    "bioconda.jl",
-    "binning.jl",
-    "classification.jl",
-    "metagraph.jl",
-    "metagenomic-classification.jl",
-    "clustering.jl",
-    "codon-optimization.jl",
-    "coverage-clustering.jl",
-    "dimensionality-reduction.jl",
-    "distance-metrics.jl",
-    "foldseek.jl",
-    "genome-features.jl",
-    "ggcat.jl",
-    "graph-cleanup.jl",
-    "kmer-analysis.jl",
-    "kmer-saturation-analysis.jl",
-    "neo4jl.jl",
-    "pangenome-analysis.jl",
-    "pantools.jl",
-    "performance-benchmarks.jl",
-    "plotting-and-visualization.jl",
-    "prokrustean.jl",
-    "quality-control-and-benchmarking.jl",
-    "read-quality-control.jl",
-    "busco-datasets.jl",
-    "ncbi-datasets-cli.jl",
-    "rclone.jl",
-    "relational-matrices.jl",
-    "reference-databases.jl",
-    "sentencepiece.jl",
-    "sequence-comparison.jl",
-    "sequence-graphs.jl",
-    "simulation.jl",
-    "slurm-sbatch.jl",
-    "taxonomy-and-trees.jl",
-    "testing-utilities.jl",
-    "variant-analysis.jl",
-    "viterbi-polishing-and-error-correction.jl",
-    "xam.jl"
-]
-
-# Use @__DIR__ which is always available at compile time, instead of pathof()
-# which can return nothing during static analysis
-const _MODULE_DIR = @__DIR__
-
-for file in remaining_files
-    file_path = joinpath(_MODULE_DIR, file)
-    if isfile(file_path)
-        include(file)
-    end
-end
+# Using explicit include() statements enables full static analysis by ExplicitImports.jl
+include("alignments-and-mapping.jl")
+include("amino-acid-analysis.jl")
+include("annotation.jl")
+include("autocycler.jl")
+include("bcalm.jl")
+include("binning.jl")
+include("bioconda.jl")
+include("busco-datasets.jl")
+include("checkpointing.jl")
+include("classification.jl")
+include("clustering.jl")
+include("codon-optimization.jl")
+include("coverage-clustering.jl")
+include("dimensionality-reduction.jl")
+include("distance-metrics.jl")
+include("foldseek.jl")
+include("genome-features.jl")
+include("ggcat.jl")
+include("graph-cleanup.jl")
+include("kmer-analysis.jl")
+include("kmer-saturation-analysis.jl")
+include("metagraph.jl")
+include("metagenomic-classification.jl")
+include("ncbi-datasets-cli.jl")
+include("pangenome-analysis.jl")
+include("pantools.jl")
+include("plotting-and-visualization.jl")
+include("prokrustean.jl")
+include("quality-control-and-benchmarking.jl")
+include("rclone.jl")
+include("read-quality-control.jl")
+include("reference-databases.jl")
+include("relational-matrices.jl")
+include("sentencepiece.jl")
+include("sequence-comparison.jl")
+include("simulation.jl")
+include("slurm-sbatch.jl")
+include("taxonomy-and-trees.jl")
+include("testing-utilities.jl")
+include("variant-analysis.jl")
+include("viterbi-polishing-and-error-correction.jl")
+include("xam.jl")
 
 # PrecompileTools workload for faster startup
 # This must be included last, after all other definitions are loaded
