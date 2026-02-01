@@ -1,6 +1,6 @@
 # """
 #     Monte Carlo Tree Search Implementation for Assembly RL
-    
+
 # This module implements Monte Carlo Tree Search (MCTS) for genome assembly,
 # treating assembly as a sequential decision game. MCTS provides a powerful
 # balance between exploration and exploitation through UCB1 selection and
@@ -17,7 +17,7 @@
 
 # """
 #     MCTSNode
-    
+
 # Node in the Monte Carlo search tree representing an assembly state.
 # """
 # mutable struct MCTSNode
@@ -33,7 +33,7 @@
 # function MCTSNode(state::AssemblyState, parent::Union{Nothing, MCTSNode}=nothing)
 #     ## Generate available actions for this state
 #     available_actions = generate_available_actions(state)
-    
+
 #     return MCTSNode(
 #         state,
 #         parent,
@@ -47,7 +47,7 @@
 
 # """
 #     MCTSPolicy
-    
+
 # Monte Carlo Tree Search policy for assembly decisions.
 # """
 # struct MCTSPolicy
@@ -84,29 +84,29 @@
 
 # """
 #     ucb1_score(node::MCTSNode, parent_visits::Int, c::Float64)
-    
+
 # Calculate UCB1 score for node selection.
 # """
 # function ucb1_score(node::MCTSNode, parent_visits::Int, c::Float64)
 #     if node.visits == 0
 #         return Inf  ## Prioritize unvisited nodes
 #     end
-    
+
 #     exploitation = node.total_reward / node.visits
 #     exploration = c * sqrt(log(parent_visits) / node.visits)
-    
+
 #     return exploitation + exploration
 # end
 
 # """
 #     select_best_child(node::MCTSNode, c::Float64)
-    
+
 # Select child with highest UCB1 score.
 # """
 # function select_best_child(node::MCTSNode, c::Float64)
 #     best_score = -Inf
 #     best_child = nothing
-    
+
 #     for (action, child) in node.children
 #         score = ucb1_score(child, node.visits, c)
 #         if score > best_score
@@ -114,7 +114,7 @@
 #             best_child = child
 #         end
 #     end
-    
+
 #     return best_child
 # end
 
@@ -122,12 +122,12 @@
 
 # """
 #     tree_policy(root::MCTSNode, c::Float64)
-    
+
 # Traverse tree using UCB1 until reaching expandable node.
 # """
 # function tree_policy(root::MCTSNode, c::Float64)
 #     node = root
-    
+
 #     while !node.is_terminal
 #         if !isempty(node.untried_actions)
 #             ## Expand with untried action
@@ -140,26 +140,26 @@
 #             end
 #         end
 #     end
-    
+
 #     return node
 # end
 
 # """
 #     expand_node(node::MCTSNode)
-    
+
 # Expand node with one untried action.
 # """
 # function expand_node(node::MCTSNode)
 #     ## Select random untried action
 #     action = popfirst!(node.untried_actions)
-    
+
 #     ## Generate next state
 #     next_state = transition_assembly_state(node.state, action)
-    
+
 #     ## Create child node
 #     child = MCTSNode(next_state, node)
 #     node.children[action] = child
-    
+
 #     return child
 # end
 
@@ -167,7 +167,7 @@
 
 # """
 #     default_rollout_policy(state::AssemblyState)
-    
+
 # Fast heuristic policy for MCTS rollouts.
 # Uses simple rules based on assembly metrics.
 # """
@@ -212,29 +212,29 @@
 
 # """
 #     simulate_rollout(state::AssemblyState, policy::Function, max_depth::Int)
-    
+
 # Simulate assembly trajectory using rollout policy.
 # """
 # function simulate_rollout(state::AssemblyState, policy::Function, max_depth::Int)
 #     current_state = state
 #     total_reward = 0.0
 #     depth = 0
-    
+
 #     while !is_terminal_state(current_state) && depth < max_depth
 #         ## Get action from rollout policy
 #         action = policy(current_state)
-        
+
 #         ## Transition to next state
 #         next_state = transition_assembly_state(current_state, action)
-        
+
 #         ## Calculate reward
 #         reward = calculate_assembly_reward(next_state)
 #         total_reward += reward * (0.99 ^ depth)  ## Discount factor
-        
+
 #         current_state = next_state
 #         depth += 1
 #     end
-    
+
 #     return total_reward
 # end
 
@@ -242,12 +242,12 @@
 
 # """
 #     backpropagate!(node::MCTSNode, reward::Float64)
-    
+
 # Propagate reward up the tree.
 # """
 # function backpropagate!(node::MCTSNode, reward::Float64)
 #     current = node
-    
+
 #     while current !== nothing
 #         current.visits += 1
 #         current.total_reward += reward
@@ -259,52 +259,52 @@
 
 # """
 #     mcts_search(root_state::AssemblyState, policy::MCTSPolicy)
-    
+
 # Run MCTS to find best action from root state.
 # """
 # function mcts_search(root_state::AssemblyState, policy::MCTSPolicy)
 #     root = MCTSNode(root_state)
-    
+
 #     for sim in 1:policy.n_simulations
 #         ## Selection - traverse tree to leaf
 #         leaf = tree_policy(root, policy.exploration_constant)
-        
+
 #         ## Rollout - simulate from leaf
 #         reward = simulate_rollout(
 #             leaf.state, 
 #             policy.rollout_policy, 
 #             policy.max_rollout_depth
 #         )
-        
+
 #         ## Backpropagation - update statistics
 #         backpropagate!(leaf, reward)
-        
+
 #         ## Progressive widening (optional)
 #         if policy.use_progressive_widening
 #             apply_progressive_widening!(root, policy)
 #         end
 #     end
-    
+
 #     ## Return action with most visits (robust selection)
 #     return select_most_visited_action(root)
 # end
 
 # """
 #     select_most_visited_action(node::MCTSNode)
-    
+
 # Select action with highest visit count (most robust).
 # """
 # function select_most_visited_action(node::MCTSNode)
 #     best_visits = -1
 #     best_action = nothing
-    
+
 #     for (action, child) in node.children
 #         if child.visits > best_visits
 #             best_visits = child.visits
 #             best_action = action
 #         end
 #     end
-    
+
 #     return best_action
 # end
 
@@ -312,7 +312,7 @@
 
 # """
 #     apply_progressive_widening!(node::MCTSNode, policy::MCTSPolicy)
-    
+
 # Add new actions based on visit count (for continuous action spaces).
 # """
 # function apply_progressive_widening!(node::MCTSNode, policy::MCTSPolicy)
@@ -320,9 +320,9 @@
 #     max_actions = Int(floor(
 #         policy.widening_constant * node.visits ^ policy.widening_exponent
 #     ))
-    
+
 #     current_actions = length(node.children) + length(node.untried_actions)
-    
+
 #     if current_actions < max_actions
 #         ## Add new action variant
 #         new_action = generate_action_variant(node.state)
@@ -334,13 +334,13 @@
 
 # """
 #     generate_action_variant(state::AssemblyState)
-    
+
 # Generate new action variant for progressive widening.
 # """
 # function generate_action_variant(state::AssemblyState)
 #     ## Generate variations in continuous parameters
 #     base_decision = rand([:continue_k, :next_k])
-    
+
 #     return AssemblyAction(
 #         base_decision,
 #         Dict(
@@ -358,15 +358,15 @@
 
 # """
 #     generate_available_actions(state::AssemblyState)
-    
+
 # Generate list of available actions for given state.
 # """
 # function generate_available_actions(state::AssemblyState)
 #     actions = AssemblyAction[]
-    
+
 #     ## Always can terminate
 #     push!(actions, AssemblyAction(:terminate, Dict(), 0.0, 0, 0))
-    
+
 #     ## Can continue with current k if not at memory limit
 #     if state.memory_usage < 0.95
 #         ## Add several parameter variants
@@ -386,7 +386,7 @@
 #             end
 #         end
 #     end
-    
+
 #     ## Can move to next k if available
 #     current_k_idx = findfirst(k -> k == state.current_k, state.k_history)
 #     if current_k_idx !== nothing && current_k_idx < length(PRIME_KMERS)
@@ -404,13 +404,13 @@
 #             ))
 #         end
 #     end
-    
+
 #     return actions
 # end
 
 # """
 #     is_terminal_state(state::AssemblyState)
-    
+
 # Check if assembly state is terminal.
 # """
 # function is_terminal_state(state::AssemblyState)
@@ -423,7 +423,7 @@
 
 # """
 #     MCTSAgent
-    
+
 # Agent using MCTS for assembly decisions.
 # """
 # struct MCTSAgent
@@ -440,7 +440,7 @@
 
 # """
 #     select_action_mcts(agent::MCTSAgent, state::AssemblyState)
-    
+
 # Select action using MCTS.
 # """
 # function select_action_mcts(agent::MCTSAgent, state::AssemblyState)
@@ -449,7 +449,7 @@
 
 # """
 #     train_mcts_agent(training_data::Vector{SimulatedAssemblyData}; kwargs...)
-    
+
 # Train MCTS agent through self-play on simulated data.
 # """
 # function train_mcts_agent(
@@ -463,13 +463,13 @@
 #         n_simulations=n_simulations,
 #         exploration_constant=exploration_constant
 #     )
-    
+
 #     episode_rewards = Float64[]
-    
+
 #     for episode in 1:n_episodes
 #         ## Select random training sequence
 #         sim_data = rand(training_data)
-        
+
 #         ## Run episode with MCTS
 #         trajectory, total_reward = run_assembly_episode(
 #             agent,
@@ -477,9 +477,9 @@
 #             sim_data.reference;
 #             method=select_action_mcts
 #         )
-        
+
 #         push!(episode_rewards, total_reward)
-        
+
 #         ## Update value estimates from trajectory
 #         for (state, action, reward) in trajectory
 #             state_hash = hash(state)
@@ -488,19 +488,19 @@
 #             n = episode + 1
 #             agent.value_estimates[state_hash] = current_estimate + (reward - current_estimate) / n
 #         end
-        
+
 #         if episode % 10 == 0
 #             @info "MCTS Training" episode avg_reward=Statistics.mean(episode_rewards[max(1,episode-9):episode])
 #         end
 #     end
-    
+
 #     ## Save trained agent
 #     JLD2.save(save_path, Dict(
 #         "policy" => agent.policy,
 #         "value_estimates" => agent.value_estimates,
 #         "training_rewards" => episode_rewards
 #     ))
-    
+
 #     return agent, episode_rewards
 # end
 
@@ -513,7 +513,7 @@
 #         n_simulations::Int=1000,
 #         kwargs...
 #     )
-    
+
 # Run intelligent assembly using MCTS for decision making.
 # """
 # function intelligent_assembly_mcts(
@@ -530,36 +530,36 @@
 #     if agent === nothing
 #         agent = MCTSAgent(n_simulations=n_simulations)
 #     end
-    
+
 #     ## Initialize assembly environment
 #     env = AssemblyEnvironment(
 #         reads,
 #         initial_k=initial_k,
 #         memory_limit=memory_limit_gb * 1e9
 #     )
-    
+
 #     ## Create output directory
 #     mkpath(output_dir)
-    
+
 #     ## Assembly loop
 #     step = 0
 #     trajectory = []
-    
+
 #     while !is_done(env)
 #         state = get_state(env)
-        
+
 #         ## Use MCTS to select action
 #         action = select_action_mcts(agent, state)
-        
+
 #         ## Log decision
 #         @info "MCTS Decision" step k=state.current_k action=action.decision visits=length(agent.value_estimates)
-        
+
 #         ## Take action in environment
 #         next_state, reward, done, info = step!(env, action)
-        
+
 #         ## Save trajectory
 #         push!(trajectory, (state, action, reward, next_state))
-        
+
 #         ## Save intermediate results
 #         if save_intermediates
 #             save_assembly_checkpoint(
@@ -568,13 +568,13 @@
 #                 trajectory
 #             )
 #         end
-        
+
 #         step += 1
 #     end
-    
+
 #     ## Extract final assembly
 #     final_assembly = get_assembly(env)
-    
+
 #     ## Save results
 #     save_assembly_results(
 #         joinpath(output_dir, "final_assembly.fasta"),
@@ -582,7 +582,7 @@
 #         trajectory,
 #         agent
 #     )
-    
+
 #     return final_assembly, trajectory
 # end
 
@@ -590,12 +590,12 @@
 
 # """
 #     compare_mcts_performance(test_data::Vector{SimulatedAssemblyData})
-    
+
 # Compare MCTS with other RL methods on test data.
 # """
 # function compare_mcts_performance(test_data::Vector{SimulatedAssemblyData})
 #     results = Dict{String, Vector{Float64}}()
-    
+
 #     ## Test MCTS with different configurations
 #     for (name, n_sims) in [
 #         ("MCTS-100", 100),
@@ -605,20 +605,20 @@
 #     ]
 #         agent = MCTSAgent(n_simulations=n_sims)
 #         rewards = Float64[]
-        
+
 #         for sim_data in test_data
 #             _, trajectory = intelligent_assembly_mcts(
 #                 sim_data.reads,
 #                 agent=agent
 #             )
-            
+
 #             total_reward = sum(r for (_, _, r, _) in trajectory)
 #             push!(rewards, total_reward)
 #         end
-        
+
 #         results[name] = rewards
 #     end
-    
+
 #     return results
 # end
 

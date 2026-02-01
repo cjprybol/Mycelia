@@ -5,12 +5,14 @@ first_nonmissing(v) = begin
 end
 
 # Robust column existence checks and key resolution
-hascol(df::DataFrames.AbstractDataFrame, col::AbstractString) =
+function hascol(df::DataFrames.AbstractDataFrame, col::AbstractString)
     (col in names(df)) || (Symbol(col) in names(df))
-hascol(df::DataFrames.AbstractDataFrame, col::Symbol) =
+end
+function hascol(df::DataFrames.AbstractDataFrame, col::Symbol)
     (col in names(df)) || (String(col) in names(df))
+end
 
-function actual_name(df::DataFrames.AbstractDataFrame, name_in::Union{String,Symbol})
+function actual_name(df::DataFrames.AbstractDataFrame, name_in::Union{String, Symbol})
     if name_in isa Symbol
         if name_in in names(df)
             return name_in
@@ -42,15 +44,15 @@ end
 # Default taxonomy ranks expected after lineage join
 function default_ranks()
     return [
-        (taxid_col = "species_taxid", name_col = "species",      rank = "species"),
-        (taxid_col = "genus_taxid",   name_col = "genus",        rank = "genus"),
-        (taxid_col = "family_taxid",  name_col = "family",       rank = "family"),
-        (taxid_col = "order_taxid",   name_col = "order",        rank = "order"),
-        (taxid_col = "class_taxid",   name_col = "class",        rank = "class"),
-        (taxid_col = "phylum_taxid",  name_col = "phylum",       rank = "phylum"),
-        (taxid_col = "kingdom_taxid", name_col = "kingdom",      rank = "kingdom"),
-        (taxid_col = "realm_taxid",   name_col = "realm",        rank = "realm"),
-        (taxid_col = "domain_taxid",  name_col = "domain",       rank = "domain"),
+        (taxid_col = "species_taxid", name_col = "species", rank = "species"),
+        (taxid_col = "genus_taxid", name_col = "genus", rank = "genus"),
+        (taxid_col = "family_taxid", name_col = "family", rank = "family"),
+        (taxid_col = "order_taxid", name_col = "order", rank = "order"),
+        (taxid_col = "class_taxid", name_col = "class", rank = "class"),
+        (taxid_col = "phylum_taxid", name_col = "phylum", rank = "phylum"),
+        (taxid_col = "kingdom_taxid", name_col = "kingdom", rank = "kingdom"),
+        (taxid_col = "realm_taxid", name_col = "realm", rank = "realm"),
+        (taxid_col = "domain_taxid", name_col = "domain", rank = "domain")
     ]
 end
 
@@ -87,8 +89,8 @@ Annotate BLAST hits with a `lineage` column using taxonkit.
 - `DataFrames.DataFrame`: The input table with a new `lineage` column.
 """
 function annotate_blast_hits_with_taxonkit(
-    blast_df::DataFrames.DataFrame;
-    taxdump_dir::Union{String,Nothing} = nothing
+        blast_df::DataFrames.DataFrame;
+        taxdump_dir::Union{String, Nothing} = nothing
 )
     if isempty(blast_df) || !hascol(blast_df, "subject tax id")
         return blast_df
@@ -110,7 +112,7 @@ function annotate_blast_hits_with_taxonkit(
         return blast_df
     end
 
-    lineage_table = Mycelia.taxids2taxonkit_full_lineage_table(taxids; taxdump_dir=taxdump_dir)
+    lineage_table = Mycelia.taxids2taxonkit_full_lineage_table(taxids; taxdump_dir = taxdump_dir)
     taxid_to_lineage = Dict{Int, String}()
     for row in DataFrames.eachrow(lineage_table)
         if !ismissing(row["taxid"]) && !ismissing(row["lineage"])
@@ -126,7 +128,8 @@ function annotate_blast_hits_with_taxonkit(
             lineage_col[i] = get(taxid_to_lineage, Int(taxid), missing)
         elseif taxid isa AbstractString
             parsed = tryparse(Int, taxid)
-            lineage_col[i] = parsed === nothing ? missing : get(taxid_to_lineage, parsed, missing)
+            lineage_col[i] = parsed === nothing ? missing :
+                             get(taxid_to_lineage, parsed, missing)
         else
             lineage_col[i] = missing
         end
@@ -137,13 +140,13 @@ end
 
 # Core aggregator: from joined BLAST rows to normalized confidence per query and rank
 function compute_taxonomic_confidence(
-    df::DataFrames.DataFrame;
-    weight_col::Union{String,Symbol} = "bit score",
-    evalue_max::Real = 1e-10,
-    min_weight::Real = 0.0,
-    ranks = default_ranks(),
-    collapse_per_subject::Bool = true,
-    subject_reduce::Function = sum,  # or maximum
+        df::DataFrames.DataFrame;
+        weight_col::Union{String, Symbol} = "bit score",
+        evalue_max::Real = 1e-10,
+        min_weight::Real = 0.0,
+        ranks = default_ranks(),
+        collapse_per_subject::Bool = true,
+        subject_reduce::Function = sum  # or maximum
 )
     # Validate required columns
     for col in ("query id", "subject id", "subject tax id")
@@ -184,7 +187,7 @@ function compute_taxonomic_confidence(
         kept = DataFrames.combine(
             grp,
             wkey => subject_reduce => "subject_weight",
-            [c => first_nonmissing => c for c in carry if !(c in (qkey, subjkey))]...,
+            [c => first_nonmissing => c for c in carry if !(c in (qkey, subjkey))]...
         )
         work = kept
         weight_field = "subject_weight"  # String name created above
@@ -214,9 +217,9 @@ function compute_taxonomic_confidence(
         # Build aggregations
         groupkeys = [qkey, r_tax_key, r_name_key]
         combine_args = Any[
-            wcol_key => sum => "weight_sum",
-            DataFrames.nrow => "n_hits",
-        ]
+        wcol_key => sum => "weight_sum",
+        DataFrames.nrow => "n_hits"
+]
         if hascol(sub, "subject id")
             skey = actual_name(sub, "subject id")
             push!(combine_args, skey => (x -> length(unique(x))) => "n_subjects")
@@ -224,23 +227,26 @@ function compute_taxonomic_confidence(
 
         agg = DataFrames.combine(
             DataFrames.groupby(sub, groupkeys),
-            combine_args...,
+            combine_args...
         )
 
         # Normalize within each query id (avoid sortperm to prevent sort! kw issues)
         conf = DataFrames.combine(DataFrames.groupby(agg, qkey)) do sdf
             # Compute rel_conf
             total = sum(sdf[!, "weight_sum"])
-            rel = total == 0 ? fill(0.0, DataFrames.nrow(sdf)) : sdf[!, "weight_sum"] ./ total
+            rel = total == 0 ? fill(0.0, DataFrames.nrow(sdf)) :
+                  sdf[!, "weight_sum"] ./ total
             DataFrames.hcat(sdf, DataFrames.DataFrame("rel_conf" => rel))
         end
 
         # Standardize col names, tag the rank, enforce String names
-        DataFrames.rename!(conf, actual_name(conf, r.taxid_col) => "taxid", actual_name(conf, r.name_col) => "taxon")
+        DataFrames.rename!(conf, actual_name(conf, r.taxid_col) => "taxid",
+            actual_name(conf, r.name_col) => "taxon")
         conf[!, "rank"] = fill(r.rank, DataFrames.nrow(conf))
 
         # Ensure expected column names are String-typed
-        for cname in ("query id", "taxid", "taxon", "weight_sum", "rel_conf", "n_subjects", "n_hits", "rank")
+        for cname in ("query id", "taxid", "taxon", "weight_sum",
+            "rel_conf", "n_subjects", "n_hits", "rank")
             ensure_as_string!(conf, cname)
         end
         # Guarantee n_subjects exists (if subject id absent)
@@ -248,7 +254,8 @@ function compute_taxonomic_confidence(
             conf[!, "n_subjects"] = fill(missing, DataFrames.nrow(conf))
         end
 
-        conf = conf[:, ["query id", "rank", "taxid", "taxon", "weight_sum", "rel_conf", "n_subjects", "n_hits"]]
+        conf = conf[:, ["query id", "rank", "taxid", "taxon",
+            "weight_sum", "rel_conf", "n_subjects", "n_hits"]]
 
         all_ranks = DataFrames.vcat(all_ranks, conf; cols = :union)
     end
@@ -272,15 +279,20 @@ function _top2_indices_and_values(vals_any)::Tuple{Int, Float64, Int, Float64}
             vals[i] = Float64(x)
         end
     end
-    v1 = -Inf; v2 = -Inf
-    i1 = 0;    i2 = 0
+    v1 = -Inf;
+    v2 = -Inf
+    i1 = 0;
+    i2 = 0
     @inbounds for i in 1:n
         x = vals[i]
         if x > v1
-            v2 = v1; i2 = i1
-            v1 = x;  i1 = i
+            v2 = v1;
+            i2 = i1
+            v1 = x;
+            i1 = i
         elseif x > v2
-            v2 = x;  i2 = i
+            v2 = x;
+            i2 = i
         end
     end
     return (i1, v1, i2, v2)
@@ -307,7 +319,7 @@ function summarize_top_calls(conf_df::DataFrames.DataFrame)
                 "taxon" => missing,
                 "top_rel_conf" => 0.0,
                 "delta_to_second" => 0.0,
-                "n_taxa_considered" => 0,
+                "n_taxa_considered" => 0
             )
         end
         delta = v1 - (DataFrames.nrow(sdf) >= 2 ? v2 : 0.0)
@@ -316,20 +328,20 @@ function summarize_top_calls(conf_df::DataFrames.DataFrame)
             "taxon" => sdf[i1, "taxon"],
             "top_rel_conf" => v1,
             "delta_to_second" => delta,
-            "n_taxa_considered" => DataFrames.nrow(sdf),
+            "n_taxa_considered" => DataFrames.nrow(sdf)
         )
     end
 end
 
 # End-to-end convenience: parse, join lineage, compute confidences, and summarize
 function taxonomic_confidence_from_blast(
-    outfile::AbstractString;
-    weight_col::Union{String,Symbol} = "bit score",
-    evalue_max::Real = 1e-10,
-    min_weight::Real = 0.0,
-    collapse_per_subject::Bool = true,
-    subject_reduce::Function = sum,
-    ranks = default_ranks(),
+        outfile::AbstractString;
+        weight_col::Union{String, Symbol} = "bit score",
+        evalue_max::Real = 1e-10,
+        min_weight::Real = 0.0,
+        collapse_per_subject::Bool = true,
+        subject_reduce::Function = sum,
+        ranks = default_ranks()
 )
     parsed = Mycelia.parse_blast_report(outfile)
     joined = ensure_lineage_columns(parsed; ranks = ranks)
@@ -340,36 +352,35 @@ function taxonomic_confidence_from_blast(
         min_weight = min_weight,
         ranks = ranks,
         collapse_per_subject = collapse_per_subject,
-        subject_reduce = subject_reduce,
+        subject_reduce = subject_reduce
     )
     summary = summarize_top_calls(conf)
     return (taxonomic_confidence_table = conf, classification_summary_table = summary)
 end
 
-
-
-
 function classify_taxonomy_aware_xam_table(taxonomy_aware_xam_table)
-    template_taxid_score_table = DataFrames.combine(DataFrames.groupby(taxonomy_aware_xam_table, [:template, :taxid]), :alignment_score => sum => :total_alignment_score)
+    template_taxid_score_table = DataFrames.combine(
+        DataFrames.groupby(taxonomy_aware_xam_table, [:template, :taxid]),
+        :alignment_score => sum => :total_alignment_score)
     # replace missing (unclassified) with 0 (NCBI taxonomies start at 1, so 0 is a common, but technically non-standard NCBI taxon identifier
     template_taxid_score_table = DataFrames.coalesce.(template_taxid_score_table, 0)
 
     # For each template, identify top taxid and calculate score difference
     results_df = DataFrames.combine(DataFrames.groupby(template_taxid_score_table, :template)) do group
         # Sort scores in descending order
-        sorted = DataFrames.sort(group, :total_alignment_score, rev=true)
-    
+        sorted = DataFrames.sort(group, :total_alignment_score, rev = true)
+
         # Get top taxid and score
         top_taxid = sorted[1, :taxid]
         top_score = sorted[1, :total_alignment_score]
-    
+
         # Calculate ratio with next best (if it exists)
         score_ratio = Inf
         if DataFrames.nrow(sorted) > 1
             second_score = sorted[2, :total_alignment_score]
             score_ratio = top_score/second_score
         end
-    
+
         # Store all additional taxids and their scores (excluding the top one)
         additional_taxids = OrderedCollections.OrderedDict{Int, Float64}()
         if DataFrames.nrow(sorted) > 1
@@ -377,7 +388,7 @@ function classify_taxonomy_aware_xam_table(taxonomy_aware_xam_table)
                 additional_taxids[sorted[i, :taxid]] = sorted[i, :total_alignment_score]
             end
         end
-    
+
         # Return a new row with the results
         return DataFrames.DataFrame(
             top_taxid = top_taxid,
@@ -391,15 +402,16 @@ function classify_taxonomy_aware_xam_table(taxonomy_aware_xam_table)
     annotated_classification_table = DataFrames.leftjoin(
         classification_table,
         Mycelia.taxids2taxonkit_summarized_lineage_table(unique(classification_table.final_assignment)),
-        on="final_assignment" => "taxid"
+        on = "final_assignment" => "taxid"
     )
 
     return annotated_classification_table
 end
 
-function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{String}=[
-        "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
-    ])
+function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame,
+        ranks::Vector{String} = [
+            "domain", "realm", "kingdom", "phylum", "class", "order", "family", "genus", "species"
+        ])
     results = DataFrames.DataFrame()
     for (i, rank) in enumerate(ranks)
         rank_taxid = string(rank, "_taxid")
@@ -411,7 +423,7 @@ function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{St
                 agg = DataFrames.combine(grouped,
                     :relative_alignment_proportion => sum => :total_relative_alignment_proportion,
                     :percent_identity => maximum => :max_percent_identity,
-                    :mappingquality => maximum => :max_mappingquality,
+                    :mappingquality => maximum => :max_mappingquality
                 )
                 DataFrames.rename!(agg, Dict(rank_taxid => :rank_taxid))
                 agg[!, :rank] .= "$(i)_$(rank)"
@@ -423,14 +435,16 @@ function aggregate_by_rank_nonmissing(df::DataFrames.DataFrame, ranks::Vector{St
 end
 
 # function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * "." * Mycelia.normalized_current_date() * ".accession_to_taxid.arrow")
-function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * ".accession_to_taxid.arrow")
+function blastdb_accessions_to_taxid(; blastdb, outfile = blastdb *
+                                                          ".accession_to_taxid.arrow")
     if !isfile(outfile)
         # Processing BLAST DB: 100%|██████████████████████████████| Time: 1:01:09
         #   completed:  112880307
         #   total:      112880307
         #   percent:    100.0
         # 4684.583511 seconds (6.22 G allocations: 306.554 GiB, 77.82% gc time, 0.29% compilation time: 2% of which was recompilation)
-        @time accession_to_taxid_table = Mycelia.blastdb2table(blastdb = blastdb, ALL_FIELDS=false, accession=true, taxid=true)
+        @time accession_to_taxid_table = Mycelia.blastdb2table(
+            blastdb = blastdb, ALL_FIELDS = false, accession = true, taxid = true)
         # 194.124952 seconds (3.76 M allocations: 6.231 GiB, 66.96% gc time, 10.46% compilation time: <1% of which was recompilation)
         accession_to_taxid_table[!, "taxid"] .= parse.(Int, accession_to_taxid_table[!, "taxid"])
         @time Arrow.write(outfile, accession_to_taxid_table)
@@ -443,18 +457,18 @@ function blastdb_accessions_to_taxid(;blastdb, outfile = blastdb * ".accession_t
     return accession_to_taxid_table
 end
 
-function streamline_counts(counts; threshold=0.01, min_len=30)
+function streamline_counts(counts; threshold = 0.01, min_len = 30)
     if length(counts) < min_len
         return counts
     end
     total_counts = sum(last, counts)
-    
+
     # Determine if threshold is relative (float between 0-1) or absolute (integer)
     is_relative = isa(threshold, AbstractFloat) && 0.0 <= threshold <= 1.0
-    
+
     new_counts = Vector{eltype(counts)}()
     other_counts = 0
-    
+
     for (item, count) in counts
         if is_relative
             # For relative threshold, check if the item's proportion is >= threshold
@@ -472,11 +486,11 @@ function streamline_counts(counts; threshold=0.01, min_len=30)
             end
         end
     end
-    
+
     if other_counts > 0
         push!(new_counts, "Other" => other_counts)
     end
-    
+
     return new_counts
 end
 
@@ -504,16 +518,16 @@ Paths to the output file: tsv_out
 Used to return an Arrow format but Arrow integration is poor with union and custom datatypes in Julia
 """
 function merge_xam_with_taxonomies(;
-    xam, 
-    accession2taxid_file::String,
-    output_prefix::String = xam,
-    verbose::Bool = true,
-    force_recalculate::Bool = false
+        xam,
+        accession2taxid_file::String,
+        output_prefix::String = xam,
+        verbose::Bool = true,
+        force_recalculate::Bool = false
 )
     # Setup output file paths
     tsv_out = output_prefix * ".taxonomy-aware.tsv.gz"
     # arrow_out = output_prefix * ".taxonomy-aware.arrow"
-    
+
     # # Check if we can use cached results
     # use_cache = (!force_recalculate && 
     #              isfile(tsv_out) && 
@@ -521,16 +535,16 @@ function merge_xam_with_taxonomies(;
     #              filesize(tsv_out) > 0 && 
     #              filesize(arrow_out) > 0)
     # Check if we can use cached results
-    use_cache = (!force_recalculate && 
-                 isfile(tsv_out) && 
+    use_cache = (!force_recalculate &&
+                 isfile(tsv_out) &&
                  filesize(tsv_out) > 0)
-    
+
     if use_cache
         verbose && println("Using cached taxonomy-aware data from: $tsv_out")
         # return (tsv_out=tsv_out, arrow_out=arrow_out)
         return tsv_out
     end
-    
+
     # Remove existing output files if they exist to avoid conflicts
     if isfile(tsv_out)
         verbose && println("Removing existing file: $tsv_out")
@@ -540,7 +554,7 @@ function merge_xam_with_taxonomies(;
     #     verbose && println("Removing existing file: $arrow_out")
     #     rm(arrow_out)
     # end
-    
+
     # Load accession to taxid mapping table
     verbose && println("Loading accession-to-taxid mapping table...")
     accession2taxid_table = if endswith(accession2taxid_file, ".arrow")
@@ -550,7 +564,7 @@ function merge_xam_with_taxonomies(;
     else
         error("Unsupported file format for accession2taxid_file. Expected .tsv.gz or .arrow")
     end
-    
+
     # Convert XAM to DataFrame
     verbose && println("Converting XAM data to DataFrame...")
     xam_table = if verbose
@@ -558,7 +572,7 @@ function merge_xam_with_taxonomies(;
     else
         Mycelia.xam_to_dataframe(xam)
     end
-    
+
     # Left join with taxonomic IDs
     verbose && println("Joining alignment data with taxonomic IDs...")
     taxid_aware_xam_table = if verbose
@@ -576,32 +590,32 @@ function merge_xam_with_taxonomies(;
             matchmissing = :notequal
         )
     end
-    
+
     # Get unique taxids and retrieve lineage information (filter out missing values)
     verbose && println("Retrieving taxonomic lineage information...")
     unique_taxids = convert(Vector{Int}, filter(!ismissing, unique(taxid_aware_xam_table[!, "taxid"])))
-    
+
     if !isempty(unique_taxids)
         xam_taxid2lineage_table = if verbose
             @time Mycelia.taxids2taxonkit_summarized_lineage_table(unique_taxids)
         else
             Mycelia.taxids2taxonkit_summarized_lineage_table(unique_taxids)
         end
-        
+
         # Add full taxonomic lineage
         verbose && println("Adding full taxonomic lineage information...")
         fully_taxonomy_aware_xam_table = if verbose
             @time DataFrames.leftjoin(
                 taxid_aware_xam_table,
                 xam_taxid2lineage_table,
-                on="taxid",
+                on = "taxid",
                 matchmissing = :notequal
             )
         else
             DataFrames.leftjoin(
                 taxid_aware_xam_table,
                 xam_taxid2lineage_table,
-                on="taxid",
+                on = "taxid",
                 matchmissing = :notequal
             )
         end
@@ -609,13 +623,15 @@ function merge_xam_with_taxonomies(;
         verbose && println("No valid taxids found, skipping lineage lookup...")
         fully_taxonomy_aware_xam_table = taxid_aware_xam_table
     end
-    
+
     # Calculate percent identity
     verbose && println("Calculating percent identity scores...")
-    if "alignlength" in names(fully_taxonomy_aware_xam_table) && "mismatches" in names(fully_taxonomy_aware_xam_table)
-        DataFrames.transform!(fully_taxonomy_aware_xam_table, 
-            [:alignlength, :mismatches] => 
-            ((len, mis) -> begin
+    if "alignlength" in names(fully_taxonomy_aware_xam_table) &&
+       "mismatches" in names(fully_taxonomy_aware_xam_table)
+        DataFrames.transform!(fully_taxonomy_aware_xam_table,
+            [:alignlength,
+                :mismatches] => ((len,
+                mis) -> begin
                 # Handle missing values by returning missing for percent identity
                 result = similar(len, Union{Float64, Missing})
                 for i in eachindex(len, mis)
@@ -626,72 +642,76 @@ function merge_xam_with_taxonomies(;
                     end
                 end
                 result
-            end) => 
-            :percent_identity)
+            end) => :percent_identity)
     else
-        verbose && println("Warning: alignlength and/or mismatches columns not found. Skipping percent identity calculation.")
+        verbose &&
+            println("Warning: alignlength and/or mismatches columns not found. Skipping percent identity calculation.")
     end
-    
+
     # Calculate relative alignment score proportions per read/template
     verbose && println("Calculating relative alignment score proportions...")
-    if "template" in names(fully_taxonomy_aware_xam_table) && "alignment_score" in names(fully_taxonomy_aware_xam_table)
+    if "template" in names(fully_taxonomy_aware_xam_table) &&
+       "alignment_score" in names(fully_taxonomy_aware_xam_table)
         # Group by template and calculate total scores per template
         template_totals = DataFrames.combine(
-            DataFrames.groupby(fully_taxonomy_aware_xam_table, :template), 
+            DataFrames.groupby(fully_taxonomy_aware_xam_table, :template),
             :alignment_score => sum => :total_template_score
         )
-        
+
         # Merge back to get proportions
         fully_taxonomy_aware_xam_table = DataFrames.leftjoin(
             fully_taxonomy_aware_xam_table,
             template_totals,
             on = :template
         )
-        
+
         # Calculate relative proportion
         DataFrames.transform!(fully_taxonomy_aware_xam_table,
-            [:alignment_score, :total_template_score] =>
-            ((score, total) -> begin
+            [:alignment_score,
+                :total_template_score] => ((score,
+                total) -> begin
                 # Handle missing values properly
-                result = similar(score, Union{Float64, Missing})
+                result = similar(score, Union{
+                    Float64, Missing})
                 for i in eachindex(score, total)
-                    if ismissing(score[i]) || ismissing(total[i]) || total[i] == 0
+                    if ismissing(score[i]) || ismissing(total[i]) ||
+                       total[i] == 0
                         result[i] = missing
                     else
                         result[i] = score[i] / total[i]
                     end
                 end
                 result
-            end) =>
-            :relative_alignment_proportion
+            end) => :relative_alignment_proportion
         )
-        
+
         # Clean up the temporary total column
         DataFrames.select!(fully_taxonomy_aware_xam_table, DataFrames.Not(:total_template_score))
     else
-        verbose && println("Warning: template and/or alignment_score columns not found. Skipping relative proportion calculation.")
+        verbose &&
+            println("Warning: template and/or alignment_score columns not found. Skipping relative proportion calculation.")
     end
 
     # sanitize nothings before writing out
     verbose && println("Sanitizing `nothing` values and replacing with `missing`")
     fully_taxonomy_aware_xam_table = Mycelia.dataframe_replace_nothing_with_missing(fully_taxonomy_aware_xam_table)
-    
+
     # Write output files
     # verbose && println("Writing results to $tsv_out and $arrow_out...")
     verbose && println("Writing results to $tsv_out...")
-    
+
     if verbose
-        @time Mycelia.write_tsvgz(df=fully_taxonomy_aware_xam_table, filename=tsv_out)
+        @time Mycelia.write_tsvgz(df = fully_taxonomy_aware_xam_table, filename = tsv_out)
         GC.gc()  # Clean up after TSV write
-        # @time Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
+    # @time Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
     else
-        Mycelia.write_tsvgz(df=fully_taxonomy_aware_xam_table, filename=tsv_out)
+        Mycelia.write_tsvgz(df = fully_taxonomy_aware_xam_table, filename = tsv_out)
         GC.gc()
         # Arrow.write(arrow_out, fully_taxonomy_aware_xam_table)
     end
-    
+
     verbose && println("Taxonomy merging complete!")
-    
+
     # return (tsv_out=tsv_out, arrow_out=arrow_out)
     return tsv_out
 end
@@ -714,9 +734,9 @@ This function takes taxonomy-aware alignment data and performs classification by
 A DataFrame with taxonomic classification results including individual alignment metrics
 """
 function classify_reads_by_taxonomy(;
-    taxonomy_aware_file::String,
-    min_relative_proportion::Float64 = 60.0,
-    verbose::Bool = true
+        taxonomy_aware_file::String,
+        min_relative_proportion::Float64 = 60.0,
+        verbose::Bool = true
 )
     # Load taxonomy-aware data
     verbose && println("Loading taxonomy-aware alignment data...")
@@ -735,62 +755,67 @@ function classify_reads_by_taxonomy(;
     else
         error("Unsupported file format. Expected .tsv.gz or .arrow")
     end
-    
+
     # Check for required columns
-    required_columns = ["template", "taxid", "alignment_score", "relative_alignment_proportion_percent"]
+    required_columns = [
+        "template", "taxid", "alignment_score", "relative_alignment_proportion_percent"]
     missing_columns = setdiff(required_columns, names(taxonomy_data))
     if !isempty(missing_columns)
         error("Missing required columns: $(join(missing_columns, ", "))")
     end
-    
+
     # Filter out rows with missing values in critical columns
     verbose && println("Filtering out rows with missing values in critical columns...")
     filtered_data = DataFrames.filter(
-        row -> !ismissing(row.taxid) && !ismissing(row.alignment_score) && !ismissing(row.relative_alignment_proportion_percent),
+        row -> !ismissing(row.taxid) && !ismissing(row.alignment_score) &&
+               !ismissing(row.relative_alignment_proportion_percent),
         taxonomy_data
     )
-    
-    verbose && println("Retained $(DataFrames.nrow(filtered_data)) rows out of $(DataFrames.nrow(taxonomy_data)) total after filtering missing values")
-    
+
+    verbose &&
+        println("Retained $(DataFrames.nrow(filtered_data)) rows out of $(DataFrames.nrow(taxonomy_data)) total after filtering missing values")
+
     # Filter alignments that meet the relative proportion threshold
-    verbose && println("Filtering alignments by relative proportion threshold (≥$min_relative_proportion%)...")
+    verbose &&
+        println("Filtering alignments by relative proportion threshold (≥$min_relative_proportion%)...")
     high_confidence_alignments = DataFrames.filter(
         row -> row.relative_alignment_proportion_percent >= min_relative_proportion,
         filtered_data
     )
-    
-    verbose && println("Found $(DataFrames.nrow(high_confidence_alignments)) alignments above threshold out of $(DataFrames.nrow(filtered_data)) total")
-    
+
+    verbose &&
+        println("Found $(DataFrames.nrow(high_confidence_alignments)) alignments above threshold out of $(DataFrames.nrow(filtered_data)) total")
+
     # For each template, analyze the taxonomic assignments
     verbose && println("Analyzing taxonomic assignments per read...")
     classification_results = DataFrames.combine(DataFrames.groupby(filtered_data, :template)) do group
         # Sort by relative proportion descending
-        sorted = DataFrames.sort(group, :relative_alignment_proportion_percent, rev=true)
-        
+        sorted = DataFrames.sort(group, :relative_alignment_proportion_percent, rev = true)
+
         # Get top assignment
         top_taxid = sorted[1, :taxid]
         top_proportion = sorted[1, :relative_alignment_proportion_percent]
         top_score = sorted[1, :alignment_score]
-        
+
         # Check if top assignment meets threshold
         passes_threshold = top_proportion >= min_relative_proportion
-        
+
         # Calculate proportion ratio with next best (if it exists)
         proportion_ratio = Inf
         if DataFrames.nrow(sorted) > 1
             second_proportion = sorted[2, :relative_alignment_proportion_percent]
             proportion_ratio = top_proportion / second_proportion
         end
-        
+
         # Count total alignments for this template
         total_alignments = DataFrames.nrow(sorted)
-        
+
         # Store all taxonomic assignments and their proportions
         all_assignments = OrderedCollections.OrderedDict{Int, Float64}()
         for i in 1:DataFrames.nrow(sorted)
             all_assignments[sorted[i, :taxid]] = sorted[i, :relative_alignment_proportion_percent]
         end
-        
+
         return DataFrames.DataFrame(
             top_taxid = top_taxid,
             top_proportion_percent = top_proportion,
@@ -801,10 +826,10 @@ function classify_reads_by_taxonomy(;
             all_taxonomic_assignments = [all_assignments]
         )
     end
-    
+
     # Apply conservative taxonomy classification
     verbose && println("Applying conservative taxonomy classification...")
-    
+
     # Prepare data for conservative taxonomy (adapting to expected format)
     conservative_input = DataFrames.DataFrame(
         template = classification_results.template,
@@ -813,22 +838,24 @@ function classify_reads_by_taxonomy(;
         ratio_to_next_best_score = classification_results.proportion_ratio_to_next_best,
         additional_taxids = classification_results.all_taxonomic_assignments
     )
-    
+
     final_classification = Mycelia.apply_conservative_taxonomy(conservative_input)
-    
+
     # Merge back with our detailed results
     detailed_classification = DataFrames.leftjoin(
         classification_results,
         final_classification,
         on = :template
     )
-    
+
     verbose && println("Read classification complete!")
     verbose && println("Summary:")
     verbose && println("  - Total reads: $(DataFrames.nrow(detailed_classification))")
-    verbose && println("  - Reads passing threshold: $(sum(detailed_classification.passes_threshold))")
-    verbose && println("  - Reads with multiple alignments: $(sum(detailed_classification.total_alignments .> 1))")
-    
+    verbose &&
+        println("  - Reads passing threshold: $(sum(detailed_classification.passes_threshold))")
+    verbose &&
+        println("  - Reads with multiple alignments: $(sum(detailed_classification.total_alignments .> 1))")
+
     return detailed_classification
 end
 
@@ -868,12 +895,12 @@ end
 #         "position",
 #         "alignment_score",
 #     ]
-    
+
 #     blast_tax_table_columns_of_interest = [
 #         "accession",
 #         "taxid",
 #     ]
-    
+
 #     # 151.408048 seconds (317.18 k allocations: 460.065 MiB, 0.10% compilation time: 20% of which was recompilation)
 #     @time xam_table = Mycelia.xam_to_dataframe(xam)
 
@@ -883,11 +910,11 @@ end
 #         on="reference" => "accession",
 #         matchmissing = :notequal
 #     )
-    
+
 #     template_taxid_score_table = DataFrames.combine(DataFrames.groupby(taxid_aware_xam_table, [:template, :taxid]), :alignment_score => sum => :total_alignment_score)
 #     # replace missing (unclassified) with 0 (NCBI taxonomies start at 1, so 0 is a common, but technically non-standard NCBI taxon identifier
 #     template_taxid_score_table = DataFrames.coalesce.(template_taxid_score_table, 0)
-    
+
 #     # For each template, identify top taxid and calculate score difference
 #     results_df = DataFrames.combine(DataFrames.groupby(template_taxid_score_table, :template)) do group
 #         # Sort scores in descending order
@@ -924,28 +951,28 @@ end
 #     return classification_table
 # end
 
-function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
+function apply_conservative_taxonomy(results_df; ratio_threshold = 2.0)
     # Initialize output columns with default values
     n_rows = DataFrames.nrow(results_df)
     final_assignment = copy(results_df.top_taxid)
     confidence_level = fill("high", n_rows)
-    
+
     # Collect all sets of taxids that need LCA calculation
     lca_needed_indices = Int[]
     competing_taxids_list = Vector{Vector{Int}}()
-    
+
     # First pass: identify which rows need LCA and prepare the taxid sets
     for i in 1:n_rows
         top_taxid = results_df.top_taxid[i]
         top_score = results_df.top_score[i]
         ratio = results_df.ratio_to_next_best_score[i]
         additional_dict = results_df.additional_taxids[i]
-        
+
         # Skip if no competitors or ratio is high enough
         if isempty(additional_dict) || ratio >= ratio_threshold
             continue
         end
-        
+
         # Collect taxids that are within the threshold
         competing_taxids = [top_taxid]
         for (taxid, score) in additional_dict
@@ -953,7 +980,7 @@ function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
                 push!(competing_taxids, taxid)
             end
         end
-        
+
         # If we have multiple competing taxids, add to the batch
         if length(competing_taxids) > 1
             push!(lca_needed_indices, i)
@@ -961,18 +988,18 @@ function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
             confidence_level[i] = "lca"  # Mark as needing LCA
         end
     end
-    
+
     # If we have any rows that need LCA calculation
     if !isempty(lca_needed_indices)
         # Batch calculate all LCAs
         lca_results = Mycelia.batch_taxids2lca(competing_taxids_list)
-        
+
         # Apply LCA results to the appropriate rows
         for (idx, lca_idx) in enumerate(lca_needed_indices)
             final_assignment[lca_idx] = lca_results[idx]
         end
     end
-    
+
     # Create a new dataframe with the original data plus our new columns
     updated_results = DataFrames.hcat(
         results_df,
@@ -983,10 +1010,9 @@ function apply_conservative_taxonomy(results_df; ratio_threshold=2.0)
     )
 
     updated_results[(updated_results.top_taxid .== 0) .& (updated_results.top_score .== 0), "confidence_level"] .= "unclassified"
-    
+
     return updated_results
 end
-
 
 # this is faster than NCBI version
 # run(pipeline(
@@ -1023,7 +1049,7 @@ function list_full_taxonomy()
         `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids 1`,
         `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --add-prefix --fill-miss-rank --show-lineage-taxids --format '{k};{K};{p};{c};{o};{f};{g};{s}'`
     )
-    data, header = uCSV.read(open(p), delim='\t')
+    data, header = uCSV.read(open(p), delim = '\t')
     header = ["taxid", "lineage", "taxid_lineage"]
     table = DataFrames.DataFrame(data, header)
     ranks = [
@@ -1063,7 +1089,7 @@ Return an ordered list of taxonomic ranks from highest (top) to lowest (species)
 # Returns
 - `Vector{String}`: An array of taxonomic rank names in hierarchical order
 """
-function list_ranks(;synonyms=false)
+function list_ranks(; synonyms = false)
     if !synonyms
         return [
             "top",
@@ -1108,7 +1134,7 @@ DataFrame
     - name::String : Node name
 """
 function list_toplevel()
-    return DataFrames.DataFrame(taxid=[0, 1], name=["unclassified", "root"])
+    return DataFrames.DataFrame(taxid = [0, 1], name = ["unclassified", "root"])
 end
 
 """
@@ -1155,7 +1181,7 @@ function list_rank(rank)
             `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit filter --equal-to "$(rank)"`,
             `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit reformat --taxid-field 1 --format "{$(shorthand)}"`
         )
-        data, header = uCSV.read(open(p), delim='\t')
+        data, header = uCSV.read(open(p), delim = '\t')
         header = ["taxid", "name"]
         return DataFrames.DataFrame(data, header)
     end
@@ -1279,7 +1305,9 @@ Vector{Int} containing all descendant taxon IDs
 function list_subtaxa(taxid)
     Mycelia.add_bioconda_env("taxonkit")
     setup_taxonkit_taxonomy()
-    return parse.(Int, filter(!isempty, strip.(readlines(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
+    return parse.(Int,
+        filter(!isempty,
+            strip.(readlines(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit list --ids $(taxid)`))))
 end
 
 """
@@ -1302,8 +1330,9 @@ Requires taxonkit package (installed automatically via Bioconda)
 function name2taxid(name)
     Mycelia.add_bioconda_env("taxonkit")
     setup_taxonkit_taxonomy()
-    p = pipeline(`echo $(name)`, `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit name2taxid --show-rank`)
-    data, header = uCSV.read(open(p), delim='\t')
+    p = pipeline(`echo $(name)`,
+        `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n taxonkit taxonkit name2taxid --show-rank`)
+    data, header = uCSV.read(open(p), delim = '\t')
     header = ["name", "taxid", "rank"]
     return DataFrames.DataFrame(data, header)
 end
@@ -1359,8 +1388,8 @@ function taxids2ncbi_taxonomy_table(taxids::AbstractVector{Int})
     cmd1 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets summary taxonomy taxon --inputfile $(temp_file) --as-json-lines`
     cmd2 = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli dataformat tsv taxonomy --template tax-summary`
     io = open(pipeline(cmd1, cmd2))
-    joint_table = CSV.read(io, DataFrames.DataFrame, delim='\t', header=1)
-    rm(temp_file)    
+    joint_table = CSV.read(io, DataFrames.DataFrame, delim = '\t', header = 1)
+    rm(temp_file)
     return joint_table
 end
 
@@ -1383,8 +1412,8 @@ A DataFrame with columns:
 """
 # function taxids2taxonkit_lineage_table(taxids::AbstractVector{Int})
 function taxids2taxonkit_full_lineage_table(
-    taxids::AbstractVector{Int};
-    taxdump_dir::Union{String,Nothing} = nothing
+        taxids::AbstractVector{Int};
+        taxdump_dir::Union{String, Nothing} = nothing
 )
     Mycelia.add_bioconda_env("taxonkit")
     if taxdump_dir === nothing
@@ -1402,14 +1431,15 @@ function taxids2taxonkit_full_lineage_table(
         "taxonkit",
         "lineage",
         "--show-lineage-taxids",
-        "--show-lineage-ranks",
+        "--show-lineage-ranks"
     ]
     if taxdump_dir !== nothing
         append!(cmd_parts, ["--data-dir", taxdump_dir])
     end
     push!(cmd_parts, f)
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit $cmd_parts`
-    data, header = uCSV.read(open(pipeline(cmd)), delim='\t', header=false, typedetectrows=100)
+    data,
+    header = uCSV.read(open(pipeline(cmd)), delim = '\t', header = false, typedetectrows = 100)
     rm(f)
     header = ["taxid", "lineage", "lineage-taxids", "lineage-ranks"]
     return DataFrames.DataFrame(data, header)
@@ -1435,13 +1465,16 @@ Returns:
 function taxids2taxonkit_taxid2lineage_ranks(taxids::AbstractVector{Int})
     table = taxids2taxonkit_full_lineage_table(taxids)
     # table = taxids2taxonkit_lineage_table(taxids)
-    taxid_to_lineage_ranks = Dict{Int, Dict{String, @NamedTuple{lineage::String, taxid::Union{Int, Missing}}}}()
+    taxid_to_lineage_ranks = Dict{
+        Int, Dict{String, @NamedTuple{lineage::String, taxid::Union{Int, Missing}}}}()
     for row in DataFrames.eachrow(table)
         lineage_ranks = String.(split(row["lineage-ranks"], ';'))
-        lineage_taxids = [something(tryparse(Int, x), missing) for x in split(row["lineage-taxids"], ';')]
+        lineage_taxids = [something(tryparse(Int, x), missing)
+                          for x in split(row["lineage-taxids"], ';')]
         # lineage_taxids = something.(tryparse.(Int, split(row["lineage-taxids"], ';')), missing)
         lineage = String.(split(row["lineage"], ';'))
-        row_dict = Dict(rank => (;lineage, taxid) for (lineage, rank, taxid) in zip(lineage, lineage_ranks, lineage_taxids))
+        row_dict = Dict(rank => (; lineage, taxid)
+        for (lineage, rank, taxid) in zip(lineage, lineage_ranks, lineage_taxids))
         delete!(row_dict, "no rank")
         taxid_to_lineage_ranks[row["taxid"]] = row_dict
     end
@@ -1468,10 +1501,10 @@ Missing values are used when a taxonomic rank is not available.
 """
 function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     taxid_to_lineage_ranks = taxids2taxonkit_taxid2lineage_ranks(taxids)
-    
+
     # Pre-allocate vectors for each column
     n_rows = length(taxid_to_lineage_ranks)
-    
+
     taxid_col = Vector{Int}(undef, n_rows)
     species_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
     species_col = Vector{Union{String, Missing}}(undef, n_rows)
@@ -1491,7 +1524,7 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
     realm_col = Vector{Union{String, Missing}}(undef, n_rows)
     domain_taxid_col = Vector{Union{Int, Missing}}(undef, n_rows)
     domain_col = Vector{Union{String, Missing}}(undef, n_rows)
-    
+
     # Fill the vectors
     for (i, (taxid, lineage_ranks)) in enumerate(taxid_to_lineage_ranks)
         # Handle domain/superkingdom special case
@@ -1506,26 +1539,42 @@ function taxids2taxonkit_summarized_lineage_table(taxids::AbstractVector{Int})
             domain_taxid_col[i] = missing
             domain_col[i] = missing
         end
-        
+
         taxid_col[i] = taxid
-        species_taxid_col[i] = haskey(lineage_ranks, "species") ? lineage_ranks["species"].taxid : missing
-        species_col[i] = haskey(lineage_ranks, "species") ? lineage_ranks["species"].lineage : missing
-        genus_taxid_col[i] = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid : missing
-        genus_col[i] = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage : missing
-        family_taxid_col[i] = haskey(lineage_ranks, "family") ? lineage_ranks["family"].taxid : missing
-        family_col[i] = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage : missing
-        order_taxid_col[i] = haskey(lineage_ranks, "order") ? lineage_ranks["order"].taxid : missing
-        order_col[i] = haskey(lineage_ranks, "order") ? lineage_ranks["order"].lineage : missing
-        class_taxid_col[i] = haskey(lineage_ranks, "class") ? lineage_ranks["class"].taxid : missing
-        class_col[i] = haskey(lineage_ranks, "class") ? lineage_ranks["class"].lineage : missing
-        phylum_taxid_col[i] = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].taxid : missing
-        phylum_col[i] = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].lineage : missing
-        kingdom_taxid_col[i] = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].taxid : missing
-        kingdom_col[i] = haskey(lineage_ranks, "kingdom") ? lineage_ranks["kingdom"].lineage : missing
-        realm_taxid_col[i] = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].taxid : missing
-        realm_col[i] = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].lineage : missing
+        species_taxid_col[i] = haskey(lineage_ranks, "species") ?
+                               lineage_ranks["species"].taxid : missing
+        species_col[i] = haskey(lineage_ranks, "species") ?
+                         lineage_ranks["species"].lineage : missing
+        genus_taxid_col[i] = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].taxid :
+                             missing
+        genus_col[i] = haskey(lineage_ranks, "genus") ? lineage_ranks["genus"].lineage :
+                       missing
+        family_taxid_col[i] = haskey(lineage_ranks, "family") ?
+                              lineage_ranks["family"].taxid : missing
+        family_col[i] = haskey(lineage_ranks, "family") ? lineage_ranks["family"].lineage :
+                        missing
+        order_taxid_col[i] = haskey(lineage_ranks, "order") ? lineage_ranks["order"].taxid :
+                             missing
+        order_col[i] = haskey(lineage_ranks, "order") ? lineage_ranks["order"].lineage :
+                       missing
+        class_taxid_col[i] = haskey(lineage_ranks, "class") ? lineage_ranks["class"].taxid :
+                             missing
+        class_col[i] = haskey(lineage_ranks, "class") ? lineage_ranks["class"].lineage :
+                       missing
+        phylum_taxid_col[i] = haskey(lineage_ranks, "phylum") ?
+                              lineage_ranks["phylum"].taxid : missing
+        phylum_col[i] = haskey(lineage_ranks, "phylum") ? lineage_ranks["phylum"].lineage :
+                        missing
+        kingdom_taxid_col[i] = haskey(lineage_ranks, "kingdom") ?
+                               lineage_ranks["kingdom"].taxid : missing
+        kingdom_col[i] = haskey(lineage_ranks, "kingdom") ?
+                         lineage_ranks["kingdom"].lineage : missing
+        realm_taxid_col[i] = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].taxid :
+                             missing
+        realm_col[i] = haskey(lineage_ranks, "realm") ? lineage_ranks["realm"].lineage :
+                       missing
     end
-    
+
     # Create DataFrame from pre-allocated vectors
     return DataFrames.DataFrame(
         taxid = taxid_col,
@@ -1576,7 +1625,9 @@ function taxids2lca(ids::Vector{Int})
     input_str = join(ids, " ")
 
     # Pass the input string to the `taxonkit lca` command and capture the output
-    output = read(pipeline(`echo $(input_str)`, `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lca`), String)
+    output = read(
+        pipeline(`echo $(input_str)`, `$(Mycelia.CONDA_RUNNER) run --live-stream -n taxonkit taxonkit lca`),
+        String)
 
     # Split the output string and select the last item
     lca_id = split(chomp(output), "\t")[end]
@@ -1663,7 +1714,7 @@ end
 #     # --lca-mode INT                   LCA Mode 1: single search LCA , 2/3: approximate 2bLCA, 4: top hit [3]
 #     # --lca-search BOOL                Efficient search for LCA candidates [0]
 #     # ^ this looks like it actually runs @ 1 with s=1.0 & --orf-filter=1
-    
+
 #     # 112 days to process 600 samples at this rate....
 #     # 278 minutes or 4.5 hours for a single sample classification!!
 #     # 16688.050696 seconds (1.43 M allocations: 80.966 MiB, 0.02% gc time, 0.00% compilation time)
@@ -1674,7 +1725,7 @@ end
 #     # difference was only 10 minutes
 #     # 15903.218456 seconds (969.92 k allocations: 48.624 MiB, 0.01% gc time)
 #     # use default parameters
-    
+
 #     if force || (!force && !isfile(outfile))
 #         cmd = 
 #         `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
@@ -1711,7 +1762,7 @@ Parse an MMseqs2 easy-taxonomy tophit report into a structured DataFrame.
   - `taxon_name`: Species name and lineage
 """
 function parse_mmseqs_easy_taxonomy_tophit_report(tophit_report)
-    data, header = uCSV.read(tophit_report, delim='\t')
+    data, header = uCSV.read(tophit_report, delim = '\t')
     # tophit_report
     # (1) Target identifier 
     # (2) Number of sequences aligning to target
@@ -1752,7 +1803,7 @@ DataFrame with columns:
 - `support -log(E-value)`: Statistical support score
 """
 function parse_mmseqs_easy_taxonomy_lca_tsv(lca_tsv)
-    data, header = uCSV.read(lca_tsv, delim='\t')
+    data, header = uCSV.read(lca_tsv, delim = '\t')
     # contig
     # (1) a single taxonomy numeric identifier
     # (2) a taxonomic rank column

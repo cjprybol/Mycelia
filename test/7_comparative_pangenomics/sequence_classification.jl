@@ -36,7 +36,7 @@ Test.@testset "sequence classification" begin
         top_taxid = [1, 2],
         top_score = [10.0, 9.0],
         ratio_to_next_best_score = [2.1, 2.5],
-        additional_taxids = [Dict{Int, Float64}(), Dict(3 => 8.0)],
+        additional_taxids = [Dict{Int, Float64}(), Dict(3 => 8.0)]
     )
     classified = Mycelia.apply_conservative_taxonomy(df; ratio_threshold = 2.0)
 

@@ -7,7 +7,7 @@ Test.@testset "QC Metrics" begin
         cv = Mycelia.robust_cv(values)
         Test.@test cv > 0.0
 
-        threshold = Mycelia.robust_threshold(values; k=2.0)
+        threshold = Mycelia.robust_threshold(values; k = 2.0)
         Test.@test threshold > 0.0
 
         Test.@test Mycelia.robust_cv(Float64[]) == 0.0
@@ -30,7 +30,7 @@ Test.@testset "QC Metrics" begin
         acc = Mycelia.accuracy(true_labels, pred_labels)
         Test.@test acc == 0.75
 
-        eval_out = Mycelia.evaluate_classification(true_labels, pred_labels; verbose=false)
+        eval_out = Mycelia.evaluate_classification(true_labels, pred_labels; verbose = false)
         Test.@test eval_out.accuracy == 0.75
 
         mapped, mapping = Mycelia.best_label_mapping(true_labels, pred_labels)

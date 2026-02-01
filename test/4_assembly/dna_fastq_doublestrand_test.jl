@@ -33,7 +33,7 @@ Test.@testset "DNA BioSequence DoubleStrand Quality Graph" begin
     reads = [fastq_record]
 
     # Build graph with quality awareness
-    singlestrand = Mycelia.Rhizomorph.build_fastq_graph(reads; dataset_id="test", min_overlap=3)
+    singlestrand = Mycelia.Rhizomorph.build_fastq_graph(reads; dataset_id = "test", min_overlap = 3)
     graph = Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(singlestrand)
 
     # Structure validation
@@ -50,7 +50,8 @@ Test.@testset "DNA BioSequence DoubleStrand Quality Graph" begin
             for entries in values(evidence_map)
                 for entry in entries
                     Test.@test entry isa Mycelia.Rhizomorph.QualityEvidenceEntry
-                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test entry.strand in (
+                        Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                     Test.@test all(q -> 0 <= q - UInt8(33) <= 60, entry.quality_scores)
                 end
             end
@@ -69,7 +70,8 @@ Test.@testset "DNA BioSequence DoubleStrand Quality Graph" begin
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
 
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
 

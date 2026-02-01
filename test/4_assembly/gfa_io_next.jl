@@ -30,8 +30,8 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             records,
             3;
-            dataset_id="gfa_write",
-            mode=:doublestrand,
+            dataset_id = "gfa_write",
+            mode = :doublestrand
         )
 
         mktempdir() do tmpdir
@@ -73,7 +73,7 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
             graph = Mycelia.Rhizomorph.read_gfa_next(
                 gfa_file,
                 Kmers.DNAKmer{3},
-                Mycelia.Rhizomorph.DoubleStrand,
+                Mycelia.Rhizomorph.DoubleStrand
             )
 
             Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -91,8 +91,8 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             [seq1],
             3;
-            dataset_id="gfa_rt",
-            mode=:doublestrand,
+            dataset_id = "gfa_rt",
+            mode = :doublestrand
         )
 
         mktempdir() do tmpdir
@@ -101,11 +101,13 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
             restored = Mycelia.Rhizomorph.read_gfa_next(
                 gfa_file,
                 Kmers.DNAKmer{3},
-                Mycelia.Rhizomorph.DoubleStrand,
+                Mycelia.Rhizomorph.DoubleStrand
             )
 
-            Test.@test length(MetaGraphsNext.labels(restored)) == length(MetaGraphsNext.labels(graph))
-            Test.@test length(collect(MetaGraphsNext.edge_labels(restored))) == length(collect(MetaGraphsNext.edge_labels(graph)))
+            Test.@test length(MetaGraphsNext.labels(restored)) ==
+                       length(MetaGraphsNext.labels(graph))
+            Test.@test length(collect(MetaGraphsNext.edge_labels(restored))) ==
+                       length(collect(MetaGraphsNext.edge_labels(graph)))
         end
     end
 
@@ -124,29 +126,31 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
             single_graph = Mycelia.Rhizomorph.read_gfa_next(
                 gfa_file,
                 Kmers.DNAKmer{3},
-                Mycelia.Rhizomorph.SingleStrand,
+                Mycelia.Rhizomorph.SingleStrand
             )
             double_graph = Mycelia.Rhizomorph.read_gfa_next(
                 gfa_file,
                 Kmers.DNAKmer{3},
-                Mycelia.Rhizomorph.DoubleStrand,
+                Mycelia.Rhizomorph.DoubleStrand
             )
 
             for graph in (single_graph, double_graph)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
-                Test.@test all(label isa Kmers.DNAKmer{3} for label in MetaGraphsNext.labels(graph))
+                Test.@test all(label isa Kmers.DNAKmer{3}
+                for label in MetaGraphsNext.labels(graph))
             end
         end
     end
 
     Test.@testset "Error Handling" begin
-        Test.@test_throws SystemError Mycelia.Rhizomorph.read_gfa_next("nonexistent.gfa", Kmers.DNAKmer{3}, Mycelia.Rhizomorph.DoubleStrand)
+        Test.@test_throws SystemError Mycelia.Rhizomorph.read_gfa_next(
+            "nonexistent.gfa", Kmers.DNAKmer{3}, Mycelia.Rhizomorph.DoubleStrand)
 
         empty_graph = MetaGraphsNext.MetaGraph(
             MetaGraphsNext.DiGraph();
-            label_type=Kmers.DNAKmer{3},
-            vertex_data_type=Mycelia.Rhizomorph.KmerVertexData{Kmers.DNAKmer{3}},
-            edge_data_type=Mycelia.Rhizomorph.KmerEdgeData,
+            label_type = Kmers.DNAKmer{3},
+            vertex_data_type = Mycelia.Rhizomorph.KmerVertexData{Kmers.DNAKmer{3}},
+            edge_data_type = Mycelia.Rhizomorph.KmerEdgeData
         )
 
         mktempdir() do tmpdir

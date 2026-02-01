@@ -36,10 +36,10 @@ function convert_variable_length_to_doublestrand(graph::MetaGraphsNext.MetaGraph
 
     ds_graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=VertexType,
-        vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType,
-        weight_function=compute_edge_weight
+        label_type = VertexType,
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        weight_function = compute_edge_weight
     )
 
     # Add forward vertices
@@ -104,10 +104,10 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
 
     canon_graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=VertexType,
-        vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType,
-        weight_function=compute_edge_weight
+        label_type = VertexType,
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        weight_function = compute_edge_weight
     )
 
     processed = Set{VertexType}()
@@ -130,7 +130,10 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
             for (dsid, obs) in vdata.evidence
                 for (obsid, evidset) in obs
                     for ev in evidset
-                        Mycelia.Rhizomorph.add_evidence!(canon_graph[canon_v], dsid, obsid, v == canon_v ? ev : Mycelia.Rhizomorph.flip_evidence_strand(ev))
+                        Mycelia.Rhizomorph.add_evidence!(canon_graph[canon_v],
+                            dsid,
+                            obsid,
+                            v == canon_v ? ev : Mycelia.Rhizomorph.flip_evidence_strand(ev))
                     end
                 end
             end
@@ -142,7 +145,11 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
                 for (dsid, obs) in rcdata.evidence
                     for (obsid, evidset) in obs
                         for ev in evidset
-                            Mycelia.Rhizomorph.add_evidence!(canon_graph[canon_v], dsid, obsid, rc_v == canon_v ? ev : Mycelia.Rhizomorph.flip_evidence_strand(ev))
+                            Mycelia.Rhizomorph.add_evidence!(canon_graph[canon_v],
+                                dsid,
+                                obsid,
+                                rc_v == canon_v ? ev :
+                                Mycelia.Rhizomorph.flip_evidence_strand(ev))
                         end
                     end
                 end
@@ -162,7 +169,11 @@ function convert_variable_length_to_canonical(graph::MetaGraphsNext.MetaGraph)
             for (dsid, obs) in edata.evidence
                 for (obsid, evidset) in obs
                     for ev in evidset
-                        Mycelia.Rhizomorph.add_evidence!(canon_graph[canon_src, canon_dst], dsid, obsid, (src == canon_src && dst == canon_dst) ? ev : Mycelia.Rhizomorph.flip_evidence_strand(ev))
+                        Mycelia.Rhizomorph.add_evidence!(canon_graph[canon_src, canon_dst],
+                            dsid,
+                            obsid,
+                            (src == canon_src && dst == canon_dst) ? ev :
+                            Mycelia.Rhizomorph.flip_evidence_strand(ev))
                     end
                 end
             end

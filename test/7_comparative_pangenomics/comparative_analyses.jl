@@ -25,5 +25,4 @@ end
 import Test
 import Mycelia
 
-Test.@testset "Comparative Analyses" begin
-end
+Test.@testset "Comparative Analyses" begin end

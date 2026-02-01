@@ -27,7 +27,6 @@ import FASTX
 import Kmers
 
 Test.@testset "DNA Qualmer Graph - Singlestrand" begin
-
     Test.@testset "DNA Qualmer Graph Construction - Single Read" begin
         # Create FASTQ record with quality scores
         seq = "ATGCG"
@@ -36,7 +35,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have 3 unique DNA k-mers
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 3
@@ -55,7 +54,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -90,7 +89,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record2 = FASTX.FASTQ.Record("read_002", seq2, qual_str2)
 
         records = [record1, record2]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Same k-mers, but observed with different qualities
         kmer = Kmers.DNAKmer{3}("ATG")
@@ -109,7 +108,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.DNAKmer{3}("ATG")
         dst = Kmers.DNAKmer{3}("TGC")
@@ -142,7 +141,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # K-mers should still be added (filtering happens later if needed)
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2
@@ -162,7 +161,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should only have ATG (NNG, NCG are invalid)
         Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("ATG"))
@@ -188,7 +187,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record2 = FASTX.FASTQ.Record("read_rev", seq2, qual_str2)
 
         records = [record1, record2]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have 2 separate vertices (strand-specific)
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2
@@ -206,7 +205,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -224,7 +223,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Test that graph query functions work on qualmer graphs
         sources = Mycelia.Rhizomorph.get_all_sources(graph)
@@ -249,7 +248,7 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Get path
         path = [
@@ -274,10 +273,10 @@ Test.@testset "DNA Qualmer Graph - Singlestrand" begin
         record2 = FASTX.FASTQ.Record("read_002", seq, qual_str)
 
         # Build graph with dataset 1
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1], 3; dataset_id="dataset_01")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1], 3; dataset_id = "dataset_01")
 
         # Add observations from dataset 2
-        Mycelia.Rhizomorph.add_observations_to_graph!(graph, [record2], 3; dataset_id="dataset_02")
+        Mycelia.Rhizomorph.add_observations_to_graph!(graph, [record2], 3; dataset_id = "dataset_02")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)

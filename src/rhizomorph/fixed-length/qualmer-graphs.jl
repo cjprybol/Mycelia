@@ -83,36 +83,36 @@ joint_quality = get_vertex_joint_quality(vertex_data, "sample_A")
 - `combine_phred_scores`: Combine quality scores from independent observations
 """
 function build_qualmer_graph(
-    records::Vector{FASTX.FASTQ.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    mode::Symbol=:singlestrand,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        mode::Symbol = :singlestrand,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if mode == :singlestrand
         return build_qualmer_graph_singlestrand(
             records,
             k;
-            dataset_id=dataset_id,
-            type_hint=type_hint,
-            ambiguous_action=ambiguous_action
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
         )
     elseif mode == :doublestrand
         return build_qualmer_graph_doublestrand(
             records,
             k;
-            dataset_id=dataset_id,
-            type_hint=type_hint,
-            ambiguous_action=ambiguous_action
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
         )
     elseif mode == :canonical
         return build_qualmer_graph_canonical(
             records,
             k;
-            dataset_id=dataset_id,
-            type_hint=type_hint,
-            ambiguous_action=ambiguous_action
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
         )
     else
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
@@ -161,12 +161,12 @@ graph = build_qualmer_graph_from_file("patient1_tumor.fastq.gz", 31;
 ```
 """
 function build_qualmer_graph_from_file(
-    filepath::String,
-    k::Int;
-    dataset_id::Union{String,Nothing}=nothing,
-    mode::Symbol=:singlestrand,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        filepath::String,
+        k::Int;
+        dataset_id::Union{String, Nothing} = nothing,
+        mode::Symbol = :singlestrand,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -192,10 +192,10 @@ function build_qualmer_graph_from_file(
     return build_qualmer_graph(
         records,
         k;
-        dataset_id=dataset_id,
-        mode=mode,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        mode = mode,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 end
 
@@ -230,11 +230,11 @@ dataset_ids = get_all_dataset_ids(graph[first(labels(graph))])
 ```
 """
 function build_qualmer_graph_from_files(
-    filepaths::Vector{String},
-    k::Int;
-    mode::Symbol=:singlestrand,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        filepaths::Vector{String},
+        k::Int;
+        mode::Symbol = :singlestrand,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(filepaths)
         error("No files provided")
@@ -248,9 +248,9 @@ function build_qualmer_graph_from_files(
     graph = build_qualmer_graph_from_file(
         filepaths[1],
         k;
-        mode=:singlestrand,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        mode = :singlestrand,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Get Mycelia module for open_fastx
@@ -269,7 +269,7 @@ function build_qualmer_graph_from_files(
         end
 
         # Add observations
-        add_observations_to_graph!(graph, records, k; dataset_id=dataset_id)
+        add_observations_to_graph!(graph, records, k; dataset_id = dataset_id)
     end
 
     # Convert to doublestrand or canonical if requested
@@ -317,8 +317,8 @@ stats_sample_a = get_qualmer_statistics(graph; dataset_id="sample_A")
 ```
 """
 function get_qualmer_statistics(
-    graph::MetaGraphsNext.MetaGraph;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph;
+        dataset_id::Union{String, Nothing} = nothing
 )
     if isempty(MetaGraphsNext.labels(graph))
         return Dict(
@@ -417,9 +417,9 @@ very_high_qual = find_high_quality_kmers(graph, 100; dataset_id="sample_A")
 ```
 """
 function find_high_quality_kmers(
-    graph::MetaGraphsNext.MetaGraph,
-    min_quality::Int;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph,
+        min_quality::Int;
+        dataset_id::Union{String, Nothing} = nothing
 )
     result = []
 

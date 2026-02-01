@@ -27,16 +27,14 @@ import BioSequences
 import FASTX
 
 Test.@testset "Graph Simplification Algorithms" begin
-
     Test.@testset "Bubble Detection - Basic Cases" begin
-
         Test.@testset "Simple SNP bubble" begin
             # Create a simple bubble: A → B → D and A → C → D
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -48,7 +46,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["B", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=5)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 5)
 
             Test.@test length(bubbles) == 1
             bubble = bubbles[1]
@@ -61,9 +60,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Linear graph: A → B → C → D
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -74,7 +73,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["B", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
             Test.@test isempty(bubbles)
         end
 
@@ -82,9 +82,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Bubble with different path lengths: A → B → C → E and A → D → E
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D", "E"]
@@ -97,7 +97,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["A", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["D", "E"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
 
             Test.@test length(bubbles) == 1
             bubble = bubbles[1]
@@ -111,9 +112,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Three parallel paths: A → B → E, A → C → E, A → D → E
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D", "E"]
@@ -127,7 +128,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["C", "E"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["D", "E"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
 
             # Should detect multiple bubbles (each pair of paths forms a bubble)
             Test.@test length(bubbles) >= 1
@@ -139,29 +141,30 @@ Test.@testset "Graph Simplification Algorithms" begin
     end
 
     Test.@testset "Bubble Detection - Edge Cases" begin
-
         Test.@testset "Empty graph" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
             Test.@test isempty(bubbles)
         end
 
         Test.@testset "Single vertex graph" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
             graph["A"] = Mycelia.Rhizomorph.StringVertexData("A")
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
             Test.@test isempty(bubbles)
         end
 
@@ -169,9 +172,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Two separate linear paths with no bubbles
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "X", "Y"]
@@ -181,7 +184,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["A", "B"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["X", "Y"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
             Test.@test isempty(bubbles)
         end
 
@@ -189,9 +193,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Simple bubble but with min_bubble_length that excludes it
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -204,19 +208,19 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
             # Set min_bubble_length to 5 - should filter out this short bubble
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=5, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 5, max_bubble_length = 10)
             Test.@test isempty(bubbles)
         end
     end
 
     Test.@testset "Bubble Support Calculation" begin
-
         Test.@testset "Calculate path support" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -228,7 +232,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["B", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=5)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 5)
 
             Test.@test length(bubbles) == 1
             bubble = bubbles[1]
@@ -239,14 +244,13 @@ Test.@testset "Graph Simplification Algorithms" begin
     end
 
     Test.@testset "Graph Simplification" begin
-
         Test.@testset "Simplify graph with clear winner" begin
             # Create a bubble where one path has much higher support
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -258,7 +262,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["B", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=5)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 5)
             Test.@test length(bubbles) >= 1
 
             # Simplify the graph
@@ -272,9 +277,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Linear graph - no simplification needed
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C"]
@@ -295,7 +300,6 @@ Test.@testset "Graph Simplification Algorithms" begin
     end
 
     Test.@testset "Bubble Detection on Real K-mer Graphs" begin
-
         Test.@testset "DNA k-mer graph with SNP bubble" begin
             mktempdir() do dir
                 # Create two sequences that differ by one nucleotide (SNP)
@@ -303,15 +307,16 @@ Test.@testset "Graph Simplification Algorithms" begin
                 fasta = joinpath(dir, "snp.fasta")
                 rec1 = FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCATGC"))
                 rec2 = FASTX.FASTA.Record("seq2", BioSequences.LongDNA{4}("ATGGATGC"))
-                Mycelia.write_fasta(outfile=fasta, records=[rec1, rec2])
+                Mycelia.write_fasta(outfile = fasta, records = [rec1, rec2])
 
-                graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, 3; mode=:singlestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, 3; mode = :singlestrand)
 
                 # Should have vertices and edges
                 Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
                 # Detect bubbles - there should be a bubble from the SNP
-                bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=20)
+                bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                    graph; min_bubble_length = 1, max_bubble_length = 20)
 
                 # The SNP should create a bubble structure
                 # (exact count depends on k-mer overlap pattern)
@@ -324,26 +329,26 @@ Test.@testset "Graph Simplification Algorithms" begin
                 fasta = joinpath(dir, "rna.fasta")
                 rec1 = FASTX.FASTA.Record("seq1", BioSequences.LongRNA{4}("AUGCAUGC"))
                 rec2 = FASTX.FASTA.Record("seq2", BioSequences.LongRNA{4}("AUGGAUGC"))
-                Mycelia.write_fasta(outfile=fasta, records=[rec1, rec2])
+                Mycelia.write_fasta(outfile = fasta, records = [rec1, rec2])
 
-                graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, 3; mode=:singlestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, 3; mode = :singlestrand)
 
                 Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
-                bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=20)
+                bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                    graph; min_bubble_length = 1, max_bubble_length = 20)
                 Test.@test bubbles isa Vector{<:Mycelia.Rhizomorph.BubbleStructure}
             end
         end
     end
 
     Test.@testset "Bubble Complexity Scoring" begin
-
         Test.@testset "Symmetric paths have low complexity" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -355,7 +360,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["B", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=5)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 5)
 
             Test.@test length(bubbles) == 1
             bubble = bubbles[1]
@@ -367,9 +373,9 @@ Test.@testset "Graph Simplification Algorithms" begin
             # Create bubble with asymmetric path lengths
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D", "E"]
@@ -384,7 +390,8 @@ Test.@testset "Graph Simplification Algorithms" begin
             graph["A", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
             graph["C", "E"] = Mycelia.Rhizomorph.StringEdgeData(1)
 
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
 
             if length(bubbles) > 0
                 bubble = bubbles[1]
@@ -395,13 +402,12 @@ Test.@testset "Graph Simplification Algorithms" begin
     end
 
     Test.@testset "Helper Functions" begin
-
         Test.@testset "get_out_neighbors" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C"]
@@ -424,9 +430,9 @@ Test.@testset "Graph Simplification Algorithms" begin
         Test.@testset "get_in_neighbors" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C"]
@@ -462,9 +468,9 @@ Test.@testset "Graph Simplification Algorithms" begin
         Test.@testset "is_valid_bubble" begin
             graph = MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-                edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
             )
 
             for v in ["A", "B", "C", "D"]
@@ -472,19 +478,23 @@ Test.@testset "Graph Simplification Algorithms" begin
             end
 
             # Valid bubble
-            valid_bubble = Mycelia.Rhizomorph.BubbleStructure("A", "D", ["B", "D"], ["C", "D"], 5, 3, 0.0)
+            valid_bubble = Mycelia.Rhizomorph.BubbleStructure(
+                "A", "D", ["B", "D"], ["C", "D"], 5, 3, 0.0)
             Test.@test Mycelia.Rhizomorph.is_valid_bubble(graph, valid_bubble)
 
             # Invalid - non-existent entry vertex
-            invalid_bubble1 = Mycelia.Rhizomorph.BubbleStructure("X", "D", ["B", "D"], ["C", "D"], 5, 3, 0.0)
+            invalid_bubble1 = Mycelia.Rhizomorph.BubbleStructure(
+                "X", "D", ["B", "D"], ["C", "D"], 5, 3, 0.0)
             Test.@test !Mycelia.Rhizomorph.is_valid_bubble(graph, invalid_bubble1)
 
             # Invalid - empty path
-            invalid_bubble2 = Mycelia.Rhizomorph.BubbleStructure("A", "D", String[], ["C", "D"], 5, 3, 0.0)
+            invalid_bubble2 = Mycelia.Rhizomorph.BubbleStructure(
+                "A", "D", String[], ["C", "D"], 5, 3, 0.0)
             Test.@test !Mycelia.Rhizomorph.is_valid_bubble(graph, invalid_bubble2)
 
             # Invalid - identical paths
-            invalid_bubble3 = Mycelia.Rhizomorph.BubbleStructure("A", "D", ["B", "D"], ["B", "D"], 5, 3, 0.0)
+            invalid_bubble3 = Mycelia.Rhizomorph.BubbleStructure(
+                "A", "D", ["B", "D"], ["B", "D"], 5, 3, 0.0)
             Test.@test !Mycelia.Rhizomorph.is_valid_bubble(graph, invalid_bubble3)
         end
     end

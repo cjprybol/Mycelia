@@ -32,17 +32,17 @@ Test.@testset "Rhizomorph k-mer graph modes" begin
         # Forward and reverse-complement content to exercise canonical merge
         rec1 = FASTX.FASTA.Record("fwd", BioSequences.LongDNA{4}("ATGCA"))
         rec2 = FASTX.FASTA.Record("rev", BioSequences.LongDNA{4}("TGCAT"))
-        Mycelia.write_fasta(outfile=file1, records=[rec1])
-        Mycelia.write_fasta(outfile=file2, records=[rec2])
+        Mycelia.write_fasta(outfile = file1, records = [rec1])
+        Mycelia.write_fasta(outfile = file2, records = [rec2])
 
         graph = Mycelia.Rhizomorph.build_kmer_graph_from_files(
-            [file1, file2], 3; mode=:canonical
+            [file1, file2], 3; mode = :canonical
         )
 
         # Canonical graph should collapse RC pairs: ATG↔CAT, TGC↔GCA
         Test.@test MetaGraphsNext.nv(graph) == 2
         Test.@test Set(MetaGraphsNext.labels(graph)) ==
-            Set([Kmers.DNAKmer{3}("ATG"), Kmers.DNAKmer{3}("GCA")])
+                   Set([Kmers.DNAKmer{3}("ATG"), Kmers.DNAKmer{3}("GCA")])
 
         # Evidence from both files should be present on canonical vertices
         atg_vertex = graph[Kmers.DNAKmer{3}("ATG")]
@@ -60,11 +60,11 @@ Test.@testset "Rhizomorph k-mer graph modes" begin
 
         rec1 = FASTX.FASTA.Record("fwd", BioSequences.LongDNA{4}("ATGCA"))
         rec2 = FASTX.FASTA.Record("rev", BioSequences.LongDNA{4}("TGCAT"))
-        Mycelia.write_fasta(outfile=file1, records=[rec1])
-        Mycelia.write_fasta(outfile=file2, records=[rec2])
+        Mycelia.write_fasta(outfile = file1, records = [rec1])
+        Mycelia.write_fasta(outfile = file2, records = [rec2])
 
         graph = Mycelia.Rhizomorph.build_kmer_graph_from_files(
-            [file1, file2], 3; mode=:doublestrand
+            [file1, file2], 3; mode = :doublestrand
         )
 
         # Doublestrand graph should carry both orientations and be directed
@@ -85,12 +85,12 @@ Test.@testset "Rhizomorph k-mer graph modes" begin
 
     Test.@testset "Singlestrand graphs are directed" begin
         rec = FASTX.FASTA.Record("fwd", BioSequences.LongDNA{4}("ATGCA"))
-        graph = Mycelia.Rhizomorph.build_kmer_graph([rec], 3; mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph([rec], 3; mode = :singlestrand)
         Test.@test Graphs.is_directed(graph.graph)
     end
 
     Test.@testset "Canonical mode not allowed for amino acids" begin
         aa_rec = FASTX.FASTA.Record("aa1", BioSequences.LongAA("ACDEFG"))
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph([aa_rec], 3; mode=:canonical)
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph([aa_rec], 3; mode = :canonical)
     end
 end

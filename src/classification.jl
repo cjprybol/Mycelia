@@ -45,11 +45,11 @@ result = run_sourmash_sketch(
 function run_sourmash_sketch(;
         input_files::Vector{String},
         outdir::String,
-        k_sizes::Vector{Int}=[21, 31, 51],
-        scaled::Int=1000,
-        molecule::String="dna",
-        singleton::Bool=false,
-        name::Union{Nothing, String}=nothing)
+        k_sizes::Vector{Int} = [21, 31, 51],
+        scaled::Int = 1000,
+        molecule::String = "dna",
+        singleton::Bool = false,
+        name::Union{Nothing, String} = nothing)
 
     # Validate inputs
     for f in input_files
@@ -112,13 +112,13 @@ function run_sourmash_search(;
         query_sig::String,
         database_sig::String,
         outdir::String,
-        threshold::Float64=0.1,
-        k_size::Int=31,
-        best_only::Bool=false,
-        num_results::Union{Nothing, Int}=nothing)
-
+        threshold::Float64 = 0.1,
+        k_size::Int = 31,
+        best_only::Bool = false,
+        num_results::Union{Nothing, Int} = nothing)
     isfile(query_sig) || error("Query signature not found: $(query_sig)")
-    (isfile(database_sig) || isdir(database_sig)) || error("Database not found: $(database_sig)")
+    (isfile(database_sig) || isdir(database_sig)) ||
+        error("Database not found: $(database_sig)")
 
     Mycelia.add_bioconda_env("sourmash")
     mkpath(outdir)
@@ -169,11 +169,11 @@ function run_sourmash_gather(;
         query_sig::String,
         database_sig::String,
         outdir::String,
-        k_size::Int=31,
-        threshold_bp::Int=50000)
-
+        k_size::Int = 31,
+        threshold_bp::Int = 50000)
     isfile(query_sig) || error("Query signature not found: $(query_sig)")
-    (isfile(database_sig) || isdir(database_sig)) || error("Database not found: $(database_sig)")
+    (isfile(database_sig) || isdir(database_sig)) ||
+        error("Database not found: $(database_sig)")
 
     Mycelia.add_bioconda_env("sourmash")
     mkpath(outdir)
@@ -265,14 +265,13 @@ Named tuple with:
 function run_mash_sketch(;
         input_files::Vector{String},
         outdir::String,
-        k::Int=21,
-        s::Int=1000,
-        r::Bool=false,
-        min_copies::Union{Nothing,Int}=nothing,
-        threads::Int=get_default_threads(),
-        output_prefix::Union{Nothing,String}=nothing,
-        additional_args::Vector{String}=String[])
-
+        k::Int = 21,
+        s::Int = 1000,
+        r::Bool = false,
+        min_copies::Union{Nothing, Int} = nothing,
+        threads::Int = get_default_threads(),
+        output_prefix::Union{Nothing, String} = nothing,
+        additional_args::Vector{String} = String[])
     for f in input_files
         isfile(f) || error("Input file not found: $(f)")
     end
@@ -300,7 +299,8 @@ function run_mash_sketch(;
         sketch_file = prefix * ".msh"
 
         if !isfile(sketch_file)
-            sketch_args = ["sketch", "-k", string(k), "-s", string(s), "-p", string(threads), "-o", prefix]
+            sketch_args = ["sketch", "-k", string(k), "-s", string(s),
+                "-p", string(threads), "-o", prefix]
             if r
                 push!(sketch_args, "-r")
             end
@@ -335,14 +335,13 @@ Combine Mash sketch files into a single database sketch.
 function run_mash_paste(;
         out_file::String,
         in_files::Vector{String})
-
     for f in in_files
         isfile(f) || error("Input sketch not found: $(f)")
     end
 
     Mycelia.add_bioconda_env("mash")
 
-    output_prefix = endswith(out_file, ".msh") ? out_file[1:end-4] : out_file
+    output_prefix = endswith(out_file, ".msh") ? out_file[1:(end - 4)] : out_file
     mkpath(dirname(output_prefix))
     output_sketch = output_prefix * ".msh"
 
@@ -379,10 +378,9 @@ function run_mash_dist(;
         reference::String,
         query::String,
         outdir::String,
-        threads::Int=get_default_threads(),
-        output_tsv::Union{Nothing,String}=nothing,
-        additional_args::Vector{String}=String[])
-
+        threads::Int = get_default_threads(),
+        output_tsv::Union{Nothing, String} = nothing,
+        additional_args::Vector{String} = String[])
     isfile(reference) || error("Reference not found: $(reference)")
     isfile(query) || error("Query not found: $(query)")
     threads > 0 || error("threads must be positive")
@@ -393,8 +391,8 @@ function run_mash_dist(;
     ref_base = replace(basename(reference), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
     query_base = replace(basename(query), r"\.(msh|fa|fasta|fq|fastq)(\.gz)?$"i => "")
     results_tsv = isnothing(output_tsv) ?
-        joinpath(outdir, "$(ref_base)_vs_$(query_base)_mash_dist.tsv") :
-        output_tsv
+                  joinpath(outdir, "$(ref_base)_vs_$(query_base)_mash_dist.tsv") :
+                  output_tsv
 
     if !isfile(results_tsv)
         dist_args = ["dist", "-p", string(threads)]
@@ -402,7 +400,7 @@ function run_mash_dist(;
         append!(dist_args, [reference, query])
         dist_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $dist_args`
         open(results_tsv, "w") do io
-            run(pipeline(dist_cmd, stdout=io))
+            run(pipeline(dist_cmd, stdout = io))
         end
     end
 
@@ -433,14 +431,13 @@ Named tuple with:
 """
 function run_mash_screen(;
         reference::String,
-        query::Union{String,Vector{String}},
+        query::Union{String, Vector{String}},
         outdir::String,
-        winner_takes_all::Bool=true,
-        threads::Int=get_default_threads(),
-        min_identity::Union{Nothing,Float64}=nothing,
-        output_tsv::Union{Nothing,String}=nothing,
-        additional_args::Vector{String}=String[])
-
+        winner_takes_all::Bool = true,
+        threads::Int = get_default_threads(),
+        min_identity::Union{Nothing, Float64} = nothing,
+        output_tsv::Union{Nothing, String} = nothing,
+        additional_args::Vector{String} = String[])
     isfile(reference) || error("Reference not found: $(reference)")
     query_files = query isa String ? [query] : query
     for f in query_files
@@ -472,7 +469,7 @@ function run_mash_screen(;
 
         screen_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $screen_args`
         open(results_tsv, "w") do io
-            run(pipeline(screen_cmd, stdout=io))
+            run(pipeline(screen_cmd, stdout = io))
         end
     end
 
@@ -489,9 +486,9 @@ function parse_mash_dist_output(file::String)
     return CSV.read(
         file,
         DataFrames.DataFrame;
-        delim='\t',
-        header=["reference", "query", "distance", "p_value", "matching_hashes"],
-        comment="#"
+        delim = '\t',
+        header = ["reference", "query", "distance", "p_value", "matching_hashes"],
+        comment = "#"
     )
 end
 
@@ -505,9 +502,10 @@ function parse_mash_screen_output(file::String)
     return CSV.read(
         file,
         DataFrames.DataFrame;
-        delim='\t',
-        header=["identity", "shared_hashes", "median_multiplicity", "p_value", "query", "reference"],
-        comment="#"
+        delim = '\t',
+        header = ["identity", "shared_hashes", "median_multiplicity",
+            "p_value", "query", "reference"],
+        comment = "#"
     )
 end
 
@@ -515,7 +513,7 @@ end
 # MetaPhlAn - Marker-based taxonomic profiling
 # ============================================================================
 
-function resolve_metaphlan_db_index(; db_index::Union{Nothing, String}=nothing)
+function resolve_metaphlan_db_index(; db_index::Union{Nothing, String} = nothing)
     if db_index !== nothing && !isempty(db_index)
         return db_index, true
     end
@@ -526,7 +524,7 @@ function resolve_metaphlan_db_index(; db_index::Union{Nothing, String}=nothing)
     return nothing, false
 end
 
-function _metaphlan_db_present(db_dir::AbstractString, db_index::Union{Nothing, String}=nothing)
+function _metaphlan_db_present(db_dir::AbstractString, db_index::Union{Nothing, String} = nothing)
     if !isdir(db_dir)
         return false
     end
@@ -537,10 +535,10 @@ function _metaphlan_db_present(db_dir::AbstractString, db_index::Union{Nothing, 
 end
 
 function download_metaphlan_db(;
-        db_dir::AbstractString=Mycelia.DEFAULT_METAPHLAN_DB_PATH,
-        db_index::Union{Nothing, String}=nothing,
-        force::Bool=false)
-    db_index_val, _ = resolve_metaphlan_db_index(db_index=db_index)
+        db_dir::AbstractString = Mycelia.DEFAULT_METAPHLAN_DB_PATH,
+        db_index::Union{Nothing, String} = nothing,
+        force::Bool = false)
+    db_index_val, _ = resolve_metaphlan_db_index(db_index = db_index)
     if !force && _metaphlan_db_present(db_dir, db_index_val)
         return db_dir
     end
@@ -555,10 +553,10 @@ function download_metaphlan_db(;
 end
 
 function get_metaphlan_db_path(;
-        require::Bool=true,
-        db_dir::Union{Nothing, String}=nothing,
-        db_index::Union{Nothing, String}=nothing,
-        download::Bool=true)
+        require::Bool = true,
+        db_dir::Union{Nothing, String} = nothing,
+        db_index::Union{Nothing, String} = nothing,
+        download::Bool = true)
     resolved_dir = db_dir
     if resolved_dir === nothing || isempty(resolved_dir)
         value = get(ENV, "METAPHLAN_DB_DIR", "")
@@ -574,13 +572,13 @@ function get_metaphlan_db_path(;
         resolved_dir = isempty(value) ? Mycelia.DEFAULT_METAPHLAN_DB_PATH : value
     end
 
-    db_index_val, _ = resolve_metaphlan_db_index(db_index=db_index)
+    db_index_val, _ = resolve_metaphlan_db_index(db_index = db_index)
     if _metaphlan_db_present(resolved_dir, db_index_val)
         return resolved_dir
     end
 
     if download
-        return download_metaphlan_db(db_dir=resolved_dir, db_index=db_index_val)
+        return download_metaphlan_db(db_dir = resolved_dir, db_index = db_index_val)
     end
 
     if require
@@ -630,20 +628,20 @@ result = run_metaphlan(
 function run_metaphlan(;
         input_file::String,
         outdir::String,
-        input_type::String="fastq",
-        nprocs::Int=get_default_threads(),
-        db_dir::Union{Nothing, String}=nothing,
-        db_index::Union{Nothing, String}=nothing,
-        unknown_estimation::Bool=true,
-        stat_q::Float64=0.2,
-        long_reads::Bool=false)
-
+        input_type::String = "fastq",
+        nprocs::Int = get_default_threads(),
+        db_dir::Union{Nothing, String} = nothing,
+        db_index::Union{Nothing, String} = nothing,
+        unknown_estimation::Bool = true,
+        stat_q::Float64 = 0.2,
+        long_reads::Bool = false)
     isfile(input_file) || error("Input file not found: $(input_file)")
-    input_type in ["fastq", "fasta", "mapout", "sam"] || error("Invalid input_type: $(input_type)")
+    input_type in ["fastq", "fasta", "mapout", "sam"] ||
+        error("Invalid input_type: $(input_type)")
 
-    resolved_index, index_explicit = resolve_metaphlan_db_index(db_index=db_index)
+    resolved_index, index_explicit = resolve_metaphlan_db_index(db_index = db_index)
     if db_dir === nothing || isempty(db_dir)
-        db_dir = get_metaphlan_db_path(db_index=resolved_index)
+        db_dir = get_metaphlan_db_path(db_index = resolved_index)
     end
 
     Mycelia.add_bioconda_env("metaphlan")
@@ -655,15 +653,15 @@ function run_metaphlan(;
 
     if !isfile(profile_txt)
         cmd_args = String[
-            "$(Mycelia.CONDA_RUNNER)", "run", "--live-stream", "-n", "metaphlan",
-            "metaphlan",
-            input_file,
-            "--input_type", input_type,
-            "--nproc", string(nprocs),
-            "-o", profile_txt,
-            "--mapout", mapout_file,
-            "--stat_q", string(stat_q)
-        ]
+        "$(Mycelia.CONDA_RUNNER)", "run", "--live-stream", "-n", "metaphlan",
+        "metaphlan",
+        input_file,
+        "--input_type", input_type,
+        "--nproc", string(nprocs),
+        "-o", profile_txt,
+        "--mapout", mapout_file,
+        "--stat_q", string(stat_q)
+]
 
         if !isnothing(db_dir)
             push!(cmd_args, "--db_dir")
@@ -685,7 +683,7 @@ function run_metaphlan(;
         run(Cmd(cmd_args))
     end
 
-    return (; outdir, profile_txt, mapout=mapout_file)
+    return (; outdir, profile_txt, mapout = mapout_file)
 end
 
 """
@@ -711,10 +709,10 @@ function parse_metaphlan_profile(profile_file::String)::DataFrames.DataFrame
 
     if isempty(lines)
         return DataFrames.DataFrame(
-            clade_name=String[],
-            taxid=Union{Int, Missing}[],
-            relative_abundance=Float64[],
-            additional_species=Union{String, Missing}[]
+            clade_name = String[],
+            taxid = Union{Int, Missing}[],
+            relative_abundance = Float64[],
+            additional_species = Union{String, Missing}[]
         )
     end
 
@@ -751,10 +749,10 @@ function parse_metaphlan_profile(profile_file::String)::DataFrames.DataFrame
     end
 
     return DataFrames.DataFrame(
-        clade_name=clade_names,
-        taxid=taxids,
-        relative_abundance=abundances,
-        additional_species=additional_species
+        clade_name = clade_names,
+        taxid = taxids,
+        relative_abundance = abundances,
+        additional_species = additional_species
     )
 end
 
@@ -779,7 +777,7 @@ function _resolve_metabuli_db_dir(db_root::AbstractString, db_name::AbstractStri
     if _metabuli_db_present(target)
         return target
     end
-    candidates = filter(path -> _metabuli_db_present(path), readdir(db_root; join=true))
+    candidates = filter(path -> _metabuli_db_present(path), readdir(db_root; join = true))
     if !isempty(candidates)
         named = filter(path -> occursin(db_name, basename(path)), candidates)
         if length(named) == 1
@@ -793,9 +791,9 @@ end
 
 function download_metabuli_db(;
         db_name::AbstractString,
-        db_root::AbstractString=Mycelia.DEFAULT_METABULI_DB_PATH,
-        force::Bool=false,
-        keep_archive::Bool=false)
+        db_root::AbstractString = Mycelia.DEFAULT_METABULI_DB_PATH,
+        force::Bool = false,
+        keep_archive::Bool = false)
     url = get(Mycelia.METABULI_DB_URLS, db_name, nothing)
     if url === nothing
         valid = join(collect(keys(Mycelia.METABULI_DB_URLS)), ", ")
@@ -814,19 +812,19 @@ function download_metabuli_db(;
             Downloads.download(url, archive_path)
         end
     end
-    Mycelia.tar_extract(tarchive=archive_path, directory=db_root)
+    Mycelia.tar_extract(tarchive = archive_path, directory = db_root)
     db_dir = _resolve_metabuli_db_dir(db_root, db_name)
     if !keep_archive && isfile(archive_path)
-        rm(archive_path; force=true)
+        rm(archive_path; force = true)
     end
     return db_dir
 end
 
 function get_metabuli_db_path(;
-        require::Bool=true,
-        db_name::Union{Nothing, String}=nothing,
-        db_root::Union{Nothing, String}=nothing,
-        download::Bool=true)
+        require::Bool = true,
+        db_name::Union{Nothing, String} = nothing,
+        db_root::Union{Nothing, String} = nothing,
+        download::Bool = true)
     for key in ("METABULI_DB", "METABULI_DB_PATH")
         value = get(ENV, key, "")
         if !isempty(value)
@@ -841,16 +839,20 @@ function get_metabuli_db_path(;
     end
 
     root_value = get(ENV, "METABULI_DB_ROOT", "")
-    resolved_root = db_root === nothing ? (isempty(root_value) ? Mycelia.DEFAULT_METABULI_DB_PATH : root_value) : db_root
+    resolved_root = db_root === nothing ?
+                    (isempty(root_value) ? Mycelia.DEFAULT_METABULI_DB_PATH : root_value) :
+                    db_root
     name_value = get(ENV, "METABULI_DB_NAME", "")
-    resolved_name = db_name === nothing ? (isempty(name_value) ? Mycelia.DEFAULT_METABULI_DB_NAME : name_value) : db_name
+    resolved_name = db_name === nothing ?
+                    (isempty(name_value) ? Mycelia.DEFAULT_METABULI_DB_NAME : name_value) :
+                    db_name
     candidate = joinpath(resolved_root, resolved_name)
     if _metabuli_db_present(candidate)
         return candidate
     end
 
     if download
-        return download_metabuli_db(db_name=resolved_name, db_root=resolved_root)
+        return download_metabuli_db(db_name = resolved_name, db_root = resolved_root)
     end
 
     if require
@@ -906,14 +908,16 @@ function _default_metabuli_max_ram_gb()::Int
 
     slurm_threads = Mycelia._detect_slurm_cpu_allocation()
     slurm_gpus = Mycelia._detect_slurm_gpu_allocation()
-    slurm_memory, _ = Mycelia._detect_slurm_memory_bytes(
-        cpu_allocation=slurm_threads,
-        gpu_allocation=slurm_gpus,
-        total_memory=total_memory,
-        available_memory=available_memory,
+    slurm_memory,
+    _ = Mycelia._detect_slurm_memory_bytes(
+        cpu_allocation = slurm_threads,
+        gpu_allocation = slurm_gpus,
+        total_memory = total_memory,
+        available_memory = available_memory
     )
 
-    usable_memory = slurm_memory === nothing ? min(available_memory, total_memory) : min(slurm_memory, available_memory, total_memory)
+    usable_memory = slurm_memory === nothing ? min(available_memory, total_memory) :
+                    min(slurm_memory, available_memory, total_memory)
     safe_bytes = Int(floor(usable_memory * 0.90))
     gib_bytes = 1024^3
     safe_gb = max(1, Int(floor(safe_bytes / gib_bytes)))
@@ -923,12 +927,12 @@ end
 function run_metabuli_classify(;
         input_files::Vector{String},
         outdir::String,
-        database_path::Union{Nothing, String}=nothing,
-        seq_mode::String="1",
-        threads::Int=get_default_threads(),
-        min_score::Union{Nothing, Float64}=nothing,
-        min_sp_score::Union{Nothing, Float64}=nothing,
-        max_ram_gb::Union{Nothing, Int}=nothing)
+        database_path::Union{Nothing, String} = nothing,
+        seq_mode::String = "1",
+        threads::Int = get_default_threads(),
+        min_score::Union{Nothing, Float64} = nothing,
+        min_sp_score::Union{Nothing, Float64} = nothing,
+        max_ram_gb::Union{Nothing, Int} = nothing)
 
     # Validate inputs
     for f in input_files
@@ -940,9 +944,11 @@ function run_metabuli_classify(;
         database_path = get_metabuli_db_path()
     end
     isdir(database_path) || error("Database directory not found: $(database_path)")
-    seq_mode in ["1", "2", "3"] || error("Invalid seq_mode: $(seq_mode). Use '1' for single-end, '2' for paired-end interleaved, '3' for paired-end separate")
+    seq_mode in ["1", "2", "3"] ||
+        error("Invalid seq_mode: $(seq_mode). Use '1' for single-end, '2' for paired-end interleaved, '3' for paired-end separate")
 
-    max_ram_value = max_ram_gb === nothing ? Mycelia._default_metabuli_max_ram_gb() : max_ram_gb
+    max_ram_value = max_ram_gb === nothing ? Mycelia._default_metabuli_max_ram_gb() :
+                    max_ram_gb
     max_ram_value > 0 || error("max_ram_gb must be positive (got $(max_ram_value)).")
 
     Mycelia.add_bioconda_env("metabuli")
@@ -955,16 +961,16 @@ function run_metabuli_classify(;
     if !isfile(report_file)
         # Build command
         cmd_args = String[
-            "$(Mycelia.CONDA_RUNNER)", "run", "--live-stream", "-n", "metabuli",
-            "metabuli", "classify",
-            input_files...,
-            database_path,
-            outdir,
-            job_id,
-            "--seq-mode", seq_mode,
-            "--threads", string(threads),
-            "--max-ram", string(max_ram_value)
-        ]
+        "$(Mycelia.CONDA_RUNNER)", "run", "--live-stream", "-n", "metabuli",
+        "metabuli", "classify",
+        input_files...,
+        database_path,
+        outdir,
+        job_id,
+        "--seq-mode", seq_mode,
+        "--threads", string(threads),
+        "--max-ram", string(max_ram_value)
+]
 
         if !isnothing(min_score)
             push!(cmd_args, "--min-score")
@@ -1003,9 +1009,8 @@ function run_metabuli_build_db(;
         reference_fasta::String,
         taxonomy_dir::String,
         outdir::String,
-        threads::Int=get_default_threads(),
-        split_num::Int=4096)
-
+        threads::Int = get_default_threads(),
+        split_num::Int = 4096)
     isfile(reference_fasta) || error("Reference FASTA not found: $(reference_fasta)")
     isdir(taxonomy_dir) || error("Taxonomy directory not found: $(taxonomy_dir)")
 
@@ -1031,7 +1036,7 @@ function run_metabuli_build_db(;
         error("Metabuli database build completed but no valid db.info/info was found under $(outdir).")
     end
 
-    return (; database_path=outdir)
+    return (; database_path = outdir)
 end
 
 """
@@ -1061,8 +1066,8 @@ function parse_metabuli_report(report_file::String)::DataFrames.DataFrame
     # Column count may vary, but first 6 are standard Kraken2-style columns
     df = DataFrames.DataFrame(CSV.File(
         report_file;
-        delim='\t',
-        header=false
+        delim = '\t',
+        header = false
     ))
 
     # Rename the standard 6 columns (if present)
@@ -1093,10 +1098,11 @@ Parse Metabuli per-read classifications into a DataFrame.
 DataFrame with per-read classification assignments
 """
 function parse_metabuli_classifications(classifications_file::String)::DataFrames.DataFrame
-    isfile(classifications_file) || error("Classifications file not found: $(classifications_file)")
+    isfile(classifications_file) ||
+        error("Classifications file not found: $(classifications_file)")
 
     # Read the classifications file
-    df = DataFrames.DataFrame(CSV.File(classifications_file; delim='\t', header=false))
+    df = DataFrames.DataFrame(CSV.File(classifications_file; delim = '\t', header = false))
 
     # Rename columns based on typical metabuli output format
     if DataFrames.ncol(df) >= 3
@@ -1135,12 +1141,11 @@ This function automatically:
 - `String`: Path to the output directory.
 """
 function run_clamlst(genome_file::String;
-                     db_path::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
-                     species::String="Escherichia coli",
-                     outdir::String=dirname(genome_file),
-                     threads::Int=get_default_threads(),
-                     force_db_update::Bool=false)
-
+        db_path::String = joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+        species::String = "Escherichia coli",
+        outdir::String = dirname(genome_file),
+        threads::Int = get_default_threads(),
+        force_db_update::Bool = false)
     mkpath(outdir)
     mkpath(dirname(db_path))
 
@@ -1161,19 +1166,19 @@ function run_clamlst(genome_file::String;
     # If the database exists, we assume the DB is already present
     db_exists = isfile(db_path) || isdir(db_path)
     if !db_exists || force_db_update
-        
         @info "Initializing claMLST database for $species at $db_dir..."
         try
             # Prepare arguments
-            cmd_args = ["run", "--live-stream", "-n", "pymlst", "claMLST", "import", db_dir, species]
-            
+            cmd_args = ["run", "--live-stream", "-n", "pymlst",
+                "claMLST", "import", db_dir, species]
+
             # If forcing an update on an existing DB, attempt to use --force if supported, 
             # or the user might need to manually clear the folder. 
             # The error message "use --force to override it" suggests the flag exists.
             if db_exists && force_db_update
                 push!(cmd_args, "--force")
             end
-            
+
             run(`$(Mycelia.CONDA_RUNNER) $cmd_args`)
         catch e
             @warn "Failed to import claMLST database: $e"
@@ -1192,18 +1197,18 @@ function run_clamlst(genome_file::String;
             # temp_file = joinpath(outdir, "tmp_" * base_name)
             temp_file = joinpath(outdir, base_name)
             open(temp_file, "w") do output_io
-                run(pipeline(`gunzip -c $genome_file`, stdout=output_io))
+                run(pipeline(`gunzip -c $genome_file`, stdout = output_io))
             end
             input_path_to_use = temp_file
         end
 
         # Run Search
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_dir) $(input_path_to_use)`
-        
+
         open(output_tsv, "w") do io
-            run(pipeline(cmd, stdout=io))
+            run(pipeline(cmd, stdout = io))
         end
-        
+
         return output_tsv
 
     finally
@@ -1234,13 +1239,13 @@ Run `ectyper` to predict *Escherichia coli* serotype and identify species.
 # Returns
 - `String`: Path to the output directory containing `output.tsv`.
 """
-function run_ectyper(genome_file::String; 
-                     outdir::String=joinpath(dirname(genome_file), "ectyper_output"),
-                     percent_identity::Int=90,
-                     percent_coverage::Int=50,
-                     verify_species::Bool=true,
-                     threads::Int=get_default_threads())
-    
+function run_ectyper(genome_file::String;
+        outdir::String = joinpath(dirname(genome_file), "ectyper_output"),
+        percent_identity::Int = 90,
+        percent_coverage::Int = 50,
+        verify_species::Bool = true,
+        threads::Int = get_default_threads())
+
     # ECTyper creates a file named 'output.tsv' inside the output directory
     expected_output = joinpath(outdir, "output.tsv")
 
@@ -1254,7 +1259,7 @@ function run_ectyper(genome_file::String;
 
     # Clean up directory if it exists but is incomplete (no output.tsv)
     if isdir(outdir)
-        rm(outdir, recursive=true, force=true)
+        rm(outdir, recursive = true, force = true)
     end
 
     # Updated flags for new ectyper version:
@@ -1298,9 +1303,8 @@ It handles gzipped inputs by decompressing them temporarily.
 # Returns
 - `String`: Path to the generated CSV result file.
 """
-function run_ezclermont(genome_file::String; 
-                        outdir::String=dirname(genome_file))
-
+function run_ezclermont(genome_file::String;
+        outdir::String = dirname(genome_file))
     mkpath(outdir)
 
     base_name = replace(basename(genome_file), r"\.gz$" => "")
@@ -1319,7 +1323,7 @@ function run_ezclermont(genome_file::String;
     if is_gzipped
         temp_file = joinpath(outdir, "tmp_ez_" * base_name)
         open(temp_file, "w") do output_io
-            run(pipeline(`gzip -dc $genome_file`, stdout=output_io))
+            run(pipeline(`gzip -dc $genome_file`, stdout = output_io))
         end
         input_path_to_use = temp_file
     end
@@ -1328,7 +1332,7 @@ function run_ezclermont(genome_file::String;
         Mycelia.add_bioconda_env("ezclermont")
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n ezclermont ezclermont $(input_path_to_use)`
         open(result_file, "w") do io
-            run(pipeline(cmd, stdout=io))
+            run(pipeline(cmd, stdout = io))
         end
         return result_file
     finally
@@ -1372,13 +1376,12 @@ Run `kleborate` on a set of genome assemblies.
 # Returns
 - `String`: Path to the output directory containing results.
 """
-function run_kleborate(assemblies::Vector{String}; 
-                       outdir::String="kleborate_results",
-                       preset::Union{String, Nothing}="kpsc",
-                       modules::Union{Vector{String}, Nothing}=nothing,
-                       trim_headers::Bool=false,
-                       threads::Int=get_default_threads())
-
+function run_kleborate(assemblies::Vector{String};
+        outdir::String = "kleborate_results",
+        preset::Union{String, Nothing} = "kpsc",
+        modules::Union{Vector{String}, Nothing} = nothing,
+        trim_headers::Bool = false,
+        threads::Int = get_default_threads())
     mkpath(outdir)
 
     # # Check for existing output
@@ -1397,7 +1400,7 @@ function run_kleborate(assemblies::Vector{String};
     if isempty(assemblies)
         error("No assembly files provided for Kleborate.")
     end
-    
+
     cmd_args = ["kleborate", "--outdir", outdir]
 
     # Handle Modules vs Preset
@@ -1415,7 +1418,7 @@ function run_kleborate(assemblies::Vector{String};
     if trim_headers
         push!(cmd_args, "--trim_headers")
     end
-    
+
     # Append assemblies
     append!(cmd_args, ["--assemblies"])
     append!(cmd_args, assemblies)

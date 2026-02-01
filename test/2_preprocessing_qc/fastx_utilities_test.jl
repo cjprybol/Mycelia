@@ -10,11 +10,11 @@ Test.@testset "FASTX Utilities" begin
 
     Test.@testset "Hash helpers" begin
         sequences = ["ATGC", "AACC"]
-        hash1 = Mycelia.generate_joint_sequence_hash(sequences; encoded_length=16)
-        hash2 = Mycelia.generate_joint_sequence_hash(reverse(sequences); encoded_length=16)
+        hash1 = Mycelia.generate_joint_sequence_hash(sequences; encoded_length = 16)
+        hash2 = Mycelia.generate_joint_sequence_hash(reverse(sequences); encoded_length = 16)
         Test.@test hash1 == hash2
 
-        hash_single = Mycelia.create_sequence_hash("atgc"; encoded_length=16)
+        hash_single = Mycelia.create_sequence_hash("atgc"; encoded_length = 16)
         Test.@test length(hash_single) == 16
     end
 
@@ -33,7 +33,7 @@ Test.@testset "FASTX Utilities" begin
             Mycelia.FASTX.FASTA.Record("seq1", "ATGC"),
             Mycelia.FASTX.FASTA.Record("seq2", "GCTA")
         ]
-        Mycelia.write_fasta(outfile=fasta_path, records=records, gzip=false, show_progress=false)
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
 
         reader = Mycelia.open_fastx(fasta_path)
         read_records = collect(reader)
@@ -43,10 +43,12 @@ Test.@testset "FASTX Utilities" begin
 
         fastq_path = joinpath(temp_dir, "reads.fastq")
         fastq_records = [
-            Mycelia.fastq_record(identifier="r1", sequence="ATGC", quality_scores=[30, 30, 30, 30]),
-            Mycelia.fastq_record(identifier="r2", sequence="GCTA", quality_scores=[20, 20, 20, 20])
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "GCTA", quality_scores = [
+                20, 20, 20, 20])
         ]
-        Mycelia.write_fastq(records=fastq_records, filename=fastq_path)
+        Mycelia.write_fastq(records = fastq_records, filename = fastq_path)
         Test.@test Mycelia.count_records(fastq_path) == 2
     end
 
@@ -56,7 +58,7 @@ Test.@testset "FASTX Utilities" begin
         Test.@test Mycelia.quality_string_to_phred("!#%+") == UInt8[0, 2, 4, 10]
 
         error_rate = Mycelia.q_value_to_error_rate(20)
-        Test.@test isapprox(Mycelia.error_rate_to_q_value(error_rate), 20.0; atol=1e-12)
+        Test.@test isapprox(Mycelia.error_rate_to_q_value(error_rate), 20.0; atol = 1e-12)
     end
 
     Test.@testset "Sequence extension helpers" begin
@@ -78,8 +80,8 @@ Test.@testset "FASTX Utilities" begin
             Mycelia.FASTX.FASTA.Record("seq2", "GCTA"),
             Mycelia.FASTX.FASTA.Record("seq1", "ATGC")
         ]
-        Mycelia.write_fasta(outfile=fasta_a, records=records_a, gzip=false, show_progress=false)
-        Mycelia.write_fasta(outfile=fasta_b, records=records_b, gzip=false, show_progress=false)
+        Mycelia.write_fasta(outfile = fasta_a, records = records_a, gzip = false, show_progress = false)
+        Mycelia.write_fasta(outfile = fasta_b, records = records_b, gzip = false, show_progress = false)
         Test.@test Mycelia.equivalent_fasta_sequences(fasta_a, fasta_b)
     end
 
@@ -87,7 +89,9 @@ Test.@testset "FASTX Utilities" begin
         temp_dir = mktempdir()
         fasta_path = joinpath(temp_dir, "seqs.fna")
         other_path = joinpath(temp_dir, "notes.txt")
-        Mycelia.write_fasta(outfile=fasta_path, records=[Mycelia.FASTX.FASTA.Record("seq", "ATGC")], gzip=false, show_progress=false)
+        Mycelia.write_fasta(
+            outfile = fasta_path, records = [Mycelia.FASTX.FASTA.Record("seq", "ATGC")],
+            gzip = false, show_progress = false)
         open(other_path, "w") do io
             write(io, "ignore")
         end
@@ -101,17 +105,19 @@ Test.@testset "FASTX Utilities" begin
         fastq_a = joinpath(temp_dir, "a.fastq")
         fastq_b = joinpath(temp_dir, "b.fastq")
         records_a = [
-            Mycelia.fastq_record(identifier="r1", sequence="ATGC", quality_scores=[30, 30, 30, 30])
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+            30, 30, 30, 30])
         ]
         records_b = [
-            Mycelia.fastq_record(identifier="r2", sequence="GCTA", quality_scores=[20, 20, 20, 20])
+            Mycelia.fastq_record(identifier = "r2", sequence = "GCTA", quality_scores = [
+            20, 20, 20, 20])
         ]
-        Mycelia.write_fastq(records=records_a, filename=fastq_a)
-        Mycelia.write_fastq(records=records_b, filename=fastq_b)
+        Mycelia.write_fastq(records = records_a, filename = fastq_a)
+        Mycelia.write_fastq(records = records_b, filename = fastq_b)
 
         fastq_out = joinpath(temp_dir, "joint_reads.fq.gz")
         tsv_out = joinpath(temp_dir, "joint_reads.tsv.gz")
-        outputs = Mycelia.join_fastqs_with_uuid([fastq_a, fastq_b]; fastq_out=fastq_out, tsv_out=tsv_out)
+        outputs = Mycelia.join_fastqs_with_uuid([fastq_a, fastq_b]; fastq_out = fastq_out, tsv_out = tsv_out)
         Test.@test Mycelia.nonempty_file(outputs.fastq_out)
         Test.@test Mycelia.nonempty_file(outputs.tsv_out)
 
@@ -127,14 +133,15 @@ Test.@testset "FASTX Utilities" begin
             Mycelia.FASTX.FASTA.Record("seq1", "ATGC"),
             Mycelia.FASTX.FASTA.Record("seq2", "GCTA")
         ]
-        Mycelia.write_fasta(outfile=fasta_path, records=records, gzip=false, show_progress=false)
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
 
-        table = Mycelia.fastx2normalized_table(fasta_path; human_readable_id="sample")
+        table = Mycelia.fastx2normalized_table(fasta_path; human_readable_id = "sample")
         Test.@test Mycelia.DataFrames.nrow(table) == 2
         Test.@test all(table[!, "human_readable_id"] .== "sample")
         Test.@test "fastx_identifier" in String.(Mycelia.DataFrames.names(table))
 
-        out_path = Mycelia.fastx2normalized_jsonl_stream(fastx_path=fasta_path, human_readable_id="sample", show_progress=false)
+        out_path = Mycelia.fastx2normalized_jsonl_stream(
+            fastx_path = fasta_path, human_readable_id = "sample", show_progress = false)
         Test.@test Mycelia.nonempty_file(out_path)
 
         io = Mycelia.CodecZlib.GzipDecompressorStream(open(out_path, "r"))

@@ -22,8 +22,8 @@ Install bcalm via Bioconda and download the GFA conversion script.
 # Keywords
 - `force::Bool=false`: Force reinstallation and re-download of dependencies.
 """
-function install_bcalm(; force::Bool=false)
-    Mycelia.add_bioconda_env(BCALM_ENV_NAME; force=force)
+function install_bcalm(; force::Bool = false)
+    Mycelia.add_bioconda_env(BCALM_ENV_NAME; force = force)
     try
         run(`$(Mycelia.CONDA_RUNNER) run -n $(BCALM_ENV_NAME) python -c "import sys"`)
     catch
@@ -62,15 +62,15 @@ Run bcalm to construct a compacted De Bruijn Graph and convert it to GFA.
 NamedTuple with keys `:unitigs` (path to .unitigs.fa) and `:gfa` (path to .gfa).
 """
 function run_bcalm(
-    input_files::Union{AbstractString, AbstractVector{<:AbstractString}},
-    out_dir::AbstractString;
-    kmer_size::Int=21,
-    abundance_min::Int=2,
-    threads::Int=Sys.CPU_THREADS,
-    tmp_dir::Union{Nothing, AbstractString}=nothing,
-    force::Bool=false,
+        input_files::Union{AbstractString, AbstractVector{<:AbstractString}},
+        out_dir::AbstractString;
+        kmer_size::Int = 21,
+        abundance_min::Int = 2,
+        threads::Int = Sys.CPU_THREADS,
+        tmp_dir::Union{Nothing, AbstractString} = nothing,
+        force::Bool = false
 )
-    install_bcalm(force=force)
+    install_bcalm(force = force)
     mkpath(out_dir)
 
     input_arg = ""
@@ -125,5 +125,5 @@ function run_bcalm(
         error("convertToGFA.py failed to produce output at $(out_gfa)")
     end
 
-    return (unitigs=unitigs_fa, gfa=out_gfa)
+    return (unitigs = unitigs_fa, gfa = out_gfa)
 end

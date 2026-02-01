@@ -53,7 +53,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     - Path reconstruction correctness
     - Quality retention (if applicable)
     """
-    function validate_graph_comprehensive(graph, input_sequences, expected_vertices, expected_edges, graph_type_name)
+    function validate_graph_comprehensive(
+            graph, input_sequences, expected_vertices, expected_edges, graph_type_name)
         @info "Validating $graph_type_name graph..."
 
         # 1. Basic structure validation
@@ -91,7 +92,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
                 total_evidence_entries += length(evidence_entries)
 
                 for entry in evidence_entries
-                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test entry.strand in (
+                        Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                 end
             end
         end
@@ -112,7 +114,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
                     walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
 
                     for (i, vertex_label) in enumerate(path_vector)
-                        step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                        step = Mycelia.Rhizomorph.WalkStep(
+                            vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                         push!(walk_steps, step)
                     end
 
@@ -196,7 +199,7 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     Test.@testset "DNA K-mer Graph Correctness" begin
         Test.@testset "DNA K-mer SingleStrand Detailed" begin
             reads = [FASTX.FASTA.Record("test", known_dna)]
-            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id = "test", mode = :singlestrand)
 
             # For ATCGATCG with k=3: ATC, TCG, CGA, GAT, ATC, TCG
             # Unique k-mers: ATC, TCG, CGA, GAT (4 vertices)
@@ -204,25 +207,28 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # ATC, TCG, CGA, GAT
             expected_edges = 4     # ATC->TCG, TCG->CGA, CGA->GAT, GAT->ATC
 
-            validate_graph_comprehensive(graph, [known_dna], expected_vertices, expected_edges, "DNA K-mer SingleStrand")
+            validate_graph_comprehensive(graph, [known_dna], expected_vertices,
+                expected_edges, "DNA K-mer SingleStrand")
         end
 
         Test.@testset "DNA K-mer DoubleStrand Detailed" begin
             reads = [FASTX.FASTA.Record("test", known_dna)]
-            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id = "test", mode = :doublestrand)
 
             # In DoubleStrand mode, forward and reverse-complement k-mers are retained
             expected_vertices = 4  # ATC, TCG, CGA, GAT for this sequence
             expected_edges = nothing
 
-            validate_graph_comprehensive(graph, [known_dna], expected_vertices, expected_edges, "DNA K-mer DoubleStrand")
+            validate_graph_comprehensive(graph, [known_dna], expected_vertices,
+                expected_edges, "DNA K-mer DoubleStrand")
 
             # Additional validation: check that both orientations are tracked
             found_both_orientations = false
             for vertex_label in MetaGraphsNext.labels(graph)
                 vertex_data = graph[vertex_label]
                 strands = Mycelia.Rhizomorph.collect_evidence_strands(vertex_data.evidence)
-                if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
+                if Mycelia.Rhizomorph.Forward in strands &&
+                   Mycelia.Rhizomorph.Reverse in strands
                     found_both_orientations = true
                     break
                 end
@@ -238,12 +244,13 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             fastq_record = FASTX.FASTQ.Record("test", string(known_dna), qual_str)
             reads = [fastq_record]
 
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 3; dataset_id = "test", mode = :singlestrand)
 
             expected_vertices = 4  # Same structure as k-mer graph
             expected_edges = 4
 
-            validate_graph_comprehensive(graph, reads, expected_vertices, expected_edges, "DNA Qualmer")
+            validate_graph_comprehensive(
+                graph, reads, expected_vertices, expected_edges, "DNA Qualmer")
             validate_quality_handling(graph, reads, "DNA Qualmer")
         end
 
@@ -257,7 +264,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
                 FASTX.FASTQ.Record("test2", string(known_dna), qual_str2)  # Same sequence, different quality
             ]
 
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_records, 3; dataset_id="test", mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                fastq_records, 3; dataset_id = "test", mode = :singlestrand)
 
             # Verify that vertices have multiple quality observations
             multiple_observations_found = false
@@ -270,7 +278,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
 
                     dataset_ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex_data)
                     if !isempty(dataset_ids)
-                        mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, first(dataset_ids))
+                        mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(
+                            vertex_data, first(dataset_ids))
                         Test.@test mean_quality !== nothing
                         Test.@test all(q -> q >= 0.0, mean_quality)
                     end
@@ -283,13 +292,14 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
 
     Test.@testset "String Graph Correctness" begin
         Test.@testset "String N-gram Graph Detailed" begin
-            graph = Mycelia.Rhizomorph.build_ngram_graph([known_string], 3; dataset_id="test")
+            graph = Mycelia.Rhizomorph.build_ngram_graph([known_string], 3; dataset_id = "test")
 
             # For ABCDEF with n=3: ABC, BCD, CDE, DEF (4 n-grams)
             expected_vertices = 4
             expected_edges = 3  # ABC->BCD, BCD->CDE, CDE->DEF
 
-            validate_graph_comprehensive(graph, [known_string], expected_vertices, expected_edges, "String N-gram")
+            validate_graph_comprehensive(
+                graph, [known_string], expected_vertices, expected_edges, "String N-gram")
         end
 
         Test.@testset "String N-gram Graph from FASTQ Inputs" begin
@@ -297,12 +307,14 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             fastq_record = FASTX.FASTQ.Record("test", known_string, qual_str)
             reads = [fastq_record]
 
-            graph = Mycelia.Rhizomorph.build_ngram_graph([FASTX.sequence(String, fastq_record)], 3; dataset_id="test")
+            graph = Mycelia.Rhizomorph.build_ngram_graph(
+                [FASTX.sequence(String, fastq_record)], 3; dataset_id = "test")
 
             expected_vertices = 4
             expected_edges = 3
 
-            validate_graph_comprehensive(graph, reads, expected_vertices, expected_edges, "String N-gram from FASTQ")
+            validate_graph_comprehensive(
+                graph, reads, expected_vertices, expected_edges, "String N-gram from FASTQ")
         end
     end
 
@@ -312,12 +324,13 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
         Test.@testset "DNA K-mer vs BioSequence Consistency" begin
             reads = [FASTX.FASTA.Record("test", known_dna)]
 
-            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
-            bio_graph = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id="test", min_overlap=3)
+            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                reads, 3; dataset_id = "test", mode = :singlestrand)
+            bio_graph = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id = "test", min_overlap = 3)
 
             # Both should successfully reconstruct sequences
             kmer_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(kmer_graph)
-            bio_paths = Mycelia.Rhizomorph.find_contigs_next(bio_graph; min_contig_length=1)
+            bio_paths = Mycelia.Rhizomorph.find_contigs_next(bio_graph; min_contig_length = 1)
 
             Test.@test !isempty(kmer_paths)
             Test.@test !isempty(bio_paths)
@@ -336,7 +349,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             FASTX.FASTQ.Record("obs2", string(known_dna), qual_str)  # Duplicate observation
         ]
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph(fastq_records, 3; dataset_id="test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            fastq_records, 3; dataset_id = "test", mode = :singlestrand)
 
         # Verify provenance tracking
         for vertex_label in MetaGraphsNext.labels(graph)
@@ -349,5 +363,4 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             Test.@test "obs2" in obs_ids
         end
     end
-
 end

@@ -41,7 +41,6 @@ const AA_ALPHABET = filter(
 #     x -> !(BioSymbols.isambiguous(x) || BioSymbols.isgap(x)),
 #     BioSymbols.alphabet(BioSymbols.AminoAcid))
 
-
 # Helper function to convert a tuple of BioSymbols to a case-insensitive Set of Chars
 function symbols_to_char_set(symbols)
     chars = Char.(symbols)
@@ -62,24 +61,27 @@ const ACGUN_RNA_CHARSET = symbols_to_char_set(ACGUN_RNA_SYMBOLS)
 # --- Unambiguous (Canonical) Alphabets ---
 # Filtered to exclude ambiguous symbols and gaps, representing the core characters.
 
-const UNAMBIGUOUS_DNA_SYMBOLS = filter(s -> !BioSymbols.isambiguous(s) && !BioSymbols.isgap(s), BioSymbols.alphabet(BioSequences.DNA))
-const UNAMBIGUOUS_RNA_SYMBOLS = filter(s -> !BioSymbols.isambiguous(s) && !BioSymbols.isgap(s), BioSymbols.alphabet(BioSymbols.RNA))
-const UNAMBIGUOUS_AA_SYMBOLS  = filter(s -> !BioSymbols.isambiguous(s) && !BioSymbols.isgap(s), BioSymbols.alphabet(BioSymbols.AminoAcid))
+const UNAMBIGUOUS_DNA_SYMBOLS = filter(
+    s -> !BioSymbols.isambiguous(s) && !BioSymbols.isgap(s), BioSymbols.alphabet(BioSequences.DNA))
+const UNAMBIGUOUS_RNA_SYMBOLS = filter(
+    s -> !BioSymbols.isambiguous(s) && !BioSymbols.isgap(s), BioSymbols.alphabet(BioSymbols.RNA))
+const UNAMBIGUOUS_AA_SYMBOLS = filter(
+    s -> !BioSymbols.isambiguous(s) && !BioSymbols.isgap(s), BioSymbols.alphabet(BioSymbols.AminoAcid))
 
 const UNAMBIGUOUS_DNA_CHARSET = symbols_to_char_set(UNAMBIGUOUS_DNA_SYMBOLS)
 const UNAMBIGUOUS_RNA_CHARSET = symbols_to_char_set(UNAMBIGUOUS_RNA_SYMBOLS)
-const UNAMBIGUOUS_AA_CHARSET  = symbols_to_char_set(UNAMBIGUOUS_AA_SYMBOLS)
+const UNAMBIGUOUS_AA_CHARSET = symbols_to_char_set(UNAMBIGUOUS_AA_SYMBOLS)
 
 # --- Full (Ambiguous) Alphabets ---
 # These include all symbols: canonical, ambiguous, and gaps.
 
 const ALL_DNA_SYMBOLS = BioSymbols.alphabet(BioSequences.DNA)
 const ALL_RNA_SYMBOLS = BioSymbols.alphabet(BioSymbols.RNA)
-const ALL_AA_SYMBOLS  = BioSymbols.alphabet(BioSymbols.AminoAcid)
+const ALL_AA_SYMBOLS = BioSymbols.alphabet(BioSymbols.AminoAcid)
 
 const AMBIGUOUS_DNA_CHARSET = symbols_to_char_set(ALL_DNA_SYMBOLS)
 const AMBIGUOUS_RNA_CHARSET = symbols_to_char_set(ALL_RNA_SYMBOLS)
-const AMBIGUOUS_AA_CHARSET  = symbols_to_char_set(ALL_AA_SYMBOLS)
+const AMBIGUOUS_AA_CHARSET = symbols_to_char_set(ALL_AA_SYMBOLS)
 
 # can add support for conda too if needed
 # const CONDA_RUNNER = joinpath(Conda.BINDIR, "mamba")
@@ -99,7 +101,7 @@ const DEFAULT_MINIMAP_DENOMINATOR=10
 const BLOSUM62_DIAG = Dict(
     'A'=>4, 'R'=>5, 'N'=>6, 'D'=>6, 'C'=>9, 'Q'=>5, 'E'=>5, 'G'=>6,
     'H'=>8, 'I'=>4, 'L'=>4, 'K'=>5, 'M'=>5, 'F'=>6, 'P'=>7, 'S'=>4,
-    'T'=>5, 'W'=>11,'Y'=>7, 'V'=>4
+    'T'=>5, 'W'=>11, 'Y'=>7, 'V'=>4
 )
 
 const BLAST_LAMBDA = 0.318    # Approximate BLAST (BLOSUM62) parameter
@@ -1510,13 +1512,15 @@ const REDUCED_ALPHABET_INFO = Dict{Symbol, Dict{Symbol, Any}}(
         :name => "Five-class Chemical",
         :classes => 5,
         :description => "Aliphatic (A), aRomatic (R), Charged (C), Tiny (T), Diverse (D)",
-        :groups => Dict('A' => "IVL", 'R' => "FYWH", 'C' => "KRDE", 'T' => "GACS", 'D' => "TMQNP")
+        :groups => Dict(
+            'A' => "IVL", 'R' => "FYWH", 'C' => "KRDE", 'T' => "GACS", 'D' => "TMQNP")
     ),
     :CHEMICAL6 => Dict(
         :name => "Six-class Chemical",
         :classes => 6,
         :description => "Aliphatic (A), aRomatic (R), Positive (+), Negative (-), Tiny (T), Diverse (D)",
-        :groups => Dict('A' => "IVL", 'R' => "FYWH", '+' => "KR", '-' => "DE", 'T' => "GACS", 'D' => "TMQNP")
+        :groups => Dict('A' => "IVL", 'R' => "FYWH", '+' => "KR",
+            '-' => "DE", 'T' => "GACS", 'D' => "TMQNP")
     ),
     :SDM12 => Dict(
         :name => "SDM 12-class",
@@ -1550,55 +1554,69 @@ const REDUCED_ALPHABET_INFO = Dict{Symbol, Dict{Symbol, Any}}(
         :name => "Murphy 5-class",
         :classes => 5,
         :description => "Murphy/BLOSUM 5-class optimal balance (~90% MI retained)",
-        :groups => Dict('L' => "LVIMC", 'A' => "ASGTP", 'F' => "FYW", 'E' => "EDNQ", 'K' => "KRH")
+        :groups => Dict(
+            'L' => "LVIMC", 'A' => "ASGTP", 'F' => "FYW", 'E' => "EDNQ", 'K' => "KRH")
     ),
     :MURPHY8 => Dict(
         :name => "Murphy 8-class",
         :classes => 8,
         :description => "Murphy 8-class balanced reduction",
-        :groups => Dict('L' => "LVIMC", 'A' => "AG", 'S' => "ST", 'P' => "P", 'F' => "FYW", 'E' => "EDNQ", 'K' => "KR", 'H' => "H")
+        :groups => Dict('L' => "LVIMC", 'A' => "AG", 'S' => "ST", 'P' => "P",
+            'F' => "FYW", 'E' => "EDNQ", 'K' => "KR", 'H' => "H")
     ),
     :MURPHY10 => Dict(
         :name => "Murphy 10-class",
         :classes => 10,
         :description => "Murphy 10-class with separated Cys, Ala, Gly",
-        :groups => Dict('L' => "LVIM", 'C' => "C", 'A' => "A", 'G' => "G", 'S' => "ST", 'P' => "P", 'F' => "FYW", 'E' => "EDNQ", 'K' => "KR", 'H' => "H")
+        :groups => Dict('L' => "LVIM", 'C' => "C", 'A' => "A", 'G' => "G", 'S' => "ST",
+            'P' => "P", 'F' => "FYW", 'E' => "EDNQ", 'K' => "KR", 'H' => "H")
     ),
     :MURPHY12 => Dict(
         :name => "Murphy 12-class",
         :classes => 12,
         :description => "Murphy 12-class high information retention (98.1% MI)",
-        :groups => Dict('L' => "LVIM", 'C' => "C", 'A' => "A", 'G' => "G", 'P' => "P", 'W' => "W", 'H' => "H", 'S' => "ST", 'F' => "FY", 'E' => "EQ", 'D' => "DN", 'K' => "KR")
+        :groups => Dict(
+            'L' => "LVIM", 'C' => "C", 'A' => "A", 'G' => "G", 'P' => "P", 'W' => "W",
+            'H' => "H", 'S' => "ST", 'F' => "FY", 'E' => "EQ", 'D' => "DN", 'K' => "KR")
     ),
     :MURPHY15 => Dict(
         :name => "Murphy 15-class",
         :classes => 15,
         :description => "Murphy 15-class high information retention",
-        :groups => Dict('L' => "LVIM", 'C' => "C", 'A' => "A", 'G' => "G", 'S' => "S", 'T' => "T", 'P' => "P", 'F' => "FY", 'W' => "W", 'E' => "E", 'D' => "D", 'N' => "N", 'Q' => "Q", 'K' => "KR", 'H' => "H")
+        :groups => Dict('L' => "LVIM", 'C' => "C", 'A' => "A", 'G' => "G", 'S' => "S",
+            'T' => "T", 'P' => "P", 'F' => "FY", 'W' => "W", 'E' => "E",
+            'D' => "D", 'N' => "N", 'Q' => "Q", 'K' => "KR", 'H' => "H")
     ),
     :WW5 => Dict(
         :name => "Wang & Wang 5-class",
         :classes => 5,
         :description => "Wang & Wang 5-class computational alphabet simplification",
-        :groups => Dict('I' => "CFILMVWY", 'A' => "AHT", 'D' => "DE", 'G' => "GP", 'K' => "KNQRS")
+        :groups => Dict(
+            'I' => "CFILMVWY", 'A' => "AHT", 'D' => "DE", 'G' => "GP", 'K' => "KNQRS")
     ),
     :MM5 => Dict(
         :name => "Melo & Marti-Renom 5-class",
         :classes => 5,
         :description => "Melo & Marti-Renom 5-class for alignment accuracy",
-        :groups => Dict('A' => "AG", 'C' => "C", 'D' => "DEKNPQRST", 'I' => "FILMVWY", 'H' => "H")
+        :groups => Dict(
+            'A' => "AG", 'C' => "C", 'D' => "DEKNPQRST", 'I' => "FILMVWY", 'H' => "H")
     ),
     :SDM12_PRLIC => Dict(
         :name => "Prlić SDM 12-class",
         :classes => 12,
         :description => "Prlić structure-derived 12-class (best AUC for fold recognition)",
-        :groups => Dict('A' => "A", 'D' => "D", 'N' => "N", 'C' => "C", 'W' => "W", 'H' => "H", 'G' => "G", 'P' => "P", 'K' => "KER", 'T' => "TSQ", 'Y' => "YF", 'L' => "LIVM")
+        :groups => Dict('A' => "A", 'D' => "D", 'N' => "N", 'C' => "C",
+            'W' => "W", 'H' => "H", 'G' => "G", 'P' => "P",
+            'K' => "KER", 'T' => "TSQ", 'Y' => "YF", 'L' => "LIVM")
     ),
     :HSDM17 => Dict(
         :name => "Prlić HSDM 17-class",
         :classes => 17,
         :description => "Prlić structure-derived 17-class (best mean pooled precision)",
-        :groups => Dict('A' => "A", 'D' => "D", 'R' => "R", 'N' => "N", 'T' => "T", 'S' => "S", 'Q' => "Q", 'Y' => "Y", 'F' => "F", 'M' => "M", 'C' => "C", 'W' => "W", 'H' => "H", 'G' => "G", 'P' => "P", 'K' => "KE", 'L' => "LIV")
+        :groups => Dict(
+            'A' => "A", 'D' => "D", 'R' => "R", 'N' => "N", 'T' => "T", 'S' => "S",
+            'Q' => "Q", 'Y' => "Y", 'F' => "F", 'M' => "M", 'C' => "C", 'W' => "W",
+            'H' => "H", 'G' => "G", 'P' => "P", 'K' => "KE", 'L' => "LIV")
     ),
     :SOLIS2 => Dict(
         :name => "Solis 2-class",
@@ -1622,91 +1640,117 @@ const REDUCED_ALPHABET_INFO = Dict{Symbol, Dict{Symbol, Any}}(
         :name => "Solis 5-class",
         :classes => 5,
         :description => "Solis 5-class hierarchical reduction",
-        :groups => Dict('F' => "FWY", 'C' => "CILMV", 'D' => "DEGKNS", 'A' => "APQT", 'H' => "HR")
+        :groups => Dict(
+            'F' => "FWY", 'C' => "CILMV", 'D' => "DEGKNS", 'A' => "APQT", 'H' => "HR")
     ),
     :SOLIS6 => Dict(
         :name => "Solis 6-class",
         :classes => 6,
         :description => "Solis 6-class with separated acidic residues",
-        :groups => Dict('F' => "FWY", 'C' => "CILMV", 'D' => "DE", 'G' => "GKNQS", 'A' => "APT", 'H' => "HR")
+        :groups => Dict('F' => "FWY", 'C' => "CILMV", 'D' => "DE",
+            'G' => "GKNQS", 'A' => "APT", 'H' => "HR")
     ),
     :SOLIS7 => Dict(
         :name => "Solis 7-class",
         :classes => 7,
         :description => "Solis 7-class with Lysine separated",
-        :groups => Dict('F' => "FWY", 'C' => "CILMV", 'D' => "DE", 'K' => "K", 'G' => "GNPQS", 'A' => "AT", 'H' => "HR")
+        :groups => Dict('F' => "FWY", 'C' => "CILMV", 'D' => "DE", 'K' => "K",
+            'G' => "GNPQS", 'A' => "AT", 'H' => "HR")
     ),
     :SOLIS8 => Dict(
         :name => "Solis 8-class",
         :classes => 8,
         :description => "Solis 8-class with Cysteine separated",
-        :groups => Dict('F' => "FWY", 'I' => "ILMV", 'C' => "C", 'D' => "DE", 'K' => "K", 'G' => "GNPQS", 'A' => "AT", 'H' => "HR")
+        :groups => Dict('F' => "FWY", 'I' => "ILMV", 'C' => "C", 'D' => "DE",
+            'K' => "K", 'G' => "GNPQS", 'A' => "AT", 'H' => "HR")
     ),
     :SOLIS9 => Dict(
         :name => "Solis 9-class",
         :classes => 9,
         :description => "Solis 9-class hierarchical reduction",
-        :groups => Dict('F' => "FWY", 'I' => "ILMV", 'D' => "DE", 'G' => "GNQS", 'P' => "PT", 'A' => "A", 'H' => "HR", 'C' => "C", 'K' => "K")
+        :groups => Dict('F' => "FWY", 'I' => "ILMV", 'D' => "DE", 'G' => "GNQS",
+            'P' => "PT", 'A' => "A", 'H' => "HR", 'C' => "C", 'K' => "K")
     ),
     :SOLIS10 => Dict(
         :name => "Solis 10-class",
         :classes => 10,
         :description => "Solis 10-class with Phe separated",
-        :groups => Dict('W' => "WY", 'F' => "F", 'I' => "ILMV", 'D' => "DE", 'G' => "GNQS", 'P' => "PT", 'A' => "A", 'H' => "HR", 'C' => "C", 'K' => "K")
+        :groups => Dict('W' => "WY", 'F' => "F", 'I' => "ILMV", 'D' => "DE", 'G' => "GNQS",
+            'P' => "PT", 'A' => "A", 'H' => "HR", 'C' => "C", 'K' => "K")
     ),
     :SOLIS11 => Dict(
         :name => "Solis 11-class",
         :classes => 11,
         :description => "Solis 11-class with Gly and Thr separated",
-        :groups => Dict('W' => "WY", 'I' => "ILMV", 'D' => "DE", 'G' => "G", 'N' => "NPQS", 'T' => "T", 'H' => "HR", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict('W' => "WY", 'I' => "ILMV", 'D' => "DE", 'G' => "G", 'N' => "NPQS",
+            'T' => "T", 'H' => "HR", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS12 => Dict(
         :name => "Solis 12-class",
         :classes => 12,
         :description => "Solis 12-class with aliphatic separation",
-        :groups => Dict('W' => "WY", 'I' => "IL", 'M' => "MV", 'D' => "DE", 'N' => "NPQS", 'H' => "HR", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict(
+            'W' => "WY", 'I' => "IL", 'M' => "MV", 'D' => "DE", 'N' => "NPQS", 'H' => "HR",
+            'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS13 => Dict(
         :name => "Solis 13-class",
         :classes => 13,
         :description => "Solis 13-class with Proline separated",
-        :groups => Dict('W' => "WY", 'I' => "IL", 'M' => "MV", 'D' => "DE", 'P' => "P", 'N' => "NQS", 'H' => "HR", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict('W' => "WY", 'I' => "IL", 'M' => "MV", 'D' => "DE",
+            'P' => "P", 'N' => "NQS", 'H' => "HR", 'G' => "G",
+            'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS14 => Dict(
         :name => "Solis 14-class",
         :classes => 14,
         :description => "Solis 14-class with W and Y separated",
-        :groups => Dict('W' => "W", 'Y' => "Y", 'I' => "IL", 'M' => "MV", 'D' => "DE", 'P' => "P", 'N' => "NQS", 'H' => "HR", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict('W' => "W", 'Y' => "Y", 'I' => "IL", 'M' => "MV", 'D' => "DE",
+            'P' => "P", 'N' => "NQS", 'H' => "HR", 'G' => "G",
+            'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS15 => Dict(
         :name => "Solis 15-class",
         :classes => 15,
         :description => "Solis 15-class with H and R separated",
-        :groups => Dict('I' => "IL", 'M' => "MV", 'D' => "DE", 'N' => "NQS", 'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict('I' => "IL", 'M' => "MV", 'D' => "DE", 'N' => "NQS", 'H' => "H",
+            'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G",
+            'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS16 => Dict(
         :name => "Solis 16-class",
         :classes => 16,
         :description => "Solis 16-class with M and V separated",
-        :groups => Dict('I' => "IL", 'M' => "M", 'V' => "V", 'D' => "DE", 'N' => "NQS", 'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict('I' => "IL", 'M' => "M", 'V' => "V", 'D' => "DE", 'N' => "NQS",
+            'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G",
+            'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS17 => Dict(
         :name => "Solis 17-class",
         :classes => 17,
         :description => "Solis 17-class with all aliphatic separated",
-        :groups => Dict('I' => "I", 'L' => "L", 'M' => "M", 'V' => "V", 'D' => "DE", 'N' => "NQS", 'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict(
+            'I' => "I", 'L' => "L", 'M' => "M", 'V' => "V", 'D' => "DE", 'N' => "NQS",
+            'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G",
+            'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS18 => Dict(
         :name => "Solis 18-class",
         :classes => 18,
         :description => "Solis 18-class with Q,S paired",
-        :groups => Dict('D' => "DE", 'N' => "N", 'Q' => "QS", 'I' => "I", 'L' => "L", 'M' => "M", 'V' => "V", 'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict(
+            'D' => "DE", 'N' => "N", 'Q' => "QS", 'I' => "I", 'L' => "L", 'M' => "M",
+            'V' => "V", 'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P",
+            'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     ),
     :SOLIS19 => Dict(
         :name => "Solis 19-class",
         :classes => 19,
         :description => "Solis 19-class nearly complete (only Q,S paired)",
-        :groups => Dict('D' => "D", 'E' => "E", 'Q' => "QS", 'N' => "N", 'I' => "I", 'L' => "L", 'M' => "M", 'V' => "V", 'H' => "H", 'R' => "R", 'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G", 'T' => "T", 'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
+        :groups => Dict('D' => "D", 'E' => "E", 'Q' => "QS", 'N' => "N", 'I' => "I",
+            'L' => "L", 'M' => "M", 'V' => "V", 'H' => "H", 'R' => "R",
+            'W' => "W", 'Y' => "Y", 'P' => "P", 'G' => "G", 'T' => "T",
+            'F' => "F", 'A' => "A", 'C' => "C", 'K' => "K")
     )
 )
 

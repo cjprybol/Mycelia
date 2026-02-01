@@ -10,12 +10,12 @@ Assembly method enumeration for unified interface.
     NgramGraph       # N-gram graph assembly (for unicode character analysis)
     KmerGraph        # K-mer graph assembly with DNAKmer/RNAKmer/AAKmer (for FASTA data)
     QualmerGraph     # Quality-aware k-mer graph assembly (for FASTQ data) - PRIMARY METHOD
-    
+
     # Variable-length graph types (simplified products)
     StringGraph      # String graph assembly (simplified from N-gram graphs)
     BioSequenceGraph # BioSequence graph assembly (simplified from K-mer graphs)
     QualityBioSequenceGraph # Quality-aware BioSequence graph assembly (simplified from Qualmer graphs)
-    
+
     # Hybrid approaches
     HybridOLC        # Hybrid OLC + qualmer graph approach
     MultiK           # Multi-k assembly with merging
@@ -132,18 +132,18 @@ struct AssemblyConfig
 
     # Constructor with validation
     function AssemblyConfig(;
-        k::Union{Int, Nothing} = nothing,
-        min_overlap::Union{Int, Nothing} = nothing,
-        sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}} = BioSequences.LongDNA{4},
-        graph_mode::GraphMode = DoubleStrand,
-        error_rate::Float64 = 0.01,
-        min_coverage::Int = 3,
-        use_quality_scores::Bool = true,
-        polish_iterations::Int = 3,
-        bubble_resolution::Bool = true,
-        repeat_resolution::Bool = true,
-        verbose::Bool = false,
-        tda::Union{Nothing, Mycelia.TDAConfig} = nothing,
+            k::Union{Int, Nothing} = nothing,
+            min_overlap::Union{Int, Nothing} = nothing,
+            sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}} = BioSequences.LongDNA{4},
+            graph_mode::GraphMode = DoubleStrand,
+            error_rate::Float64 = 0.01,
+            min_coverage::Int = 3,
+            use_quality_scores::Bool = true,
+            polish_iterations::Int = 3,
+            bubble_resolution::Bool = true,
+            repeat_resolution::Bool = true,
+            verbose::Bool = false,
+            tda::Union{Nothing, Mycelia.TDAConfig} = nothing
     )
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
@@ -186,7 +186,7 @@ struct AssemblyConfig
             bubble_resolution,
             repeat_resolution,
             verbose,
-            tda,
+            tda
         )
     end
 end
@@ -205,10 +205,11 @@ struct AssemblyResult
     gfa_compatible::Bool                # Whether graph structure is valid for GFA export
 
     function AssemblyResult(contigs::Vector{String}, contig_names::Vector{String};
-                          graph=nothing, simplified_graph=nothing, paths=Dict{String, Vector}(),
-                          assembly_stats=Dict{String, Any}(), fastq_contigs=FASTX.FASTQ.Record[],
-                          gfa_compatible=true)
-        new(contigs, contig_names, graph, simplified_graph, paths, assembly_stats, fastq_contigs, gfa_compatible)
+            graph = nothing, simplified_graph = nothing, paths = Dict{String, Vector}(),
+            assembly_stats = Dict{String, Any}(), fastq_contigs = FASTX.FASTQ.Record[],
+            gfa_compatible = true)
+        new(contigs, contig_names, graph, simplified_graph,
+            paths, assembly_stats, fastq_contigs, gfa_compatible)
     end
 end
 
@@ -228,7 +229,8 @@ end
 Check if the assembly result preserves quality information from the original reads.
 """
 function has_quality_information(result::AssemblyResult)
-    return !isempty(result.fastq_contigs) && get(result.assembly_stats, "quality_preserved", false)
+    return !isempty(result.fastq_contigs) &&
+           get(result.assembly_stats, "quality_preserved", false)
 end
 
 """
@@ -240,13 +242,13 @@ function write_fastq_contigs(result::AssemblyResult, output_file::String)
     if !has_quality_information(result)
         error("Assembly result does not contain quality information")
     end
-    
+
     FASTX.FASTQ.Writer(open(output_file, "w")) do writer
         for record in result.fastq_contigs
             write(writer, record)
         end
     end
-    
+
     @info "Quality-aware contigs written to $(output_file)"
     return output_file
 end
@@ -267,7 +269,8 @@ function write_gfa(result::AssemblyResult, output_file::String)
     end
 
     # Use the simplified graph if available, otherwise the full graph
-    graph_to_write = isnothing(result.simplified_graph) ? result.graph : result.simplified_graph
+    graph_to_write = isnothing(result.simplified_graph) ? result.graph :
+                     result.simplified_graph
 
     # Write base GFA structure using existing function
     Rhizomorph.write_gfa_next(graph_to_write, output_file)
@@ -369,7 +372,7 @@ Append path information to an existing GFA file.
 Adds GFA P-lines (path lines) that describe walks through the graph corresponding to assembled contigs.
 """
 function _append_gfa_paths(gfa_file::String, paths::Dict{String, Vector},
-                          contigs::Vector{String}, contig_names::Vector{String})
+        contigs::Vector{String}, contig_names::Vector{String})
     open(gfa_file, "a") do io
         println(io, "# Path information for assembled contigs")
 
@@ -397,7 +400,8 @@ end
 """
 Auto-configure assembly based on input type and parameters.
 """
-function _auto_configure_assembly(reads; k=nothing, min_overlap=nothing, graph_mode=nothing, kwargs...)
+function _auto_configure_assembly(
+        reads; k = nothing, min_overlap = nothing, graph_mode = nothing, kwargs...)
     # Detect input format and sequence type
     sequence_type = _detect_sequence_type(reads)
 
@@ -415,11 +419,11 @@ function _auto_configure_assembly(reads; k=nothing, min_overlap=nothing, graph_m
 
     # Create config with detected parameters
     return AssemblyConfig(;
-        k=k,
-        min_overlap=min_overlap,
-        sequence_type=sequence_type,
-        graph_mode=graph_mode,
-        use_quality_scores=use_quality_scores,
+        k = k,
+        min_overlap = min_overlap,
+        sequence_type = sequence_type,
+        graph_mode = graph_mode,
+        use_quality_scores = use_quality_scores,
         kwargs...
     )
 end
@@ -488,7 +492,8 @@ end
 Type-stable main assembly function that dispatches based on configuration.
 """
 function assemble_genome(reads, config::AssemblyConfig)
-    _log_info(config, "Starting unified genome assembly", config.sequence_type, config.graph_mode, config.k, config.min_overlap)
+    _log_info(config, "Starting unified genome assembly", config.sequence_type,
+        config.graph_mode, config.k, config.min_overlap)
 
     # Phase 1: Load and validate input
     observations = _prepare_observations(reads)
@@ -542,36 +547,36 @@ Uses Phase 2 enhanced Viterbi algorithms with quality score integration for:
 - Consensus calling from multiple observations
 - Iterative improvement until convergence
 """
-function polish_assembly(assembly::AssemblyResult, reads; iterations::Int=3)
+function polish_assembly(assembly::AssemblyResult, reads; iterations::Int = 3)
     @info "Starting assembly polishing" iterations
-    
+
     observations = _prepare_observations(reads)
     polished_contigs = copy(assembly.contigs)
-    
+
     for iter in 1:iterations
         @info "Polishing iteration $iter/$iterations"
-        
+
         # Build k-mer graph from current contigs + reads
         graph = Rhizomorph.build_kmer_graph(
             vcat(observations, _contigs_to_records(polished_contigs)),
             31
         )
-        
+
         # Polish each contig using Viterbi error correction
         for (i, contig) in enumerate(polished_contigs)
             polished_contigs[i] = _polish_contig_viterbi(contig, graph, observations)
         end
     end
-    
+
     # Update assembly stats
     new_stats = merge(assembly.assembly_stats, Dict(
         "polishing_iterations" => iterations,
         "polished" => true
     ))
-    
+
     @info "Polishing completed"
-    return AssemblyResult(polished_contigs, assembly.contig_names; 
-                         graph=assembly.graph, assembly_stats=new_stats)
+    return AssemblyResult(polished_contigs, assembly.contig_names;
+        graph = assembly.graph, assembly_stats = new_stats)
 end
 
 """
@@ -594,35 +599,35 @@ Computes assembly quality metrics including:
 - Structural variant detection (if reference provided)
 - Gap analysis and repeat characterization
 """
-function validate_assembly(assembly::AssemblyResult; reference=nothing)
+function validate_assembly(assembly::AssemblyResult; reference = nothing)
     @info "Validating assembly quality"
-    
+
     contigs = assembly.contigs
     metrics = Dict{String, Any}()
-    
+
     # Basic assembly statistics
     contig_lengths = [length(contig) for contig in contigs]
     total_length = sum(contig_lengths)
-    sort!(contig_lengths, rev=true)
-    
+    sort!(contig_lengths, rev = true)
+
     metrics["num_contigs"] = length(contigs)
     metrics["total_length"] = total_length
     metrics["mean_contig_length"] = Statistics.mean(contig_lengths)
     metrics["max_contig_length"] = maximum(contig_lengths)
     metrics["min_contig_length"] = minimum(contig_lengths)
-    
+
     # N-statistics
     metrics["N50"] = _calculate_n_statistic(contig_lengths, 0.5)
     metrics["N90"] = _calculate_n_statistic(contig_lengths, 0.9)
     metrics["L50"] = _calculate_l_statistic(contig_lengths, 0.5)
     metrics["L90"] = _calculate_l_statistic(contig_lengths, 0.9)
-    
+
     # Reference-based validation (if provided)
     if !isnothing(reference)
         ref_metrics = _validate_against_reference(contigs, reference)
         merge!(metrics, ref_metrics)
     end
-    
+
     @info "Assembly validation completed" metrics["N50"] metrics["num_contigs"]
     return metrics
 end
@@ -643,7 +648,9 @@ function _prepare_observations(reads)
                 # Load FASTQ and convert to FASTA records
                 open(FASTX.FASTQ.Reader, file_path) do reader
                     for record in reader
-                        push!(observations, FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record)))
+                        push!(observations,
+                            FASTX.FASTA.Record(FASTX.FASTQ.identifier(record),
+                                FASTX.FASTQ.sequence(record)))
                     end
                 end
             else
@@ -660,7 +667,8 @@ function _prepare_observations(reads)
         return reads
     elseif reads isa Vector{<:FASTX.FASTQ.Record}
         # Convert FASTQ to FASTA records
-        return [FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record)) for record in reads]
+        return [FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record))
+                for record in reads]
     else
         throw(ArgumentError("Unsupported reads format: $(typeof(reads))"))
     end
@@ -674,13 +682,13 @@ function _assemble_string_graph(observations, config)
 
     strings = [String(FASTX.FASTA.sequence(obs)) for obs in observations]
     min_overlap = isnothing(config.min_overlap) ? 1 : config.min_overlap
-    string_graph = Rhizomorph.build_string_graph(strings; min_overlap=min_overlap)
+    string_graph = Rhizomorph.build_string_graph(strings; min_overlap = min_overlap)
 
     if config.bubble_resolution
         _simplify_string_graph(string_graph)
     end
 
-    contig_paths = Rhizomorph.find_contigs_next(string_graph; min_contig_length=1)
+    contig_paths = Rhizomorph.find_contigs_next(string_graph; min_contig_length = 1)
     contigs = [string(contig.sequence) for contig in contig_paths]
     if isempty(contigs)
         contigs = strings
@@ -696,7 +704,7 @@ function _assemble_string_graph(observations, config)
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
-    return AssemblyResult(contigs, contig_names; graph=string_graph, assembly_stats=stats)
+    return AssemblyResult(contigs, contig_names; graph = string_graph, assembly_stats = stats)
 end
 
 """
@@ -705,22 +713,22 @@ K-mer graph assembly implementation (fixed-length k-mer foundation).
 function _assemble_kmer_graph(observations, config)
     _log_info(config, "Using k-mer graph assembly strategy (fixed-length k-mer foundation)")
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_kmer_graph(observations, config.k; mode=mode)
-    
+    graph = Rhizomorph.build_kmer_graph(observations, config.k; mode = mode)
+
     # Apply Phase 2 graph algorithms
     if config.bubble_resolution
         bubbles = Rhizomorph.detect_bubbles_next(graph)
         _log_info(config, "Detected $(length(bubbles)) bubble structures")
     end
-    
+
     if config.repeat_resolution
         repeats = Rhizomorph.resolve_repeats_next(graph)
         _log_info(config, "Identified $(length(repeats)) repeat regions")
     end
-    
+
     # Find contigs using Eulerian path finding
     paths = Rhizomorph.find_eulerian_paths_next(graph)
-    
+
     # Convert paths to sequences
     contigs = String[]
     for path in paths
@@ -729,20 +737,21 @@ function _assemble_kmer_graph(observations, config)
             push!(contigs, string(sequence))
         end
     end
-    
+
     # If no Eulerian paths, use probabilistic walks
     if isempty(contigs)
         _log_info(config, "No Eulerian paths found, using linear contigs")
         contigs = _generate_contigs_probabilistic(graph, config)
     end
-    
+
     contig_names = ["kmer_contig_$i" for i in 1:length(contigs)]
-    
+
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "KmerGraph",
         "graph_type" => "fixed_length",
-        "vertex_type" => isempty(MetaGraphsNext.labels(graph)) ? "unknown" : string(typeof(first(MetaGraphsNext.labels(graph)))),
+        "vertex_type" => isempty(MetaGraphsNext.labels(graph)) ? "unknown" :
+                         string(typeof(first(MetaGraphsNext.labels(graph)))),
         "k" => config.k,
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
@@ -750,8 +759,8 @@ function _assemble_kmer_graph(observations, config)
         "num_input_sequences" => length(observations),
         "assembly_date" => string(Mycelia.Dates.now())
     )
-    
-    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
+
+    return AssemblyResult(contigs, contig_names; graph = graph, assembly_stats = stats)
 end
 
 """
@@ -759,28 +768,28 @@ Quality-aware k-mer graph assembly implementation (fixed-length qualmer foundati
 """
 function _assemble_qualmer_graph(observations, config)
     _log_info(config, "Using quality-aware k-mer graph assembly strategy (fixed-length qualmer foundation)")
-    
+
     # Convert observations to FASTQ records for quality processing
     fastq_records = _prepare_fastq_observations(observations)
-    
+
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode=mode)
-    
+    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
+
     # Apply Phase 2 graph algorithms if enabled
     if config.bubble_resolution
         # Note: This would use detect_bubbles_next adapted for qualmer graphs
         _log_info(config, "Bubble resolution enabled for qualmer graphs")
     end
-    
+
     if config.repeat_resolution
         # Note: This would use resolve_repeats_next adapted for qualmer graphs
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
-    
+
     # Find contigs using quality-aware path finding
     paths = _find_qualmer_paths(graph, config)
-    
+
     # Convert paths to FASTQ records with quality propagation
     contig_records = FASTX.FASTQ.Record[]
     for (i, path) in enumerate(paths)
@@ -793,17 +802,17 @@ function _assemble_qualmer_graph(observations, config)
             end
         end
     end
-    
+
     # If no paths found, use probabilistic walks on qualmer graph
     if isempty(contig_records)
         _log_info(config, "No quality-aware paths found, using probabilistic walks")
         contig_records = _generate_fastq_contigs_from_qualmer_graph(graph, config)
     end
-    
+
     # Convert FASTQ records to strings for backward compatibility with existing code
     contigs = [String(FASTX.sequence(record)) for record in contig_records]
     contig_names = [String(FASTX.identifier(record)) for record in contig_records]
-    
+
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "QualmerGraph",
@@ -818,7 +827,7 @@ function _assemble_qualmer_graph(observations, config)
         "num_input_sequences" => length(observations),
         "assembly_date" => string(Mycelia.Dates.now())
     )
-    
+
     # Add quality-specific statistics
     if !isempty(MetaGraphsNext.labels(graph))
         qualmer_stats = Rhizomorph.get_qualmer_statistics(graph)
@@ -826,8 +835,9 @@ function _assemble_qualmer_graph(observations, config)
             stats[string(key)] = value
         end
     end
-    
-    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats, fastq_contigs=contig_records)
+
+    return AssemblyResult(contigs, contig_names; graph = graph,
+        assembly_stats = stats, fastq_contigs = contig_records)
 end
 
 """
@@ -843,7 +853,7 @@ function _find_qualmer_paths(graph, config)
         return paths
     end
 
-    sorted_vertices = sort(vertices, by=v -> _qualmer_vertex_score(graph[v]), rev=true)
+    sorted_vertices = sort(vertices, by = v -> _qualmer_vertex_score(graph[v]), rev = true)
 
     visited = Set()
 
@@ -853,7 +863,7 @@ function _find_qualmer_paths(graph, config)
         if start_vertex in visited
             continue
         end
-        
+
         # Try to find Eulerian path starting from high-confidence vertex
         path = _find_heaviest_eulerian_path(graph, start_vertex, visited)
         if length(path) > 1
@@ -861,7 +871,7 @@ function _find_qualmer_paths(graph, config)
             push!(paths, path)
         end
     end
-    
+
     # Method 2: Iterative Viterbi Algorithm for remaining vertices
     if length(paths) < 3  # If we haven't found many paths, try iterative Viterbi
         _log_info(config, "Applying iterative Viterbi algorithm")
@@ -876,9 +886,11 @@ function _find_qualmer_paths(graph, config)
             end
         end
     end
-    
+
     # Method 3: Evidence-weighted walks for any remaining vertices
-    remaining_vertices = filter(v -> !(v in visited) && _qualmer_vertex_score(graph[v]) > 0.0, vertices)
+    remaining_vertices = filter(
+        v -> !(v in visited) &&
+             _qualmer_vertex_score(graph[v]) > 0.0, vertices)
     if !isempty(remaining_vertices) && length(paths) < 5
         _log_info(config, "Using probabilistic walks for remaining high-quality vertices")
         for start_vertex in remaining_vertices[1:min(3, end)]  # Limit to avoid too many small contigs
@@ -891,7 +903,7 @@ function _find_qualmer_paths(graph, config)
             end
         end
     end
-    
+
     return paths
 end
 
@@ -901,23 +913,23 @@ Find the heaviest (highest confidence) Eulerian path starting from a given verte
 function _find_heaviest_eulerian_path(graph, start_vertex, visited::Set)
     path = [start_vertex]
     current = start_vertex
-    
+
     max_steps = 1000  # Prevent infinite loops
     steps = 0
-    
+
     while steps < max_steps
         # Get unvisited neighbors
         neighbors = collect(MetaGraphsNext.outneighbor_labels(graph, current))
         unvisited_neighbors = filter(n -> !(n in visited), neighbors)
-        
+
         if isempty(unvisited_neighbors)
             break
         end
-        
+
         # Choose neighbor with highest combined score (vertex evidence * edge evidence)
         best_neighbor = nothing
         best_score = -1.0
-        
+
         for neighbor in unvisited_neighbors
             # Vertex evidence score
             vertex_score = _qualmer_vertex_score(graph[neighbor])
@@ -928,25 +940,25 @@ function _find_heaviest_eulerian_path(graph, start_vertex, visited::Set)
                 edge_data = graph[current, neighbor]
                 edge_score = _qualmer_edge_score(edge_data)
             end
-            
+
             # Combined score
             total_score = vertex_score * edge_score
-            
+
             if total_score > best_score
                 best_score = total_score
                 best_neighbor = neighbor
             end
         end
-        
+
         if best_neighbor === nothing || best_score < 1.0  # Evidence threshold
             break
         end
-        
+
         push!(path, best_neighbor)
         current = best_neighbor
         steps += 1
     end
-    
+
     return path
 end
 
@@ -956,30 +968,30 @@ Uses dynamic programming with quality scores as emission/transition probabilitie
 """
 function _iterative_viterbi_paths(graph, candidate_vertices, config)
     paths = Vector{Vector}()
-    
+
     # Group vertices into potential start points (high in-degree or isolated)
     start_candidates = Vector()
     for vertex in candidate_vertices
         in_degree = length(collect(MetaGraphsNext.inneighbor_labels(graph, vertex)))
         out_degree = length(collect(MetaGraphsNext.outneighbor_labels(graph, vertex)))
-        
+
         # Prefer vertices that could be sequence starts
         if in_degree <= out_degree || _qualmer_vertex_score(graph[vertex]) >= 1.0
             push!(start_candidates, vertex)
         end
     end
-    
+
     # If no clear starts, use highest quality vertices
     if isempty(start_candidates)
         start_candidates = candidate_vertices[1:min(3, end)]
     end
-    
+
     visited = Set()
     for start_vertex in start_candidates
         if start_vertex in visited
             continue
         end
-        
+
         # Apply Viterbi-like algorithm
         path = _viterbi_optimal_path(graph, start_vertex, visited, 500)  # Reasonable max length
         if length(path) > 1
@@ -987,7 +999,7 @@ function _iterative_viterbi_paths(graph, candidate_vertices, config)
             push!(paths, path)
         end
     end
-    
+
     return paths
 end
 
@@ -999,48 +1011,48 @@ function _viterbi_optimal_path(graph, start_vertex, visited::Set, max_length::In
     path = [start_vertex]
     current = start_vertex
     local_visited = Set([start_vertex])
-    
+
     for step in 1:max_length
         neighbors = collect(MetaGraphsNext.outneighbor_labels(graph, current))
         unvisited_neighbors = filter(n -> !(n in visited) && !(n in local_visited), neighbors)
-        
+
         if isempty(unvisited_neighbors)
             break
         end
-        
+
         # Calculate Viterbi scores for each neighbor
         best_neighbor = nothing
         best_viterbi_score = -Inf
-        
+
         for neighbor in unvisited_neighbors
             # Emission probability (vertex quality)
             emission_prob = log(max(1e-10, _qualmer_vertex_score(graph[neighbor])))
-            
+
             # Transition probability (edge quality)
             transition_prob = 0.0
             if haskey(graph, current, neighbor)
                 edge_data = graph[current, neighbor]
                 transition_prob = log(max(1e-10, _qualmer_edge_score(edge_data)))
             end
-            
+
             # Viterbi score
             viterbi_score = emission_prob + transition_prob
-            
+
             if viterbi_score > best_viterbi_score
                 best_viterbi_score = viterbi_score
                 best_neighbor = neighbor
             end
         end
-        
+
         if best_neighbor === nothing || best_viterbi_score < -10.0  # Quality threshold in log space
             break
         end
-        
+
         push!(path, best_neighbor)
         push!(local_visited, best_neighbor)
         current = best_neighbor
     end
-    
+
     return path
 end
 
@@ -1049,7 +1061,7 @@ Hybrid OLC assembly (placeholder for future implementation).
 """
 function _assemble_hybrid_olc(observations, config)
     _log_info(config, "Using hybrid OLC assembly strategy")
-    
+
     # For now, fall back to k-mer graph assembly
     # Future implementation would combine overlap-layout-consensus with string graphs
     @warn "Hybrid OLC not fully implemented, using k-mer graph assembly"
@@ -1061,7 +1073,7 @@ Multi-k assembly (placeholder for future implementation).
 """
 function _assemble_multi_k(observations, config)
     _log_info(config, "Using multi-k assembly strategy")
-    
+
     # For now, fall back to single-k assembly
     # Future implementation would use multiple k-mer sizes and merge results
     @warn "Multi-k assembly not fully implemented, using single-k assembly"
@@ -1072,7 +1084,7 @@ end
 Generate contigs using probabilistic walks when Eulerian paths are not available.
 """
 function _generate_contigs_probabilistic(graph, config)
-    contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length=1)
+    contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length = 1)
     contigs = String[]
 
     for contig in contig_paths
@@ -1089,8 +1101,8 @@ Polish a single contig using Viterbi error correction.
 """
 function _polish_contig_viterbi(contig, graph, observations)
     # Create observation sequence from contig
-    contig_kmers = [contig[i:i+30] for i in 1:length(contig)-30]  # Assuming k=31
-    
+    contig_kmers = [contig[i:(i + 30)] for i in 1:(length(contig) - 30)]  # Assuming k=31
+
     # Use Viterbi decoding for error correction
     try
         path = Mycelia.viterbi_decode_next(graph, contig_kmers)
@@ -1118,7 +1130,7 @@ Calculate N-statistic (N50, N90, etc.) for contig lengths.
 function _calculate_n_statistic(sorted_lengths, threshold)
     total_length = sum(sorted_lengths)
     target_length = total_length * threshold
-    
+
     cumulative_length = 0
     for length in sorted_lengths
         cumulative_length += length
@@ -1126,7 +1138,7 @@ function _calculate_n_statistic(sorted_lengths, threshold)
             return length
         end
     end
-    
+
     return 0
 end
 
@@ -1146,10 +1158,10 @@ For example, L50 is the number of contigs needed to reach 50% of the total assem
 function _calculate_l_statistic(sorted_lengths, threshold)
     total_length = sum(sorted_lengths)
     target_length = total_length * threshold
-    
+
     cumulative_length = 0
     contig_count = 0
-    
+
     for length in sorted_lengths
         cumulative_length += length
         contig_count += 1
@@ -1157,7 +1169,7 @@ function _calculate_l_statistic(sorted_lengths, threshold)
             return contig_count
         end
     end
-    
+
     return length(sorted_lengths)  # Return total number of contigs if threshold not reached
 end
 
@@ -1191,7 +1203,7 @@ Convert observations to FASTQ records for quality processing.
 """
 function _prepare_fastq_observations(observations)
     fastq_records = FASTX.FASTQ.Record[]
-    
+
     for (i, obs) in enumerate(observations)
         # Handle different observation formats
         if obs isa FASTX.FASTQ.Record
@@ -1220,7 +1232,7 @@ function _prepare_fastq_observations(observations)
             @warn "Unsupported observation type: $(typeof(obs))"
         end
     end
-    
+
     return fastq_records
 end
 
@@ -1281,40 +1293,40 @@ Generate FASTQ contigs from qualmer graph using probabilistic walks when no path
 function _generate_fastq_contigs_from_qualmer_graph(graph, config)
     contig_records = FASTX.FASTQ.Record[]
     vertices = collect(MetaGraphsNext.labels(graph))
-    
+
     if isempty(vertices)
         return contig_records
     end
-    
+
     # Track visited vertices to avoid duplicates
     visited = Set()
-    
+
     # Start evidence-weighted walks from high-confidence vertices
     min_quality = 1.0
     start_vertices = filter(v -> _qualmer_vertex_score(graph[v]) >= min_quality, vertices)
-    
+
     # If no high-confidence vertices, use all vertices
     if isempty(start_vertices)
         start_vertices = vertices
     end
-    
+
     contig_id = 1
     for start_vertex in start_vertices
         if start_vertex in visited
             continue
         end
-        
+
         # Perform quality-weighted walk from this vertex
         path = _quality_weighted_walk(graph, start_vertex, config.k * 10)  # Reasonable max length
-        
+
         if length(path) > 1  # Need at least 2 vertices to form a meaningful contig
             # Mark all vertices in path as visited
             union!(visited, path)
-            
+
             # Convert path to FASTQ record
             contig_name = "qualmer_probabilistic_contig_$(contig_id)"
             fastq_record = _qualmer_path_to_consensus_fastq(path, graph, contig_name)
-            
+
             # Only keep contigs longer than k
             if length(FASTX.sequence(fastq_record)) > config.k
                 push!(contig_records, fastq_record)
@@ -1322,62 +1334,62 @@ function _generate_fastq_contigs_from_qualmer_graph(graph, config)
             end
         end
     end
-    
+
     return contig_records
 end
 
 """
 Perform quality-weighted walk through qualmer graph.
 """
-function _quality_weighted_walk(graph, start_vertex, max_length::Int=1000)
+function _quality_weighted_walk(graph, start_vertex, max_length::Int = 1000)
     path = [start_vertex]
     current = start_vertex
     visited = Set([current])
-    
+
     while length(path) < max_length
         # Get outgoing neighbors
         neighbors = collect(MetaGraphsNext.outneighbor_labels(graph, current))
-        
+
         # Filter out visited vertices
         unvisited = filter(n -> !(n in visited), neighbors)
-        
+
         if isempty(unvisited)
             break
         end
-        
+
         # Choose next vertex based on evidence scores
         best_neighbor = nothing
         best_score = -1.0
-        
+
         for neighbor in unvisited
             # Calculate score based on vertex evidence and edge evidence
             vertex_quality = _qualmer_vertex_score(graph[neighbor])
-            
+
             # Check if edge exists and get its quality weight
             edge_quality = 1.0
             if haskey(graph, current, neighbor)
                 edge_data = graph[current, neighbor]
                 edge_quality = _qualmer_edge_score(edge_data)
             end
-            
+
             # Combined score (vertex quality * edge quality)
             score = vertex_quality * edge_quality
-            
+
             if score > best_score
                 best_score = score
                 best_neighbor = neighbor
             end
         end
-        
+
         if best_neighbor === nothing
             break
         end
-        
+
         push!(path, best_neighbor)
         push!(visited, best_neighbor)
         current = best_neighbor
     end
-    
+
     return path
 end
 
@@ -1387,17 +1399,17 @@ Generate contigs from qualmer graph using probabilistic walks.
 function _generate_contigs_from_qualmer_graph(graph, config)
     contigs = String[]
     vertices = collect(MetaGraphsNext.labels(graph))
-    
+
     # Start probabilistic walks from high-quality vertices
     for start_vertex in vertices
         vertex_data = graph[start_vertex]
-        
+
         # Only start from high-quality k-mers
         if _qualmer_vertex_score(vertex_data) > 0.0
             # Simple random walk (placeholder for more sophisticated algorithm)
             path = [start_vertex]
             current = start_vertex
-            
+
             for _ in 1:100  # Max walk length
                 # Find outgoing edges
                 outgoing = []
@@ -1407,16 +1419,16 @@ function _generate_contigs_from_qualmer_graph(graph, config)
                         push!(outgoing, dst)
                     end
                 end
-                
+
                 if isempty(outgoing)
                     break
                 end
-                
+
                 # Choose randomly weighted by quality
                 current = rand(outgoing)
                 push!(path, current)
             end
-            
+
             if length(path) > 1
                 sequence = _qualmer_path_to_sequence(path, graph)
                 if length(sequence) > config.k
@@ -1425,7 +1437,7 @@ function _generate_contigs_from_qualmer_graph(graph, config)
             end
         end
     end
-    
+
     return contigs
 end
 
@@ -1455,7 +1467,7 @@ function _assemble_ngram_graph(observations, config)
     end
 
     if isempty(contigs)
-        contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length=1)
+        contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length = 1)
         contigs = [string(contig.sequence) for contig in contig_paths]
     end
 
@@ -1470,7 +1482,7 @@ function _assemble_ngram_graph(observations, config)
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
-    return AssemblyResult(contigs, contig_names; graph=graph, assembly_stats=stats)
+    return AssemblyResult(contigs, contig_names; graph = graph, assembly_stats = stats)
 end
 
 """
@@ -1480,18 +1492,18 @@ function _assemble_biosequence_graph(observations, config)
     _log_info(config, "Using BioSequence graph assembly strategy (variable-length simplified from k-mer)")
 
     min_overlap = isnothing(config.min_overlap) ? 1 : config.min_overlap
-    biosequence_graph = Rhizomorph.build_fasta_graph(observations; min_overlap=min_overlap)
-    
+    biosequence_graph = Rhizomorph.build_fasta_graph(observations; min_overlap = min_overlap)
+
     # Extract sequences from graph vertices
     contigs = String[]
     contig_names = String[]
-    
+
     for (i, vertex_label) in enumerate(MetaGraphsNext.labels(biosequence_graph))
         sequence = string(vertex_label)
         push!(contigs, sequence)
         push!(contig_names, "biosequence_contig_$i")
     end
-    
+
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "BioSequenceGraph",
@@ -1504,32 +1516,33 @@ function _assemble_biosequence_graph(observations, config)
         "num_input_sequences" => length(observations),
         "assembly_date" => string(Mycelia.Dates.now())
     )
-    
-    return AssemblyResult(contigs, contig_names; graph=biosequence_graph, assembly_stats=stats)
+
+    return AssemblyResult(contigs, contig_names; graph = biosequence_graph, assembly_stats = stats)
 end
 
 """
 Quality-aware BioSequence graph assembly implementation (variable-length simplified from qualmer graphs).
 """
 function _assemble_quality_biosequence_graph(observations, config)
-    _log_info(config, "Using quality-aware BioSequence graph assembly strategy (variable-length simplified from qualmer)")
-    
+    _log_info(config,
+        "Using quality-aware BioSequence graph assembly strategy (variable-length simplified from qualmer)")
+
     # Convert observations to FASTQ records for quality processing
     fastq_records = _prepare_fastq_observations(observations)
 
     min_overlap = isnothing(config.min_overlap) ? 1 : config.min_overlap
-    quality_biosequence_graph = Rhizomorph.build_fastq_graph(fastq_records; min_overlap=min_overlap)
-    
+    quality_biosequence_graph = Rhizomorph.build_fastq_graph(fastq_records; min_overlap = min_overlap)
+
     # Extract sequences from graph vertices
     contigs = String[]
     contig_names = String[]
-    
+
     for (i, vertex_label) in enumerate(MetaGraphsNext.labels(quality_biosequence_graph))
         sequence = string(vertex_label)
         push!(contigs, sequence)
         push!(contig_names, "quality_biosequence_contig_$i")
     end
-    
+
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "QualityBioSequenceGraph",
@@ -1542,8 +1555,8 @@ function _assemble_quality_biosequence_graph(observations, config)
         "num_input_sequences" => length(observations),
         "assembly_date" => string(Mycelia.Dates.now())
     )
-    
-    return AssemblyResult(contigs, contig_names; graph=quality_biosequence_graph, assembly_stats=stats)
+
+    return AssemblyResult(contigs, contig_names; graph = quality_biosequence_graph, assembly_stats = stats)
 end
 
 """

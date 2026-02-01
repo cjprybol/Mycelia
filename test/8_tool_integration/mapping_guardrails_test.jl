@@ -12,7 +12,6 @@ import Mycelia
 import Logging
 
 Test.@testset "Mapping efficiency guardrails" begin
-
     Test.@testset "minimap_merge_map_and_split warns on small input" begin
         mktempdir() do dir
             # Create reference and tiny FASTQ (< 50KB threshold)
@@ -25,11 +24,11 @@ Test.@testset "Mapping efficiency guardrails" begin
             # Capture warning logs - should warn about small input
             Test.@test_logs (:warn, r"very small input size") begin
                 Mycelia.minimap_merge_map_and_split(
-                    reference_fasta=ref,
-                    mapping_type="sr",
-                    single_end_fastqs=[tiny_fq],
-                    run_mapping=false,
-                    run_splitting=false
+                    reference_fasta = ref,
+                    mapping_type = "sr",
+                    single_end_fastqs = [tiny_fq],
+                    run_mapping = false,
+                    run_splitting = false
                 )
             end
         end
@@ -49,11 +48,11 @@ Test.@testset "Mapping efficiency guardrails" begin
             # Capture warning logs - should warn about small input
             Test.@test_logs (:warn, r"very small input size") begin
                 Mycelia.minimap_merge_map_and_split(
-                    reference_fasta=ref,
-                    mapping_type="sr",
-                    paired_end_fastqs=[(tiny_fq1, tiny_fq2)],
-                    run_mapping=false,
-                    run_splitting=false
+                    reference_fasta = ref,
+                    mapping_type = "sr",
+                    paired_end_fastqs = [(tiny_fq1, tiny_fq2)],
+                    run_mapping = false,
+                    run_splitting = false
                 )
             end
         end
@@ -85,11 +84,11 @@ Test.@testset "Mapping efficiency guardrails" begin
             logs = []
             result = Test.@test_logs min_level=Logging.Warn match_mode=:any begin
                 Mycelia.minimap_merge_map_and_split(
-                    reference_fasta=ref,
-                    mapping_type="sr",
-                    single_end_fastqs=[large_fq],
-                    run_mapping=false,
-                    run_splitting=false
+                    reference_fasta = ref,
+                    mapping_type = "sr",
+                    single_end_fastqs = [large_fq],
+                    run_mapping = false,
+                    run_splitting = false
                 )
             end
 
@@ -120,9 +119,9 @@ Test.@testset "Mapping efficiency guardrails" begin
             try
                 Test.@test_logs (:warn, r"large input size") begin
                     Mycelia.run_blastn(
-                        fasta=large_fasta,
-                        blastdb=fake_db,
-                        force=true
+                        fasta = large_fasta,
+                        blastdb = fake_db,
+                        force = true
                     )
                 end
                 warning_emitted = true
@@ -152,9 +151,9 @@ Test.@testset "Mapping efficiency guardrails" begin
             # The function will fail due to missing db, but no efficiency warning should be logged
             try
                 Mycelia.run_blastn(
-                    fasta=small_fasta,
-                    blastdb=fake_db,
-                    force=true
+                    fasta = small_fasta,
+                    blastdb = fake_db,
+                    force = true
                 )
             catch
                 # Expected to fail on missing db/conda env

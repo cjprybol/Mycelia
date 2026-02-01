@@ -27,7 +27,6 @@ import Kmers
 import MetaGraphsNext
 
 Test.@testset "Path Finding - Eulerian Paths" begin
-
     Test.@testset "Simple Linear Path - DNA K-mer" begin
         # Create simple linear sequence: ATCGATCG
         # k=3: ATC -> TCG -> CGA -> GAT -> ATC (cycle!)
@@ -39,8 +38,8 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             records,
             3;
-            dataset_id="test_dataset",
-            mode=:singlestrand
+            dataset_id = "test_dataset",
+            mode = :singlestrand
         )
 
         # Find Eulerian paths
@@ -60,12 +59,12 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         end
 
         # Verify path connectivity (each k-mer overlaps with next by k-1)
-        for i in 1:(length(path)-1)
+        for i in 1:(length(path) - 1)
             kmer1 = path[i]
-            kmer2 = path[i+1]
+            kmer2 = path[i + 1]
             # Check k-1 overlap
             suffix = string(kmer1)[2:end]
-            prefix = string(kmer2)[1:end-1]
+            prefix = string(kmer2)[1:(end - 1)]
             Test.@test suffix == prefix
         end
     end
@@ -79,7 +78,7 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             FASTX.FASTA.Record("seq2", seq2)
         ]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id="multi_seq", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id = "multi_seq", mode = :singlestrand)
 
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
@@ -92,9 +91,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
                 Test.@test all(k -> k isa Kmers.DNAKmer{4}, path)
 
                 # Verify connectivity
-                for i in 1:(length(path)-1)
+                for i in 1:(length(path) - 1)
                     suffix = string(path[i])[2:end]
-                    prefix = string(path[i+1])[1:end-1]
+                    prefix = string(path[i + 1])[1:(end - 1)]
                     Test.@test suffix == prefix
                 end
             end
@@ -107,7 +106,8 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.dna"ATCATCATC"
         records = [FASTX.FASTA.Record("circular", sequence)]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="circular_test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id = "circular_test", mode = :singlestrand)
 
         # Check graph has cycle
         vertex_count = length(MetaGraphsNext.labels(graph))
@@ -128,9 +128,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             @info "Found $(length(paths)) path(s) in circular graph"
             # Verify first path is valid
             path = first(paths)
-            for i in 1:(length(path)-1)
+            for i in 1:(length(path) - 1)
                 suffix = string(path[i])[2:end]
-                prefix = string(path[i+1])[1:end-1]
+                prefix = string(path[i + 1])[1:(end - 1)]
                 Test.@test suffix == prefix
             end
         end
@@ -151,7 +151,8 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             FASTX.FASTA.Record("path2", seq2)
         ]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="bubble_test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id = "bubble_test", mode = :singlestrand)
 
         # Should have branching structure
         vertex_count = length(MetaGraphsNext.labels(graph))
@@ -166,9 +167,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         # Verify paths are valid
         for path in paths
             if !isempty(path)
-                for i in 1:(length(path)-1)
+                for i in 1:(length(path) - 1)
                     suffix = string(path[i])[2:end]
-                    prefix = string(path[i+1])[1:end-1]
+                    prefix = string(path[i + 1])[1:(end - 1)]
                     Test.@test suffix == prefix
                 end
             end
@@ -184,7 +185,8 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             FASTX.FASTA.Record("comp2", seq2)
         ]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="disconnected", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id = "disconnected", mode = :singlestrand)
 
         # Find paths
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
@@ -196,9 +198,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         # Verify any paths found are valid
         for path in paths
             if !isempty(path)
-                for i in 1:(length(path)-1)
+                for i in 1:(length(path) - 1)
                     suffix = string(path[i])[2:end]
-                    prefix = string(path[i+1])[1:end-1]
+                    prefix = string(path[i + 1])[1:(end - 1)]
                     Test.@test suffix == prefix
                 end
             end
@@ -210,7 +212,7 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.rna"AUCGAUCG"
         records = [FASTX.FASTA.Record("rna_seq", sequence)]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="rna_test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id = "rna_test", mode = :singlestrand)
 
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
@@ -221,9 +223,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             Test.@test all(k -> k isa Kmers.RNAKmer{3}, path)
 
             # Verify connectivity
-            for i in 1:(length(path)-1)
+            for i in 1:(length(path) - 1)
                 suffix = string(path[i])[2:end]
-                prefix = string(path[i+1])[1:end-1]
+                prefix = string(path[i + 1])[1:(end - 1)]
                 Test.@test suffix == prefix
             end
         end
@@ -234,7 +236,7 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.aa"MKKLAVAA"
         records = [FASTX.FASTA.Record("protein", sequence)]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="aa_test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id = "aa_test", mode = :singlestrand)
 
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
@@ -245,9 +247,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             Test.@test all(k -> k isa Kmers.AAKmer{3}, path)
 
             # Verify connectivity
-            for i in 1:(length(path)-1)
+            for i in 1:(length(path) - 1)
                 suffix = string(path[i])[2:end]
-                prefix = string(path[i+1])[1:end-1]
+                prefix = string(path[i + 1])[1:(end - 1)]
                 Test.@test suffix == prefix
             end
         end
@@ -258,7 +260,7 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.dna"ATCGATCGATCGATCGATCGATCGATCGATCGATCG"
         records = [FASTX.FASTA.Record("long_seq", sequence)]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 31; dataset_id="large_k", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 31; dataset_id = "large_k", mode = :singlestrand)
 
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
@@ -270,9 +272,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             Test.@test all(k -> k isa Kmers.DNAKmer{31}, path)
 
             # Verify connectivity with k=31
-            for i in 1:(length(path)-1)
+            for i in 1:(length(path) - 1)
                 suffix = string(path[i])[2:end]
-                prefix = string(path[i+1])[1:end-1]
+                prefix = string(path[i + 1])[1:(end - 1)]
                 Test.@test suffix == prefix
             end
         end
@@ -283,7 +285,8 @@ Test.@testset "Path Finding - Eulerian Paths" begin
         sequence = BioSequences.dna"ATCGAT"
         records = [FASTX.FASTA.Record("ds_test", sequence)]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="doublestrand_test", mode=:doublestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id = "doublestrand_test", mode = :doublestrand)
 
         # DoubleStrand graph includes both forward and reverse complement
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
@@ -297,9 +300,9 @@ Test.@testset "Path Finding - Eulerian Paths" begin
                 Test.@test all(k -> k isa Kmers.DNAKmer{3}, path)
 
                 # Verify connectivity
-                for i in 1:(length(path)-1)
+                for i in 1:(length(path) - 1)
                     suffix = string(path[i])[2:end]
-                    prefix = string(path[i+1])[1:end-1]
+                    prefix = string(path[i + 1])[1:(end - 1)]
                     Test.@test suffix == prefix
                 end
             end
@@ -312,8 +315,8 @@ Test.@testset "Path Finding - Eulerian Paths" begin
             Mycelia.Rhizomorph.build_kmer_graph(
                 FASTX.FASTA.Record[],
                 3;
-                dataset_id="empty",
-                mode=:singlestrand
+                dataset_id = "empty",
+                mode = :singlestrand
             )
         end
     end

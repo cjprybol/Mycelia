@@ -34,12 +34,15 @@ Test.@testset "Mash Tool Integration" begin
 
         dist_table = Mycelia.parse_mash_dist_output(dist_file)
         Test.@test dist_table isa DataFrames.DataFrame
-        Test.@test names(dist_table) == ["reference", "query", "distance", "p_value", "matching_hashes"]
+        Test.@test names(dist_table) ==
+                   ["reference", "query", "distance", "p_value", "matching_hashes"]
         Test.@test dist_table[1, "reference"] == "ref.fasta"
 
         screen_table = Mycelia.parse_mash_screen_output(screen_file)
         Test.@test screen_table isa DataFrames.DataFrame
-        Test.@test names(screen_table) == ["identity", "shared_hashes", "median_multiplicity", "p_value", "query", "reference"]
+        Test.@test names(screen_table) ==
+                   ["identity", "shared_hashes", "median_multiplicity",
+            "p_value", "query", "reference"]
         Test.@test screen_table[1, "reference"] == "reference.fasta"
     end
 
@@ -47,43 +50,43 @@ Test.@testset "Mash Tool Integration" begin
         if run_external
             workdir = mktempdir()
 
-            ref_record = Mycelia.random_fasta_record(moltype=:DNA, seed=7, L=400)
+            ref_record = Mycelia.random_fasta_record(moltype = :DNA, seed = 7, L = 400)
             ref_fasta = joinpath(workdir, "reference.fasta")
-            Mycelia.write_fasta(outfile=ref_fasta, records=[ref_record])
+            Mycelia.write_fasta(outfile = ref_fasta, records = [ref_record])
 
             ref_seq = FASTX.sequence(ref_record)
             reads = Mycelia.create_test_reads(String(ref_seq), 10, 0.01)
             reads_fastq = joinpath(workdir, "reads.fastq")
-            Mycelia.write_fastq(records=reads, filename=reads_fastq)
+            Mycelia.write_fastq(records = reads, filename = reads_fastq)
 
             ref_sketch = Mycelia.run_mash_sketch(
-                input_files=[ref_fasta],
-                outdir=joinpath(workdir, "sketches"),
-                k=21,
-                s=1000
+                input_files = [ref_fasta],
+                outdir = joinpath(workdir, "sketches"),
+                k = 21,
+                s = 1000
             ).sketches[1]
 
             read_sketch = Mycelia.run_mash_sketch(
-                input_files=[reads_fastq],
-                outdir=joinpath(workdir, "sketches"),
-                k=21,
-                s=1000,
-                r=true,
-                min_copies=2
+                input_files = [reads_fastq],
+                outdir = joinpath(workdir, "sketches"),
+                k = 21,
+                s = 1000,
+                r = true,
+                min_copies = 2
             ).sketches[1]
 
             dist_result = Mycelia.run_mash_dist(
-                reference=ref_sketch,
-                query=read_sketch,
-                outdir=joinpath(workdir, "dist")
+                reference = ref_sketch,
+                query = read_sketch,
+                outdir = joinpath(workdir, "dist")
             )
             Test.@test isfile(dist_result.results_tsv)
 
             screen_result = Mycelia.run_mash_screen(
-                reference=ref_sketch,
-                query=reads_fastq,
-                outdir=joinpath(workdir, "screen"),
-                winner_takes_all=true
+                reference = ref_sketch,
+                query = reads_fastq,
+                outdir = joinpath(workdir, "screen"),
+                winner_takes_all = true
             )
             Test.@test isfile(screen_result.results_tsv)
 

@@ -7,9 +7,9 @@ import BioSequences
 Test.@testset "Graph cleanup" begin
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=Int,
-        vertex_data_type=Dict{Symbol, Any},
-        edge_data_type=Nothing,
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing
     )
 
     graph[1] = Dict(:coverage => 1.0, :sequence => BioSequences.LongDNA{4}("AAAA"))
@@ -19,11 +19,12 @@ Test.@testset "Graph cleanup" begin
     Graphs.add_edge!(graph, 1, 2)
     Graphs.add_edge!(graph, 2, 3)
 
-    cleaned_graph, stats = Mycelia.statistical_tip_clipping(
+    cleaned_graph,
+    stats = Mycelia.statistical_tip_clipping(
         graph;
-        min_coverage_threshold=1,
-        std_dev_multiplier=3.0,
-        preserve_high_quality=true,
+        min_coverage_threshold = 1,
+        std_dev_multiplier = 3.0,
+        preserve_high_quality = true
     )
 
     Test.@test !MetaGraphsNext.haskey(cleaned_graph, 1)
@@ -33,9 +34,9 @@ Test.@testset "Graph cleanup" begin
 
     component_graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=Int,
-        vertex_data_type=Dict{Symbol, Any},
-        edge_data_type=Nothing,
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing
     )
 
     component_graph[1] = Dict(:coverage => 5.0)
@@ -151,7 +152,8 @@ Test.@testset "assess_sequence_quality - amino acid sequences" begin
 
     ## Lowercase amino acids
     Test.@test Mycelia.assess_sequence_quality(lowercase(aa_seq)) == 1.0
-    Test.@test Mycelia.assess_sequence_quality(BioSequences.LongAA(lowercase(aa_seq))) == 1.0
+    Test.@test Mycelia.assess_sequence_quality(BioSequences.LongAA(lowercase(aa_seq))) ==
+               1.0
 
     ## Mixed case amino acids
     mixed_aa = "AcDeFgHiKlMnPqRsTvWy"
@@ -179,9 +181,9 @@ Test.@testset "Graph cleanup with string sequences (lowercase)" begin
 
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=Int,
-        vertex_data_type=Dict{Symbol, Any},
-        edge_data_type=Nothing,
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing
     )
 
     ## Use lowercase string sequences (should work fine via BioSequences case handling)
@@ -193,11 +195,12 @@ Test.@testset "Graph cleanup with string sequences (lowercase)" begin
     Graphs.add_edge!(graph, 2, 3)
 
     ## This should not throw - verify lowercase strings are handled correctly
-    cleaned_graph, stats = Mycelia.statistical_tip_clipping(
+    cleaned_graph,
+    stats = Mycelia.statistical_tip_clipping(
         graph;
-        min_coverage_threshold=1,
-        std_dev_multiplier=3.0,
-        preserve_high_quality=true,
+        min_coverage_threshold = 1,
+        std_dev_multiplier = 3.0,
+        preserve_high_quality = true
     )
 
     Test.@test stats[:tips_removed] >= 0
@@ -210,9 +213,9 @@ Test.@testset "Graph cleanup with soft-masked sequences (mixed case)" begin
 
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=Int,
-        vertex_data_type=Dict{Symbol, Any},
-        edge_data_type=Nothing,
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing
     )
 
     ## Soft-masked style sequences (uppercase = unmasked, lowercase = masked)
@@ -224,11 +227,12 @@ Test.@testset "Graph cleanup with soft-masked sequences (mixed case)" begin
     Graphs.add_edge!(graph, 2, 3)
 
     ## This should not throw - verify mixed case strings are handled correctly
-    cleaned_graph, stats = Mycelia.statistical_tip_clipping(
+    cleaned_graph,
+    stats = Mycelia.statistical_tip_clipping(
         graph;
-        min_coverage_threshold=1,
-        std_dev_multiplier=3.0,
-        preserve_high_quality=true,
+        min_coverage_threshold = 1,
+        std_dev_multiplier = 3.0,
+        preserve_high_quality = true
     )
 
     Test.@test stats[:tips_removed] >= 0
@@ -241,9 +245,9 @@ Test.@testset "Graph cleanup with sequences containing N" begin
 
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=Int,
-        vertex_data_type=Dict{Symbol, Any},
-        edge_data_type=Nothing,
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing
     )
 
     ## Sequences with varying amounts of N (ambiguous bases)
@@ -254,11 +258,12 @@ Test.@testset "Graph cleanup with sequences containing N" begin
     Graphs.add_edge!(graph, 1, 2)
     Graphs.add_edge!(graph, 2, 3)
 
-    cleaned_graph, stats = Mycelia.statistical_tip_clipping(
+    cleaned_graph,
+    stats = Mycelia.statistical_tip_clipping(
         graph;
-        min_coverage_threshold=1,
-        std_dev_multiplier=3.0,
-        preserve_high_quality=true,
+        min_coverage_threshold = 1,
+        std_dev_multiplier = 3.0,
+        preserve_high_quality = true
     )
 
     Test.@test stats[:tips_removed] >= 0

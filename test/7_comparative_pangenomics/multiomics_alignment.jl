@@ -35,13 +35,15 @@ import Arrow
 # Test merging and mapping long-read pacbio data with re-identification
 Test.@testset "Test merging and mapping long-read pacbio data with re-identification" begin
     ## simulate a fasta record of 10kb and save it to disk
-    original_fasta_record = Mycelia.random_fasta_record(seed=42, L=10_000)
-    Test.@test Mycelia.seq2sha256(FASTX.sequence(original_fasta_record)) == "96f36383f772afb5f41db96c42cdaed12b8a6bc151744c108b60a33df7fd56d5"
+    original_fasta_record = Mycelia.random_fasta_record(seed = 42, L = 10_000)
+    Test.@test Mycelia.seq2sha256(FASTX.sequence(original_fasta_record)) ==
+               "96f36383f772afb5f41db96c42cdaed12b8a6bc151744c108b60a33df7fd56d5"
     fasta_file = "test_fasta.fna.gz"
-    Test.@test Mycelia.write_fasta(outfile=fasta_file, records = [original_fasta_record]) == fasta_file
+    Test.@test Mycelia.write_fasta(outfile = fasta_file, records = [original_fasta_record]) ==
+               fasta_file
     Test.@test isfile(fasta_file)
     Test.@test filesize(fasta_file) > 0
-    
+
     ## build a minimap2 hifi index
     minimap_index_result = Mycelia.minimap_index(
         fasta = fasta_file,
@@ -52,28 +54,28 @@ Test.@testset "Test merging and mapping long-read pacbio data with re-identifica
     end
     Test.@test isfile(minimap_index_result.outfile)
     Test.@test filesize(minimap_index_result.outfile) > 0
-    
+
     ## simulate nearly perfect long reads at 10x coverage, 3 times
-    fastq_list = [
-        Mycelia.simulate_pacbio_reads(fasta = fasta_file, quantity = q) for q in ["5x", "10x", "20x"]
-    ]
+    fastq_list = [Mycelia.simulate_pacbio_reads(fasta = fasta_file, quantity = q)
+                  for q in ["5x", "10x", "20x"]]
     Test.@test fastq_list == [
         "test_fasta.badread.pacbio_hifi.5x.fq.gz",
         "test_fasta.badread.pacbio_hifi.10x.fq.gz",
         "test_fasta.badread.pacbio_hifi.20x.fq.gz"
     ]
     Test.@test all(filesize.(fastq_list) .> 0)
-    
+
     ## merge and map asserting all reads align and we can re-identify original files and records
     merged_mapping_results = Mycelia.merge_and_map_single_end_samples(
-        fasta_reference=fasta_file,
-        fastq_list=fastq_list, 
-        minimap_index=minimap_index_result.outfile, 
-        mapping_type="map-hifi",
+        fasta_reference = fasta_file,
+        fastq_list = fastq_list,
+        minimap_index = minimap_index_result.outfile,
+        mapping_type = "map-hifi"
     )
-    Test.@test Set(unique(merged_mapping_results.results_table.input_file)) == Set(fastq_list)
-    percent_mapped = 
-        count(merged_mapping_results.results_table.ismapped) / length(merged_mapping_results.results_table.ismapped)
+    Test.@test Set(unique(merged_mapping_results.results_table.input_file)) ==
+               Set(fastq_list)
+    percent_mapped = count(merged_mapping_results.results_table.ismapped) /
+                     length(merged_mapping_results.results_table.ismapped)
     Test.@test percent_mapped >= 0.9
     ## Test.@test all(merged_mapping_results.results_table.ismapped)
 
@@ -99,5 +101,4 @@ Test.@testset "Test merging and mapping long-read pacbio data with re-identifica
 end
 
 ## Multi-omics alignment & mapping tests
-Test.@testset "Multi-omics alignment & mapping" begin
-end
+Test.@testset "Multi-omics alignment & mapping" begin end

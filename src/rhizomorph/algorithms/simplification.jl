@@ -44,8 +44,8 @@ struct BubbleStructure{T}
     complexity_score::Float64
 
     function BubbleStructure(entry::T, exit::T,
-                           p1::Vector{T}, p2::Vector{T},
-                           s1::Int, s2::Int, complexity::Float64) where T
+            p1::Vector{T}, p2::Vector{T},
+            s1::Int, s2::Int, complexity::Float64) where {T}
         new{T}(entry, exit, p1, p2, s1, s2, complexity)
     end
 end
@@ -81,8 +81,8 @@ bubbles = detect_bubbles_next(graph, min_bubble_length=2, max_bubble_length=50)
 ```
 """
 function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
-                           min_bubble_length::Int=2,
-                           max_bubble_length::Int=100)
+        min_bubble_length::Int = 2,
+        max_bubble_length::Int = 100)
     vertices = collect(MetaGraphsNext.labels(graph))
     T = eltype(vertices)
     bubbles = BubbleStructure{T}[]
@@ -94,7 +94,7 @@ function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
         if length(out_neighbors) >= 2
             # Look for bubbles starting from this vertex
             bubble_candidates = find_bubble_paths(graph, entry_vertex, out_neighbors,
-                                                min_bubble_length, max_bubble_length)
+                min_bubble_length, max_bubble_length)
 
             for bubble in bubble_candidates
                 if is_valid_bubble(graph, bubble)
@@ -139,14 +139,14 @@ end
 Find potential bubble paths from an entry vertex.
 """
 function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
-                          entry_vertex::T,
-                          out_neighbors::Vector,
-                          min_length::Int, max_length::Int) where T
+        entry_vertex::T,
+        out_neighbors::Vector,
+        min_length::Int, max_length::Int) where {T}
     bubbles = BubbleStructure{T}[]
 
     # Try all pairs of outgoing paths
     for i in 1:length(out_neighbors)
-        for j in (i+1):length(out_neighbors)
+        for j in (i + 1):length(out_neighbors)
             path1_start = out_neighbors[i]
             path2_start = out_neighbors[j]
 
@@ -175,8 +175,8 @@ function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
                     complexity = calculate_bubble_complexity(bubble_path1, bubble_path2)
 
                     bubble = BubbleStructure(entry_vertex, convergence_point,
-                                           bubble_path1, bubble_path2,
-                                           support1, support2, complexity)
+                        bubble_path1, bubble_path2,
+                        support1, support2, complexity)
                     push!(bubbles, bubble)
                 end
             end
@@ -255,7 +255,7 @@ end
 """
 Check if a bubble structure is valid.
 """
-function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure{T}) where T
+function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure{T}) where {T}
     # Check that entry and exit vertices exist
     if !haskey(graph, bubble.entry_vertex) || !haskey(graph, bubble.exit_vertex)
         return false
@@ -277,7 +277,7 @@ end
 """
 Remove duplicate bubble detections.
 """
-function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where T
+function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where {T}
     unique_bubbles = BubbleStructure{T}[]
     seen_pairs = Set{Tuple{T, T}}()
 
@@ -302,7 +302,7 @@ end
 Remove dead-end vertices (tips) whose evidence support is ≤ `min_support`.
 Tips are vertices with indegree == 0 or outdegree == 0. Returns the modified graph.
 """
-function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int=1)
+function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int = 1)
     if Graphs.nv(graph.graph) == 0
         return graph
     end
@@ -364,7 +364,7 @@ simplified = simplify_graph_next(graph, bubbles)
 ```
 """
 function simplify_graph_next(graph::MetaGraphsNext.MetaGraph,
-                           bubbles::Vector{BubbleStructure{T}}) where T
+        bubbles::Vector{BubbleStructure{T}}) where {T}
     # Create a copy of the graph
     simplified_graph = deepcopy(graph)
 
@@ -392,7 +392,7 @@ end
 Remove a path from the graph (helper function for simplification).
 """
 function remove_path_from_graph!(graph::MetaGraphsNext.MetaGraph, path::Vector,
-                                entry_vertex, exit_vertex)
+        entry_vertex, exit_vertex)
     prev_vertex = entry_vertex
 
     for vertex in path
@@ -417,7 +417,8 @@ end
 Check if a vertex is isolated (no edges).
 """
 function is_isolated_vertex(graph::MetaGraphsNext.MetaGraph, vertex)
-    return isempty(get_in_neighbors(graph, vertex)) && isempty(get_out_neighbors(graph, vertex))
+    return isempty(get_in_neighbors(graph, vertex)) &&
+           isempty(get_out_neighbors(graph, vertex))
 end
 
 """
@@ -504,10 +505,10 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
         # Reconnect external edges with position-adjusted evidence
         for ((src, dst), edge_data) in edge_copies
             if haskey(offsets, src) && !haskey(offsets, dst)
-                shifted = _shift_edge_data(edge_data, offsets[src]; shift_from=true)
+                shifted = _shift_edge_data(edge_data, offsets[src]; shift_from = true)
                 graph[new_label, dst] = shifted
             elseif !haskey(offsets, src) && haskey(offsets, dst)
-                shifted = _shift_edge_data(edge_data, offsets[dst]; shift_to=true)
+                shifted = _shift_edge_data(edge_data, offsets[dst]; shift_to = true)
                 graph[src, new_label] = shifted
             end
         end
@@ -574,7 +575,7 @@ function _shift_evidence_entry(entry::QualityEvidenceEntry, offset::Int)
     return QualityEvidenceEntry(entry.position + offset, entry.strand, entry.quality_scores)
 end
 
-function _shift_edge_data(edge_data, offset::Int; shift_from::Bool=false, shift_to::Bool=false)
+function _shift_edge_data(edge_data, offset::Int; shift_from::Bool = false, shift_to::Bool = false)
     if hasfield(typeof(edge_data), :overlap_length)
         new_edge = typeof(edge_data)(edge_data.overlap_length)
     else
@@ -584,7 +585,7 @@ function _shift_edge_data(edge_data, offset::Int; shift_from::Bool=false, shift_
     for (dataset_id, dataset_evidence) in edge_data.evidence
         for (obs_id, evidence_set) in dataset_evidence
             for entry in evidence_set
-                shifted_entry = _shift_edge_entry(entry, offset; shift_from=shift_from, shift_to=shift_to)
+                shifted_entry = _shift_edge_entry(entry, offset; shift_from = shift_from, shift_to = shift_to)
                 add_evidence!(new_edge, dataset_id, obs_id, shifted_entry)
             end
         end
@@ -603,6 +604,6 @@ function _shift_edge_entry(entry::EdgeQualityEvidenceEntry, offset::Int; shift_f
     from_pos = shift_from ? entry.from_position + offset : entry.from_position
     to_pos = shift_to ? entry.to_position + offset : entry.to_position
     return EdgeQualityEvidenceEntry(from_pos, to_pos, entry.strand,
-                                    entry.from_quality_scores,
-                                    entry.to_quality_scores)
+        entry.from_quality_scores,
+        entry.to_quality_scores)
 end

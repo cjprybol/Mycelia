@@ -451,7 +451,7 @@ end
 Reconstruct the sequence represented by a path of k-mers.
 K-mers must overlap by k-1 bases.
 """
-function assemble_path_sequence(path::Vector{T}) where T <: Kmers.Kmer
+function assemble_path_sequence(path::Vector{T}) where {T <: Kmers.Kmer}
     if isempty(path)
         error("Cannot assemble empty path")
     end

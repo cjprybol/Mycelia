@@ -88,11 +88,11 @@ graph = build_string_graph(fragments; min_overlap=3)
 - `get_string_graph_statistics`: Get graph statistics
 """
 function build_string_graph(
-    strings::Vector{String};
-    dataset_id::String="dataset_01",
-    min_overlap::Int=3
+        strings::Vector{String};
+        dataset_id::String = "dataset_01",
+        min_overlap::Int = 3
 )
-    return build_string_graph_olc(strings; dataset_id=dataset_id, min_overlap=min_overlap)
+    return build_string_graph_olc(strings; dataset_id = dataset_id, min_overlap = min_overlap)
 end
 
 # Note: The core implementation (build_string_graph_olc, find_overlap_length)
@@ -130,8 +130,8 @@ println(stats)
 ```
 """
 function build_token_graph(
-    token_sequences::Vector{Vector{String}};
-    dataset_id::String="dataset_01"
+        token_sequences::Vector{Vector{String}};
+        dataset_id::String = "dataset_01"
 )
     if isempty(token_sequences)
         error("Cannot build token graph from empty token sequence vector")
@@ -139,10 +139,10 @@ function build_token_graph(
 
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=String,
-        vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData,
-        weight_function=compute_edge_weight
+        label_type = String,
+        vertex_data_type = StringVertexData,
+        edge_data_type = StringEdgeData,
+        weight_function = compute_edge_weight
     )
 
     for (sequence_idx, tokens) in enumerate(token_sequences)
@@ -157,7 +157,7 @@ function build_token_graph(
             end
             vertex_data = graph[token]
             add_evidence!(vertex_data, dataset_id, observation_id,
-                          EvidenceEntry(position, Forward))
+                EvidenceEntry(position, Forward))
         end
 
         for i in 1:(length(tokens) - 1)
@@ -168,7 +168,7 @@ function build_token_graph(
             end
             edge_data = graph[src_token, dst_token]
             add_evidence!(edge_data, dataset_id, observation_id,
-                          EdgeEvidenceEntry(i, i + 1, Forward))
+                EdgeEvidenceEntry(i, i + 1, Forward))
         end
     end
 
@@ -201,9 +201,9 @@ graph = build_string_graph_from_file("reads.txt"; min_overlap=7)
 ```
 """
 function build_string_graph_from_file(
-    filepath::String;
-    dataset_id::Union{String,Nothing}=nothing,
-    min_overlap::Int=3
+        filepath::String;
+        dataset_id::Union{String, Nothing} = nothing,
+        min_overlap::Int = 3
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -224,7 +224,7 @@ function build_string_graph_from_file(
         error("No non-empty lines found in file: $filepath")
     end
 
-    return build_string_graph(strings; dataset_id=dataset_id, min_overlap=min_overlap)
+    return build_string_graph(strings; dataset_id = dataset_id, min_overlap = min_overlap)
 end
 
 """
@@ -258,15 +258,15 @@ end
 ```
 """
 function build_string_graph_from_files(
-    filepaths::Vector{String};
-    min_overlap::Int=3
+        filepaths::Vector{String};
+        min_overlap::Int = 3
 )
     if isempty(filepaths)
         error("No files provided")
     end
 
     # Build graph from first file
-    graph = build_string_graph_from_file(filepaths[1]; min_overlap=min_overlap)
+    graph = build_string_graph_from_file(filepaths[1]; min_overlap = min_overlap)
 
     # Add observations from remaining files
     # Note: We rebuild the graph with all strings to find ALL overlaps
@@ -285,16 +285,16 @@ function build_string_graph_from_files(
     end
 
     # Rebuild with all strings and proper dataset tracking
-    return build_string_graph_olc_multi_dataset(all_strings, all_dataset_ids; min_overlap=min_overlap)
+    return build_string_graph_olc_multi_dataset(all_strings, all_dataset_ids; min_overlap = min_overlap)
 end
 
 """
 Helper function for building string graph from multiple datasets.
 """
 function build_string_graph_olc_multi_dataset(
-    strings::Vector{String},
-    dataset_ids::Vector{String};
-    min_overlap::Int=3
+        strings::Vector{String},
+        dataset_ids::Vector{String};
+        min_overlap::Int = 3
 )
     if isempty(strings)
         error("Cannot build graph from empty string vector")
@@ -309,10 +309,10 @@ function build_string_graph_olc_multi_dataset(
     # Create empty directed graph
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=String,
-        vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData,
-        weight_function=compute_edge_weight
+        label_type = String,
+        vertex_data_type = StringVertexData,
+        edge_data_type = StringEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Add all strings as vertices with their dataset IDs
@@ -328,7 +328,7 @@ function build_string_graph_olc_multi_dataset(
         # Add evidence
         vertex_data = graph[input_string]
         add_evidence!(vertex_data, dataset_id, observation_id,
-                     EvidenceEntry(1, Forward))
+            EvidenceEntry(1, Forward))
     end
 
     # Find overlaps between all unique strings
@@ -358,7 +358,7 @@ function build_string_graph_olc_multi_dataset(
                         src_pos = length(str1) - overlap_len + 1
                         dst_pos = 1
                         add_evidence!(edge_data, ds_id, observation_id,
-                                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                            EdgeEvidenceEntry(src_pos, dst_pos, Forward))
                     end
                 end
             end

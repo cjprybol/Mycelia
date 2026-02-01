@@ -28,7 +28,7 @@ Test.@testset "RNA BioSequence DoubleStrand Graph" begin
     test_rna = BioSequences.rna"AUCGAUCG"
     reads = [FASTX.FASTA.Record("test", test_rna)]
 
-    singlestrand = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id="test", min_overlap=3)
+    singlestrand = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id = "test", min_overlap = 3)
     graph = Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(singlestrand)
 
     vertices = collect(MetaGraphsNext.labels(graph))
@@ -43,7 +43,8 @@ Test.@testset "RNA BioSequence DoubleStrand Graph" begin
             for entries in values(evidence_map)
                 for entry in entries
                     Test.@test entry isa Mycelia.Rhizomorph.EvidenceEntry
-                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test entry.strand in (
+                        Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                 end
             end
         end
@@ -59,7 +60,8 @@ Test.@testset "RNA BioSequence DoubleStrand Graph" begin
                 vertex_type = typeof(first(path_vector))
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
                 graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)

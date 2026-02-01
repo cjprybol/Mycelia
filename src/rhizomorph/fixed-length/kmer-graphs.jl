@@ -71,36 +71,36 @@ add_observations_to_graph!(graph, records2, 31; dataset_id="sample_B")
 - `add_observations_to_graph!`: Add more observations to existing graph
 """
 function build_kmer_graph(
-    records::Vector{<:FASTX.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    mode::Symbol=:singlestrand,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        mode::Symbol = :singlestrand,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if mode == :singlestrand
         return build_kmer_graph_singlestrand(
             records,
             k;
-            dataset_id=dataset_id,
-            type_hint=type_hint,
-            ambiguous_action=ambiguous_action
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
         )
     elseif mode == :doublestrand
         return build_kmer_graph_doublestrand(
             records,
             k;
-            dataset_id=dataset_id,
-            type_hint=type_hint,
-            ambiguous_action=ambiguous_action
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
         )
     elseif mode == :canonical
         singlestrand_graph = build_kmer_graph_singlestrand(
             records,
             k;
-            dataset_id=dataset_id,
-            type_hint=type_hint,
-            ambiguous_action=ambiguous_action
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
         )
         return convert_to_canonical(singlestrand_graph)
     else
@@ -151,12 +151,12 @@ graph = build_kmer_graph_from_file("patient1_tumor.fastq.gz", 31;
 ```
 """
 function build_kmer_graph_from_file(
-    filepath::String,
-    k::Int;
-    dataset_id::Union{String,Nothing}=nothing,
-    mode::Symbol=:singlestrand,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        filepath::String,
+        k::Int;
+        dataset_id::Union{String, Nothing} = nothing,
+        mode::Symbol = :singlestrand,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -177,10 +177,10 @@ function build_kmer_graph_from_file(
     return build_kmer_graph(
         records,
         k;
-        dataset_id=dataset_id,
-        mode=mode,
-        type_hint=final_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        mode = mode,
+        type_hint = final_hint,
+        ambiguous_action = ambiguous_action
     )
 end
 
@@ -217,11 +217,11 @@ dataset_ids = get_all_dataset_ids(graph[first(labels(graph))])
 ```
 """
 function build_kmer_graph_from_files(
-    filepaths::Vector{String},
-    k::Int;
-    mode::Symbol=:singlestrand,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        filepaths::Vector{String},
+        k::Int;
+        mode::Symbol = :singlestrand,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(filepaths)
         error("No files provided")
@@ -257,9 +257,9 @@ function build_kmer_graph_from_files(
     graph = build_kmer_graph_from_file(
         filepaths[1],
         k;
-        mode=:singlestrand,
-        type_hint=final_hint,
-        ambiguous_action=ambiguous_action
+        mode = :singlestrand,
+        type_hint = final_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Get Mycelia module for open_fastx
@@ -273,13 +273,14 @@ function build_kmer_graph_from_files(
         records = collect(Mycelia_module.open_fastx(filepath))
 
         # Add observations
-        add_observations_to_graph!(graph, records, k; dataset_id=dataset_id)
+        add_observations_to_graph!(graph, records, k; dataset_id = dataset_id)
     end
 
     # Determine if canonical/doublestrand conversion is valid for the k-mer type
     if !isempty(MetaGraphsNext.labels(graph))
         first_label = first(MetaGraphsNext.labels(graph))
-        if mode != :singlestrand && !(first_label isa Kmers.DNAKmer || first_label isa Kmers.RNAKmer)
+        if mode != :singlestrand &&
+           !(first_label isa Kmers.DNAKmer || first_label isa Kmers.RNAKmer)
             error("Mode $mode is only supported for DNA/RNA k-mers")
         end
     end
@@ -391,9 +392,9 @@ high_cov_sample_a = find_high_coverage_kmers(graph, 5; dataset_id="sample_A")
 ```
 """
 function find_high_coverage_kmers(
-    graph::MetaGraphsNext.MetaGraph,
-    min_coverage::Int;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph,
+        min_coverage::Int;
+        dataset_id::Union{String, Nothing} = nothing
 )
     result = []
 
@@ -428,9 +429,9 @@ Find k-mers with coverage <= max_coverage.
 - `Vector`: K-mers meeting coverage threshold
 """
 function find_low_coverage_kmers(
-    graph::MetaGraphsNext.MetaGraph,
-    max_coverage::Int;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph,
+        max_coverage::Int;
+        dataset_id::Union{String, Nothing} = nothing
 )
     result = []
 

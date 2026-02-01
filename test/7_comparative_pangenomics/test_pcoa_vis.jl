@@ -21,39 +21,39 @@ import Mycelia
 import CairoMakie
 
 Test.@testset "PCoA Visualization Utils" begin
-    
+
     # 1. Test Ellipse Generation
     # Create a perfect diagonal line of points (highly correlated)
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     y = [1.0, 2.0, 3.0, 4.0, 5.0]
-    
+
     points, anchors = Mycelia.get_ellipse_points(x, y)
-    
+
     # Check return types
     Test.@test points isa Vector{CairoMakie.Point2f}
     Test.@test anchors isa Dict{Symbol, CairoMakie.Point2f}
-    
+
     # Check anchor keys exist
     Test.@test haskey(anchors, :top)
     Test.@test haskey(anchors, :bottom)
-    
+
     # Check that points were generated (length 100 is hardcoded in function)
     Test.@test length(points) == 100
-    
+
     # 2. Test Plot Generation (Integration)
     # Define minimal series
     series = [Mycelia.PointSeries([1, 2, 3], "Test Group", :blue)]
-    
+
     # Call main function
     fig = Mycelia.plot_generalized_pcoa(
         x, y, series;
         title = "Test Plot",
         output_file = "" # Don't save to disk during test
     )
-    
+
     # Check that a Figure was returned
     Test.@test fig isa CairoMakie.Figure
-    
+
     # 3. Test Empty Data Handling
     # Should handle empty ellipse points gracefully
     empty_x = Float64[]
@@ -97,15 +97,21 @@ y_all = vcat(y_a, y_b, y_env)
 
 # Generate Indices
 indices_a = collect(1:n_clinical_a)
-indices_b = collect(n_clinical_a+1 : n_clinical_a+n_clinical_b)
-indices_env = collect(n_clinical_a+n_clinical_b+1 : n_total)
+indices_b = collect((n_clinical_a + 1):(n_clinical_a + n_clinical_b))
+indices_env = collect((n_clinical_a + n_clinical_b + 1):n_total)
 indices_clinical = vcat(indices_a, indices_b)
 
 # Map indices to "Species" or Subtypes for shapes
 species_map = Dict{Int, String}()
-for i in indices_a species_map[i] = "P. aeruginosa Type A" end
-for i in indices_b species_map[i] = "P. aeruginosa Type B" end
-for i in indices_env species_map[i] = "P. aeruginosa Env" end
+for i in indices_a
+    species_map[i] = "P. aeruginosa Type A"
+end
+for i in indices_b
+    species_map[i] = "P. aeruginosa Type B"
+end
+for i in indices_env
+    species_map[i] = "P. aeruginosa Env"
+end
 
 # 2. Configuration
 
@@ -127,18 +133,18 @@ series_list = [
         indices_env,
         "Environmental Reservoirs",
         env_green,
-        marker=:circle,
-        size=8.0,
-        z_order=1
+        marker = :circle,
+        size = 8.0,
+        z_order = 1
     ),
     # Foreground (Clinical) - Plot on top (high z_order)
     Mycelia.PointSeries(
         indices_clinical,
         "Clinical Outbreak",
         clinical_red,
-        marker=:diamond, # will be overridden by marker_map if provided
-        size=12.0,
-        z_order=2
+        marker = :diamond, # will be overridden by marker_map if provided
+        size = 12.0,
+        z_order = 2
     )
 ]
 
@@ -148,17 +154,17 @@ ellipses = [
         indices_a,
         "Type A Cluster",
         clinical_red,
-        anchor=:top,
-        align=(:center, :bottom),
-        offset=(0.0, 10.0)
+        anchor = :top,
+        align = (:center, :bottom),
+        offset = (0.0, 10.0)
     ),
     Mycelia.EllipseConfig(
         indices_b,
         "Type B Cluster",
         clinical_red,
-        anchor=:right,
-        align=(:left, :center),
-        offset=(5.0, 0.0)
+        anchor = :right,
+        align = (:left, :center),
+        offset = (5.0, 0.0)
     )
 ]
 
@@ -167,8 +173,8 @@ output_file = joinpath(example_dir, "pseudomonas_outbreak_pcoa.svg")
 try
     # 5. Execute Visualization
     fig = Mycelia.plot_generalized_pcoa(
-        x_all, 
-        y_all, 
+        x_all,
+        y_all,
         series_list;
         species_map = species_map,
         marker_map = marker_map,
@@ -180,6 +186,6 @@ try
     # Display result
     CairoMakie.display(fig)
 finally
-    isfile(output_file) && rm(output_file; force=true)
-    rm(example_dir; recursive=true, force=true)
+    isfile(output_file) && rm(output_file; force = true)
+    rm(example_dir; recursive = true, force = true)
 end

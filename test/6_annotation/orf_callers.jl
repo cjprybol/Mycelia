@@ -35,9 +35,11 @@ Test.@testset "ORF caller wrappers" begin
         open(prodigal_gff, "w") do io
             write(io, "")
         end
-        prodigal_result = Mycelia.run_prodigal(fasta_file=fasta_file, out_dir=out_dir, translation_table=11)
+        prodigal_result = Mycelia.run_prodigal(
+            fasta_file = fasta_file, out_dir = out_dir, translation_table = 11)
         Test.@test prodigal_result.gff == prodigal_gff
-        Test.@test prodigal_result.faa == joinpath(out_dir, "$(basename(fasta_file)).prodigal.faa")
+        Test.@test prodigal_result.faa ==
+                   joinpath(out_dir, "$(basename(fasta_file)).prodigal.faa")
 
         pyrodigal_gff = joinpath(out_dir, "$(basename(fasta_file)).pyrodigal.gff")
         pyrodigal_faa = joinpath(out_dir, "$(basename(fasta_file)).pyrodigal.faa")
@@ -47,7 +49,8 @@ Test.@testset "ORF caller wrappers" begin
         open(pyrodigal_faa, "w") do io
             write(io, "")
         end
-        pyrodigal_result = Mycelia.run_pyrodigal(fasta_file=fasta_file, out_dir=out_dir, translation_table=11)
+        pyrodigal_result = Mycelia.run_pyrodigal(
+            fasta_file = fasta_file, out_dir = out_dir, translation_table = 11)
         Test.@test pyrodigal_result.gff == pyrodigal_gff
         Test.@test pyrodigal_result.faa == pyrodigal_faa
 
@@ -55,24 +58,27 @@ Test.@testset "ORF caller wrappers" begin
         open(prodigal_gv_gff, "w") do io
             write(io, "")
         end
-        prodigal_gv_result = Mycelia.run_prodigal_gv(fasta_file=fasta_file, out_dir=out_dir, translation_table=11)
+        prodigal_gv_result = Mycelia.run_prodigal_gv(
+            fasta_file = fasta_file, out_dir = out_dir, translation_table = 11)
         Test.@test prodigal_gv_result.gff == prodigal_gv_gff
-        Test.@test prodigal_gv_result.faa == joinpath(out_dir, "$(basename(fasta_file)).prodigal-gv.faa")
+        Test.@test prodigal_gv_result.faa ==
+                   joinpath(out_dir, "$(basename(fasta_file)).prodigal-gv.faa")
 
         augustus_gff = joinpath(out_dir, "$(basename(fasta_file)).augustus.gff")
         open(augustus_gff, "w") do io
             write(io, "")
         end
-        augustus_result = Mycelia.run_augustus(fasta_file=fasta_file, out_dir=out_dir, species="human")
+        augustus_result = Mycelia.run_augustus(fasta_file = fasta_file, out_dir = out_dir, species = "human")
         Test.@test augustus_result.gff == augustus_gff
-        Test.@test augustus_result.out == joinpath(out_dir, "$(basename(fasta_file)).augustus.out")
+        Test.@test augustus_result.out ==
+                   joinpath(out_dir, "$(basename(fasta_file)).augustus.out")
 
         metaeuk_prefix = joinpath(out_dir, "$(basename(fasta_file)).metaeuk")
         metaeuk_gff = "$(metaeuk_prefix)_preds.gff"
         open(metaeuk_gff, "w") do io
             write(io, "")
         end
-        metaeuk_result = Mycelia.run_metaeuk(fasta_file=fasta_file, db_file="dummy.db", out_dir=out_dir)
+        metaeuk_result = Mycelia.run_metaeuk(fasta_file = fasta_file, db_file = "dummy.db", out_dir = out_dir)
         Test.@test metaeuk_result.gff == metaeuk_gff
         Test.@test metaeuk_result.out_prefix == metaeuk_prefix
     end

@@ -27,7 +27,7 @@ import StableRNGs
 Test.@testset "Quick XAM Verification" begin
     ## Create test data
     rng = StableRNGs.StableRNG(1234)
-    ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+    ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
     ref_fasta = tempname() * ".fasta"
     writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
     write(writer, ref_record)
@@ -35,16 +35,17 @@ Test.@testset "Quick XAM Verification" begin
 
     sim_start = Base.time_ns()
     fastq_files = Mycelia.simulate_illumina_reads(
-        fasta=ref_fasta,
-        read_count=2,
-        rndSeed=rand(rng, 0:typemax(Int)),
+        fasta = ref_fasta,
+        read_count = 2,
+        rndSeed = rand(rng, 0:typemax(Int))
     )
     sim_elapsed_s = (Base.time_ns() - sim_start) / 1e9
     Base.println("Quick XAM: simulate_illumina_reads took $(round(sim_elapsed_s; digits=2))s")
 
     Test.@testset "Basic Functionality" begin
         ## Test BAM output (default)
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr")
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads, mapping_type = "sr")
         map_start = Base.time_ns()
         run(map_result.cmd)
         map_elapsed_s = (Base.time_ns() - map_start) / 1e9
@@ -60,12 +61,14 @@ Test.@testset "Quick XAM Verification" begin
         Test.@test DataFrames.nrow(df) == 2
         Test.@test all(df.ismapped)
 
-        rm(bam_file, force=true)
+        rm(bam_file, force = true)
     end
 
     Test.@testset "Format Options" begin
         ## Test SAM output
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         map_start = Base.time_ns()
         run(map_result.cmd)
         map_elapsed_s = (Base.time_ns() - map_start) / 1e9
@@ -86,12 +89,14 @@ Test.@testset "Quick XAM Verification" begin
         Base.println("Quick XAM: xam_to_dataframe SAM took $(round(parse_elapsed_s; digits=2))s")
         Test.@test DataFrames.nrow(df) == 2
 
-        rm(sam_file, force=true)
+        rm(sam_file, force = true)
     end
 
     Test.@testset "Parser Selection" begin
         ## Create BAM file
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="bam")
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "bam")
         map_start = Base.time_ns()
         run(map_result.cmd)
         map_elapsed_s = (Base.time_ns() - map_start) / 1e9
@@ -99,32 +104,34 @@ Test.@testset "Quick XAM Verification" begin
         bam_file = map_result.outfile
 
         ## Test different parsers
-        reader_xamjl = Mycelia.open_xam(bam_file, parser=:xamjl)
+        reader_xamjl = Mycelia.open_xam(bam_file, parser = :xamjl)
         Test.@test reader_xamjl isa XAM.BAM.Reader
         close(reader_xamjl)
 
-        reader_samtools = Mycelia.open_xam(bam_file, parser=:samtools)
+        reader_samtools = Mycelia.open_xam(bam_file, parser = :samtools)
         Test.@test reader_samtools isa XAM.SAM.Reader
         close(reader_samtools)
 
-        rm(bam_file, force=true)
+        rm(bam_file, force = true)
     end
 
     ## Cleanup
     if ref_fasta !== nothing && isfile(ref_fasta)
-        rm(ref_fasta, force=true)
+        rm(ref_fasta, force = true)
     end
     if fastq_files.forward_reads !== nothing && isfile(fastq_files.forward_reads)
-        rm(fastq_files.forward_reads, force=true)
+        rm(fastq_files.forward_reads, force = true)
     end
     if fastq_files.reverse_reads !== nothing && isfile(fastq_files.reverse_reads)
-        rm(fastq_files.reverse_reads, force=true)
+        rm(fastq_files.reverse_reads, force = true)
     end
-    if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-        rm(fastq_files.sam, force=true)
+    if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+       isfile(fastq_files.sam)
+        rm(fastq_files.sam, force = true)
     end
-    if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-        rm(fastq_files.error_free_sam, force=true)
+    if hasproperty(fastq_files, :error_free_sam) &&
+       fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+        rm(fastq_files.error_free_sam, force = true)
     end
 end
 
@@ -132,17 +139,19 @@ Test.@testset "XAM File Processing Tests" begin
     Test.@testset "Reproducible SAM Test" begin
         # 1. Create a reference genome
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         ref_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
         # 2. Simulate reads
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=10, rndSeed=rand(rng, 0:typemax(Int)))
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = ref_fasta, read_count = 10, rndSeed = rand(rng, 0:typemax(Int)))
 
         # 3. Align reads
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr")
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads, mapping_type = "sr")
         run(map_result.cmd)
         sam_file = map_result.outfile
 
@@ -152,36 +161,39 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@test DataFrames.nrow(df) > 0
 
         # Cleanup
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        rm(sam_file, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(ref_fasta, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        rm(sam_file, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
-    
 
     Test.@testset "XAM to DataFrame Conversion - Reader Input" begin
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         ref_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = ref_fasta, read_count = 2, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads, mapping_type = "sr")
         run(map_result.cmd)
         sam_file = map_result.outfile
 
         reader = Mycelia.open_xam(sam_file)
         df = Mycelia.xam_to_dataframe(reader)
         close(reader)
-        
+
         Test.@test df isa DataFrames.DataFrame
         Test.@test DataFrames.nrow(df) == 2
         Test.@test "template" in names(df)
@@ -189,104 +201,116 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@test "flag" in names(df)
         Test.@test "reference" in names(df)
         Test.@test "position" in names(df)
-        
+
         # Test specific values
         Test.@test all(df.ismapped)  # Both reads should be mapped
-        
+
         # Cleanup
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        rm(sam_file, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(ref_fasta, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        rm(sam_file, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
     Test.@testset "XAM to DataFrame Conversion - File Path Input" begin
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         ref_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=1, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = ref_fasta, read_count = 1, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads, mapping_type = "sr")
         run(map_result.cmd)
         sam_file = map_result.outfile
 
         df = Mycelia.xam_to_dataframe(sam_file)
-        
+
         Test.@test df isa DataFrames.DataFrame
         Test.@test DataFrames.nrow(df) == 1
-        
+
         # Cleanup
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        rm(sam_file, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(ref_fasta, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        rm(sam_file, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
-
-
 
     Test.@testset "XAM File Opening" begin
         # Create test data using real simulation pipeline
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         temp_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(temp_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=temp_fasta, read_count=1, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=temp_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = temp_fasta, read_count = 1, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = temp_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         run(map_result.cmd)
         temp_sam = map_result.outfile
 
         # Test opening without header
-        reader = Mycelia.open_xam(temp_sam, header=false)
+        reader = Mycelia.open_xam(temp_sam, header = false)
         Test.@test reader isa XAM.SAM.Reader
         close(reader)
 
         # Test opening with header
-        reader_with_header = Mycelia.open_xam(temp_sam, header=true)
+        reader_with_header = Mycelia.open_xam(temp_sam, header = true)
         Test.@test reader_with_header isa XAM.SAM.Reader
         close(reader_with_header)
 
         # Cleanup
-        rm(temp_fasta, force=true)
-        rm(temp_sam, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(temp_fasta, force = true)
+        rm(temp_sam, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
     Test.@testset "Samtools Flagstat Integration" begin
         # Create test data using real simulation pipeline
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         ref_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = ref_fasta, read_count = 2, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         run(map_result.cmd)
         temp_sam = map_result.outfile
 
@@ -301,7 +325,7 @@ Test.@testset "XAM File Processing Tests" begin
             # If successful, check that file was created
             if isfile(expected_flagstat)
                 Test.@test isfile(expected_flagstat)
-                rm(expected_flagstat, force=true)
+                rm(expected_flagstat, force = true)
             end
         catch e
             # If samtools not available, test that function exists
@@ -309,34 +333,39 @@ Test.@testset "XAM File Processing Tests" begin
         end
 
         # Cleanup
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        rm(temp_sam, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(ref_fasta, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        rm(temp_sam, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
     Test.@testset "Mapping Statistics" begin
         # Create test data using real simulation pipeline
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         temp_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(temp_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=temp_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=temp_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = temp_fasta, read_count = 2, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = temp_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         run(map_result.cmd)
         temp_sam = map_result.outfile
 
         # Test FASTA-XAM mapping statistics
-        stats = Mycelia.fasta_xam_mapping_stats(fasta=temp_fasta, xam=temp_sam)
+        stats = Mycelia.fasta_xam_mapping_stats(fasta = temp_fasta, xam = temp_sam)
         Test.@test stats isa DataFrames.DataFrame
         Test.@test DataFrames.nrow(stats) >= 1
 
@@ -345,15 +374,17 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@test contig_stats isa DataFrames.DataFrame
 
         # Cleanup
-        rm(temp_fasta, force=true)
-        rm(temp_sam, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(temp_fasta, force = true)
+        rm(temp_sam, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
@@ -363,14 +394,17 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@testset "Coverage Determination" begin
             # Create test data using Mycelia pipeline to ensure correct BAM format
             rng = StableRNGs.StableRNG(1234)
-            ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+            ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
             ref_fasta = tempname() * ".fasta"
             writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
             write(writer, ref_record)
             close(writer)
 
-            fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-            map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="bam")
+            fastq_files = Mycelia.simulate_illumina_reads(
+                fasta = ref_fasta, read_count = 2, rndSeed = rand(rng, 0:typemax(Int)))
+            map_result = Mycelia.minimap_map(
+                fasta = ref_fasta, fastq = fastq_files.forward_reads,
+                mapping_type = "sr", output_format = "bam")
             run(map_result.cmd)
             bam_file = map_result.outfile
 
@@ -379,15 +413,17 @@ Test.@testset "XAM File Processing Tests" begin
             Test.@test coverage_result isa DataFrames.DataFrame
 
             # Cleanup
-            rm(ref_fasta, force=true)
-            rm(fastq_files.forward_reads, force=true)
-            rm(fastq_files.reverse_reads, force=true)
-            rm(bam_file, force=true)
-            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-                rm(fastq_files.sam, force=true)
+            rm(ref_fasta, force = true)
+            rm(fastq_files.forward_reads, force = true)
+            rm(fastq_files.reverse_reads, force = true)
+            rm(bam_file, force = true)
+            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+               isfile(fastq_files.sam)
+                rm(fastq_files.sam, force = true)
             end
-            if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-                rm(fastq_files.error_free_sam, force=true)
+            if hasproperty(fastq_files, :error_free_sam) &&
+               fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+                rm(fastq_files.error_free_sam, force = true)
             end
         end
     else
@@ -397,49 +433,57 @@ Test.@testset "XAM File Processing Tests" begin
     Test.@testset "BAM to FASTQ Conversion" begin
         # Create test data using Mycelia pipeline to ensure correct BAM format
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         ref_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="bam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = ref_fasta, read_count = 2, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = ref_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "bam")
         run(map_result.cmd)
         bam_file = map_result.outfile
 
         # Test BAM to FASTQ conversion - samtools fastq expects BAM format
         expected_fastq = bam_file * ".fq.gz"
-        result = Mycelia.bam_to_fastq(bam=bam_file, fastq=expected_fastq)
+        result = Mycelia.bam_to_fastq(bam = bam_file, fastq = expected_fastq)
 
         Test.@test result == expected_fastq
         Test.@test isfile(expected_fastq)
 
         # Cleanup
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        rm(bam_file, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(ref_fasta, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        rm(bam_file, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
-        rm(expected_fastq, force=true)
+        rm(expected_fastq, force = true)
     end
 
     Test.@testset "XAM Summary Table Parsing" begin
         # Create test data using real simulation pipeline
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         temp_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(temp_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=temp_fasta, read_count=2, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=temp_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = temp_fasta, read_count = 2, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = temp_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         run(map_result.cmd)
         temp_sam = map_result.outfile
 
@@ -449,15 +493,17 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@test DataFrames.nrow(summary) >= 1
 
         # Cleanup
-        rm(temp_fasta, force=true)
-        rm(temp_sam, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(temp_fasta, force = true)
+        rm(temp_sam, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
@@ -465,37 +511,40 @@ Test.@testset "XAM File Processing Tests" begin
         # Test with non-existent file
         Test.@test_throws Exception Mycelia.xam_to_dataframe("nonexistent.sam")
         Test.@test_throws Exception Mycelia.open_xam("nonexistent.sam")
-        
+
         # Test with empty SAM file
         empty_sam = tempname() * ".sam"
         write(empty_sam, "")
-        
+
         Test.@test_throws Exception Mycelia.xam_to_dataframe(empty_sam)
-        
+
         # Cleanup
-        rm(empty_sam, force=true)
-        
+        rm(empty_sam, force = true)
+
         # Test with malformed SAM file
         malformed_sam = tempname() * ".sam"
         write(malformed_sam, "not_a_sam_file\n")
-        
+
         Test.@test_throws Exception Mycelia.xam_to_dataframe(malformed_sam)
-        
+
         # Cleanup
-        rm(malformed_sam, force=true)
+        rm(malformed_sam, force = true)
     end
 
     Test.@testset "Record Field Extraction" begin
         # Create test data using real simulation pipeline
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         temp_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(temp_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=temp_fasta, read_count=3, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=temp_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = temp_fasta, read_count = 3, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = temp_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         run(map_result.cmd)
         temp_sam = map_result.outfile
 
@@ -512,29 +561,34 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@test all(df.isprimary) # All should be primary in this simple mapping
 
         # Cleanup
-        rm(temp_fasta, force=true)
-        rm(temp_sam, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(temp_fasta, force = true)
+        rm(temp_sam, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
     Test.@testset "Large File Handling" begin
         # Create test data using real simulation pipeline with more reads
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=5000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 5000, seed = rand(rng, 0:typemax(Int)))
         temp_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(temp_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=temp_fasta, read_count=50, rndSeed=rand(rng, 0:typemax(Int)))
-        map_result = Mycelia.minimap_map(fasta=temp_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = temp_fasta, read_count = 50, rndSeed = rand(rng, 0:typemax(Int)))
+        map_result = Mycelia.minimap_map(
+            fasta = temp_fasta, fastq = fastq_files.forward_reads,
+            mapping_type = "sr", output_format = "sam")
         run(map_result.cmd)
         temp_sam = map_result.outfile
 
@@ -547,28 +601,31 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@test length(unique(df.template)) == DataFrames.nrow(df)
 
         # Cleanup
-        rm(temp_fasta, force=true)
-        rm(temp_sam, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(temp_fasta, force = true)
+        rm(temp_sam, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
     Test.@testset "Comprehensive Parser Testing" begin
         ## Create test data using Mycelia pipeline
         rng = StableRNGs.StableRNG(1234)
-        ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+        ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
         ref_fasta = tempname() * ".fasta"
         writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
         write(writer, ref_record)
         close(writer)
 
-        fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=3, rndSeed=rand(rng, 0:typemax(Int)))
+        fastq_files = Mycelia.simulate_illumina_reads(
+            fasta = ref_fasta, read_count = 3, rndSeed = rand(rng, 0:typemax(Int)))
 
         Test.@testset "Format Detection Tests" begin
             ## Test different output formats from minimap
@@ -577,11 +634,11 @@ Test.@testset "XAM File Processing Tests" begin
 
             for format in formats
                 map_result = Mycelia.minimap_map(
-                    fasta=ref_fasta,
-                    fastq=fastq_files.forward_reads,
-                    mapping_type="sr",
-                    output_format=format,
-                    sorted=true
+                    fasta = ref_fasta,
+                    fastq = fastq_files.forward_reads,
+                    mapping_type = "sr",
+                    output_format = format,
+                    sorted = true
                 )
                 run(map_result.cmd)
                 push!(test_files, map_result.outfile)
@@ -602,18 +659,18 @@ Test.@testset "XAM File Processing Tests" begin
 
             ## Cleanup format test files
             for file in test_files
-                rm(file, force=true)
+                rm(file, force = true)
             end
         end
 
         Test.@testset "BGZ Extension Support Tests" begin
             ## Create BGZF-compressed SAM file with .bgz extension
             map_result = Mycelia.minimap_map(
-                fasta=ref_fasta,
-                fastq=fastq_files.forward_reads,
-                mapping_type="sr",
-                output_format="sam.gz",
-                sorted=true
+                fasta = ref_fasta,
+                fastq = fastq_files.forward_reads,
+                mapping_type = "sr",
+                output_format = "sam.gz",
+                sorted = true
             )
             run(map_result.cmd)
             original_samgz = map_result.outfile
@@ -644,21 +701,21 @@ Test.@testset "XAM File Processing Tests" begin
                 ## Test .bgz file parsing with all parsers
                 Test.@testset ".bgz File Parsing" begin
                     ## Auto parser
-                    reader_auto = Mycelia.open_xam(bgz_file, parser=:auto)
+                    reader_auto = Mycelia.open_xam(bgz_file, parser = :auto)
                     df_auto = Mycelia.xam_to_dataframe(reader_auto)
                     close(reader_auto)
                     Test.@test DataFrames.nrow(df_auto) == 3
                     Test.@test all(df_auto.ismapped)
 
                     ## XAM.jl parser
-                    reader_xamjl = Mycelia.open_xam(bgz_file, parser=:xamjl)
+                    reader_xamjl = Mycelia.open_xam(bgz_file, parser = :xamjl)
                     df_xamjl = Mycelia.xam_to_dataframe(reader_xamjl)
                     close(reader_xamjl)
                     Test.@test DataFrames.nrow(df_xamjl) == 3
                     Test.@test all(df_xamjl.ismapped)
 
                     ## Samtools parser
-                    reader_samtools = Mycelia.open_xam(bgz_file, parser=:samtools)
+                    reader_samtools = Mycelia.open_xam(bgz_file, parser = :samtools)
                     df_samtools = Mycelia.xam_to_dataframe(reader_samtools)
                     close(reader_samtools)
                     Test.@test DataFrames.nrow(df_samtools) == 3
@@ -673,21 +730,21 @@ Test.@testset "XAM File Processing Tests" begin
                 ## Test .sam.bgz file parsing with all parsers
                 Test.@testset ".sam.bgz File Parsing" begin
                     ## Auto parser
-                    reader_auto = Mycelia.open_xam(sambgz_file, parser=:auto)
+                    reader_auto = Mycelia.open_xam(sambgz_file, parser = :auto)
                     df_auto = Mycelia.xam_to_dataframe(reader_auto)
                     close(reader_auto)
                     Test.@test DataFrames.nrow(df_auto) == 3
                     Test.@test all(df_auto.ismapped)
 
                     ## XAM.jl parser
-                    reader_xamjl = Mycelia.open_xam(sambgz_file, parser=:xamjl)
+                    reader_xamjl = Mycelia.open_xam(sambgz_file, parser = :xamjl)
                     df_xamjl = Mycelia.xam_to_dataframe(reader_xamjl)
                     close(reader_xamjl)
                     Test.@test DataFrames.nrow(df_xamjl) == 3
                     Test.@test all(df_xamjl.ismapped)
 
                     ## Samtools parser
-                    reader_samtools = Mycelia.open_xam(sambgz_file, parser=:samtools)
+                    reader_samtools = Mycelia.open_xam(sambgz_file, parser = :samtools)
                     df_samtools = Mycelia.xam_to_dataframe(reader_samtools)
                     close(reader_samtools)
                     Test.@test DataFrames.nrow(df_samtools) == 3
@@ -707,20 +764,23 @@ Test.@testset "XAM File Processing Tests" begin
                 df_sambgz = Mycelia.xam_to_dataframe(sambgz_file)
 
                 ## All should have same number of records
-                Test.@test DataFrames.nrow(df_samgz) == DataFrames.nrow(df_bgz) == DataFrames.nrow(df_sambgz)
+                Test.@test DataFrames.nrow(df_samgz) == DataFrames.nrow(df_bgz) ==
+                           DataFrames.nrow(df_sambgz)
                 Test.@test DataFrames.nrow(df_samgz) == 3
 
                 ## All should have identical read names
-                Test.@test Set(df_samgz.template) == Set(df_bgz.template) == Set(df_sambgz.template)
+                Test.@test Set(df_samgz.template) == Set(df_bgz.template) ==
+                           Set(df_sambgz.template)
 
                 ## All should have identical mapping status
-                Test.@test all(df_samgz.ismapped) && all(df_bgz.ismapped) && all(df_sambgz.ismapped)
+                Test.@test all(df_samgz.ismapped) && all(df_bgz.ismapped) &&
+                           all(df_sambgz.ismapped)
             end
 
             ## Cleanup
-            rm(original_samgz, force=true)
-            rm(bgz_file, force=true)
-            rm(sambgz_file, force=true)
+            rm(original_samgz, force = true)
+            rm(bgz_file, force = true)
+            rm(sambgz_file, force = true)
         end
 
         Test.@testset "Format Detection Edge Cases" begin
@@ -729,11 +789,11 @@ Test.@testset "XAM File Processing Tests" begin
 
             ## Create a BGZF-compressed SAM file first
             map_result = Mycelia.minimap_map(
-                fasta=ref_fasta,
-                fastq=fastq_files.forward_reads,
-                mapping_type="sr",
-                output_format="sam.gz",
-                sorted=true
+                fasta = ref_fasta,
+                fastq = fastq_files.forward_reads,
+                mapping_type = "sr",
+                output_format = "sam.gz",
+                sorted = true
             )
             run(map_result.cmd)
             original_samgz = map_result.outfile
@@ -771,10 +831,10 @@ Test.@testset "XAM File Processing Tests" begin
                 end
 
                 ## Cleanup
-                rm(bgz_file, force=true)
-                rm(sambgz_file, force=true)
-                rm(samgz_file, force=true)
-                rm(bam_file, force=true)
+                rm(bgz_file, force = true)
+                rm(sambgz_file, force = true)
+                rm(samgz_file, force = true)
+                rm(bam_file, force = true)
             end
 
             Test.@testset "No Extension Fallback to Magic Bytes" begin
@@ -794,27 +854,27 @@ Test.@testset "XAM File Processing Tests" begin
                 Test.@test all(df.ismapped)
 
                 ## Cleanup
-                rm(no_ext_file, force=true)
+                rm(no_ext_file, force = true)
             end
 
             ## Cleanup
-            rm(original_samgz, force=true)
+            rm(original_samgz, force = true)
         end
 
         Test.@testset "Parser Comparison Tests" begin
             ## Create BAM file for parser comparison
             map_result = Mycelia.minimap_map(
-                fasta=ref_fasta,
-                fastq=fastq_files.forward_reads,
-                mapping_type="sr",
-                output_format="bam"
+                fasta = ref_fasta,
+                fastq = fastq_files.forward_reads,
+                mapping_type = "sr",
+                output_format = "bam"
             )
             run(map_result.cmd)
             bam_file = map_result.outfile
 
             ## Test XAM.jl parser
             Test.@testset "XAM.jl Parser" begin
-                reader = Mycelia.open_xam(bam_file, parser=:xamjl)
+                reader = Mycelia.open_xam(bam_file, parser = :xamjl)
                 Test.@test reader isa XAM.BAM.Reader
                 df_xamjl = Mycelia.xam_to_dataframe(reader)
                 close(reader)
@@ -827,7 +887,7 @@ Test.@testset "XAM File Processing Tests" begin
 
             ## Test samtools parser
             Test.@testset "Samtools Parser" begin
-                reader = Mycelia.open_xam(bam_file, parser=:samtools)
+                reader = Mycelia.open_xam(bam_file, parser = :samtools)
                 Test.@test reader isa XAM.SAM.Reader
                 df_samtools = Mycelia.xam_to_dataframe(reader)
                 close(reader)
@@ -840,7 +900,7 @@ Test.@testset "XAM File Processing Tests" begin
 
             ## Test auto parser (defaults to samtools, returns SAM.Reader)
             Test.@testset "Auto Parser" begin
-                reader = Mycelia.open_xam(bam_file, parser=:auto)
+                reader = Mycelia.open_xam(bam_file, parser = :auto)
                 Test.@test reader isa XAM.SAM.Reader  # Auto parser defaults to samtools
                 df_auto = Mycelia.xam_to_dataframe(reader)
                 close(reader)
@@ -850,7 +910,7 @@ Test.@testset "XAM File Processing Tests" begin
             end
 
             ## Cleanup parser comparison test file
-            rm(bam_file, force=true)
+            rm(bam_file, force = true)
         end
 
         Test.@testset "minimap_map Format Options" begin
@@ -858,11 +918,11 @@ Test.@testset "XAM File Processing Tests" begin
             Test.@testset "Sorted vs Unsorted Output Comparison" begin
                 ## Create sorted output
                 map_result_sorted = Mycelia.minimap_map(
-                    fasta=ref_fasta,
-                    fastq=fastq_files.forward_reads,
-                    mapping_type="sr",
-                    output_format="sam",
-                    sorted=true
+                    fasta = ref_fasta,
+                    fastq = fastq_files.forward_reads,
+                    mapping_type = "sr",
+                    output_format = "sam",
+                    sorted = true
                 )
                 Test.@test occursin("sorted", map_result_sorted.outfile)
                 Test.@test endswith(map_result_sorted.outfile, ".sam")
@@ -871,11 +931,11 @@ Test.@testset "XAM File Processing Tests" begin
 
                 ## Create unsorted output
                 map_result_unsorted = Mycelia.minimap_map(
-                    fasta=ref_fasta,
-                    fastq=fastq_files.forward_reads,
-                    mapping_type="sr",
-                    output_format="sam",
-                    sorted=false
+                    fasta = ref_fasta,
+                    fastq = fastq_files.forward_reads,
+                    mapping_type = "sr",
+                    output_format = "sam",
+                    sorted = false
                 )
                 Test.@test !occursin("sorted", map_result_unsorted.outfile)
                 Test.@test endswith(map_result_unsorted.outfile, ".sam")
@@ -894,18 +954,18 @@ Test.@testset "XAM File Processing Tests" begin
                 Test.@test all(df_sorted.ismapped) == all(df_unsorted.ismapped)
 
                 ## Clean up
-                rm(map_result_sorted.outfile, force=true)
-                rm(map_result_unsorted.outfile, force=true)
+                rm(map_result_sorted.outfile, force = true)
+                rm(map_result_unsorted.outfile, force = true)
             end
         end
 
         Test.@testset "SAM.GZ Compressed Format Tests" begin
             ## Test SAM.GZ creation and parsing
             map_result = Mycelia.minimap_map(
-                fasta=ref_fasta,
-                fastq=fastq_files.forward_reads,
-                mapping_type="sr",
-                output_format="sam.gz"
+                fasta = ref_fasta,
+                fastq = fastq_files.forward_reads,
+                mapping_type = "sr",
+                output_format = "sam.gz"
             )
             run(map_result.cmd)
             samgz_file = map_result.outfile
@@ -920,28 +980,29 @@ Test.@testset "XAM File Processing Tests" begin
             ## Test parsing with different methods
             Test.@testset "SAM.GZ Parser Methods" begin
                 ## Test auto parser
-                reader_auto = Mycelia.open_xam(samgz_file, parser=:auto)
+                reader_auto = Mycelia.open_xam(samgz_file, parser = :auto)
                 df_auto = Mycelia.xam_to_dataframe(reader_auto)
                 close(reader_auto)
                 Test.@test DataFrames.nrow(df_auto) == 3
                 Test.@test all(df_auto.ismapped)
 
                 ## Test xamjl parser
-                reader_xamjl = Mycelia.open_xam(samgz_file, parser=:xamjl)
+                reader_xamjl = Mycelia.open_xam(samgz_file, parser = :xamjl)
                 df_xamjl = Mycelia.xam_to_dataframe(reader_xamjl)
                 close(reader_xamjl)
                 Test.@test DataFrames.nrow(df_xamjl) == 3
                 Test.@test all(df_xamjl.ismapped)
 
                 ## Test samtools parser
-                reader_samtools = Mycelia.open_xam(samgz_file, parser=:samtools)
+                reader_samtools = Mycelia.open_xam(samgz_file, parser = :samtools)
                 df_samtools = Mycelia.xam_to_dataframe(reader_samtools)
                 close(reader_samtools)
                 Test.@test DataFrames.nrow(df_samtools) == 3
                 Test.@test all(df_samtools.ismapped)
 
                 ## Verify all parsers give same number of records
-                Test.@test DataFrames.nrow(df_auto) == DataFrames.nrow(df_xamjl) == DataFrames.nrow(df_samtools)
+                Test.@test DataFrames.nrow(df_auto) == DataFrames.nrow(df_xamjl) ==
+                           DataFrames.nrow(df_samtools)
             end
 
             ## Test direct file path parsing
@@ -953,18 +1014,20 @@ Test.@testset "XAM File Processing Tests" begin
             Test.@test "reference" in names(df_direct)
 
             ## Clean up
-            rm(samgz_file, force=true)
+            rm(samgz_file, force = true)
         end
 
         ## Cleanup main test data
-        rm(ref_fasta, force=true)
-        rm(fastq_files.forward_reads, force=true)
-        rm(fastq_files.reverse_reads, force=true)
-        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-            rm(fastq_files.sam, force=true)
+        rm(ref_fasta, force = true)
+        rm(fastq_files.forward_reads, force = true)
+        rm(fastq_files.reverse_reads, force = true)
+        if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+           isfile(fastq_files.sam)
+            rm(fastq_files.sam, force = true)
         end
-        if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-            rm(fastq_files.error_free_sam, force=true)
+        if hasproperty(fastq_files, :error_free_sam) &&
+           fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+            rm(fastq_files.error_free_sam, force = true)
         end
     end
 
@@ -977,44 +1040,48 @@ Test.@testset "XAM File Processing Tests" begin
         empty_sam = tempname() * ".sam"
         write(empty_sam, "")
         Test.@test_throws Exception Mycelia.open_xam(empty_sam)
-        rm(empty_sam, force=true)
+        rm(empty_sam, force = true)
 
         ## Test invalid parser specification
         Test.@testset "Invalid Parser Options" begin
             ## Create a valid test file first
             rng = StableRNGs.StableRNG(1234)
-            ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+            ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
             ref_fasta = tempname() * ".fasta"
             writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
             write(writer, ref_record)
             close(writer)
 
-            fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=1, rndSeed=rand(rng, 0:typemax(Int)))
-            map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr")
+            fastq_files = Mycelia.simulate_illumina_reads(
+                fasta = ref_fasta, read_count = 1, rndSeed = rand(rng, 0:typemax(Int)))
+            map_result = Mycelia.minimap_map(
+                fasta = ref_fasta, fastq = fastq_files.forward_reads, mapping_type = "sr")
             run(map_result.cmd)
             test_file = map_result.outfile
 
             ## Test invalid parser
-            Test.@test_throws Exception Mycelia.open_xam(test_file, parser=:invalid)
+            Test.@test_throws Exception Mycelia.open_xam(test_file, parser = :invalid)
 
             ## Test invalid minimap output format
             Test.@test_throws Exception Mycelia.minimap_map(
-                fasta=ref_fasta,
-                fastq=fastq_files.forward_reads,
-                mapping_type="sr",
-                output_format="invalid"
+                fasta = ref_fasta,
+                fastq = fastq_files.forward_reads,
+                mapping_type = "sr",
+                output_format = "invalid"
             )
 
             ## Cleanup
-            rm(ref_fasta, force=true)
-            rm(fastq_files.forward_reads, force=true)
-            rm(fastq_files.reverse_reads, force=true)
-            rm(test_file, force=true)
-            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-                rm(fastq_files.sam, force=true)
+            rm(ref_fasta, force = true)
+            rm(fastq_files.forward_reads, force = true)
+            rm(fastq_files.reverse_reads, force = true)
+            rm(test_file, force = true)
+            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+               isfile(fastq_files.sam)
+                rm(fastq_files.sam, force = true)
             end
-            if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-                rm(fastq_files.error_free_sam, force=true)
+            if hasproperty(fastq_files, :error_free_sam) &&
+               fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+                rm(fastq_files.error_free_sam, force = true)
             end
         end
 
@@ -1022,14 +1089,17 @@ Test.@testset "XAM File Processing Tests" begin
         Test.@testset "Malformed File Handling" begin
             ## Create a valid SAM file first
             rng = StableRNGs.StableRNG(1234)
-            ref_record = Mycelia.random_fasta_record(L=1000, seed=rand(rng, 0:typemax(Int)))
+            ref_record = Mycelia.random_fasta_record(L = 1000, seed = rand(rng, 0:typemax(Int)))
             ref_fasta = tempname() * ".fasta"
             writer = FASTX.FASTA.Writer(open(ref_fasta, "w"))
             write(writer, ref_record)
             close(writer)
 
-            fastq_files = Mycelia.simulate_illumina_reads(fasta=ref_fasta, read_count=1, rndSeed=rand(rng, 0:typemax(Int)))
-            map_result = Mycelia.minimap_map(fasta=ref_fasta, fastq=fastq_files.forward_reads, mapping_type="sr", output_format="sam")
+            fastq_files = Mycelia.simulate_illumina_reads(
+                fasta = ref_fasta, read_count = 1, rndSeed = rand(rng, 0:typemax(Int)))
+            map_result = Mycelia.minimap_map(
+                fasta = ref_fasta, fastq = fastq_files.forward_reads,
+                mapping_type = "sr", output_format = "sam")
             run(map_result.cmd)
             valid_sam = map_result.outfile
 
@@ -1037,7 +1107,7 @@ Test.@testset "XAM File Processing Tests" begin
             malformed_sam = tempname() * ".sam"
             valid_content = read(valid_sam, String)
             ## Corrupt the content by removing essential fields
-            corrupted_content = replace(valid_content, r"\t[0-9]+\t" => "\tXXX\t", count=1)
+            corrupted_content = replace(valid_content, r"\t[0-9]+\t" => "\tXXX\t", count = 1)
             write(malformed_sam, corrupted_content)
 
             ## Test that malformed file is handled appropriately
@@ -1047,16 +1117,18 @@ Test.@testset "XAM File Processing Tests" begin
             Test.@test df isa DataFrames.DataFrame
 
             ## Cleanup
-            rm(ref_fasta, force=true)
-            rm(fastq_files.forward_reads, force=true)
-            rm(fastq_files.reverse_reads, force=true)
-            rm(valid_sam, force=true)
-            rm(malformed_sam, force=true)
-            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing && isfile(fastq_files.sam)
-                rm(fastq_files.sam, force=true)
+            rm(ref_fasta, force = true)
+            rm(fastq_files.forward_reads, force = true)
+            rm(fastq_files.reverse_reads, force = true)
+            rm(valid_sam, force = true)
+            rm(malformed_sam, force = true)
+            if hasproperty(fastq_files, :sam) && fastq_files.sam !== nothing &&
+               isfile(fastq_files.sam)
+                rm(fastq_files.sam, force = true)
             end
-            if hasproperty(fastq_files, :error_free_sam) && fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
-                rm(fastq_files.error_free_sam, force=true)
+            if hasproperty(fastq_files, :error_free_sam) &&
+               fastq_files.error_free_sam !== nothing && isfile(fastq_files.error_free_sam)
+                rm(fastq_files.error_free_sam, force = true)
             end
         end
     end

@@ -19,10 +19,10 @@ struct TDAConfig
     backend::Symbol
 
     function TDAConfig(;
-        max_dim::Int = 1,
-        thresholds::AbstractVector{<:Real} = Float64[],
-        max_points::Int = 10_000,
-        backend::Symbol = :graph_betti,
+            max_dim::Int = 1,
+            thresholds::AbstractVector{<:Real} = Float64[],
+            max_points::Int = 10_000,
+            backend::Symbol = :graph_betti
     )
         max_dim < 0 && throw(ArgumentError("max_dim must be ≥ 0, got $(max_dim)"))
         max_points < 1 && throw(ArgumentError("max_points must be ≥ 1, got $(max_points)"))
@@ -46,13 +46,15 @@ struct TDAMetrics
     persistence::Union{Nothing, TDAPersistenceSummary}
 
     function TDAMetrics(
-        thresholds::Vector{Float64},
-        betti0::Vector{Int},
-        betti1::Vector{Int};
-        persistence::Union{Nothing, TDAPersistenceSummary} = nothing,
+            thresholds::Vector{Float64},
+            betti0::Vector{Int},
+            betti1::Vector{Int};
+            persistence::Union{Nothing, TDAPersistenceSummary} = nothing
     )
-        length(thresholds) == length(betti0) || throw(ArgumentError("thresholds and betti0 must have the same length"))
-        length(thresholds) == length(betti1) || throw(ArgumentError("thresholds and betti1 must have the same length"))
+        length(thresholds) == length(betti0) ||
+            throw(ArgumentError("thresholds and betti0 must have the same length"))
+        length(thresholds) == length(betti1) ||
+            throw(ArgumentError("thresholds and betti1 must have the same length"))
         return new(thresholds, betti0, betti1, persistence)
     end
 end
@@ -99,20 +101,19 @@ function tda_graph_stats(g::Graphs.AbstractGraph)
     vertex_count = Graphs.nv(g)
     edge_count = Graphs.ne(g)
     directed = Graphs.is_directed(g)
-    density =
-        if vertex_count <= 1
-            0.0
-        elseif directed
-            edge_count / (vertex_count * (vertex_count - 1))
-        else
-            edge_count / (vertex_count * (vertex_count - 1) / 2)
-        end
+    density = if vertex_count <= 1
+        0.0
+    elseif directed
+        edge_count / (vertex_count * (vertex_count - 1))
+    else
+        edge_count / (vertex_count * (vertex_count - 1) / 2)
+    end
 
     return (
         nv = vertex_count,
         ne = edge_count,
         directed = directed,
-        density = density,
+        density = density
     )
 end
 
@@ -125,11 +126,12 @@ we take the induced subgraph on vertices with `vertex_weights[v] >= t`.
 This provides an initial “topology signal” without requiring persistent homology.
 """
 function tda_betti_curves(
-    g::Graphs.AbstractGraph;
-    thresholds::AbstractVector{<:Real},
-    vertex_weights::AbstractVector{<:Real},
+        g::Graphs.AbstractGraph;
+        thresholds::AbstractVector{<:Real},
+        vertex_weights::AbstractVector{<:Real}
 )
-    Graphs.nv(g) == length(vertex_weights) || throw(ArgumentError("vertex_weights must have length nv(g)"))
+    Graphs.nv(g) == length(vertex_weights) ||
+        throw(ArgumentError("vertex_weights must have length nv(g)"))
 
     threshold_vec = sort!(collect(Float64.(thresholds)))
     isempty(threshold_vec) && (threshold_vec = Float64[-Inf])
@@ -163,19 +165,20 @@ Compute a standardized TDA summary for a graph.
 vertex indices. If omitted, all vertices are given weight 1.0.
 """
 function tda_on_graph(
-    g::Graphs.AbstractGraph,
-    cfg::TDAConfig;
-    vertex_weights::Union{Nothing, AbstractVector{<:Real}} = nothing,
+        g::Graphs.AbstractGraph,
+        cfg::TDAConfig;
+        vertex_weights::Union{Nothing, AbstractVector{<:Real}} = nothing
 )
-    cfg.backend == :graph_betti || throw(ArgumentError("Unsupported TDA backend $(cfg.backend); currently supported: :graph_betti"))
-    cfg.max_dim <= 1 || throw(ArgumentError("max_dim=$(cfg.max_dim) is not supported by backend :graph_betti (max_dim ≤ 1)"))
+    cfg.backend == :graph_betti ||
+        throw(ArgumentError("Unsupported TDA backend $(cfg.backend); currently supported: :graph_betti"))
+    cfg.max_dim <= 1 ||
+        throw(ArgumentError("max_dim=$(cfg.max_dim) is not supported by backend :graph_betti (max_dim ≤ 1)"))
 
-    weights =
-        if isnothing(vertex_weights)
-            ones(Float64, Graphs.nv(g))
-        else
-            vertex_weights
-        end
+    weights = if isnothing(vertex_weights)
+        ones(Float64, Graphs.nv(g))
+    else
+        vertex_weights
+    end
 
     metrics = tda_betti_curves(g; thresholds = cfg.thresholds, vertex_weights = weights)
     return TDARunSummary(cfg, tda_graph_stats(g), metrics)
@@ -195,6 +198,7 @@ total persistence in H₁.
 """
 function tda_graph_score(metrics::TDAMetrics; α::Float64 = 1.0, β::Float64 = 1.0)
     cycle_penalty = α * (isempty(metrics.betti1) ? 0.0 : Float64(maximum(metrics.betti1)))
-    fragmentation_penalty = β * (isempty(metrics.betti0) ? 0.0 : Float64(maximum(metrics.betti0)))
+    fragmentation_penalty = β * (isempty(metrics.betti0) ? 0.0 :
+                             Float64(maximum(metrics.betti0)))
     return cycle_penalty + fragmentation_penalty
 end

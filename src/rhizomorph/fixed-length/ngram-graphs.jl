@@ -90,11 +90,11 @@ graph = build_ngram_graph(sequences, 3)
 - `get_ngram_statistics`: Get graph statistics
 """
 function build_ngram_graph(
-    strings::Vector{String},
-    n::Int;
-    dataset_id::String="dataset_01"
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
 )
-    return build_ngram_graph_singlestrand(strings, n; dataset_id=dataset_id)
+    return build_ngram_graph_singlestrand(strings, n; dataset_id = dataset_id)
 end
 
 # Note: The core implementation (build_ngram_graph_singlestrand,
@@ -131,9 +131,9 @@ graph = build_ngram_graph_from_file("source.jl", 10)
 ```
 """
 function build_ngram_graph_from_file(
-    filepath::String,
-    n::Int;
-    dataset_id::Union{String,Nothing}=nothing
+        filepath::String,
+        n::Int;
+        dataset_id::Union{String, Nothing} = nothing
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -154,7 +154,7 @@ function build_ngram_graph_from_file(
         error("No non-empty lines found in file: $filepath")
     end
 
-    return build_ngram_graph(strings, n; dataset_id=dataset_id)
+    return build_ngram_graph(strings, n; dataset_id = dataset_id)
 end
 
 """
@@ -188,8 +188,8 @@ end
 ```
 """
 function build_ngram_graph_from_files(
-    filepaths::Vector{String},
-    n::Int
+        filepaths::Vector{String},
+        n::Int
 )
     if isempty(filepaths)
         error("No files provided")
@@ -207,7 +207,7 @@ function build_ngram_graph_from_files(
         strings = filter(!isempty, strings)
 
         # Add observations
-        add_observations_to_ngram_graph!(graph, strings, n; dataset_id=dataset_id)
+        add_observations_to_ngram_graph!(graph, strings, n; dataset_id = dataset_id)
     end
 
     return graph
@@ -305,9 +305,9 @@ common_doc1 = find_high_coverage_ngrams(graph, 3; dataset_id="doc1")
 ```
 """
 function find_high_coverage_ngrams(
-    graph::MetaGraphsNext.MetaGraph,
-    min_coverage::Int;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph,
+        min_coverage::Int;
+        dataset_id::Union{String, Nothing} = nothing
 )
     result = String[]
 
@@ -349,8 +349,8 @@ unique_to_doc1 = find_unique_ngrams(graph, "doc1")
 ```
 """
 function find_unique_ngrams(
-    graph::MetaGraphsNext.MetaGraph,
-    dataset_id::String
+        graph::MetaGraphsNext.MetaGraph,
+        dataset_id::String
 )
     unique_ngrams = String[]
 
@@ -388,8 +388,8 @@ shared = find_shared_ngrams(graph, ["doc1", "doc2", "doc3"])
 ```
 """
 function find_shared_ngrams(
-    graph::MetaGraphsNext.MetaGraph,
-    dataset_ids::Vector{String}
+        graph::MetaGraphsNext.MetaGraph,
+        dataset_ids::Vector{String}
 )
     shared_ngrams = String[]
     target_set = Set(dataset_ids)

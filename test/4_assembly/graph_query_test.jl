@@ -29,11 +29,10 @@ import FASTX
 import Kmers
 
 Test.@testset "Graph Query Functions - Basic Properties" begin
-
     Test.@testset "vertex_count - Single Vertex" begin
         # Create graph with single record, then check function works
         records = [FASTX.FASTA.Record("read_001", "ATG")]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         count = Mycelia.Rhizomorph.vertex_count(graph)
         Test.@test count == 1  # One 3-mer: ATG
@@ -43,7 +42,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCGATCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         count = Mycelia.Rhizomorph.vertex_count(graph)
         Test.@test count == 7  # 7 unique 3-mers in ATGCGATCG
@@ -52,7 +51,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
     Test.@testset "edge_count - No Edges" begin
         # Single k-mer has no edges
         records = [FASTX.FASTA.Record("read_001", "ATG")]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         count = Mycelia.Rhizomorph.edge_count(graph)
         Test.@test count == 0
@@ -62,7 +61,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         count = Mycelia.Rhizomorph.edge_count(graph)
         Test.@test count == 1  # ATG -> TGC
@@ -72,7 +71,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         Test.@test Mycelia.Rhizomorph.has_vertex(graph, kmer)
@@ -82,7 +81,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("GGG")
         Test.@test !Mycelia.Rhizomorph.has_vertex(graph, kmer)
@@ -92,7 +91,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.DNAKmer{3}("ATG")
         dst = Kmers.DNAKmer{3}("TGC")
@@ -103,7 +102,7 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.DNAKmer{3}("ATG")
         dst = Kmers.DNAKmer{3}("GCA")
@@ -112,12 +111,11 @@ Test.@testset "Graph Query Functions - Basic Properties" begin
 end
 
 Test.@testset "Graph Query Functions - Vertex Properties" begin
-
     Test.@testset "get_vertex_data - Valid Vertex" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -131,7 +129,7 @@ Test.@testset "Graph Query Functions - Vertex Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("GGG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -143,7 +141,7 @@ Test.@testset "Graph Query Functions - Vertex Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.DNAKmer{3}("ATG")
         dst = Kmers.DNAKmer{3}("TGC")
@@ -157,7 +155,7 @@ Test.@testset "Graph Query Functions - Vertex Properties" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.DNAKmer{3}("ATG")
         dst = Kmers.DNAKmer{3}("GCA")
@@ -171,7 +169,7 @@ Test.@testset "Graph Query Functions - Vertex Properties" begin
             FASTX.FASTA.Record("read_001", "ATGCG"),
             FASTX.FASTA.Record("read_002", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         count = Mycelia.Rhizomorph.get_vertex_observation_count(graph, kmer)
@@ -184,7 +182,7 @@ Test.@testset "Graph Query Functions - Vertex Properties" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.DNAKmer{3}("ATG")
         dst = Kmers.DNAKmer{3}("TGC")
@@ -195,12 +193,11 @@ Test.@testset "Graph Query Functions - Vertex Properties" begin
 end
 
 Test.@testset "Graph Traversal Functions - Neighbors" begin
-
     Test.@testset "get_outgoing_neighbors - Single Neighbor" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         neighbors = Mycelia.Rhizomorph.get_outgoing_neighbors(graph, kmer)
@@ -214,7 +211,7 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "ATGA")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         neighbors = Mycelia.Rhizomorph.get_outgoing_neighbors(graph, kmer)
@@ -228,7 +225,7 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         neighbors = Mycelia.Rhizomorph.get_outgoing_neighbors(graph, kmer)
@@ -240,7 +237,7 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("TGC")
         neighbors = Mycelia.Rhizomorph.get_incoming_neighbors(graph, kmer)
@@ -254,7 +251,7 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "GTGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("TGC")
         neighbors = Mycelia.Rhizomorph.get_incoming_neighbors(graph, kmer)
@@ -269,7 +266,7 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "ATGA")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         degree = Mycelia.Rhizomorph.get_outgoing_degree(graph, kmer)
@@ -282,7 +279,7 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "GTGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("TGC")
         degree = Mycelia.Rhizomorph.get_incoming_degree(graph, kmer)
@@ -292,12 +289,11 @@ Test.@testset "Graph Traversal Functions - Neighbors" begin
 end
 
 Test.@testset "Graph Traversal Functions - Path Finding" begin
-
     Test.@testset "is_linear_path - True" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("TGC")
         # TGC has one incoming (ATG) and one outgoing (GCG)
@@ -309,7 +305,7 @@ Test.@testset "Graph Traversal Functions - Path Finding" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "ATGA")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         # ATG has two outgoing neighbors
@@ -320,7 +316,7 @@ Test.@testset "Graph Traversal Functions - Path Finding" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("ATG")
         # ATG has no incoming neighbors
@@ -331,7 +327,7 @@ Test.@testset "Graph Traversal Functions - Path Finding" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{3}("TGC")
         # TGC has no outgoing neighbors
@@ -343,7 +339,7 @@ Test.@testset "Graph Traversal Functions - Path Finding" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "GGAT")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         sources = Mycelia.Rhizomorph.get_all_sources(graph)
 
@@ -358,7 +354,7 @@ Test.@testset "Graph Traversal Functions - Path Finding" begin
             FASTX.FASTA.Record("read_001", "ATGC"),
             FASTX.FASTA.Record("read_002", "GGAT")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         sinks = Mycelia.Rhizomorph.get_all_sinks(graph)
 
@@ -370,12 +366,11 @@ Test.@testset "Graph Traversal Functions - Path Finding" begin
 end
 
 Test.@testset "Graph Traversal Functions - Simple Paths" begin
-
     Test.@testset "extend_unitig_forward - Simple Path" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCGATCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         start_kmer = Kmers.DNAKmer{3}("ATG")
         path = Mycelia.Rhizomorph.extend_unitig_forward(graph, start_kmer)
@@ -391,7 +386,7 @@ Test.@testset "Graph Traversal Functions - Simple Paths" begin
             FASTX.FASTA.Record("read_002", "TGCA"),
             FASTX.FASTA.Record("read_003", "TGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         start_kmer = Kmers.DNAKmer{3}("ATG")
         path = Mycelia.Rhizomorph.extend_unitig_forward(graph, start_kmer)
@@ -404,7 +399,7 @@ Test.@testset "Graph Traversal Functions - Simple Paths" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCGATCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         start_kmer = Kmers.DNAKmer{3}("TCG")
         path = Mycelia.Rhizomorph.extend_unitig_backward(graph, start_kmer)
@@ -418,7 +413,7 @@ Test.@testset "Graph Traversal Functions - Simple Paths" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         middle_kmer = Kmers.DNAKmer{3}("TGC")
         unitig = Mycelia.Rhizomorph.get_maximal_unitig(graph, middle_kmer)
@@ -434,7 +429,7 @@ Test.@testset "Graph Traversal Functions - Simple Paths" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         path = [
             Kmers.DNAKmer{3}("ATG"),
@@ -450,10 +445,9 @@ Test.@testset "Graph Traversal Functions - Simple Paths" begin
 end
 
 Test.@testset "Graph Analysis Functions - Connected Components" begin
-
     Test.@testset "get_all_vertices - Single Vertex" begin
         records = [FASTX.FASTA.Record("read_001", "ATG")]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         vertices = Mycelia.Rhizomorph.get_all_vertices(graph)
         Test.@test length(vertices) == 1
@@ -463,7 +457,7 @@ Test.@testset "Graph Analysis Functions - Connected Components" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         vertices = Mycelia.Rhizomorph.get_all_vertices(graph)
         Test.@test length(vertices) == 2  # ATG and TGC
@@ -475,7 +469,7 @@ Test.@testset "Graph Analysis Functions - Connected Components" begin
             FASTX.FASTA.Record("read_002", "ATGCGATCG"),
             FASTX.FASTA.Record("read_003", "GGGG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Filter to vertices seen at least twice
         high_coverage = Mycelia.Rhizomorph.filter_vertices_by_observation_count(graph, 2)
@@ -489,7 +483,7 @@ Test.@testset "Graph Analysis Functions - Connected Components" begin
         records = [
             FASTX.FASTA.Record("read_001", "ATGCGATCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         stats = Mycelia.Rhizomorph.get_graph_statistics(graph)
 

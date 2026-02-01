@@ -26,7 +26,6 @@ import FASTX
 import Kmers
 
 Test.@testset "Quality Functions" begin
-
     Test.@testset "combine_phred_scores - Basic" begin
         # Two Q10 observations combine to Q20
         combined = Mycelia.Rhizomorph.combine_phred_scores(UInt8[10, 10])
@@ -68,7 +67,7 @@ Test.@testset "Quality Functions" begin
         qual_str = String([Char(q + 33) for q in qual])
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record], 3; dataset_id = "test")
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
 
@@ -89,7 +88,7 @@ Test.@testset "Quality Functions" begin
         qual_str2 = String([Char(q + 33) for q in qual2])
         record2 = FASTX.FASTQ.Record("read_002", seq, qual_str2)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id = "test")
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
 
@@ -110,7 +109,7 @@ Test.@testset "Quality Functions" begin
         qual_str2 = String([Char(q + 33) for q in qual2])
         record2 = FASTX.FASTQ.Record("read_002", seq, qual_str2)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id = "test")
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
 
@@ -130,7 +129,7 @@ Test.@testset "Quality Functions" begin
         qual_str2 = String([Char(q + 33) for q in qual2])
         record2 = FASTX.FASTQ.Record("read_002", seq, qual_str2)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id = "test")
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
 
@@ -150,7 +149,7 @@ Test.@testset "Quality Functions" begin
         qual_str2 = String([Char(q + 33) for q in qual2])
         record2 = FASTX.FASTQ.Record("read_002", seq, qual_str2)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id = "test")
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
 
@@ -172,7 +171,7 @@ Test.@testset "Quality Functions" begin
         qual_str2 = String([Char(q + 33) for q in qual2])
         record2 = FASTX.FASTQ.Record("read_002", seq2, qual_str2)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record1, record2], 3; dataset_id = "test")
 
         # Filter for Q30+
         high_qual = Mycelia.Rhizomorph.filter_by_quality(graph, 30, "test")
@@ -192,7 +191,7 @@ Test.@testset "Quality Functions" begin
         qual_str = String([Char(q + 33) for q in qual])
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([record], 3; dataset_id = "test")
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
 

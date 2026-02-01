@@ -33,7 +33,7 @@ Test.@testset "AA BioSequence SingleStrand Quality Graph" begin
     fastq_record = FASTX.FASTQ.Record("test", string(test_aa), qual_str)
     reads = [fastq_record]
 
-    graph = Mycelia.Rhizomorph.build_fastq_graph(reads; dataset_id="aa_fastq_test", min_overlap=3)
+    graph = Mycelia.Rhizomorph.build_fastq_graph(reads; dataset_id = "aa_fastq_test", min_overlap = 3)
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) == 1
@@ -69,7 +69,8 @@ Test.@testset "AA BioSequence SingleStrand Quality Graph" begin
                 vertex_type = typeof(first(path_vector))
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
                 graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)

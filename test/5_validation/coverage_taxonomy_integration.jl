@@ -125,7 +125,7 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             Test.@test all(abundance.sample .== "Sample_001")
 
             ## Relative abundances should sum to 1
-            Test.@test isapprox(sum(abundance.relative_abundance), 1.0, atol=1e-10)
+            Test.@test isapprox(sum(abundance.relative_abundance), 1.0, atol = 1e-10)
         end
 
         Test.@testset "Abundance at domain level" begin
@@ -162,7 +162,7 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             Test.@test !("Unclassified" in abundance.taxon)
 
             ## Relative abundances should still sum to 1 (among classified only)
-            Test.@test isapprox(sum(abundance.relative_abundance), 1.0, atol=1e-10)
+            Test.@test isapprox(sum(abundance.relative_abundance), 1.0, atol = 1e-10)
         end
 
         Test.@testset "Custom unclassified label" begin
@@ -186,8 +186,9 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             )
 
             ## Should be sorted in descending order
-            for i in 1:(DataFrames.nrow(abundance)-1)
-                Test.@test abundance.relative_abundance[i] >= abundance.relative_abundance[i+1]
+            for i in 1:(DataFrames.nrow(abundance) - 1)
+                Test.@test abundance.relative_abundance[i] >=
+                           abundance.relative_abundance[i + 1]
             end
         end
     end
@@ -294,12 +295,13 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             config = Mycelia.MicrobiomePlotConfig()
 
             ## Small sample count (landscape)
-            width, height = Mycelia.calculate_figure_size(50, 25, config=config)
+            width, height = Mycelia.calculate_figure_size(50, 25, config = config)
             Test.@test width >= 800
             Test.@test height >= config.min_height
 
             ## Large sample count (portrait)
-            width_large, height_large = Mycelia.calculate_figure_size(300, 25, config=config)
+            width_large,
+            height_large = Mycelia.calculate_figure_size(300, 25, config = config)
             Test.@test width_large <= config.max_width
             Test.@test height_large > height  ## Should be taller for more samples
         end
@@ -308,28 +310,28 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             config = Mycelia.MicrobiomePlotConfig()
 
             ## Few samples - just barplot
-            views_small = Mycelia.determine_view_types(50, config=config)
+            views_small = Mycelia.determine_view_types(50, config = config)
             Test.@test :barplot in views_small
             Test.@test length(views_small) == 1
 
             ## Medium samples - barplot and heatmap
-            views_medium = Mycelia.determine_view_types(200, config=config)
+            views_medium = Mycelia.determine_view_types(200, config = config)
             Test.@test :barplot in views_medium
             Test.@test :heatmap in views_medium
 
             ## Large samples - heatmap and paginated
-            views_large = Mycelia.determine_view_types(500, config=config)
+            views_large = Mycelia.determine_view_types(500, config = config)
             Test.@test :heatmap in views_large
             Test.@test :paginated in views_large
         end
 
         Test.@testset "calculate_tick_step" begin
             ## Few samples - show all
-            step_small = Mycelia.calculate_tick_step(30, config=Mycelia.MicrobiomePlotConfig())
+            step_small = Mycelia.calculate_tick_step(30, config = Mycelia.MicrobiomePlotConfig())
             Test.@test step_small == 1
 
             ## Many samples - skip some
-            step_large = Mycelia.calculate_tick_step(300, config=Mycelia.MicrobiomePlotConfig())
+            step_large = Mycelia.calculate_tick_step(300, config = Mycelia.MicrobiomePlotConfig())
             Test.@test step_large > 1
         end
     end
@@ -356,7 +358,8 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
 
             ## Create mock taxonomy data (some contigs unclassified)
             taxa = ["Bacteria", "Viruses", "Archaea", missing]
-            genera = ["Escherichia", "Bacillus", "Streptococcus", "Lambdavirus", "Methanobacterium", missing]
+            genera = ["Escherichia", "Bacillus", "Streptococcus",
+                "Lambdavirus", "Methanobacterium", missing]
 
             taxonomy_df = DataFrames.DataFrame(
                 contig_id = coverage_df.chrom,
@@ -387,7 +390,7 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
         ## Check that each sample's abundances sum to 1
         for sample_df in DataFrames.groupby(all_abundances, :sample)
             total_abundance = sum(sample_df.relative_abundance)
-            Test.@test isapprox(total_abundance, 1.0, atol=1e-10)
+            Test.@test isapprox(total_abundance, 1.0, atol = 1e-10)
         end
 
         ## Test that the data format is compatible with plot_microbiome_abundance
@@ -398,5 +401,5 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
     end
 
     ## Cleanup
-    rm(test_dir, recursive=true, force=true)
+    rm(test_dir, recursive = true, force = true)
 end

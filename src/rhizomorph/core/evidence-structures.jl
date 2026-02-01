@@ -34,8 +34,9 @@ struct EvidenceEntry
 end
 
 # Equality and hashing for Set operations
-Base.:(==)(a::EvidenceEntry, b::EvidenceEntry) =
+function Base.:(==)(a::EvidenceEntry, b::EvidenceEntry)
     a.position == b.position && a.strand == b.strand
+end
 
 Base.hash(e::EvidenceEntry, h::UInt) = hash(e.strand, hash(e.position, h))
 
@@ -66,13 +67,15 @@ struct QualityEvidenceEntry
 end
 
 # Equality and hashing
-Base.:(==)(a::QualityEvidenceEntry, b::QualityEvidenceEntry) =
+function Base.:(==)(a::QualityEvidenceEntry, b::QualityEvidenceEntry)
     a.position == b.position &&
-    a.strand == b.strand &&
-    a.quality_scores == b.quality_scores
+        a.strand == b.strand &&
+        a.quality_scores == b.quality_scores
+end
 
-Base.hash(e::QualityEvidenceEntry, h::UInt) =
+function Base.hash(e::QualityEvidenceEntry, h::UInt)
     hash(e.quality_scores, hash(e.strand, hash(e.position, h)))
+end
 
 """
     EdgeEvidenceEntry
@@ -104,13 +107,15 @@ struct EdgeEvidenceEntry
 end
 
 # Equality and hashing
-Base.:(==)(a::EdgeEvidenceEntry, b::EdgeEvidenceEntry) =
+function Base.:(==)(a::EdgeEvidenceEntry, b::EdgeEvidenceEntry)
     a.from_position == b.from_position &&
-    a.to_position == b.to_position &&
-    a.strand == b.strand
+        a.to_position == b.to_position &&
+        a.strand == b.strand
+end
 
-Base.hash(e::EdgeEvidenceEntry, h::UInt) =
+function Base.hash(e::EdgeEvidenceEntry, h::UInt)
     hash(e.strand, hash(e.to_position, hash(e.from_position, h)))
+end
 
 """
     EdgeQualityEvidenceEntry
@@ -146,13 +151,15 @@ struct EdgeQualityEvidenceEntry
 end
 
 # Equality and hashing
-Base.:(==)(a::EdgeQualityEvidenceEntry, b::EdgeQualityEvidenceEntry) =
+function Base.:(==)(a::EdgeQualityEvidenceEntry, b::EdgeQualityEvidenceEntry)
     a.from_position == b.from_position &&
-    a.to_position == b.to_position &&
-    a.strand == b.strand &&
-    a.from_quality == b.from_quality &&
-    a.to_quality == b.to_quality
+        a.to_position == b.to_position &&
+        a.strand == b.strand &&
+        a.from_quality == b.from_quality &&
+        a.to_quality == b.to_quality
+end
 
-Base.hash(e::EdgeQualityEvidenceEntry, h::UInt) =
+function Base.hash(e::EdgeQualityEvidenceEntry, h::UInt)
     hash(e.to_quality, hash(e.from_quality,
-         hash(e.strand, hash(e.to_position, hash(e.from_position, h)))))
+        hash(e.strand, hash(e.to_position, hash(e.from_position, h)))))
+end

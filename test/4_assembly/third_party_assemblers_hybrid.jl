@@ -30,49 +30,49 @@ Test.@testset "Hybrid Assembly Tools" begin
             "missing_r1.fq",
             "missing_r2.fq",
             5_000_000;
-            sample_name="sample",
-            outdir=outdir
+            sample_name = "sample",
+            outdir = outdir
         )
         Test.@test_throws ErrorException Mycelia.run_hybracter_long_single(
             "missing_long.fq",
             5_000_000;
-            sample_name="sample",
-            outdir=outdir
+            sample_name = "sample",
+            outdir = outdir
         )
         Test.@test_throws ErrorException Mycelia.run_hybracter_hybrid_single(
             "missing_long.fq",
             "missing_r1.fq",
             "missing_r2.fq",
             5_000_000;
-            sample_name="",
-            outdir=outdir
+            sample_name = "",
+            outdir = outdir
         )
         Test.@test_throws ErrorException Mycelia.run_hybracter_long_single(
             "missing_long.fq",
             5_000_000;
-            sample_name="",
-            outdir=outdir
+            sample_name = "",
+            outdir = outdir
         )
         Test.@test_throws ErrorException Mycelia.run_plassembler(
             "missing_long.fq",
             "missing_r1.fq",
             "missing_r2.fq",
             5_000_000;
-            outdir=outdir
+            outdir = outdir
         )
         Test.@test_throws ErrorException Mycelia.run_plassembler_long(
             "missing_long.fq",
             5_000_000;
-            outdir=outdir
+            outdir = outdir
         )
         Test.@test_throws ErrorException Mycelia.run_dnaapler_all(
             "missing_input.fasta";
-            outdir=outdir
+            outdir = outdir
         )
     end
 
     run_external = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true" ||
-        lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+                   lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 
     if run_external
         threads = clamp(something(tryparse(Int, get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2")), 2), 1, 4)
@@ -86,7 +86,8 @@ Test.@testset "Hybrid Assembly Tools" begin
 
                 outdir = joinpath(dir, "dnaapler_out")
                 try
-                    result = Mycelia.run_dnaapler_all(input_fasta; outdir=outdir, force=true, threads=threads)
+                    result = Mycelia.run_dnaapler_all(
+                        input_fasta; outdir = outdir, force = true, threads = threads)
                     Test.@test isfile(result.reoriented)
                 catch e
                     @error "DNAapler test failed." exception=(e, catch_backtrace())
@@ -100,29 +101,30 @@ Test.@testset "Hybrid Assembly Tools" begin
                 ref_fasta = joinpath(dir, "hybrid_ref.fasta")
                 rng = StableRNGs.StableRNG(101)
                 genome = BioSequences.randdnaseq(rng, 30_000)
-                Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("hybrid_ref", genome)])
+                Mycelia.write_fasta(outfile = ref_fasta,
+                    records = [FASTX.FASTA.Record("hybrid_ref", genome)])
 
                 chrom_size = length(genome)
                 plassembler_chrom_size = max(10_000, Int(floor(chrom_size * 0.8)))
 
                 illumina = Mycelia.simulate_illumina_reads(
-                    fasta=ref_fasta,
-                    coverage=10,
-                    outbase=joinpath(dir, "hybrid_short"),
-                    read_length=150,
-                    mflen=300,
-                    seqSys="HS25",
-                    paired=true,
-                    errfree=true,
-                    rndSeed=101,
-                    quiet=true
+                    fasta = ref_fasta,
+                    coverage = 10,
+                    outbase = joinpath(dir, "hybrid_short"),
+                    read_length = 150,
+                    mflen = 300,
+                    seqSys = "HS25",
+                    paired = true,
+                    errfree = true,
+                    rndSeed = 101,
+                    quiet = true
                 )
 
                 long_reads_gz = Mycelia.simulate_nanopore_reads(
-                    fasta=ref_fasta,
-                    quantity="12x",
-                    quiet=true,
-                    seed=101
+                    fasta = ref_fasta,
+                    quantity = "12x",
+                    quiet = true,
+                    seed = 101
                 )
                 long_reads = joinpath(dir, "hybrid_long.fq")
                 run(pipeline(`gunzip -c $(long_reads_gz)`, long_reads))
@@ -135,16 +137,16 @@ Test.@testset "Hybrid Assembly Tools" begin
                             illumina.forward_reads,
                             illumina.reverse_reads,
                             chrom_size;
-                            sample_name="hybracter_sample",
-                            outdir=outdir,
-                            threads=threads
+                            sample_name = "hybracter_sample",
+                            outdir = outdir,
+                            threads = threads
                         )
                         Test.@test isfile(result.final_fasta)
                     catch e
                         @error "Hybracter test failed." exception=(e, catch_backtrace())
                         Test.@test false
                     finally
-                        isdir(outdir) && rm(outdir; recursive=true, force=true)
+                        isdir(outdir) && rm(outdir; recursive = true, force = true)
                     end
                 end
 
@@ -156,15 +158,15 @@ Test.@testset "Hybrid Assembly Tools" begin
                             illumina.forward_reads,
                             illumina.reverse_reads,
                             plassembler_chrom_size;
-                            outdir=outdir,
-                            threads=threads
+                            outdir = outdir,
+                            threads = threads
                         )
                         Test.@test isfile(result.plasmids_fasta)
                     catch e
                         @error "Plassembler test failed." exception=(e, catch_backtrace())
                         Test.@test false
                     finally
-                        isdir(outdir) && rm(outdir; recursive=true, force=true)
+                        isdir(outdir) && rm(outdir; recursive = true, force = true)
                     end
                 end
             end
@@ -180,7 +182,7 @@ Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
             "missing_r1.fq",
             "missing_r2.fq",
             "missing_long.fq";
-            outdir=outdir
+            outdir = outdir
         )
     end
 end

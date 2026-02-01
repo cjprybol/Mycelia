@@ -27,14 +27,13 @@ import FASTX
 import Kmers
 
 Test.@testset "RNA K-mer Doublestrand Graph" begin
-
     Test.@testset "Canonical K-mer Merging - Basic" begin
         # RNA sequence
         seq1 = "AUGCAU"
         record = FASTX.FASTA.Record("read_001", seq1)
 
         # Use canonical builder for canonical behavior (merging forward and RC)
-        graph = Mycelia.Rhizomorph.build_kmer_graph_canonical([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_canonical([record], 3; dataset_id = "test")
 
         # In "AUGCAU": AUG, UGC, GCA, CAU
         # Canonical: AUG (for AUG and CAU), GCA (for UGC and GCA)
@@ -47,7 +46,7 @@ Test.@testset "RNA K-mer Doublestrand Graph" begin
         # Reverse read: GCAU (RC of AUGC)
         record2 = FASTX.FASTA.Record("read_rev", "GCAU")
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record1, record2], 3; dataset_id = "test")
 
         # Both reads should contribute to canonical k-mers
         # Check that observation count reflects both strands
@@ -60,7 +59,7 @@ Test.@testset "RNA K-mer Doublestrand Graph" begin
 
     Test.@testset "Strand Evidence is Preserved" begin
         record = FASTX.FASTA.Record("read_001", "AUGC")
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id = "test")
 
         canon_aug = BioSequences.canonical(Kmers.RNAKmer{3}("AUG"))
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, canon_aug)
@@ -76,7 +75,7 @@ Test.@testset "RNA K-mer Doublestrand Graph" begin
 
     Test.@testset "Graph Query Functions Work on Doublestrand" begin
         record = FASTX.FASTA.Record("read_001", "AUGCGAUCG")
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id = "test")
 
         # Query functions should work
         sources = Mycelia.Rhizomorph.get_all_sources(graph)

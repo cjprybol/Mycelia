@@ -24,7 +24,6 @@ import LinearAlgebra
 import StableRNGs
 
 Test.@testset "Relational Clustering Tests" begin
-
     Test.@testset "RelationalMatrix Construction" begin
         ## Test long_to_relational_matrix with basic data
         df = DataFrames.DataFrame(
@@ -35,9 +34,9 @@ Test.@testset "Relational Clustering Tests" begin
 
         rm = Mycelia.long_to_relational_matrix(
             df, :entity_a, :entity_b, :value;
-            entity_a_name="test_a",
-            entity_b_name="test_b",
-            measurement_name="score"
+            entity_a_name = "test_a",
+            entity_b_name = "test_b",
+            measurement_name = "score"
         )
 
         Test.@test rm isa Mycelia.RelationalMatrix{Float64}
@@ -82,8 +81,8 @@ Test.@testset "Relational Clustering Tests" begin
 
         rm = Mycelia.long_to_relational_matrix(
             df, :entity_a, :entity_b, :value;
-            entity_a_name="row_type",
-            entity_b_name="col_type"
+            entity_a_name = "row_type",
+            entity_b_name = "col_type"
         )
         rm_t = Mycelia.transpose_relational(rm)
 
@@ -103,7 +102,7 @@ Test.@testset "Relational Clustering Tests" begin
             nothing, nothing
         )
 
-        stats = Mycelia.summarize_relational_matrix(rm; verbose=false)
+        stats = Mycelia.summarize_relational_matrix(rm; verbose = false)
 
         Test.@test stats.n_entity_a == 3
         Test.@test stats.n_entity_b == 2
@@ -121,7 +120,7 @@ Test.@testset "Relational Clustering Tests" begin
             nothing, nothing
         )
 
-        long_df = Mycelia.relational_matrix_to_long(rm; include_missing=true)
+        long_df = Mycelia.relational_matrix_to_long(rm; include_missing = true)
 
         Test.@test DataFrames.nrow(long_df) == 4
         Test.@test :entity_a in DataFrames.propertynames(long_df)
@@ -134,32 +133,32 @@ Test.@testset "Relational Clustering Tests" begin
         dist = [0.0 0.5 NaN; 0.5 0.0 0.8; NaN 0.8 0.0]
 
         Test.@testset "IMPUTE_MAX" begin
-            imputed = Mycelia.impute_distances(dist; method=Mycelia.IMPUTE_MAX)
+            imputed = Mycelia.impute_distances(dist; method = Mycelia.IMPUTE_MAX)
             Test.@test imputed[1, 3] == 1.0
             Test.@test imputed[3, 1] == 1.0
             Test.@test LinearAlgebra.issymmetric(imputed)
         end
 
         Test.@testset "IMPUTE_MAX_OBSERVED" begin
-            imputed = Mycelia.impute_distances(dist; method=Mycelia.IMPUTE_MAX_OBSERVED)
+            imputed = Mycelia.impute_distances(dist; method = Mycelia.IMPUTE_MAX_OBSERVED)
             Test.@test imputed[1, 3] == 0.8  ## max of [0.5, 0.8]
             Test.@test imputed[3, 1] == 0.8
         end
 
         Test.@testset "IMPUTE_MEDIAN" begin
-            imputed = Mycelia.impute_distances(dist; method=Mycelia.IMPUTE_MEDIAN)
+            imputed = Mycelia.impute_distances(dist; method = Mycelia.IMPUTE_MEDIAN)
             expected_median = Statistics.median([0.5, 0.8])
             Test.@test imputed[1, 3] ≈ expected_median
         end
 
         Test.@testset "IMPUTE_MEAN" begin
-            imputed = Mycelia.impute_distances(dist; method=Mycelia.IMPUTE_MEAN)
+            imputed = Mycelia.impute_distances(dist; method = Mycelia.IMPUTE_MEAN)
             expected_mean = Statistics.mean([0.5, 0.8])
             Test.@test imputed[1, 3] ≈ expected_mean
         end
 
         Test.@testset "Diagonal remains zero" begin
-            imputed = Mycelia.impute_distances(dist; method=Mycelia.IMPUTE_MAX)
+            imputed = Mycelia.impute_distances(dist; method = Mycelia.IMPUTE_MAX)
             Test.@test all(LinearAlgebra.diag(imputed) .== 0.0)
         end
     end
@@ -183,7 +182,7 @@ Test.@testset "Relational Clustering Tests" begin
         Test.@testset "With missing values" begin
             matrix = [1.0 NaN; 2.0 3.0; NaN 4.0]
 
-            gower_dist = Mycelia.gower_distance(matrix; min_shared_features=1)
+            gower_dist = Mycelia.gower_distance(matrix; min_shared_features = 1)
 
             ## Samples 1 and 2 share feature 1
             Test.@test !isnan(gower_dist[1, 2])
@@ -199,7 +198,7 @@ Test.@testset "Relational Clustering Tests" begin
 
             gower_dist = Mycelia.gower_distance(
                 matrix;
-                feature_types=[:numeric, :binary, :categorical]
+                feature_types = [:numeric, :binary, :categorical]
             )
 
             Test.@test size(gower_dist) == (3, 3)
@@ -279,6 +278,7 @@ Test.@testset "Relational Clustering Tests" begin
         ## Generate distance matrix with clear cluster structure
         dist = zeros(n, n)
         for i in 1:n, j in 1:n
+
             if i != j
                 if assignments[i] == assignments[j]
                     dist[i, j] = 0.1 + 0.1 * rand(rng)  ## Low intra-cluster
@@ -387,11 +387,11 @@ Test.@testset "Relational Clustering Tests" begin
         ## Run pipeline
         result = Mycelia.relational_clustering_pipeline(
             rm;
-            cluster_by=:entity_a,
-            distance_metric=:euclidean,
-            imputation=:max_observed,
-            ks=2:5,
-            plot_backend=:cairomakie
+            cluster_by = :entity_a,
+            distance_metric = :euclidean,
+            imputation = :max_observed,
+            ks = 2:5,
+            plot_backend = :cairomakie
         )
 
         ## Check that result has expected fields
@@ -435,27 +435,27 @@ Test.@testset "Relational Clustering Tests" begin
         ## Test with cosine distance
         result_cosine = Mycelia.relational_clustering_pipeline(
             rm;
-            distance_metric=:cosine,
-            ks=2:3,
-            plot_backend=:cairomakie
+            distance_metric = :cosine,
+            ks = 2:3,
+            plot_backend = :cairomakie
         )
         Test.@test result_cosine.optimal_k >= 2
 
         ## Test with Jaccard distance
         result_jaccard = Mycelia.relational_clustering_pipeline(
             rm;
-            distance_metric=:jaccard,
-            ks=2:3,
-            plot_backend=:cairomakie
+            distance_metric = :jaccard,
+            ks = 2:3,
+            plot_backend = :cairomakie
         )
         Test.@test result_jaccard.optimal_k >= 2
 
         ## Test with Gower distance
         result_gower = Mycelia.relational_clustering_pipeline(
             rm;
-            distance_metric=:gower,
-            ks=2:3,
-            plot_backend=:cairomakie
+            distance_metric = :gower,
+            ks = 2:3,
+            plot_backend = :cairomakie
         )
         Test.@test result_gower.optimal_k >= 2
     end
@@ -479,9 +479,9 @@ Test.@testset "Relational Clustering Tests" begin
         ## Cluster by entity_b (features) instead of entity_a (samples)
         result = Mycelia.relational_clustering_pipeline(
             rm;
-            cluster_by=:entity_b,
-            ks=2:3,
-            plot_backend=:cairomakie
+            cluster_by = :entity_b,
+            ks = 2:3,
+            plot_backend = :cairomakie
         )
 
         ## Should cluster the 6 features
@@ -528,5 +528,4 @@ Test.@testset "Relational Clustering Tests" begin
             Test.@test length(rankings[1].entity_indices) == 3
         end
     end
-
 end

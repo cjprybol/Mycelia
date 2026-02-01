@@ -20,13 +20,14 @@ Perform DIAMOND BLASTP search between query and reference protein FASTA files.
 - `SystemError`: If DIAMOND execution fails
 """
 function run_diamond_search(;
-    query_fasta::String,
-    reference_fasta::String,
-    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond",
-    threads::Int = get_default_threads(),
-    evalue::Float64 = 1e-3,
-    block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
-    sensitivity::String = "--iterate"
+        query_fasta::String,
+        reference_fasta::String,
+        output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") *
+                             "_diamond",
+        threads::Int = get_default_threads(),
+        evalue::Float64 = 1e-3,
+        block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
+        sensitivity::String = "--iterate"
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -34,20 +35,23 @@ function run_diamond_search(;
     @assert threads > 0 "Thread count must be positive: $(threads)"
     @assert evalue > 0 "E-value must be positive: $(evalue)"
     @assert block_size > 0 "Block size must be positive: $(block_size)"
-    
+
     # Validate FASTA files have content
     @assert filesize(query_fasta) > 0 "Query FASTA file is empty: $(query_fasta)"
     @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
-    
+
     # Setup output directory and files
     mkpath(output_dir)
     diamond_db = joinpath(output_dir, "diamond_db.dmnd")
-    results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_results.tsv")
+    results_file = joinpath(output_dir,
+        replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" *
+        replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") *
+        "_diamond_results.tsv")
 
     if isfile(results_file) && (filesize(results_file) > 0)
         return results_file
     end
-    
+
     # Ensure DIAMOND environment exists
     Mycelia.add_bioconda_env("diamond")
 
@@ -58,7 +62,8 @@ function run_diamond_search(;
     #     "evalue", "bitscore", "length", "pident", "nident", "mismatch", "gapopen"
     # ]
     outfmt_headers = [
-        "Query Seq - id", "Query title", "Query sequence length", "Subject Seq - id", "All subject Seq - id(s)",
+        "Query Seq - id", "Query title", "Query sequence length",
+        "Subject Seq - id", "All subject Seq - id(s)",
         "Subject Title", "All Subject Title(s)", "Subject sequence length", "Start of alignment in query",
         "End of alignment in query", "Start of alignment in subject", "End of alignment in subject",
         "Expect value", "Bit score", "Alignment length", "Percentage of identical matches",
@@ -68,12 +73,12 @@ function run_diamond_search(;
     try
         # Create DIAMOND database
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond makedb --in $(reference_fasta) --db $(diamond_db)`)
-        
+
         @assert isfile(diamond_db) "DIAMOND database creation failed: $(diamond_db)"
-        
+
         # Run DIAMOND search
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp --query $(query_fasta) --db $(diamond_db) --out $(results_file) --evalue $(evalue) --threads $(threads) --block-size $(block_size) $(sensitivity) --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch gapopen`)
-        
+
         @assert isfile(results_file) "DIAMOND results file was not created: $(results_file)"
         @assert filesize(results_file) > 0 "DIAMOND results file is empty"
 
@@ -89,16 +94,16 @@ function run_diamond_search(;
                 end
             end
         end
-        mv(results_tmp, results_file; force=true)
-        
+        mv(results_tmp, results_file; force = true)
+
         return results_file
-        
+
     catch e
         @error "DIAMOND execution failed" exception=e
         rethrow(e)
     finally
         # Cleanup database file
-        rm(diamond_db, force=true)
+        rm(diamond_db, force = true)
     end
 end
 
@@ -108,15 +113,16 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run DIAMOND BLASTP and keep only the best hit per query.
 """
 function run_diamond_besthits(;
-    query_fasta::String,
-    reference_fasta::String,
-    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_besthits",
-    threads::Int = get_default_threads(),
-    evalue::Float64 = 1e-10,
-    block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8),
-    sensitivity::String = "--sensitive",
-    max_target_seqs::Int = 1,
-    force::Bool = false
+        query_fasta::String,
+        reference_fasta::String,
+        output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") *
+                             "_diamond_besthits",
+        threads::Int = get_default_threads(),
+        evalue::Float64 = 1e-10,
+        block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8),
+        sensitivity::String = "--sensitive",
+        max_target_seqs::Int = 1,
+        force::Bool = false
 )
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
     @assert isfile(reference_fasta) "Reference FASTA file does not exist: $(reference_fasta)"
@@ -130,7 +136,8 @@ function run_diamond_besthits(;
     results_file = joinpath(
         output_dir,
         replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" *
-        replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_diamond_besthits.tsv"
+        replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") *
+        "_diamond_besthits.tsv"
     )
 
     if !force && isfile(results_file) && filesize(results_file) > 0
@@ -152,7 +159,7 @@ function run_diamond_besthits(;
         @error "DIAMOND best-hit execution failed" exception=e
         rethrow(e)
     finally
-        rm(diamond_db, force=true)
+        rm(diamond_db, force = true)
     end
 end
 
@@ -177,12 +184,13 @@ Perform BLASTP search between query and reference protein FASTA files.
 - `SystemError`: If BLAST execution fails
 """
 function run_blastp_search(;
-    query_fasta::String,
-    reference_fasta::String,
-    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_blastp",
-    threads::Int = get_default_threads(),
-    evalue::Float64 = 1e-3,
-    max_target_seqs::Int = 500
+        query_fasta::String,
+        reference_fasta::String,
+        output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") *
+                             "_blastp",
+        threads::Int = get_default_threads(),
+        evalue::Float64 = 1e-3,
+        max_target_seqs::Int = 500
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -190,46 +198,49 @@ function run_blastp_search(;
     @assert threads > 0 "Thread count must be positive: $(threads)"
     @assert evalue > 0 "E-value must be positive: $(evalue)"
     @assert max_target_seqs > 0 "Max target sequences must be positive: $(max_target_seqs)"
-    
+
     # Validate FASTA files have content
     @assert filesize(query_fasta) > 0 "Query FASTA file is empty: $(query_fasta)"
     @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
-    
+
     # Setup output directory and files
     mkpath(output_dir)
     blast_db = joinpath(output_dir, "blast_db")
     # results_file = joinpath(output_dir, "blastp_results.tsv")
-    results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_blastp_results.tsv")
+    results_file = joinpath(output_dir,
+        replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" *
+        replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") *
+        "_blastp_results.tsv")
 
     if isfile(results_file) && (filesize(results_file) > 0)
         return results_file
     end
-    
+
     # Ensure BLAST environment exists
     Mycelia.add_bioconda_env("blast")
-    
+
     try
         # Create BLAST database
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(reference_fasta) -dbtype prot -out $(blast_db)`)
-        
+
         # Verify database was created
         @assert isfile("$(blast_db).phr") "BLAST database creation failed"
-        
+
         # Run BLASTP search
         outfmt = "7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid"
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastp -query $(query_fasta) -db $(blast_db) -out $(results_file) -evalue $(evalue) -max_target_seqs $(max_target_seqs) -num_threads $(threads) -outfmt "$(outfmt)"`)
-        
+
         @assert isfile(results_file) "BLASTP results file was not created: $(results_file)"
-        
+
         return results_file
-        
+
     catch e
         @error "BLASTP execution failed" exception=e
         rethrow(e)
     finally
         # Cleanup database files
         for ext in [".phr", ".pin", ".psq"]
-            rm("$(blast_db)$(ext)", force=true)
+            rm("$(blast_db)$(ext)", force = true)
         end
     end
 end
@@ -255,12 +266,13 @@ Perform MMseqs2 easy-search between query and reference FASTA files.
 - `SystemError`: If MMseqs2 execution fails
 """
 function run_mmseqs_search(;
-    query_fasta::String,
-    reference_fasta::String,
-    output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs",
-    threads::Int = get_default_threads(),
-    evalue::Float64 = 1e-3,
-    sensitivity::Float64 = 4.0
+        query_fasta::String,
+        reference_fasta::String,
+        output_dir::String = replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") *
+                             "_mmseqs",
+        threads::Int = get_default_threads(),
+        evalue::Float64 = 1e-3,
+        sensitivity::Float64 = 4.0
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -268,23 +280,26 @@ function run_mmseqs_search(;
     @assert threads > 0 "Thread count must be positive: $(threads)"
     @assert evalue > 0 "E-value must be positive: $(evalue)"
     @assert sensitivity > 0 "Sensitivity must be positive: $(sensitivity)"
-    
+
     # Validate FASTA files have content
     @assert filesize(query_fasta) > 0 "Query FASTA file is empty: $(query_fasta)"
     @assert filesize(reference_fasta) > 0 "Reference FASTA file is empty: $(reference_fasta)"
-    
+
     # Setup output directory and files
     mkpath(output_dir)
     query_db = joinpath(output_dir, "query_db")
-    ref_db = joinpath(output_dir, "ref_db") 
-    results_file = joinpath(output_dir, replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" * replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") * "_mmseqs-easy-search.tsv")
+    ref_db = joinpath(output_dir, "ref_db")
+    results_file = joinpath(output_dir,
+        replace(basename(query_fasta), Mycelia.FASTA_REGEX => "") * "__" *
+        replace(basename(reference_fasta), Mycelia.FASTA_REGEX => "") *
+        "_mmseqs-easy-search.tsv")
     tmp_dir = joinpath(output_dir, "tmp")
     mkpath(tmp_dir)
 
     if isfile(results_file) && (filesize(results_file) > 0)
         return results_file
     end
-    
+
     # Ensure MMseqs2 environment exists
     Mycelia.add_bioconda_env("mmseqs2")
 
@@ -296,32 +311,32 @@ function run_mmseqs_search(;
             --format-mode 4
             --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits
             --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`)
-    
+
         # # Create databases
         # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(query_fasta) $(query_db)`)
         # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs createdb $(reference_fasta) $(ref_db)`)
-        
+
         # # Run search
         # search_db = joinpath(output_dir, "search_results")
         # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs search $(query_db) $(ref_db) $(search_db) $(tmp_dir) --threads $(threads) -e $(evalue) -s $(sensitivity)`)
-        
+
         # # Convert to readable format
         # run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs convertalis $(query_db) $(ref_db) $(search_db) $(results_file) --format-output "query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits"`)
-        
+
         @assert isfile(results_file) "MMseqs2 results file was not created: $(results_file)"
         @assert filesize(results_file) > 0 "MMseqs2 results file is empty"
 
         # Cleanup temporary files
-        rm(tmp_dir, recursive=true, force=true)
-        
+        rm(tmp_dir, recursive = true, force = true)
+
         return results_file
-        
+
     catch e
         @error "MMseqs2 execution failed" exception=e
         rethrow(e)
     finally
         # Cleanup temporary files
-        rm(tmp_dir, recursive=true, force=true)
+        rm(tmp_dir, recursive = true, force = true)
     end
 end
 
@@ -343,13 +358,13 @@ Run the NUCmer alignment tool from the MUMmer package.
 - `String`: Path to the generated `.delta` file.
 """
 function run_nucmer(;
-    reference::String,
-    query::String,
-    outdir::String = joinpath(pwd(), "nucmer_$(basename(query))_vs_$(basename(reference))"),
-    prefix::String = "nucmer",
-    threads::Int = get_default_threads(),
-    min_match::Int = 20,
-    additional_args::Vector{String} = String[]
+        reference::String,
+        query::String,
+        outdir::String = joinpath(pwd(), "nucmer_$(basename(query))_vs_$(basename(reference))"),
+        prefix::String = "nucmer",
+        threads::Int = get_default_threads(),
+        min_match::Int = 20,
+        additional_args::Vector{String} = String[]
 )
     @assert isfile(reference) "Reference file not found: $(reference)"
     @assert isfile(query) "Query file not found: $(query)"
@@ -397,12 +412,12 @@ Run MUMmer dnadiff to generate genome-level comparison statistics.
 - `NamedTuple`: Paths to dnadiff outputs (`report`, `delta`, `snps`, `rdiff`, `qdiff`).
 """
 function run_dnadiff(;
-    reference::String,
-    query::String,
-    outdir::String = joinpath(pwd(), "dnadiff_$(basename(query))_vs_$(basename(reference))"),
-    prefix::String = "dnadiff",
-    force::Bool = false,
-    additional_args::Vector{String} = String[]
+        reference::String,
+        query::String,
+        outdir::String = joinpath(pwd(), "dnadiff_$(basename(query))_vs_$(basename(reference))"),
+        prefix::String = "dnadiff",
+        force::Bool = false,
+        additional_args::Vector{String} = String[]
 )
     @assert isfile(reference) "Reference file not found: $(reference)"
     @assert isfile(query) "Query file not found: $(query)"
@@ -422,7 +437,8 @@ function run_dnadiff(;
     end
 
     @assert isfile(report_file) "dnadiff failed to create report file: $(report_file)"
-    return (;report=report_file, delta=delta_file, snps=snps_file, rdiff=rdiff_file, qdiff=qdiff_file)
+    return (; report = report_file, delta = delta_file,
+        snps = snps_file, rdiff = rdiff_file, qdiff = qdiff_file)
 end
 
 """
@@ -440,10 +456,10 @@ Generate a show-coords report from a MUMmer delta file.
 - `String`: Path to the generated coords file.
 """
 function run_show_coords(;
-    delta_file::String,
-    coords_file::String = replace(delta_file, r"\.delta$" => ".coords"),
-    args::Vector{String} = ["-r", "-c", "-l"],
-    force::Bool = false
+        delta_file::String,
+        coords_file::String = replace(delta_file, r"\.delta$" => ".coords"),
+        args::Vector{String} = ["-r", "-c", "-l"],
+        force::Bool = false
 )
     @assert isfile(delta_file) "Delta file does not exist: $(delta_file)"
 
@@ -541,18 +557,20 @@ function parse_dnadiff_report(report_file::String)
 
     summary = Dict{Symbol, Any}()
     if !isempty(sections)
-        primary_section = haskey(sections, Symbol("1_to_1")) ? Symbol("1_to_1") : first(keys(sections))
+        primary_section = haskey(sections, Symbol("1_to_1")) ? Symbol("1_to_1") :
+                          first(keys(sections))
         summary = get(sections, primary_section, Dict{Symbol, Any}())
     end
 
     avg_identity = get(summary, :avg_identity, missing)
     avg_identity_aligned = get(summary, :avg_identity_aligned, missing)
     distance = avg_identity === missing ? missing : 1.0 - (avg_identity / 100.0)
-    distance_aligned = avg_identity_aligned === missing ? missing : 1.0 - (avg_identity_aligned / 100.0)
+    distance_aligned = avg_identity_aligned === missing ? missing :
+                       1.0 - (avg_identity_aligned / 100.0)
 
     summary_nt = (; (k => summary[k] for k in sort(collect(keys(summary))))...)
 
-    return (;summary=summary_nt, distance, distance_aligned, raw_sections=sections)
+    return (; summary = summary_nt, distance, distance_aligned, raw_sections = sections)
 end
 
 """
@@ -639,17 +657,17 @@ function parse_mummer_coords_table(coords_file::String)
     end
 
     return DataFrames.DataFrame(
-        ref_start=ref_start,
-        ref_end=ref_end,
-        query_start=query_start,
-        query_end=query_end,
-        ref_aln_len=ref_aln_len,
-        query_aln_len=query_aln_len,
-        identity=identity,
-        ref_coverage=ref_coverage,
-        query_coverage=query_coverage,
-        ref_id=ref_id,
-        query_id=query_id
+        ref_start = ref_start,
+        ref_end = ref_end,
+        query_start = query_start,
+        query_end = query_end,
+        ref_aln_len = ref_aln_len,
+        query_aln_len = query_aln_len,
+        identity = identity,
+        ref_coverage = ref_coverage,
+        query_coverage = query_coverage,
+        ref_id = ref_id,
+        query_id = query_id
     )
 end
 
@@ -667,13 +685,13 @@ Summarize a show-coords alignment table into genome comparison metrics.
 - `NamedTuple`: Summary metrics including weighted identity and distance.
 """
 function summarize_mummer_coords(coords_df::DataFrames.DataFrame;
-    reference_length::Union{Int, Missing} = missing,
-    query_length::Union{Int, Missing} = missing
+        reference_length::Union{Int, Missing} = missing,
+        query_length::Union{Int, Missing} = missing
 )
     if DataFrames.nrow(coords_df) == 0
-        return (;num_alignments=0, aligned_bases_ref=0, aligned_bases_query=0,
-                avg_identity=missing, distance=missing,
-                aligned_pct_ref=missing, aligned_pct_query=missing)
+        return (; num_alignments = 0, aligned_bases_ref = 0, aligned_bases_query = 0,
+            avg_identity = missing, distance = missing,
+            aligned_pct_ref = missing, aligned_pct_query = missing)
     end
 
     aligned_ref = sum(coords_df.ref_aln_len)
@@ -681,17 +699,19 @@ function summarize_mummer_coords(coords_df::DataFrames.DataFrame;
     weighted_identity = sum(coords_df.identity .* coords_df.ref_aln_len) / aligned_ref
     distance = 1.0 - (weighted_identity / 100.0)
 
-    aligned_pct_ref = reference_length === missing ? missing : (aligned_ref / reference_length) * 100.0
-    aligned_pct_query = query_length === missing ? missing : (aligned_query / query_length) * 100.0
+    aligned_pct_ref = reference_length === missing ? missing :
+                      (aligned_ref / reference_length) * 100.0
+    aligned_pct_query = query_length === missing ? missing :
+                        (aligned_query / query_length) * 100.0
 
     return (;
-        num_alignments=DataFrames.nrow(coords_df),
-        aligned_bases_ref=aligned_ref,
-        aligned_bases_query=aligned_query,
-        avg_identity=weighted_identity,
-        distance=distance,
-        aligned_pct_ref=aligned_pct_ref,
-        aligned_pct_query=aligned_pct_query
+        num_alignments = DataFrames.nrow(coords_df),
+        aligned_bases_ref = aligned_ref,
+        aligned_bases_query = aligned_query,
+        avg_identity = weighted_identity,
+        distance = distance,
+        aligned_pct_ref = aligned_pct_ref,
+        aligned_pct_query = aligned_pct_query
     )
 end
 
@@ -713,28 +733,28 @@ Run dnadiff and show-coords to compute genome distance metrics from MUMmer.
 - `NamedTuple`: Paths and parsed metrics from dnadiff and show-coords.
 """
 function calculate_mummer_genome_distance(;
-    reference::String,
-    query::String,
-    outdir::String = joinpath(pwd(), "mummer_distance_$(basename(query))_vs_$(basename(reference))"),
-    prefix::String = "mummer_distance",
-    force::Bool = false,
-    coords_args::Vector{String} = String[],
-    dnadiff_args::Vector{String} = String[]
+        reference::String,
+        query::String,
+        outdir::String = joinpath(pwd(), "mummer_distance_$(basename(query))_vs_$(basename(reference))"),
+        prefix::String = "mummer_distance",
+        force::Bool = false,
+        coords_args::Vector{String} = String[],
+        dnadiff_args::Vector{String} = String[]
 )
     dnadiff_outputs = run_dnadiff(
-        reference=reference,
-        query=query,
-        outdir=outdir,
-        prefix=prefix,
-        force=force,
-        additional_args=dnadiff_args
+        reference = reference,
+        query = query,
+        outdir = outdir,
+        prefix = prefix,
+        force = force,
+        additional_args = dnadiff_args
     )
 
     coords_file = run_show_coords(
-        delta_file=dnadiff_outputs.delta,
-        coords_file=joinpath(outdir, "$(prefix).coords"),
-        args=vcat(["-r", "-c", "-l"], coords_args),
-        force=force
+        delta_file = dnadiff_outputs.delta,
+        coords_file = joinpath(outdir, "$(prefix).coords"),
+        args = vcat(["-r", "-c", "-l"], coords_args),
+        force = force
     )
 
     coords_df = parse_mummer_coords_table(coords_file)
@@ -742,16 +762,16 @@ function calculate_mummer_genome_distance(;
 
     summary = summarize_mummer_coords(
         coords_df;
-        reference_length=get(report_metrics.summary, :total_bases_ref, missing),
-        query_length=get(report_metrics.summary, :total_bases_query, missing)
+        reference_length = get(report_metrics.summary, :total_bases_ref, missing),
+        query_length = get(report_metrics.summary, :total_bases_query, missing)
     )
 
     return (;
-        dnadiff=dnadiff_outputs,
-        coords=coords_file,
-        coords_table=coords_df,
-        coords_summary=summary,
-        report_metrics=report_metrics
+        dnadiff = dnadiff_outputs,
+        coords = coords_file,
+        coords_table = coords_df,
+        coords_summary = summary,
+        report_metrics = report_metrics
     )
 end
 
@@ -771,11 +791,11 @@ Run Qualimap BAM QC on an alignment file.
 Named tuple with `report_pdf`, `report_txt`, and `coverage` file paths.
 """
 function run_qualimap_bamqc(;
-    bam::String,
-    outdir::String = joinpath(dirname(bam), "qualimap"),
-    threads::Int = get_default_threads(),
-    outformat::String = "PDF:HTML",
-    java_mem::String = "4G"
+        bam::String,
+        outdir::String = joinpath(dirname(bam), "qualimap"),
+        threads::Int = get_default_threads(),
+        outformat::String = "PDF:HTML",
+        java_mem::String = "4G"
 )
     @assert isfile(bam) "BAM file does not exist: $(bam)"
     Mycelia.add_bioconda_env("qualimap")
@@ -789,7 +809,7 @@ function run_qualimap_bamqc(;
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n qualimap qualimap bamqc -nt $(threads) -bam $(bam) -outdir $(outdir) -outformat $(outformat) --output-genome-coverage $(coverage_txt) --java-mem-size=$(java_mem)`)
     end
 
-    return (;report_pdf, report_txt, coverage=coverage_txt)
+    return (; report_pdf, report_txt, coverage = coverage_txt)
 end
 
 """
@@ -809,7 +829,8 @@ Float64 between 0.0 and 1.0 representing alignment accuracy, where:
 - 0.0 indicates no matches
 """
 function assess_alignment_accuracy(alignment_result)
-    return alignment_result.total_matches / (alignment_result.total_matches + alignment_result.total_edits)
+    return alignment_result.total_matches /
+           (alignment_result.total_matches + alignment_result.total_edits)
 end
 
 """
@@ -836,7 +857,6 @@ A tuple containing:
 - Uses BioSequences.reverse_complement for reverse orientation comparison
 """
 function assess_optimal_kmer_alignment(kmer, observed_kmer)
-
     forward_alignment_result = assess_alignment(kmer, observed_kmer)
     forward_alignment_accuracy = assess_alignment_accuracy(forward_alignment_result)
 
@@ -850,7 +870,9 @@ function assess_optimal_kmer_alignment(kmer, observed_kmer)
         alignment_result = reverse_alignment_result
         orientation = false
     elseif forward_alignment_accuracy == reverse_alignment_accuracy
-        alignment_result, orientation = rand(((forward_alignment_result, missing), (reverse_alignment_result, missing)))
+        alignment_result,
+        orientation = rand((
+            (forward_alignment_result, missing), (reverse_alignment_result, missing)))
     end
 
     return (alignment_result, orientation)
@@ -991,7 +1013,9 @@ Compute the minimap2 index size string based on available system memory.
 # Returns
 - `String`: Value such as `"4G"` suitable for the minimap2 `-I` option.
 """
-function system_mem_to_minimap_index_size(;system_mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), denominator=DEFAULT_MINIMAP_DENOMINATOR)
+function system_mem_to_minimap_index_size(;
+        system_mem_gb = (Int(Sys.total_memory()) / 1e9 * 0.85),
+        denominator = DEFAULT_MINIMAP_DENOMINATOR)
     value = Int(floor(system_mem_gb/denominator))
     # 4G is the default
     # this value should be larger for larger memory machines, and smaller for smaller ones
@@ -1015,9 +1039,12 @@ Create a minimap2 index for the provided reference sequence.
 # Returns
 Named tuple `(cmd, outfile)` where `outfile` is the generated `.mmi` index path.
 """
-function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85), threads=get_default_threads(), as_string=false, denominator=DEFAULT_MINIMAP_DENOMINATOR)
+function minimap_index(;
+        fasta, mapping_type, mem_gb = (Int(Sys.total_memory()) / 1e9 * 0.85),
+        threads = get_default_threads(), as_string = false,
+        denominator = DEFAULT_MINIMAP_DENOMINATOR)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_size = system_mem_to_minimap_index_size(system_mem_gb = mem_gb, denominator = denominator)
     # if lr:hq, deal with : in the name
     index_file = "$(fasta).x" * replace(mapping_type, ":" => "-") * ".I$(index_size).mmi"
     if !isfile(index_file)
@@ -1029,7 +1056,7 @@ function minimap_index(;fasta, mapping_type, mem_gb=(Int(Sys.total_memory()) / 1
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -d $(index_file) $(fasta)`
     end
     outfile = index_file
-    return (;cmd, outfile)
+    return (; cmd, outfile)
 end
 
 function build_sample_tag(name::AbstractString)
@@ -1042,13 +1069,16 @@ function build_output_label(paths::AbstractVector{<:AbstractString})
     return length(labels) == 1 ? labels[1] : join(labels, "__")
 end
 
-function concatenate_mapping_tsv(mapping_files::AbstractVector{<:AbstractString}, output_path::AbstractString; threads=get_default_threads(), force=false)
-    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") : output_path
+function concatenate_mapping_tsv(mapping_files::AbstractVector{<:AbstractString},
+        output_path::AbstractString; threads = get_default_threads(), force = false)
+    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") :
+                output_path
     tmp_out = out_plain * ".tmp"
     open(tmp_out, "w") do out_io
         wrote_header = false
         for file in mapping_files
-            in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
+            in_io = endswith(file, ".gz") ?
+                    CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
             first_line = true
             for line in eachline(in_io)
                 if first_line
@@ -1064,18 +1094,22 @@ function concatenate_mapping_tsv(mapping_files::AbstractVector{<:AbstractString}
             close(in_io)
         end
     end
-    mv(tmp_out, out_plain; force=true)
+    mv(tmp_out, out_plain; force = true)
     if endswith(output_path, ".gz")
-        Mycelia.gzip_file(out_plain; outfile=output_path, threads=threads, force=force, keep_input=false)
+        Mycelia.gzip_file(out_plain; outfile = output_path, threads = threads,
+            force = force, keep_input = false)
     end
     return output_path
 end
 
-function write_read_id_list(mapping_files::AbstractVector{<:AbstractString}, output_path::AbstractString; read_map_format::Symbol, read_id_column::Symbol)
+function write_read_id_list(
+        mapping_files::AbstractVector{<:AbstractString}, output_path::AbstractString;
+        read_map_format::Symbol, read_id_column::Symbol)
     open(output_path, "w") do out_io
         for file in mapping_files
             if read_map_format == :tsv
-                in_io = endswith(file, ".gz") ? CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
+                in_io = endswith(file, ".gz") ?
+                        CodecZlib.GzipDecompressorStream(open(file, "r")) : open(file, "r")
                 first_line = true
                 for line in eachline(in_io)
                     if first_line
@@ -1084,7 +1118,7 @@ function write_read_id_list(mapping_files::AbstractVector{<:AbstractString}, out
                     end
                     isempty(line) && continue
                     tab_idx = findlast('\t', line)
-                    read_id = tab_idx === nothing ? line : line[tab_idx + 1:end]
+                    read_id = tab_idx === nothing ? line : line[(tab_idx + 1):end]
                     write(out_io, read_id, '\n')
                 end
                 close(in_io)
@@ -1121,34 +1155,35 @@ Map reads using an existing minimap2 index file.
 Named tuple `(cmd, outfile)` producing a BAM file from the mapping.
 """
 function minimap_map_with_index(;
-        fasta::Union{Nothing,AbstractString}=nothing,
+        fasta::Union{Nothing, AbstractString} = nothing,
         mapping_type,
         fastq,
-        index_file::AbstractString="",
-        mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85),
-        threads=get_default_threads(),
-        as_string=false,
-        denominator=DEFAULT_MINIMAP_DENOMINATOR,
-        sorted::Bool=true,
-        keep_header::Bool=false,
-        outfile::Union{Nothing,String}=nothing,
-        minimap_extra_args::Vector{<:AbstractString}=String[],
-        require_index::Bool=true
-    )
+        index_file::AbstractString = "",
+        mem_gb = (Int(Sys.total_memory()) / 1e9 * 0.85),
+        threads = get_default_threads(),
+        as_string = false,
+        denominator = DEFAULT_MINIMAP_DENOMINATOR,
+        sorted::Bool = true,
+        keep_header::Bool = false,
+        outfile::Union{Nothing, String} = nothing,
+        minimap_extra_args::Vector{<:AbstractString} = String[],
+        require_index::Bool = true
+)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     fastq_inputs = fastq isa AbstractVector || fastq isa Tuple ? collect(fastq) : [fastq]
     fastq_inputs = map(String, fastq_inputs)
     isempty(fastq_inputs) && error("Provide at least one FASTQ")
     fastq_str = join(fastq_inputs, " ")
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
-    
+    index_size = system_mem_to_minimap_index_size(system_mem_gb = mem_gb, denominator = denominator)
+
     if !isempty(index_file)
         if require_index
             @assert isfile(index_file) "index_file provided but not found: $index_file"
         end
     else
         isnothing(fasta) && error("Provide fasta or index_file")
-        index_file_result = Mycelia.minimap_index(fasta=fasta, mapping_type=mapping_type, mem_gb=mem_gb, threads=threads)
+        index_file_result = Mycelia.minimap_index(
+            fasta = fasta, mapping_type = mapping_type, mem_gb = mem_gb, threads = threads)
         index_file = index_file_result.outfile
     end
     if require_index
@@ -1162,50 +1197,48 @@ function minimap_map_with_index(;
             output_label = build_output_label(fastq_inputs)
             joinpath(output_dir, output_label)
         end
-        outfile = output_prefix * "." * basename(index_file) * ".minimap2" * (sorted ? ".sorted" : "") * ".bam"
+        outfile = output_prefix * "." * basename(index_file) * ".minimap2" *
+                  (sorted ? ".sorted" : "") * ".bam"
     end
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
     if as_string
-        extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
+        extra_args_str = isempty(minimap_extra_args) ? "" :
+                         " " * join(minimap_extra_args, " ")
         if sorted
             if keep_header
-                cmd =
-                """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
-                """
+                cmd = """
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
+                      """
             else
-                cmd =
-                """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
-                """
+                cmd = """
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                      """
             end
         else
             if keep_header
-                cmd =
-                """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
-                """
+                cmd = """
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
+                      """
             else
-                cmd =
-                """
-                $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
-                """
+                cmd = """
+                      $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(index_file) $(fastq_str) --split-prefix=$(outfile).tmp \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                      """
             end
         end
     else
         map_args = String[
-            Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
-            "-t", string(threads),
-            "-x", string(mapping_type),
-            "-I", string(index_size),
-            "-a"
-        ]
+        Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "minimap2", "minimap2",
+        "-t", string(threads),
+        "-x", string(mapping_type),
+        "-I", string(index_size),
+        "-a"
+]
         append!(map_args, minimap_extra_args)
         push!(map_args, index_file)
         append!(map_args, fastq_inputs)
@@ -1229,7 +1262,7 @@ function minimap_map_with_index(;
             cmd = pipeline(map_cmd, compress)
         end
     end
-    return (;cmd, outfile)
+    return (; cmd, outfile)
 end
 
 """
@@ -1265,24 +1298,24 @@ function minimap_map(;
         fasta,
         fastq,
         mapping_type,
-        as_string=false,
-        mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=get_default_threads(),
-        denominator=DEFAULT_MINIMAP_DENOMINATOR,
-        output_format="bam",
-        sorted=true,
-        keep_header=false,
-        quiet=true,
-        outfile::Union{Nothing,String}=nothing,
-        minimap_extra_args::Vector{<:AbstractString}=String[]
-    )
+        as_string = false,
+        mem_gb = (Int(Sys.free_memory()) / 1e9),
+        threads = get_default_threads(),
+        denominator = DEFAULT_MINIMAP_DENOMINATOR,
+        output_format = "bam",
+        sorted = true,
+        keep_header = false,
+        quiet = true,
+        outfile::Union{Nothing, String} = nothing,
+        minimap_extra_args::Vector{<:AbstractString} = String[]
+)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     @assert output_format in ["sam", "sam.gz", "bam"] "output_format must be 'sam', 'sam.gz', or 'bam'"
     fastq_inputs = fastq isa AbstractVector || fastq isa Tuple ? collect(fastq) : [fastq]
     isempty(fastq_inputs) && error("Provide at least one FASTQ")
     fastq_str = join(fastq_inputs, " ")
 
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_size = system_mem_to_minimap_index_size(system_mem_gb = mem_gb, denominator = denominator)
 
     # Construct output filename based on format
     if isnothing(outfile)
@@ -1306,7 +1339,8 @@ function minimap_map(;
     if output_format == "sam"
         # Direct SAM output
         if as_string
-            extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
+            extra_args_str = isempty(minimap_extra_args) ? "" :
+                             " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
                 $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
@@ -1323,11 +1357,14 @@ function minimap_map(;
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
-                    cmd = pipeline(cmd, stderr=devnull)
+                    cmd = pipeline(cmd, stderr = devnull)
                 end
             else
                 if quiet
-                    cmd = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`, stdout=devnull, stderr=devnull)
+                    cmd = pipeline(
+                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`,
+                        stdout = devnull,
+                        stderr = devnull)
                 else
                     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp -o $(outfile)`
                 end
@@ -1337,7 +1374,8 @@ function minimap_map(;
     elseif output_format == "sam.gz"
         # Gzipped SAM output using samtools for proper BGZF compression
         if as_string
-            extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
+            extra_args_str = isempty(minimap_extra_args) ? "" :
+                             " " * join(minimap_extra_args, " ")
             if sorted
                 cmd = """
                 $(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a$(extra_args_str) $(fasta) $(fastq_str) --split-prefix=$(outfile).tmp \\
@@ -1355,14 +1393,14 @@ function minimap_map(;
                 sort_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, sort_cmd)
                 if quiet
-                    cmd = pipeline(cmd, stderr=devnull)
+                    cmd = pipeline(cmd, stderr = devnull)
                 end
             else
                 map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
                 view_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -O sam,level=6 -o $(outfile) -`
                 cmd = pipeline(map_cmd, view_cmd)
                 if quiet
-                    cmd = pipeline(cmd, stderr=devnull)
+                    cmd = pipeline(cmd, stderr = devnull)
                 end
             end
         end
@@ -1370,7 +1408,8 @@ function minimap_map(;
     else  # output_format == "bam"
         # BAM output (default behavior)
         if as_string
-            extra_args_str = isempty(minimap_extra_args) ? "" : " " * join(minimap_extra_args, " ")
+            extra_args_str = isempty(minimap_extra_args) ? "" :
+                             " " * join(minimap_extra_args, " ")
             if sorted
                 if keep_header
                     cmd = """
@@ -1409,7 +1448,7 @@ function minimap_map(;
                     cmd = pipeline(map_cmd, sort_cmd, compress_cmd)
                 end
                 if quiet
-                    cmd = pipeline(cmd, stderr=devnull)
+                    cmd = pipeline(cmd, stderr = devnull)
                 end
             else
                 map_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_type) -I$(index_size) -a $(minimap_extra_args...) $(fasta) $(fastq_inputs...) --split-prefix=$(outfile).tmp`
@@ -1420,13 +1459,13 @@ function minimap_map(;
                 end
                 cmd = pipeline(map_cmd, view_cmd)
                 if quiet
-                    cmd = pipeline(cmd, stderr=devnull)
+                    cmd = pipeline(cmd, stderr = devnull)
                 end
             end
         end
     end
 
-    return (;cmd, outfile)
+    return (; cmd, outfile)
 end
 
 """
@@ -1459,21 +1498,21 @@ Named tuple containing:
 function minimap_map_paired_end_with_index(;
         forward,
         reverse,
-        mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=get_default_threads(),
+        mem_gb = (Int(Sys.free_memory()) / 1e9),
+        threads = get_default_threads(),
         outdir = dirname(forward),
-        as_string=false,
-        denominator=DEFAULT_MINIMAP_DENOMINATOR,
-        sorted=true,
-        keep_header=false,
-        fasta="",
+        as_string = false,
+        denominator = DEFAULT_MINIMAP_DENOMINATOR,
+        sorted = true,
+        keep_header = false,
+        fasta = "",
         index_file = ""
-    )
+)
     mapping_preset = "sr"
     # determine index_file and index_size
     if isempty(index_file)
         @assert !isempty(fasta) "must supply index file or fasta + mem_gb + denominator values to infer index file"
-        index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+        index_size = system_mem_to_minimap_index_size(system_mem_gb = mem_gb, denominator = denominator)
         index_file = "$(fasta).x$(mapping_preset).I$(index_size).mmi"
     else
         # parse basename for ".I<index_size>.mmi"
@@ -1483,7 +1522,8 @@ function minimap_map_paired_end_with_index(;
             error("Could not parse index size from index_file basename: $filename. Expected pattern '.I<index_size>.mmi' (e.g. genome.xsr.I42.mmi).")
         end
         parsed_index_size = m.captures[1]
-        expected_index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+        expected_index_size = system_mem_to_minimap_index_size(
+            system_mem_gb = mem_gb, denominator = denominator)
         @assert parsed_index_size == expected_index_size "Index size in index_file ($parsed_index_size) does not match expected index size ($expected_index_size)."
         index_size = parsed_index_size
     end
@@ -1506,32 +1546,28 @@ function minimap_map_paired_end_with_index(;
         map_str = "$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -t $(threads) -x $(mapping_preset) -I$(index_size) -a $(index_file) $(forward) $(reverse) --split-prefix=$(outfile).tmp"
         if sorted
             if keep_header
-                cmd =
-                """
-                $map_str \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
-                """
+                cmd = """
+                      $map_str \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp -o $(outfile) -
+                      """
             else
-                cmd =
-                """
-                $map_str \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
-                """
+                cmd = """
+                      $map_str \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(outfile).sort.tmp - \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                      """
             end
         else
             if keep_header
-                cmd =
-                """
-                $map_str \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
-                """
+                cmd = """
+                      $map_str \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS -o $(outfile) -
+                      """
             else
-                cmd =
-                """
-                $map_str \\
-                | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
-                """
+                cmd = """
+                      $map_str \\
+                      | $(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -@ $(threads) -bS --no-header -o $(outfile) -
+                      """
             end
         end
     else
@@ -1554,8 +1590,8 @@ function minimap_map_paired_end_with_index(;
             cmd = pipeline(map, compress)
         end
     end
-    
-    return (;cmd, outfile)
+
+    return (; cmd, outfile)
 end
 
 """
@@ -1609,38 +1645,40 @@ paired collections (forward, reverse). Additional minimap2 flags can be supplied
 Named tuple with commands, paths, and per-sample output metadata.
 """
 function minimap_merge_map_and_split(;
-    reference_fasta::Union{Nothing,AbstractString}=nothing,
-    mapping_type::AbstractString,
-    single_end_fastqs::Vector{<:AbstractString}=String[],
-    paired_end_fastqs::AbstractVector{<:Tuple{<:AbstractString,<:AbstractString}}=Tuple{String,String}[],
-    minimap_index::AbstractString="",
-    build_index::Bool=false,
-    outdir::Union{Nothing,String}=nothing,
-    tmpdir::Union{Nothing,String}=nothing,
-    minimap_extra_args::Vector{<:AbstractString}=String[],
-    threads::Integer=get_default_threads(),
-    mem_gb=(Int(Sys.total_memory()) / 1e9 * 0.85),
-    denominator::Real=DEFAULT_MINIMAP_DENOMINATOR,
-    read_id_strategy::Symbol=:uuid,
-    fastq_mode::Symbol=:per_sample,
-    id_delimiter::AbstractString="::",
-    write_read_map::Bool=false,
-    read_map_format::Symbol=:arrow,
-    gzip_prefixed_fastqs::Bool=true,
-    gzip_read_map_tsv::Bool=true,
-    show_progress::Union{Bool,Nothing}=nothing,
-    run_mapping::Bool=true,
-    run_splitting::Bool=true,
-    keep_prefixed_fastqs::Bool=false,
-    force::Bool=false,
-    merged_bam::Union{Nothing,String}=nothing,
-    as_string::Bool=false
+        reference_fasta::Union{Nothing, AbstractString} = nothing,
+        mapping_type::AbstractString,
+        single_end_fastqs::Vector{<:AbstractString} = String[],
+        paired_end_fastqs::AbstractVector{<:Tuple{<:AbstractString, <:AbstractString}} = Tuple{
+            String, String}[],
+        minimap_index::AbstractString = "",
+        build_index::Bool = false,
+        outdir::Union{Nothing, String} = nothing,
+        tmpdir::Union{Nothing, String} = nothing,
+        minimap_extra_args::Vector{<:AbstractString} = String[],
+        threads::Integer = get_default_threads(),
+        mem_gb = (Int(Sys.total_memory()) / 1e9 * 0.85),
+        denominator::Real = DEFAULT_MINIMAP_DENOMINATOR,
+        read_id_strategy::Symbol = :uuid,
+        fastq_mode::Symbol = :per_sample,
+        id_delimiter::AbstractString = "::",
+        write_read_map::Bool = false,
+        read_map_format::Symbol = :arrow,
+        gzip_prefixed_fastqs::Bool = true,
+        gzip_read_map_tsv::Bool = true,
+        show_progress::Union{Bool, Nothing} = nothing,
+        run_mapping::Bool = true,
+        run_splitting::Bool = true,
+        keep_prefixed_fastqs::Bool = false,
+        force::Bool = false,
+        merged_bam::Union{Nothing, String} = nothing,
+        as_string::Bool = false
 )
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     if isempty(single_end_fastqs) && isempty(paired_end_fastqs)
         error("Provide at least one FASTQ via single_end_fastqs or paired_end_fastqs")
     end
-    isempty(minimap_index) && isnothing(reference_fasta) && error("Provide reference_fasta or minimap_index")
+    isempty(minimap_index) && isnothing(reference_fasta) &&
+        error("Provide reference_fasta or minimap_index")
     if !isnothing(reference_fasta)
         @assert isfile(reference_fasta) "Reference FASTA not found: $reference_fasta"
     end
@@ -1663,7 +1701,7 @@ function minimap_merge_map_and_split(;
 
     # Guardrail: Check for inefficient use of minimap2 on tiny datasets
     # Calculate total input size from all FASTQ files
-    total_input_size = sum(filesize, single_end_fastqs; init=0)
+    total_input_size = sum(filesize, single_end_fastqs; init = 0)
     for (fwd, rev) in paired_end_fastqs
         total_input_size += filesize(fwd) + filesize(rev)
     end
@@ -1695,18 +1733,22 @@ function minimap_merge_map_and_split(;
     for fq in single_end_fastqs
         sample_tag = build_sample_tag(fq)
         output_label = build_output_label([fq])
-        outfq = joinpath(tmpdir, sample_tag * rewrite_suffix * (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
-        map_path = write_read_map_local ? joinpath(tmpdir, "$(sample_tag).read_map.$mapping_suffix") : nothing
-        push!(prefix_jobs, (fastq=fq, sample_tag=sample_tag, out_fastq=outfq, mapping_out=map_path))
-        push!(sample_infos, (
-            sample_tag=sample_tag,
-            output_label=output_label,
-            source_fastqs=[fq],
-            prefixed_fastqs=[outfq],
-            mapping_files=map_path === nothing ? String[] : [map_path],
-            paired=false,
-            output_bam=nothing
-        ))
+        outfq = joinpath(tmpdir, sample_tag * rewrite_suffix *
+                                 (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
+        map_path = write_read_map_local ?
+                   joinpath(tmpdir, "$(sample_tag).read_map.$mapping_suffix") : nothing
+        push!(prefix_jobs, (
+            fastq = fq, sample_tag = sample_tag, out_fastq = outfq, mapping_out = map_path))
+        push!(sample_infos,
+            (
+                sample_tag = sample_tag,
+                output_label = output_label,
+                source_fastqs = [fq],
+                prefixed_fastqs = [outfq],
+                mapping_files = map_path === nothing ? String[] : [map_path],
+                paired = false,
+                output_bam = nothing
+            ))
     end
 
     # Paired-end inputs
@@ -1717,21 +1759,28 @@ function minimap_merge_map_and_split(;
         end
         sample_tag = replace(sample_tag, r"[^\w\.\-]+" => "_")
         output_label = build_output_label([fwd, rev])
-        out1 = joinpath(tmpdir, "$(sample_tag).R1" * rewrite_suffix * (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
-        out2 = joinpath(tmpdir, "$(sample_tag).R2" * rewrite_suffix * (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
-        map1 = write_read_map_local ? joinpath(tmpdir, "$(sample_tag).R1.read_map.$mapping_suffix") : nothing
-        map2 = write_read_map_local ? joinpath(tmpdir, "$(sample_tag).R2.read_map.$mapping_suffix") : nothing
-        push!(prefix_jobs, (fastq=fwd, sample_tag=sample_tag, out_fastq=out1, mapping_out=map1))
-        push!(prefix_jobs, (fastq=rev, sample_tag=sample_tag, out_fastq=out2, mapping_out=map2))
-        push!(sample_infos, (
-            sample_tag=sample_tag,
-            output_label=output_label,
-            source_fastqs=[fwd, rev],
-            prefixed_fastqs=[out1, out2],
-            mapping_files=String[m for m in (map1, map2) if m !== nothing],
-            paired=true,
-            output_bam=nothing
-        ))
+        out1 = joinpath(tmpdir, "$(sample_tag).R1" * rewrite_suffix *
+                                (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
+        out2 = joinpath(tmpdir, "$(sample_tag).R2" * rewrite_suffix *
+                                (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
+        map1 = write_read_map_local ?
+               joinpath(tmpdir, "$(sample_tag).R1.read_map.$mapping_suffix") : nothing
+        map2 = write_read_map_local ?
+               joinpath(tmpdir, "$(sample_tag).R2.read_map.$mapping_suffix") : nothing
+        push!(prefix_jobs, (
+            fastq = fwd, sample_tag = sample_tag, out_fastq = out1, mapping_out = map1))
+        push!(prefix_jobs, (
+            fastq = rev, sample_tag = sample_tag, out_fastq = out2, mapping_out = map2))
+        push!(sample_infos,
+            (
+                sample_tag = sample_tag,
+                output_label = output_label,
+                source_fastqs = [fwd, rev],
+                prefixed_fastqs = [out1, out2],
+                mapping_files = String[m for m in (map1, map2) if m !== nothing],
+                paired = true,
+                output_bam = nothing
+            ))
     end
 
     prefixed_fastqs = String[j.out_fastq for j in prefix_jobs]
@@ -1743,12 +1792,12 @@ function minimap_merge_map_and_split(;
         @assert !isnothing(reference_fasta)
         if build_index
             index_result = Mycelia.minimap_index(
-                fasta=reference_fasta,
-                mapping_type=mapping_type,
-                mem_gb=mem_gb,
-                threads=threads,
-                as_string=false,
-                denominator=denominator
+                fasta = reference_fasta,
+                mapping_type = mapping_type,
+                mem_gb = mem_gb,
+                threads = threads,
+                as_string = false,
+                denominator = denominator
             )
             index_file = index_result.outfile
             index_cmd = as_string ? string(index_result.cmd) : index_result.cmd
@@ -1775,17 +1824,19 @@ function minimap_merge_map_and_split(;
                 "paired_end_fastqs=", paired_str, "\n",
                 "minimap_extra_args=", join(minimap_extra_args, " ")
             );
-            encoding=:hex,
-            encoded_length=12,
-            normalize_case=false,
-            allow_truncation=true
+            encoding = :hex,
+            encoded_length = 12,
+            normalize_case = false,
+            allow_truncation = true
         )
-        merged_bam = joinpath(tmpdir, "$(target_label).$(mapping_type).$(fingerprint).joint.minimap2.sorted.bam")
+        merged_bam = joinpath(
+            tmpdir, "$(target_label).$(mapping_type).$(fingerprint).joint.minimap2.sorted.bam")
     end
 
     # Rewriting (UUID/prefix) and optional gzip in parallel across samples.
     merged_ready = nonempty_file(merged_bam) && !force
-    need_prefixing = force || write_read_map_local || keep_prefixed_fastqs || (run_mapping && !merged_ready)
+    need_prefixing = force || write_read_map_local || keep_prefixed_fastqs ||
+                     (run_mapping && !merged_ready)
     if need_prefixing && !isempty(prefix_jobs)
         prefix_workers = min(length(prefix_jobs), max(1, Threads.nthreads()))
         show_prefix_progress = if show_progress === nothing
@@ -1793,18 +1844,20 @@ function minimap_merge_map_and_split(;
         else
             show_progress
         end
-        total_prefix_bytes = show_prefix_progress ? sum(filesize(j.fastq) for j in prefix_jobs) : 0
+        total_prefix_bytes = show_prefix_progress ?
+                             sum(filesize(j.fastq) for j in prefix_jobs) : 0
         progress_chan = show_prefix_progress ? Channel{NamedTuple}(prefix_workers) : nothing
         progress_task = nothing
         if show_prefix_progress
             progress_task = @async begin
                 bytes_done = 0
                 files_done = 0
-                p = ProgressMeter.Progress(total_prefix_bytes; desc="Rewriting FASTQs: ")
+                p = ProgressMeter.Progress(total_prefix_bytes; desc = "Rewriting FASTQs: ")
                 for msg in progress_chan
                     bytes_done += msg.bytes
                     files_done += 1
-                    ProgressMeter.update!(p, min(bytes_done, total_prefix_bytes); showvalues=[(:files, files_done), (:total, length(prefix_jobs))])
+                    ProgressMeter.update!(p, min(bytes_done, total_prefix_bytes);
+                        showvalues = [(:files, files_done), (:total, length(prefix_jobs))])
                 end
                 ProgressMeter.finish!(p)
             end
@@ -1819,28 +1872,28 @@ function minimap_merge_map_and_split(;
                     if read_id_strategy == :uuid
                         Mycelia.uuid_fastq_reads(
                             job.fastq;
-                            out_fastq=job.out_fastq,
-                            mapping_out=job.mapping_out,
-                            mapping_format=read_map_format_local,
-                            source_fastq=job.fastq,
-                            force=force,
-                            compress_threads=compress_threads_per_job
+                            out_fastq = job.out_fastq,
+                            mapping_out = job.mapping_out,
+                            mapping_format = read_map_format_local,
+                            source_fastq = job.fastq,
+                            force = force,
+                            compress_threads = compress_threads_per_job
                         )
                     else
                         Mycelia.prefix_fastq_reads(
                             job.fastq;
-                            sample_tag=job.sample_tag,
-                            out_fastq=job.out_fastq,
-                            mapping_out=job.mapping_out,
-                            mapping_format=read_map_format_local,
-                            id_delimiter=id_delimiter,
-                            force=force,
-                            compress_threads=compress_threads_per_job
+                            sample_tag = job.sample_tag,
+                            out_fastq = job.out_fastq,
+                            mapping_out = job.mapping_out,
+                            mapping_format = read_map_format_local,
+                            id_delimiter = id_delimiter,
+                            force = force,
+                            compress_threads = compress_threads_per_job
                         )
                     end
                     if progress_chan !== nothing
                         try
-                            put!(progress_chan, (bytes=filesize(job.fastq),))
+                            put!(progress_chan, (bytes = filesize(job.fastq),))
                         catch
                         end
                     end
@@ -1867,11 +1920,14 @@ function minimap_merge_map_and_split(;
     joint_read_map = nothing
     mapping_fastqs = prefixed_fastqs
     if fastq_mode == :joint
-        joint_fastq = joinpath(tmpdir, "joint" * rewrite_suffix * (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
-        joint_read_map = write_read_map_local ? joinpath(tmpdir, "joint.read_map.$mapping_suffix") : nothing
+        joint_fastq = joinpath(tmpdir, "joint" * rewrite_suffix *
+                                       (gzip_prefixed_fastqs ? ".fq.gz" : ".fq"))
+        joint_read_map = write_read_map_local ?
+                         joinpath(tmpdir, "joint.read_map.$mapping_suffix") : nothing
         mapping_fastqs = [joint_fastq]
         if need_prefixing
-            Mycelia.concatenate_fastx(prefixed_fastqs; output_path=joint_fastq, threads=threads, force=force)
+            Mycelia.concatenate_fastx(prefixed_fastqs; output_path = joint_fastq,
+                threads = threads, force = force)
             if write_read_map_local
                 mapping_files = String[]
                 for info in sample_infos
@@ -1880,7 +1936,7 @@ function minimap_merge_map_and_split(;
                 if isempty(mapping_files)
                     error("read_id mappings requested but mapping files are missing")
                 end
-                concatenate_mapping_tsv(mapping_files, joint_read_map; threads=threads, force=force)
+                concatenate_mapping_tsv(mapping_files, joint_read_map; threads = threads, force = force)
             end
         end
     end
@@ -1889,33 +1945,33 @@ function minimap_merge_map_and_split(;
     use_index = !isnothing(index_for_mapping) && !isempty(index_for_mapping)
     minimap_result = if use_index
         Mycelia.minimap_map_with_index(
-            fasta=reference_fasta,
-            mapping_type=mapping_type,
-            fastq=mapping_fastqs,
-            index_file=index_for_mapping,
-            mem_gb=mem_gb,
-            threads=threads,
-            as_string=as_string,
-            denominator=denominator,
-            sorted=true,
-            outfile=merged_bam,
-            minimap_extra_args=minimap_extra_args,
-            require_index=run_mapping
+            fasta = reference_fasta,
+            mapping_type = mapping_type,
+            fastq = mapping_fastqs,
+            index_file = index_for_mapping,
+            mem_gb = mem_gb,
+            threads = threads,
+            as_string = as_string,
+            denominator = denominator,
+            sorted = true,
+            outfile = merged_bam,
+            minimap_extra_args = minimap_extra_args,
+            require_index = run_mapping
         )
     else
         Mycelia.minimap_map(
-            fasta=reference_fasta,
-            fastq=mapping_fastqs,
-            mapping_type=mapping_type,
-            as_string=as_string,
-            mem_gb=mem_gb,
-            threads=threads,
-            denominator=denominator,
-            output_format="bam",
-            sorted=true,
-            quiet=false,
-            outfile=merged_bam,
-            minimap_extra_args=minimap_extra_args
+            fasta = reference_fasta,
+            fastq = mapping_fastqs,
+            mapping_type = mapping_type,
+            as_string = as_string,
+            mem_gb = mem_gb,
+            threads = threads,
+            denominator = denominator,
+            output_format = "bam",
+            sorted = true,
+            quiet = false,
+            outfile = merged_bam,
+            minimap_extra_args = minimap_extra_args
         )
     end
     minimap_cmd = minimap_result.cmd
@@ -1930,14 +1986,15 @@ function minimap_merge_map_and_split(;
                 # Best-effort cleanup of minimap2 split-prefix temp files.
                 try
                     split_base = basename(split_prefix)
-                    for path in readdir(tmpdir; join=true)
-                        startswith(basename(path), split_base) && rm(path; force=true)
+                    for path in readdir(tmpdir; join = true)
+                        startswith(basename(path), split_base) && rm(path; force = true)
                     end
                 catch
                 end
             catch err
                 msg = sprint(showerror, err)
-                if occursin("E2BIG", msg) || occursin("argument list too long", lowercase(msg))
+                if occursin("E2BIG", msg) ||
+                   occursin("argument list too long", lowercase(msg))
                     error(
                         "minimap2 failed with an argument-length error (too many/too-long FASTQ paths).\n" *
                         "Mitigations:\n" *
@@ -1946,10 +2003,11 @@ function minimap_merge_map_and_split(;
                         "Original error: $(msg)"
                     )
                 end
-                if occursin("no SQ lines present in the header", msg) || occursin("samtools sort: truncated file", msg)
+                if occursin("no SQ lines present in the header", msg) ||
+                   occursin("samtools sort: truncated file", msg)
                     # Leave a clearer error and avoid caching a possibly corrupt BAM.
                     try
-                        isfile(merged_bam) && rm(merged_bam; force=true)
+                        isfile(merged_bam) && rm(merged_bam; force = true)
                     catch
                     end
                     error(
@@ -1965,7 +2023,7 @@ function minimap_merge_map_and_split(;
 
     read_id_column = read_id_strategy == :uuid ? :uuid : :new_read_id
 
-    split_cmds = Dict{String,Base.AbstractCmd}()
+    split_cmds = Dict{String, Base.AbstractCmd}()
     if run_splitting
         @assert isfile(merged_bam) "Merged BAM not found: $(merged_bam). Run mapping or supply existing BAM."
         Mycelia.add_bioconda_env("samtools")
@@ -1974,18 +2032,26 @@ function minimap_merge_map_and_split(;
         else
             show_progress
         end
-        split_progress = show_split_progress ? ProgressMeter.Progress(length(sample_infos); desc="Splitting BAMs: ") : nothing
+        split_progress = show_split_progress ?
+                         ProgressMeter.Progress(length(sample_infos); desc = "Splitting BAMs: ") :
+                         nothing
         split_done = 0
         for info in sample_infos
             sample_tag = info.sample_tag
             sample_outdir = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
             mkpath(sample_outdir)
             sample_bam = joinpath(sample_outdir, string(info.output_label, ".", target_label, ".sorted.bam"))
-            isempty(info.mapping_files) && error("Missing read-id mapping files for sample $(sample_tag)")
+            isempty(info.mapping_files) &&
+                error("Missing read-id mapping files for sample $(sample_tag)")
             read_id_list = joinpath(tmpdir, "$(sample_tag).read_ids.txt")
-            write_read_id_list(info.mapping_files, read_id_list; read_map_format=read_map_format_local, read_id_column=read_id_column)
-            view_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "view", "-@", string(threads), "-h", "-N", read_id_list, merged_bam])
-            sort_split_cmd = Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools", "sort", "-@", string(threads), "-o", sample_bam, "-"])
+            write_read_id_list(info.mapping_files, read_id_list;
+                read_map_format = read_map_format_local, read_id_column = read_id_column)
+            view_cmd = Cmd([
+                Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools", "samtools",
+                "view", "-@", string(threads), "-h", "-N", read_id_list, merged_bam])
+            sort_split_cmd = Cmd([
+                Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "samtools",
+                "samtools", "sort", "-@", string(threads), "-o", sample_bam, "-"])
             split_cmd = pipeline(view_cmd, sort_split_cmd)
             split_cmds[sample_tag] = split_cmd
             if nonempty_file(sample_bam) && !force
@@ -2006,16 +2072,16 @@ function minimap_merge_map_and_split(;
     sample_outputs = map(sample_infos) do info
         outdir_for_sample = isnothing(outdir) ? dirname(first(info.source_fastqs)) : outdir
         sample_bam = joinpath(outdir_for_sample, string(info.output_label, ".", target_label, ".sorted.bam"))
-        merge(info, (;output_bam=sample_bam))
+        merge(info, (; output_bam = sample_bam))
     end
 
     if !keep_prefixed_fastqs && run_mapping && run_splitting
         try
             for fq in prefixed_fastqs
-                rm(fq; force=true)
+                rm(fq; force = true)
             end
             if fastq_mode == :joint && !isnothing(joint_fastq)
-                rm(joint_fastq; force=true)
+                rm(joint_fastq; force = true)
             end
             if fastq_mode == :joint && write_read_map_local
                 mapping_files = String[]
@@ -2023,7 +2089,7 @@ function minimap_merge_map_and_split(;
                     append!(mapping_files, info.mapping_files)
                 end
                 for map_path in mapping_files
-                    rm(map_path; force=true)
+                    rm(map_path; force = true)
                 end
             end
         catch
@@ -2075,21 +2141,21 @@ function minimap_map_paired_end(;
         fasta,
         forward,
         reverse,
-        mem_gb=(Int(Sys.free_memory()) / 1e9),
-        threads=get_default_threads(),
+        mem_gb = (Int(Sys.free_memory()) / 1e9),
+        threads = get_default_threads(),
         outdir = dirname(forward),
-        as_string=false,
-        mapping_type="sr",
-        denominator=DEFAULT_MINIMAP_DENOMINATOR,
-        sorted=true,
-        keep_header=false
-    )
+        as_string = false,
+        mapping_type = "sr",
+        denominator = DEFAULT_MINIMAP_DENOMINATOR,
+        sorted = true,
+        keep_header = false
+)
     @assert mapping_type in ["map-hifi", "map-ont", "map-pb", "sr", "lr:hq"]
     @assert isfile(fasta) "Reference FASTA not found: $(fasta)"
     @assert isfile(forward) "Forward reads not found: $(forward)"
     @assert isfile(reverse) "Reverse reads not found: $(reverse)"
 
-    index_size = system_mem_to_minimap_index_size(system_mem_gb=mem_gb, denominator=denominator)
+    index_size = system_mem_to_minimap_index_size(system_mem_gb = mem_gb, denominator = denominator)
 
     fastq_prefix = find_matching_prefix(basename(forward), basename(reverse))
     outfile = joinpath(outdir, fastq_prefix) * "." * basename(fasta) * ".minimap2"
@@ -2152,7 +2218,7 @@ function minimap_map_paired_end(;
         end
     end
 
-    return (;cmd, outfile)
+    return (; cmd, outfile)
 end
 
 """
@@ -2181,7 +2247,7 @@ Run Clustal Omega multiple sequence alignment on a FASTA file.
 - Caches results - will return existing output file if already generated
 - Handles single sequence files gracefully by returning output path without error
 """
-function run_clustal_omega(;fasta, outfmt="clustal")
+function run_clustal_omega(; fasta, outfmt = "clustal")
     Mycelia.add_bioconda_env("clustalo")
     outfile = "$(fasta).clustal-omega.$(outfmt)"
     if !isfile(outfile)
@@ -2214,12 +2280,11 @@ end
 #     # set block size to total memory / 8
 #     available_gigabytes = floor(Sys.free_memory() / 1e9)
 #     block_size = floor(available_gigabytes / 8)
-    
+
 #     @time run(`diamond blastp $(sensitivity) --block-size $(block_size) --id 0 --min-score 0 --max-target-seqs $(n_records) --unal 1 --outfmt 6 qseqid sseqid pident length mismatch gapopen qlen qstart qend slen sstart send evalue bitscore -d $(joint_fasta_file).dmnd -q $(joint_fasta_file) -o $(joint_fasta_file).dmnd.tsv`)
 #     # # pairwise output is all of the alignments, super helpful!
 #     # # @time run(`diamond blastp $(sensitivity) --id 0 --min-score 0 --max-target-seqs $(N_RECORDS) --unal 1 --outfmt 0  -d $(joint_fasta_outfile).dmnd -q $(joint_fasta_outfile) -o $(joint_fasta_outfile).diamond.pairwise.txt`)
 # end
-
 
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
@@ -2251,9 +2316,9 @@ end
 #     # reference says 6 but let's round upwards towards 8
 #     gb_per_block = 8
 #     block_size = system_memory_in_gigabytes / gb_per_block
-    
+
 #     outfile = "$(diamond_dir)/$(outfile)"
-    
+
 #     if force || !isfile(outfile)
 #         cmd = 
 #         `diamond blastp
@@ -2294,7 +2359,7 @@ end
 # #         nident means Number of identical matches
 # #         mismatch means Number of mismatches
 # #         staxids means unique Subject Taxonomy ID(s), separated by a ';' (in numerical order)
-        
+
 #         @time run(pipeline(cmd))
 #     end
 #     return outfile
@@ -2351,7 +2416,7 @@ end
 #     # --lca-mode INT                   LCA Mode 1: single search LCA , 2/3: approximate 2bLCA, 4: top hit [3]
 #     # --lca-search BOOL                Efficient search for LCA candidates [0]
 #     # ^ this looks like it actually runs @ 1 with s=1.0 & --orf-filter=1
-    
+
 #     # 112 days to process 600 samples at this rate....
 #     # 278 minutes or 4.5 hours for a single sample classification!!
 #     # 16688.050696 seconds (1.43 M allocations: 80.966 MiB, 0.02% gc time, 0.00% compilation time)
@@ -2362,7 +2427,7 @@ end
 #     # difference was only 10 minutes
 #     # 15903.218456 seconds (969.92 k allocations: 48.624 MiB, 0.01% gc time)
 #     # use default parameters
-    
+
 #     if force || (!force && !isfile(outfile))
 #         cmd = 
 #         `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
@@ -2411,16 +2476,17 @@ Integrity Caveats
 - pigz -t validates internal integrity (CRC32 and length modulo 2^32) of the compressed file; it does not compare against a preserved checksum of the original unless you add such a mechanism externally.
 """
 function run_mmseqs_easy_search(;
-    query_fasta,
-    target_database,
-    out_dir = dirname(query_fasta),
-    outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." * basename(target_database) * ".txt",
-    format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
-    threads = get_default_threads(),
-    force::Bool = false,
-    gzip::Bool = true,
-    validate_compression::Bool = true,
-    keep_uncompressed::Bool = false,
+        query_fasta,
+        target_database,
+        out_dir = dirname(query_fasta),
+        outfile = replace(basename(query_fasta), r"\.gz$"i => "") * ".mmseqs_easy_search." *
+                  basename(target_database) * ".txt",
+        format_output = "query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits,taxid,taxname",
+        threads = get_default_threads(),
+        force::Bool = false,
+        gzip::Bool = true,
+        validate_compression::Bool = true,
+        keep_uncompressed::Bool = false
 )
     # Validate interaction of flags
     if !gzip && validate_compression
@@ -2448,9 +2514,9 @@ function run_mmseqs_easy_search(;
         end
     end
 
-    final_outfile_name = gzip ? compressed_name :: String : uncompressed_name
+    final_outfile_name = gzip ? compressed_name::String : uncompressed_name
     final_outfile_path = joinpath(out_dir, final_outfile_name)
-    work_outfile_path  = gzip ? joinpath(out_dir, uncompressed_name) : final_outfile_path
+    work_outfile_path = gzip ? joinpath(out_dir, uncompressed_name) : final_outfile_path
     tmp_dir = joinpath(out_dir, "tmp")
 
     # Ensure required environments (pigz only if needed)
@@ -2460,9 +2526,10 @@ function run_mmseqs_easy_search(;
     end
 
     # Helper: compress (optionally validate) with pigz
-    function _compress_with_pigz(uncompressed_path::String, final_path::String, threads::Int;
-                                 validate::Bool,
-                                 keep_uncompressed::Bool)
+    function _compress_with_pigz(
+            uncompressed_path::String, final_path::String, threads::Int;
+            validate::Bool,
+            keep_uncompressed::Bool)
         if !isfile(uncompressed_path)
             error("Cannot compress: uncompressed file $(uncompressed_path) does not exist.")
         end
@@ -2470,7 +2537,7 @@ function run_mmseqs_easy_search(;
         # Remove zero-byte or clearly invalid existing compressed file artifact if present
         if isfile(final_path) && filesize(final_path) == 0
             @warn "Existing compressed file $(final_path) is zero bytes; removing before retry."
-            rm(final_path; force=true)
+            rm(final_path; force = true)
         end
 
         # Skip if final already exists (rare race case)
@@ -2497,7 +2564,7 @@ function run_mmseqs_easy_search(;
                 @error "pigz -t integrity test failed; retaining uncompressed file $(uncompressed_path)" error=err
                 # Remove corrupted compressed file to avoid confusion
                 try
-                    rm(final_path; force=true)
+                    rm(final_path; force = true)
                 catch
                 end
                 error("Validation failed for compressed file $(final_path): $(err)")
@@ -2506,7 +2573,7 @@ function run_mmseqs_easy_search(;
             # Remove uncompressed only if we do not want to keep it
             if !keep_uncompressed && isfile(uncompressed_path)
                 try
-                    rm(uncompressed_path; force=true)
+                    rm(uncompressed_path; force = true)
                 catch err
                     @warn "Failed to remove uncompressed file after successful validation: $(uncompressed_path)" error=err
                 end
@@ -2523,7 +2590,7 @@ function run_mmseqs_easy_search(;
     # Handle zero-byte final compressed artifact early (force regeneration path)
     if gzip && isfile(final_outfile_path) && filesize(final_outfile_path) == 0
         @warn "Existing compressed file $(final_outfile_path) is zero bytes; removing for regeneration."
-        rm(final_outfile_path; force=true)
+        rm(final_outfile_path; force = true)
     end
 
     # Early return if final artifact already exists and not forcing
@@ -2542,29 +2609,28 @@ function run_mmseqs_easy_search(;
     # Force cleanup if required
     if force
         if isfile(final_outfile_path)
-            rm(final_outfile_path; force=true)
+            rm(final_outfile_path; force = true)
         end
         if gzip && isfile(work_outfile_path)
-            rm(work_outfile_path; force=true)
+            rm(work_outfile_path; force = true)
         end
     end
 
     # Run MMseqs2 only if we do not reuse an existing uncompressed result
     if !(gzip && reused_uncompressed)
-        cmd_search =
-            `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
-                easy-search
-                $(query_fasta)
-                $(target_database)
-                $(work_outfile_path)
-                $(tmp_dir)
-                --threads $(threads)
-                --format-mode 4
-                --format-output $(format_output)
-                --start-sens 1 -s 7 --sens-steps 7
-                --sort-results 1
-                --remove-tmp-files 1
-            `
+        cmd_search = `$(CONDA_RUNNER) run --no-capture-output -n mmseqs2 mmseqs
+                         easy-search
+                         $(query_fasta)
+                         $(target_database)
+                         $(work_outfile_path)
+                         $(tmp_dir)
+                         --threads $(threads)
+                         --format-mode 4
+                         --format-output $(format_output)
+                         --start-sens 1 -s 7 --sens-steps 7
+                         --sort-results 1
+                         --remove-tmp-files 1
+                     `
         @info "Running MMseqs2 easy-search -> $(work_outfile_path)"
         @time run(cmd_search)
     end
@@ -2573,8 +2639,8 @@ function run_mmseqs_easy_search(;
     if gzip
         if !isfile(final_outfile_path)
             _compress_with_pigz(work_outfile_path, final_outfile_path, threads;
-                                validate = validate_compression,
-                                keep_uncompressed = keep_uncompressed)
+                validate = validate_compression,
+                keep_uncompressed = keep_uncompressed)
         else
             @info "Compressed file already present after generation: $(final_outfile_path)"
             # If user requested validation but file already existed, we skip re-validation to avoid a full read.
@@ -2584,7 +2650,7 @@ function run_mmseqs_easy_search(;
 
     # Cleanup tmp directory if present
     if isdir(tmp_dir)
-        rm(tmp_dir; recursive=true)
+        rm(tmp_dir; recursive = true)
     end
 
     return final_outfile_path
@@ -2620,7 +2686,7 @@ tabular format with the following columns:
 
 Requires MMseqs2 to be available through Bioconda.
 """
-function mmseqs_pairwise_search(;fasta, output=fasta*".mmseqs_easy_search_pairwise")
+function mmseqs_pairwise_search(; fasta, output = fasta*".mmseqs_easy_search_pairwise")
     Mycelia.add_bioconda_env("mmseqs2")
     mkpath(output)
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search
@@ -2653,14 +2719,14 @@ Ensure a BLAST database exists for the given FASTA file.
 - `String`: The database prefix path.
 """
 function ensure_blast_db(;
-    fasta::String,
-    dbtype::String = "nucl",
-    db_prefix::Union{String,Nothing} = nothing,
-    output_dir::Union{String,Nothing} = nothing,
-    db_name::Union{String,Nothing} = nothing,
-    title::Union{String,Nothing} = nothing,
-    parse_seqids::Bool = false,
-    force::Bool = false
+        fasta::String,
+        dbtype::String = "nucl",
+        db_prefix::Union{String, Nothing} = nothing,
+        output_dir::Union{String, Nothing} = nothing,
+        db_name::Union{String, Nothing} = nothing,
+        title::Union{String, Nothing} = nothing,
+        parse_seqids::Bool = false,
+        force::Bool = false
 )
     @assert isfile(fasta) "FASTA file does not exist: $(fasta)"
     @assert dbtype in ("nucl", "prot") "dbtype must be \"nucl\" or \"prot\""
@@ -2671,7 +2737,8 @@ function ensure_blast_db(;
         if output_dir === nothing && db_name === nothing
             fasta
         else
-            base_name = db_name === nothing ? replace(basename(fasta), Mycelia.FASTA_REGEX => "") : db_name
+            base_name = db_name === nothing ?
+                        replace(basename(fasta), Mycelia.FASTA_REGEX => "") : db_name
             base_dir = output_dir === nothing ? dirname(fasta) : output_dir
             joinpath(base_dir, base_name, base_name)
         end
@@ -2681,7 +2748,9 @@ function ensure_blast_db(;
     mkpath(dirname(resolved_prefix))
 
     extensions = dbtype == "nucl" ? [".nhr", ".nin", ".nsq"] : [".phr", ".pin", ".psq"]
-    db_ready = all(ext -> isfile(resolved_prefix * ext) || isfile(resolved_prefix * ".00" * ext), extensions)
+    db_ready = all(
+        ext -> isfile(resolved_prefix * ext) ||
+               isfile(resolved_prefix * ".00" * ext), extensions)
 
     if force || !db_ready
         Mycelia.add_bioconda_env("blast")
@@ -2692,7 +2761,7 @@ function ensure_blast_db(;
             "-dbtype",
             dbtype,
             "-out",
-            resolved_prefix,
+            resolved_prefix
         ]
         if resolved_title !== nothing
             push!(cmd_parts, "-title", resolved_title)
@@ -2703,7 +2772,9 @@ function ensure_blast_db(;
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast $cmd_parts`)
     end
 
-    @assert all(ext -> isfile(resolved_prefix * ext) || isfile(resolved_prefix * ".00" * ext), extensions) "BLAST database creation failed for: $(resolved_prefix)"
+    @assert all(
+        ext -> isfile(resolved_prefix * ext) ||
+               isfile(resolved_prefix * ".00" * ext), extensions) "BLAST database creation failed for: $(resolved_prefix)"
     return resolved_prefix
 end
 
@@ -2733,16 +2804,16 @@ It creates an output directory if it doesn't exist, constructs the output file p
 The function supports running the BLASTN command locally or remotely, with options to force re-running and to wait for completion.
 """
 function run_blastn(;
-    outdir=pwd(),
-    fasta,
-    blastdb,
-    threads=min(get_default_threads(), 8),
-    task="megablast",
-    force=false,
-    remote=false,
-    wait=true,
-    max_target_seqs=10,
-    evalue=0.001
+        outdir = pwd(),
+        fasta,
+        blastdb,
+        threads = min(get_default_threads(), 8),
+        task = "megablast",
+        force = false,
+        remote = false,
+        wait = true,
+        max_target_seqs = 10,
+        evalue = 0.001
 )
     Mycelia.add_bioconda_env("blast")
     outdir = mkpath(outdir)
@@ -2765,28 +2836,27 @@ function run_blastn(;
     end
 
     outfile = "$(outdir)/$(basename(fasta)).blastn.$(basename(blastdb)).$(task).txt"
-    
+
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
-    
+
     # default max target seqs = 500, which seemed like too much
     # default evalue is 10, which also seems like too much
-    
+
     if force || need_to_run
-        cmd = 
-        `
-        $(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastn
-        -num_threads $(threads)
-        -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-        -query $(fasta)
-        -db $(blastdb)
-        -out $(outfile)
-        -max_target_seqs $(max_target_seqs)
-        -subject_besthit
-        -task $(task)
-        -evalue $(evalue)
-        `
+        cmd = `
+              $(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastn
+              -num_threads $(threads)
+              -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+              -query $(fasta)
+              -db $(blastdb)
+              -out $(outfile)
+              -max_target_seqs $(max_target_seqs)
+              -subject_besthit
+              -task $(task)
+              -evalue $(evalue)
+              `
         @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait=wait)
+        @time run(pipeline(cmd), wait = wait)
     end
     return outfile
 end
@@ -2813,48 +2883,47 @@ This function constructs and runs a BLAST command based on the provided paramete
 
 If `force` is set to `true` or the output file does not exist or is empty, the BLAST command is executed. The function logs the command being run and measures the time taken for execution. The output file path is returned upon completion.
 """
-function run_blast(;out_dir, fasta, blast_db, blast_command, force=false, remote=false, wait=true)
+function run_blast(; out_dir, fasta, blast_db, blast_command,
+        force = false, remote = false, wait = true)
     blast_dir = mkpath(joinpath(out_dir, blast_command))
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
     if remote
         outfile = replace(outfile, ".txt" => ".remote.txt")
     end
-    
+
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
-    
+
     # default max target seqs = 500, which seemed like too much
     # default evalue is 10, which also seems like too much
     if force || need_to_run
         if remote
-            cmd = 
-                `
-                $(blast_command)
-                -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-                -query $(fasta)
-                -db $(basename(blast_db))
-                -out $(outfile)
-                -max_target_seqs 10
-                -evalue 0.001
-                -remote
-                `
+            cmd = `
+                  $(blast_command)
+                  -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+                  -query $(fasta)
+                  -db $(basename(blast_db))
+                  -out $(outfile)
+                  -max_target_seqs 10
+                  -evalue 0.001
+                  -remote
+                  `
         else
-            cmd = 
-            `
-            $(blast_command)
-            -num_threads $(get_default_threads())
-            -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-            -query $(fasta)
-            -db $(blast_db)
-            -out $(outfile)
-            -max_target_seqs 10
-            -evalue 0.001
-            `
+            cmd = `
+                  $(blast_command)
+                  -num_threads $(get_default_threads())
+                  -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
+                  -query $(fasta)
+                  -db $(blast_db)
+                  -out $(outfile)
+                  -max_target_seqs 10
+                  -evalue 0.001
+                  `
         end
-#         p = pipeline(cmd, 
-#                 stdout="$(blastn_dir)/$(ID).blastn.out",
-#                 stderr="$(blastn_dir)/$(ID).blastn.err")
+        #         p = pipeline(cmd, 
+        #                 stdout="$(blastn_dir)/$(ID).blastn.out",
+        #                 stderr="$(blastn_dir)/$(ID).blastn.err")
         @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait=wait)
+        @time run(pipeline(cmd), wait = wait)
     end
     return outfile
 end
@@ -2866,7 +2935,7 @@ end
 # """
 # function read_diamond(path::String)
 #   diamond_colnames = [ "qseqid", "sseqid", "pident", "length", "mismatch", "gapopen", "qstart", "qend", "sstart", "send", "evalue", "bitscore" ]
-  
+
 #   diamond_coltypes = Dict(
 #      1 => String, 
 #      2 => String, 
@@ -2948,15 +3017,16 @@ function parse_blast_report(blast_report)
         "subject title" => String,
         "subject titles" => String
     )
-    data, _ = uCSV.read(
+    data,
+    _ = uCSV.read(
         blast_report,
-        delim='\t',
-        comment='#',
-        skipmalformed=true,
-        allowmissing=true,
-        encodings=Dict("N/A" => missing),
-        types=[blast_col_types[h] for h in header])
-    return DataFrames.DataFrame(data, header, makeunique=true)
+        delim = '\t',
+        comment = '#',
+        skipmalformed = true,
+        allowmissing = true,
+        encodings = Dict("N/A" => missing),
+        types = [blast_col_types[h] for h in header])
+    return DataFrames.DataFrame(data, header, makeunique = true)
 end
 
 """
@@ -3011,9 +3081,10 @@ function parse_qualimap_contig_coverage(qualimap_report_txt)
     io = IOBuffer(join(map(x -> join(split(x, '\t')[2:end], '\t'), lines), '\n'))
     header = ["Contig", "Length", "Mapped bases", "Mean coverage", "Standard Deviation"]
     types = [String, Int, Int, Float64, Float64]
-    data, _ = uCSV.read(io, delim='\t', types=types)
+    data, _ = uCSV.read(io, delim = '\t', types = types)
     qualimap_results = DataFrames.DataFrame(data, header)
-    qualimap_results[!, "% Mapped bases"] = qualimap_results[!, "Mapped bases"] ./ sum(qualimap_results[!, "Mapped bases"]) .* 100
+    qualimap_results[!, "% Mapped bases"] = qualimap_results[!, "Mapped bases"] ./
+                                            sum(qualimap_results[!, "Mapped bases"]) .* 100
     return qualimap_results
 end
 
@@ -3043,7 +3114,7 @@ DataFrame with columns:
 - Column order is preserved as listed above
 """
 function read_fastani(path::String)
-    data, header = uCSV.read(path, delim='\t', typedetectrows=100)
+    data, header = uCSV.read(path, delim = '\t', typedetectrows = 100)
     header = [
         "query",
         "reference",
@@ -3053,7 +3124,8 @@ function read_fastani(path::String)
     ]
     ani_table = DataFrames.DataFrame(data, header)
     ani_table[!, "query_identifier"] = replace.(basename.(ani_table[!, "query"]), r"\.(fasta|fna|fa)$" => "")
-    ani_table[!, "reference_identifier"] = replace.(basename.(ani_table[!, "reference"]), r"\.(fasta|fna|fa)$" => "")
+    ani_table[!, "reference_identifier"] = replace.(
+        basename.(ani_table[!, "reference"]), r"\.(fasta|fna|fa)$" => "")
     columns = [
         "query",
         "query_identifier",
@@ -3063,7 +3135,7 @@ function read_fastani(path::String)
         "fragments_mapped",
         "total_query_fragments"
     ]
-    ani_table = ani_table[!, columns]    
+    ani_table = ani_table[!, columns]
     return ani_table
 end
 
@@ -3098,7 +3170,7 @@ function read_kraken_report(kraken_report)
         "scientific_name"
     ]
 
-    data, header = uCSV.read(kraken_report, delim='\t')
+    data, header = uCSV.read(kraken_report, delim = '\t')
     kraken_report_table = DataFrames.DataFrame(data, kraken_report_header)
     kraken_report_table[!, "scientific_name"] = string.(strip.(kraken_report_table[!, "scientific_name"]))
     return kraken_report_table
@@ -3143,13 +3215,13 @@ end
 #         "bitscore" => Float64,
 #     ]
 #     types = Dict(i => t for (i, t) in enumerate(last.(column_names_to_types)))
-    
+
 #     data, header = uCSV.read(diamond_file, header=0, delim='\t', types = types)
 #     header = first.(column_names_to_types)    
-    
+
 #     # data, header = uCSV.read(diamond_file, header=1, delim='\t', types = types)
 #     # @assert header == first.(column_names_to_types)
-    
+
 #     table = DataFrames.DataFrame(data, header)
 #     return table
 # end
@@ -3230,7 +3302,6 @@ end
 #     return mmseqs_results
 # end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -3273,7 +3344,7 @@ function read_mmseqs_easy_search(mmseqs_file::String)
         "tlen" => Int,
         "theader" => String,
         "nident" => Int,
-        "fident" => Float64,      
+        "fident" => Float64,
         "pident" => Float64,
         "alnlen" => Int,          # Alignment length (lowercase 'l')
         "mismatch" => Int,        # Number of mismatches
@@ -3290,11 +3361,11 @@ function read_mmseqs_easy_search(mmseqs_file::String)
 
     # Common CSV reading options
     csv_options = (
-        header=1,             # Assumes the first row contains column names
-        delim='\t',           # Tab-delimited file
-        types=col_types,      # Apply our defined column types
-        pool=true,            # Pool string columns to save memory
-        ntasks=get_default_threads(), # Utilize available CPU threads for parsing
+        header = 1,             # Assumes the first row contains column names
+        delim = '\t',           # Tab-delimited file
+        types = col_types,      # Apply our defined column types
+        pool = true,            # Pool string columns to save memory
+        ntasks = get_default_threads() # Utilize available CPU threads for parsing
     )
 
     local mmseqs_results::DataFrames.DataFrame
@@ -3373,16 +3444,16 @@ Remarks
 - In unsorted mode memory is also O(#queries) since only best rows are stored.
 """
 function top_hits_mmseqs(
-    mmseqs_file::String;
-    assume_grouped::Bool = true,
-    validation::Symbol = :fast,
-    rank_by::Symbol = :bits,
-    keep_columns::Union{Nothing,Vector{String}} = nothing,
-    schema::Union{Nothing,Dict{String,DataType}} = nothing,
-    pool_strings::Bool = true,
-    allow_parse_fail::Bool = true,
-    narrow_types::Bool = true
-) :: DataFrames.DataFrame
+        mmseqs_file::String;
+        assume_grouped::Bool = true,
+        validation::Symbol = :fast,
+        rank_by::Symbol = :bits,
+        keep_columns::Union{Nothing, Vector{String}} = nothing,
+        schema::Union{Nothing, Dict{String, DataType}} = nothing,
+        pool_strings::Bool = true,
+        allow_parse_fail::Bool = true,
+        narrow_types::Bool = true
+)::DataFrames.DataFrame
     if !(rank_by in (:bits, :evalue))
         throw(ArgumentError("rank_by must be :bits or :evalue"))
     end
@@ -3393,12 +3464,12 @@ function top_hits_mmseqs(
     selected_cols::Vector{String} = String[]
     selected_idx::Vector{Int} = Int[]
     # Allow union types by using Any for values
-    col_types = Dict{String,Any}()
-    stored_cols = Dict{String,AbstractVector}()
+    col_types = Dict{String, Any}()
+    stored_cols = Dict{String, AbstractVector}()
 
     io = endswith(lowercase(mmseqs_file), ".gz") ?
-        CodecZlib.GzipDecompressorStream(open(mmseqs_file, "r")) :
-        open(mmseqs_file, "r")
+         CodecZlib.GzipDecompressorStream(open(mmseqs_file, "r")) :
+         open(mmseqs_file, "r")
 
     try
         if eof(io)
@@ -3409,8 +3480,8 @@ function top_hits_mmseqs(
             return DataFrames.DataFrame()
         end
 
-        cols = split(header_line, '\t', keepempty=true)
-        col_index = Dict{String,Int}(c => i for (i, c) in enumerate(cols))
+        cols = split(header_line, '\t', keepempty = true)
+        col_index = Dict{String, Int}(c => i for (i, c) in enumerate(cols))
 
         if !haskey(col_index, "query")
             throw(ArgumentError("Missing required column 'query'"))
@@ -3422,29 +3493,29 @@ function top_hits_mmseqs(
         end
 
         default_schema = Dict(
-            "query"    => String,
-            "qheader"  => String,
-            "qlen"     => Int,
-            "target"   => String,
-            "theader"  => String,
-            "tlen"     => Int,
-            "nident"   => Int,
-            "fident"   => Float64,
-            "pident"   => Float64,
-            "alnlen"   => Int,
+            "query" => String,
+            "qheader" => String,
+            "qlen" => Int,
+            "target" => String,
+            "theader" => String,
+            "tlen" => Int,
+            "nident" => Int,
+            "fident" => Float64,
+            "pident" => Float64,
+            "alnlen" => Int,
             "mismatch" => Int,
-            "gapopen"  => Int,
-            "qstart"   => Int,
-            "qend"     => Int,
-            "tstart"   => Int,
-            "tend"     => Int,
-            "evalue"   => Float64,
-            "bits"     => Float64,
-            "taxid"    => Int,
-            "taxname"  => String
+            "gapopen" => Int,
+            "qstart" => Int,
+            "qend" => Int,
+            "tstart" => Int,
+            "tend" => Int,
+            "evalue" => Float64,
+            "bits" => Float64,
+            "taxid" => Int,
+            "taxname" => String
         )
         if schema !== nothing
-            for (k,v) in schema
+            for (k, v) in schema
                 default_schema[k] = v
             end
         end
@@ -3463,9 +3534,9 @@ function top_hits_mmseqs(
         for c in selected_cols
             T = get(default_schema, c, String)
             if T === Int
-                col_types[c] = allow_parse_fail ? Union{Int,Missing} : Int
+                col_types[c] = allow_parse_fail ? Union{Int, Missing} : Int
             elseif T === Float64
-                col_types[c] = allow_parse_fail ? Union{Float64,Missing} : Float64
+                col_types[c] = allow_parse_fail ? Union{Float64, Missing} : Float64
             elseif T === String
                 col_types[c] = String
             else
@@ -3487,11 +3558,11 @@ function top_hits_mmseqs(
                 return parse(Int, raw)
             elseif T === Float64
                 return parse(Float64, raw)
-            elseif T === Union{Int,Missing}
+            elseif T === Union{Int, Missing}
                 raw == "" && return missing
                 v = tryparse(Int, raw)
                 return v === nothing ? missing : v
-            elseif T === Union{Float64,Missing}
+            elseif T === Union{Float64, Missing}
                 raw == "" && return missing
                 v = tryparse(Float64, raw)
                 return v === nothing ? missing : v
@@ -3503,11 +3574,15 @@ function top_hits_mmseqs(
         @inline function extract_rank(fields::Vector{SubString{String}})
             if rank_by == :bits
                 bits_val = begin
-                    b = tryparse(Float64, fields[col_index["bits"]]); b === nothing && (b = -Inf); b
+                    b = tryparse(Float64, fields[col_index["bits"]]);
+                    b === nothing && (b = -Inf);
+                    b
                 end
                 if haskey(col_index, "evalue")
                     e_val = begin
-                        e = tryparse(Float64, fields[col_index["evalue"]]); e === nothing && (e = Inf); e
+                        e = tryparse(Float64, fields[col_index["evalue"]]);
+                        e === nothing && (e = Inf);
+                        e
                     end
                     return (bits_val, e_val)
                 else
@@ -3515,11 +3590,15 @@ function top_hits_mmseqs(
                 end
             else
                 e_val = begin
-                    e = tryparse(Float64, fields[col_index["evalue"]]); e === nothing && (e = Inf); e
+                    e = tryparse(Float64, fields[col_index["evalue"]]);
+                    e === nothing && (e = Inf);
+                    e
                 end
                 if haskey(col_index, "bits")
                     b_val = begin
-                        b = tryparse(Float64, fields[col_index["bits"]]); b === nothing && (b = -Inf); b
+                        b = tryparse(Float64, fields[col_index["bits"]]);
+                        b === nothing && (b = -Inf);
+                        b
                     end
                     return (e_val, -b_val)
                 else
@@ -3536,7 +3615,7 @@ function top_hits_mmseqs(
             end
         end
 
-        current_query::Union{Nothing,String} = nothing
+        current_query::Union{Nothing, String} = nothing
         current_first_rank = nothing
         closed_queries = validation == :none ? nothing : Set{String}()
         interleave_violation = false
@@ -3565,7 +3644,7 @@ function top_hits_mmseqs(
 
         for line in eachline(io)
             isempty(line) && continue
-            fields = split(line, '\t', keepempty=true)
+            fields = split(line, '\t', keepempty = true)
             length(fields) < length(cols) && continue
             q = fields[col_index["query"]]
 

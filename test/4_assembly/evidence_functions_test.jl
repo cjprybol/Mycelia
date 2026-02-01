@@ -26,14 +26,13 @@ import Mycelia
 import Kmers
 
 Test.@testset "Evidence Helper Functions" begin
-
     Test.@testset "add_evidence! - Vertex" begin
         kmer = Kmers.DNAKmer{3}("ATG")
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
 
         # Add evidence
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
 
         Test.@test haskey(vertex.evidence, "dataset_01")
         Test.@test haskey(vertex.evidence["dataset_01"], "read_001")
@@ -44,7 +43,7 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Add evidence
         Mycelia.Rhizomorph.add_evidence!(edge, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
 
         Test.@test haskey(edge.evidence, "dataset_01")
         Test.@test haskey(edge.evidence["dataset_01"], "read_001")
@@ -56,9 +55,9 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Add evidence from multiple datasets
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
 
         # Get evidence from specific dataset
         dataset_01_evidence = Mycelia.Rhizomorph.get_dataset_evidence(vertex, "dataset_01")
@@ -86,9 +85,9 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Add evidence from multiple observations
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
 
         # Get evidence from specific observation
         read_001_evidence = Mycelia.Rhizomorph.get_observation_evidence(vertex, "dataset_01", "read_001")
@@ -117,11 +116,11 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Add evidence at same position from different observations
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_003",
-                             Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
 
         # Get all evidence at position 5
         position_5_evidence = Mycelia.Rhizomorph.get_position_evidence(vertex, "dataset_01", 5)
@@ -182,11 +181,11 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Add evidence from multiple observations
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
 
         # Total unique observations across all datasets
         total = Mycelia.Rhizomorph.count_total_observations(vertex)
@@ -199,11 +198,11 @@ Test.@testset "Evidence Helper Functions" begin
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
 
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
 
         # Count observations in specific dataset
         dataset_01_count = Mycelia.Rhizomorph.count_dataset_observations(vertex, "dataset_01")
@@ -219,11 +218,11 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Same observation can have multiple evidence entries
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(50, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(50, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
 
         # Total evidence entries (not unique observations)
         total_entries = Mycelia.Rhizomorph.count_evidence_entries(vertex)
@@ -236,15 +235,16 @@ Test.@testset "Evidence Helper Functions" begin
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
 
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Reverse))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Reverse))
 
         entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex.evidence)
         Test.@test length(entries) == 2
 
         strands = Mycelia.Rhizomorph.collect_evidence_strands(vertex.evidence)
-        Test.@test Set(strands) == Set([Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse])
+        Test.@test Set(strands) ==
+                   Set([Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse])
 
         first_strand = Mycelia.Rhizomorph.first_evidence_strand(vertex.evidence)
         Test.@test first_strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
@@ -256,19 +256,19 @@ Test.@testset "Evidence Helper Functions" begin
 
         # Add evidence from both strands
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Reverse))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Reverse))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_003",
-                             Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
 
         # Filter to only Forward strand
         forward_only = Mycelia.Rhizomorph.filter_evidence_by_strand(vertex, Mycelia.Rhizomorph.Forward)
 
         # Should have 2 observations with Forward evidence
         total_forward = sum(length(obs_evidence)
-                           for dataset_evidence in values(forward_only.evidence)
-                           for obs_evidence in values(dataset_evidence))
+        for dataset_evidence in values(forward_only.evidence)
+        for obs_evidence in values(dataset_evidence))
 
         Test.@test total_forward == 2
     end
@@ -278,11 +278,11 @@ Test.@testset "Evidence Helper Functions" begin
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
 
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_03", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
 
         dataset_ids = Mycelia.Rhizomorph.get_all_dataset_ids(vertex)
 
@@ -297,11 +297,11 @@ Test.@testset "Evidence Helper Functions" begin
         vertex = Mycelia.Rhizomorph.KmerVertexData(kmer)
 
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex, "dataset_01", "read_003",
-                             Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
 
         observation_ids = Mycelia.Rhizomorph.get_all_observation_ids(vertex, "dataset_01")
 
@@ -313,14 +313,13 @@ Test.@testset "Evidence Helper Functions" begin
 end
 
 Test.@testset "Evidence Functions - Edge Support" begin
-
     Test.@testset "get_dataset_evidence - Edge" begin
         edge = Mycelia.Rhizomorph.KmerEdgeData()
 
         Mycelia.Rhizomorph.add_evidence!(edge, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(8, 9, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(8, 9, Mycelia.Rhizomorph.Forward))
 
         dataset_01_evidence = Mycelia.Rhizomorph.get_dataset_evidence(edge, "dataset_01")
 
@@ -332,11 +331,11 @@ Test.@testset "Evidence Functions - Edge Support" begin
         edge = Mycelia.Rhizomorph.KmerEdgeData()
 
         Mycelia.Rhizomorph.add_evidence!(edge, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(3, 4, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(3, 4, Mycelia.Rhizomorph.Forward))
 
         total = Mycelia.Rhizomorph.count_total_observations(edge)
 

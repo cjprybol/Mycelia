@@ -22,7 +22,7 @@ Install Autocycler by creating the conda environment and downloading the automat
 # Keywords
 - `force::Bool=false`: Force recreation of the environment and re-download of the script.
 """
-function install_autocycler(; force::Bool=false)
+function install_autocycler(; force::Bool = false)
     install_dir, script_path, env_file_path = _autocycler_paths()
     mkpath(install_dir)
 
@@ -31,7 +31,7 @@ function install_autocycler(; force::Bool=false)
         Downloads.download(AUTOCYCLER_ENV_URL, env_file_path)
     end
 
-    create_conda_env_from_yaml(env_file_path, AUTOCYCLER_ENV_NAME; force=force)
+    create_conda_env_from_yaml(env_file_path, AUTOCYCLER_ENV_NAME; force = force)
 
     if !isfile(script_path) || force
         @info "Downloading autocycler_full.sh script..."
@@ -56,17 +56,18 @@ Run the automated Autocycler pipeline.
 - `extra_args::Vector{String}=String[]`: Extra arguments passed to the script
 """
 function run_autocycler(;
-    long_reads::AbstractString,
-    out_dir::AbstractString,
-    short_reads_1::Union{AbstractString, Nothing}=nothing,
-    short_reads_2::Union{AbstractString, Nothing}=nothing,
-    extra_args::Vector{String}=String[]
+        long_reads::AbstractString,
+        out_dir::AbstractString,
+        short_reads_1::Union{AbstractString, Nothing} = nothing,
+        short_reads_2::Union{AbstractString, Nothing} = nothing,
+        extra_args::Vector{String} = String[]
 )
     if !isfile(long_reads)
         throw(ArgumentError("Long-read FASTQ not found: $(long_reads)"))
     end
 
-    if (isnothing(short_reads_1) && !isnothing(short_reads_2)) || (!isnothing(short_reads_1) && isnothing(short_reads_2))
+    if (isnothing(short_reads_1) && !isnothing(short_reads_2)) ||
+       (!isnothing(short_reads_1) && isnothing(short_reads_2))
         throw(ArgumentError("If providing short reads, both R1 and R2 must be provided."))
     end
 

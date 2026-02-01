@@ -53,7 +53,7 @@
 #         0,    # corrections_made
 #         0.0   # time_elapsed
 #     )
-    
+
 #     return AssemblyEnvRL(
 #         initial_state,
 #         [:continue_k, :next_k, :terminate],
@@ -107,7 +107,7 @@
 #         :emission_weight => 1.0,
 #         :quality_weight => 0.5
 #     )
-    
+
 #     assembly_action = AssemblyAction(
 #         action,
 #         viterbi_params,
@@ -115,7 +115,7 @@
 #         1000,  # batch_size
 #         10     # max_iterations
 #     )
-    
+
 #     # Execute action and get new state
 #     new_state, reward_components = execute_assembly_action(
 #         env.state,
@@ -123,21 +123,21 @@
 #         env.max_k,
 #         env.memory_limit
 #     )
-    
+
 #     # Calculate total reward
 #     total_reward = calculate_total_reward(reward_components)
 #     push!(env.reward_history, total_reward)
-    
+
 #     # Update environment
 #     env.state = new_state
 #     env.done = (action == :terminate || 
 #                 new_state.memory_usage > env.memory_limit ||
 #                 new_state.current_k >= env.max_k)
-    
+
 #     # Store info for debugging
 #     env.info["last_action"] = action
 #     env.info["reward_components"] = reward_components
-    
+
 #     return env.state
 # end
 
@@ -167,14 +167,14 @@
 #         ReinforcementLearning.Dense(hidden_dims[1], hidden_dims[2], ReinforcementLearning.relu),
 #         ReinforcementLearning.Dense(hidden_dims[2], action_dim)
 #     )
-    
+
 #     approximator = ReinforcementLearning.NeuralNetworkApproximator(
 #         model=model,
 #         optimizer=ReinforcementLearning.Adam(learning_rate)
 #     )
-    
+
 #     explorer = ReinforcementLearning.EpsilonGreedyExplorer(exploration_rate)
-    
+
 #     return RLJLDQNPolicy(
 #         approximator,
 #         explorer,
@@ -207,24 +207,24 @@
 #         ReinforcementLearning.Dense(hidden_dims[1], hidden_dims[2], ReinforcementLearning.relu),
 #         ReinforcementLearning.Dense(hidden_dims[2], action_dim * 2)  # Mean and log_std
 #     )
-    
+
 #     actor = ReinforcementLearning.NeuralNetworkApproximator(
 #         model=actor_model,
 #         optimizer=ReinforcementLearning.Adam(learning_rate)
 #     )
-    
+
 #     # Critic network (value function)
 #     critic_model = ReinforcementLearning.Chain(
 #         ReinforcementLearning.Dense(state_dim, hidden_dims[1], ReinforcementLearning.relu),
 #         ReinforcementLearning.Dense(hidden_dims[1], hidden_dims[2], ReinforcementLearning.relu),
 #         ReinforcementLearning.Dense(hidden_dims[2], 1)
 #     )
-    
+
 #     critic = ReinforcementLearning.NeuralNetworkApproximator(
 #         model=critic_model,
 #         optimizer=ReinforcementLearning.Adam(learning_rate)
 #     )
-    
+
 #     return RLJLPPOPolicy(actor, critic, clip_range, 0.01)
 # end
 
@@ -248,11 +248,11 @@
 # )
 #     # Create environment
 #     env = AssemblyEnvRL()
-    
+
 #     # Create policy based on algorithm choice
 #     state_dim = 11  # Number of features in AssemblyState
 #     action_dim = 3  # Number of discrete actions
-    
+
 #     policy = if algorithm == :dqn
 #         RLJLDQNPolicy(state_dim, action_dim)
 #     elseif algorithm == :ppo
@@ -260,7 +260,7 @@
 #     else
 #         error("Unsupported algorithm: $algorithm")
 #     end
-    
+
 #     # Create agent
 #     agent = ReinforcementLearning.Agent(
 #         policy=policy,
@@ -270,25 +270,25 @@
 #             action=Vector{Symbol}
 #         )
 #     )
-    
+
 #     # Training loop
 #     hook = ReinforcementLearning.ComposedHook(
 #         ReinforcementLearning.TotalRewardPerEpisode(),
 #         ReinforcementLearning.TimePerStep()
 #     )
-    
+
 #     ReinforcementLearning.run(
 #         agent,
 #         env,
 #         ReinforcementLearning.StopAfterEpisode(episodes),
 #         hook
 #     )
-    
+
 #     # Save trained model if path provided
 #     if !isempty(save_path)
 #         save_rljl_model(agent, save_path)
 #     end
-    
+
 #     return agent, hook
 # end
 
@@ -309,29 +309,29 @@
 # )
 #     env = AssemblyEnvRL(initial_k=initial_k)
 #     ReinforcementLearning.reset!(env)
-    
+
 #     assembly_history = AssemblyHistory()
-    
+
 #     while !ReinforcementLearning.is_terminated(env)
 #         # Get action from trained agent
 #         state = ReinforcementLearning.state(env)
 #         action = ReinforcementLearning.plan!(agent, state)
-        
+
 #         # Execute action
 #         ReinforcementLearning.act!(env, action)
-        
+
 #         # Log progress if verbose
 #         if verbose
 #             println("K: $(state.current_k), Action: $action, " *
 #                    "Quality: $(round(state.assembly_quality, digits=2))")
 #         end
-        
+
 #         # Record history
 #         push!(assembly_history.k_values, state.current_k)
 #         push!(assembly_history.quality_scores, state.assembly_quality)
 #         push!(assembly_history.actions_taken, action)
 #     end
-    
+
 #     return assembly_history
 # end
 
@@ -387,20 +387,20 @@
 #             algorithm=algorithm
 #         )
 #     end
-    
+
 #     # Apply policy to full dataset
 #     assembly_history = apply_rljl_policy(
 #         agent,
 #         reads,
 #         verbose=verbose
 #     )
-    
+
 #     # Get final assembly using best k
 #     best_k_idx = argmax(assembly_history.quality_scores)
 #     best_k = assembly_history.k_values[best_k_idx]
-    
+
 #     # Run assembly with optimal k
 #     final_assembly = assemble_with_k(reads, best_k; kwargs...)
-    
+
 #     return final_assembly, assembly_history
 # end

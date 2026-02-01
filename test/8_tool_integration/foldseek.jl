@@ -50,25 +50,21 @@ Test.@testset "Foldseek Tool Integration" begin
                         x = 10.0 + residue_id
                         y = 10.0
                         z = 10.0
-                        push!(lines, Printf.@sprintf(
-                            "ATOM  %5d  N   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           N",
-                            atom_id, residue_id, x, y, z,
-                        ))
+                        push!(lines,
+                            Printf.@sprintf("ATOM  %5d  N   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           N",
+                                atom_id, residue_id, x, y, z,))
                         atom_id += 1
-                        push!(lines, Printf.@sprintf(
-                            "ATOM  %5d  CA  GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           C",
-                            atom_id, residue_id, x + 0.6, y + 0.2, z + 0.1,
-                        ))
+                        push!(lines,
+                            Printf.@sprintf("ATOM  %5d  CA  GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           C",
+                                atom_id, residue_id, x + 0.6, y + 0.2, z + 0.1,))
                         atom_id += 1
-                        push!(lines, Printf.@sprintf(
-                            "ATOM  %5d  C   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           C",
-                            atom_id, residue_id, x + 1.2, y + 0.4, z + 0.2,
-                        ))
+                        push!(lines,
+                            Printf.@sprintf("ATOM  %5d  C   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           C",
+                                atom_id, residue_id, x + 1.2, y + 0.4, z + 0.2,))
                         atom_id += 1
-                        push!(lines, Printf.@sprintf(
-                            "ATOM  %5d  O   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           O",
-                            atom_id, residue_id, x + 1.8, y + 0.6, z + 0.3,
-                        ))
+                        push!(lines,
+                            Printf.@sprintf("ATOM  %5d  O   GLY A%4d    %8.3f%8.3f%8.3f  1.00 20.00           O",
+                                atom_id, residue_id, x + 1.8, y + 0.6, z + 0.3,))
                         atom_id += 1
                     end
                     push!(lines, "TER")
@@ -84,9 +80,10 @@ Test.@testset "Foldseek Tool Integration" begin
                     Test.@test Mycelia.check_bioconda_env_is_installed("foldseek")
 
                     db_path = joinpath(workdir, "foldseek_db")
-                    Mycelia.foldseek_createdb(query_dir, db_path; threads=1)
+                    Mycelia.foldseek_createdb(query_dir, db_path; threads = 1)
                     db_entries = readdir(dirname(db_path))
-                    Test.@test any(startswith(entry, basename(db_path)) for entry in db_entries)
+                    Test.@test any(startswith(entry, basename(db_path))
+                    for entry in db_entries)
 
                     search_tmp = joinpath(workdir, "tmp_search")
                     mkpath(search_tmp)
@@ -95,8 +92,8 @@ Test.@testset "Foldseek Tool Integration" begin
                         query_dir,
                         target_dir,
                         search_output;
-                        tmp_dir=search_tmp,
-                        threads=1,
+                        tmp_dir = search_tmp,
+                        threads = 1
                     )
                     Test.@test isfile(search_output)
 
@@ -106,12 +103,12 @@ Test.@testset "Foldseek Tool Integration" begin
                     cluster_output = Mycelia.foldseek_easy_cluster(
                         query_dir,
                         cluster_prefix;
-                        tmp_dir=cluster_tmp,
-                        threads=1,
+                        tmp_dir = cluster_tmp,
+                        threads = 1
                     )
                     Test.@test isfile(cluster_output)
                 finally
-                    rm(workdir; recursive=true, force=true)
+                    rm(workdir; recursive = true, force = true)
                 end
             end
         end

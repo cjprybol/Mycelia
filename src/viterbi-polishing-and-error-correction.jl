@@ -19,7 +19,7 @@
 #     for state_index in size(state_likelihoods, 2)-1:-1:1
 #         next_kmer, next_orientation = first(maximum_likelihood_path)
 #         maximum_likelihood_arrival_path = arrival_paths[next_kmer, state_index]
-        
+
 #         is_match = last(maximum_likelihood_arrival_path) == (next_kmer => next_orientation)
 #         if !ismissing(is_match) && !is_match
 #             error("breaking")
@@ -40,7 +40,7 @@
 # ```
 # """
 # function initialize_transition_probabilities(kmer_graph)
-    
+
 #     total_kmers = Graphs.nv(kmer_graph)
 #     transition_likelihoods = Dict(
 #         true => SparseArrays.spzeros(total_kmers, total_kmers),
@@ -169,8 +169,7 @@
 # #     @show prior_state
 # #     @show current_vertex
 # #     @show prior_vertex
-    
-    
+
 #     current_state_likelihood = state_likelihoods[current_vertex, current_state]
 #     prior_state_likelihood = state_likelihoods[prior_vertex, prior_state]
 
@@ -185,13 +184,13 @@
 #     # we're just moving to an adjacent kmer
 #     # and the shortest path and most likely path should be the same
 #     shortest_path = shortest_paths[prior_vertex][current_vertex]
-    
+
 # #     no path & not considering insertion
 #     if isempty(shortest_path) && (prior_vertex != current_vertex)
 # #         @show "no path, skipping"
 #         return
 #     end
-    
+
 #     # if shortest path isn't viable, exit
 #     if !isempty(shortest_path)
 # #         @show "checking if path is viable"
@@ -200,10 +199,10 @@
 # #         @show arrival_paths[prior_vertex, prior_state]
 # #         @show "we were at vertex $(prior_vertex) in orientation $(terminal_orientation_prior_state)"
 #         candidate_edge = Graphs.Edge(shortest_path[1], shortest_path[2])
-                
+
 #         if !ismissing(terminal_orientation_prior_state) && 
 #             !any(o -> o.source_orientation == terminal_orientation_prior_state, kmer_graph.eprops[candidate_edge][:orientations])
-            
+
 # #             @show "no viable orientation matching edges detected between $(candidate_edge)"
 # #             @show "full candidate path was $(shortest_path)"
 # #             @show "orientation options were:"
@@ -211,14 +210,14 @@
 #             return
 #         end
 #     end
-    
+
 #     # zero step path - insertion in observed sequence relative to kmer graph
 #     is_same_vertex = (current_vertex == prior_vertex)
 #     has_edge = Graphs.has_edge(kmer_graph, Graphs.Edge(prior_vertex, current_vertex))
 #     if is_same_vertex && has_edge
 #         shortest_path = [prior_vertex, current_vertex]
 #     end
-    
+
 #     if is_same_vertex
 # #         @show "same vertex, considering insertion potential"
 #         emission_likelihood = observed_error_rate
@@ -253,15 +252,15 @@
 #             edge = Graphs.Edge(prior_vertex, this_vertex)
 
 #             possible_edge_orientations::Set{NamedTuple{(:source_orientation, :destination_orientation), Tuple{Bool, Bool}}} = kmer_graph.eprops[edge][:orientations]
-            
+
 # #             @show possible_edge_orientations
-            
+
 #             if !ismissing(prior_orientation)
 #                 possible_edge_orientations = filter(o -> o.source_orientation == prior_orientation, possible_edge_orientations)
 #             end
-            
+
 # #             @show possible_edge_orientations
-            
+
 #             if isempty(possible_edge_orientations)
 #                 path_likelihood *= 0.0
 #                 path = Vector{eltype(path)}()
@@ -286,7 +285,7 @@
 #             end
 #             state_likelihood::Float64 = kmer_likelihoods[this_vertex]
 #             path_likelihood *= transition_likelihood * state_likelihood
-            
+
 #             if length(possible_edge_orientations) == 1
 #                 orientation = first(possible_edge_orientations).destination_orientation
 #                 path[i] = this_vertex => orientation
@@ -362,22 +361,22 @@
 #     k = kmer_graph.gprops[:k]
 #     kmer_type = BioSequences.BigDNAMer{k}
 #     total_kmers = length(kmers)
-    
+
 # #     @info "determining shortest paths between kmers"
 #     shortest_paths = Graphs.enumerate_paths(Graphs.floyd_warshall_shortest_paths(kmer_graph));
-    
+
 #     @info "counting the number of records to establish runtime estimate"
 #     number_of_records = 0
 #     for fastq_record in FASTX.FASTQ.Reader(open(fastq_file))
 #         number_of_records += 1
 #     end
 #     progress_bar = ProgressMeter.Progress(number_of_records, 1)
-    
+
 #     output_fastq_file = replace(fastq_file, ".fastq" => ".k$(kmer_graph.gprops[:k]).fastq")
 #     fastq_writer = FASTX.FASTQ.Writer(open(output_fastq_file, "w"))
 #     for fastq_record in FASTX.FASTQ.Reader(open(fastq_file))
 #         ProgressMeter.next!(progress_bar)
-        
+
 # #         @info "Initializing matrices"
 #         total_states = length(FASTX.sequence(fastq_record))-k+1
 #         transition_likelihoods = initialize_transition_probabilities(kmer_graph)
@@ -513,17 +512,18 @@ Vector of FASTX.FASTA.Record containing error-corrected sequences
 - "dataset" verbosity shows only summary statistics
 """
 function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
-                                               error_rate::Float64=1/(stranded_kmer_graph.gprops[:k] + 1),
-                                               verbosity::String="dataset")
+        error_rate::Float64 = 1/(stranded_kmer_graph.gprops[:k] + 1),
+        verbosity::String = "dataset")
     @assert verbosity in ["debug", "reads", "dataset"]
-    if error_rate >= .5
+    if error_rate >= 0.5
         error("Error rate >= 50%. Did you enter the accuracy by mistake?")
     end
 
     if verbosity in ["debug", "reads", "dataset"]
         println("computing kmer counts...")
     end
-    stranded_kmer_counts = [length(stranded_kmer_graph.vprops[vertex][:coverage]) for vertex in Graphs.vertices(stranded_kmer_graph)]
+    stranded_kmer_counts = [length(stranded_kmer_graph.vprops[vertex][:coverage])
+                            for vertex in Graphs.vertices(stranded_kmer_graph)]
     if verbosity in ["debug", "reads", "dataset"]
         println("computing kmer state likelihoods...")
     end
@@ -550,7 +550,7 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
             if K1 != K2
                 shortest_path = shortest_paths[K1][K2]
                 path_likelihood = 1.0
-                for ui in 1:length(shortest_path)-1
+                for ui in 1:(length(shortest_path) - 1)
                     u = shortest_path[ui]
                     v = shortest_path[ui + 1]
                     # likelihood of the transition
@@ -568,26 +568,30 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
                     else
                         shortest_paths[K1][K2] = Vector{Int}()
                     end
-                # otherwise, check to see if any outneighbors connect back to the kmer
+                    # otherwise, check to see if any outneighbors connect back to the kmer
                 else
-                    connected_outneighbors = filter(outneighbor -> Graphs.has_path(stranded_kmer_graph, outneighbor, K2), Graphs.outneighbors(stranded_kmer_graph, K1))
+                    connected_outneighbors = filter(
+                        outneighbor -> Graphs.has_path(stranded_kmer_graph, outneighbor, K2),
+                        Graphs.outneighbors(stranded_kmer_graph, K1))
                     if !isempty(connected_outneighbors)
-                        outneighbor_cycles = [[K1, shortest_paths[outneighbor][K2]...] for outneighbor in connected_outneighbors]
+                        outneighbor_cycles = [[K1, shortest_paths[outneighbor][K2]...]
+                                              for outneighbor in connected_outneighbors]
                         cycle_likelihoods = ones(length(outneighbor_cycles))
                         for (i, cycle) in enumerate(outneighbor_cycles)
-                            for ui in 1:length(cycle)-1
+                            for ui in 1:(length(cycle) - 1)
                                 u = cycle[ui]
                                 v = cycle[ui + 1]
                                 # likelihood of the transition
                                 cycle_likelihoods[i] *= edge_probability(stranded_kmer_graph, Graphs.Edge(u, v))
                             end
                             # include likelihoods of states
-                            for vertex in cycle[2:end-1]
+                            for vertex in cycle[2:(end - 1)]
                                 cycle_likelihoods[i] *= stranded_kmer_likelihoods[vertex]
                             end
                         end
                         path_likelihood = maximum(cycle_likelihoods)
-                        max_likelihood_cycle_indices = findall(cycle_likelihoods .== path_likelihood)
+                        max_likelihood_cycle_indices = findall(cycle_likelihoods .==
+                                                               path_likelihood)
                         shortest_paths[K1][K2] = outneighbor_cycles[first(max_likelihood_cycle_indices)]
                     else
                         shortest_paths[K1][K2] = Vector{Int}()
@@ -616,7 +620,8 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
         println("finding viterbi maximum likelihood paths for observed sequences...")
     end
     # p = Progress(length(stranded_kmer_graph.gprops[:observed_paths]))
-    for (observation_index, observed_path) in enumerate(stranded_kmer_graph.gprops[:observed_paths])
+    for (observation_index, observed_path) in
+        enumerate(stranded_kmer_graph.gprops[:observed_paths])
         if verbosity in ["debug", "reads"]
             println("\nevaluating sequence $observation_index of $(length(stranded_kmer_graph.gprops[:observed_paths]))")
         end
@@ -626,11 +631,12 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
         edit_distances = zeros(Int, Graphs.nv(stranded_kmer_graph), length(observed_path))
         # changed here!!
         observed_kmer_index, observed_kmer_orientation = observed_path[1]
-        
+
         observed_kmer_sequence = stranded_kmer_graph.gprops[:stranded_kmers][observed_kmer_index]
         for hidden_kmer_index in Graphs.vertices(stranded_kmer_graph)
             hidden_kmer_sequence = stranded_kmer_graph.gprops[:stranded_kmers][hidden_kmer_index]
-            alignment_result = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(), observed_kmer_sequence, hidden_kmer_sequence)
+            alignment_result = BioAlignments.pairalign(BioAlignments.LevenshteinDistance(),
+                observed_kmer_sequence, hidden_kmer_sequence)
             number_of_matches = BioAlignments.count_matches(BioAlignments.alignment(alignment_result))
             number_of_edits = stranded_kmer_graph.gprops[:k] - number_of_matches
             kmer_likelihoods[hidden_kmer_index, 1] = stranded_kmer_likelihoods[hidden_kmer_index]
@@ -656,7 +662,8 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
         end
         for observed_path_index in 2:length(observed_path)
             # changed!!
-            observed_kmer_index, observed_kmer_orientation = observed_path[observed_path_index]
+            observed_kmer_index,
+            observed_kmer_orientation = observed_path[observed_path_index]
             observed_base = stranded_kmer_graph.gprops[:stranded_kmers][observed_kmer_index][end]
 
             if verbosity in ["debug"]
@@ -684,13 +691,14 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
                     if length(shortest_path) >= 2
                         edit_distance = Int(!base_is_match) + length(shortest_path) - 2
                         if edit_distance == 0
-                            p = kmer_likelihoods[K1, observed_path_index-1] +
+                            p = kmer_likelihoods[K1, observed_path_index - 1] +
                                 log(accuracy) + log(stranded_kmer_likelihoods[K2])
                         else
-                            p = kmer_likelihoods[K1, observed_path_index-1] +
-                                log(error_rate^edit_distance) + log(stranded_kmer_likelihoods[K2])
+                            p = kmer_likelihoods[K1, observed_path_index - 1] +
+                                log(error_rate^edit_distance) +
+                                log(stranded_kmer_likelihoods[K2])
                         end
-                        edit_distance += edit_distances[K1, observed_path_index-1]
+                        edit_distance += edit_distances[K1, observed_path_index - 1]
                     else
                         p = log(0.0)
                     end
@@ -699,11 +707,12 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
                         # matches or not because it's an inserted & erroneous
                         # base, but in practice it's necessary to balance
                         # insertion probabilities with deletion probabilities
-                        insertion_p = kmer_likelihoods[K1, observed_path_index-1] +
-                                      log(error_rate^(1 + Int(!base_is_match))) + log(stranded_kmer_likelihoods[K2])
+                        insertion_p = kmer_likelihoods[K1, observed_path_index - 1] +
+                                      log(error_rate^(1 + Int(!base_is_match))) +
+                                      log(stranded_kmer_likelihoods[K2])
                         if insertion_p > p
                             p = insertion_p
-                            edit_distance = edit_distances[K1, observed_path_index-1] + 1
+                            edit_distance = edit_distances[K1, observed_path_index - 1] + 1
                             shortest_path = [K2]
                         end
                     end
@@ -748,7 +757,8 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
 
         ## backtrack
         maximum_likelihood_path_value = maximum(kmer_likelihoods[:, end])
-        maximum_likelihood_path_indices = findall(kmer_likelihoods[:, end] .== maximum_likelihood_path_value)
+        maximum_likelihood_path_indices = findall(kmer_likelihoods[:, end] .==
+                                                  maximum_likelihood_path_value)
         # if multiple paths are tied, randomly choose one
         maximum_likelihood_path_index = rand(maximum_likelihood_path_indices)
         maximum_likelihood_edit_distance = edit_distances[maximum_likelihood_path_index, end]
@@ -757,14 +767,16 @@ function viterbi_maximum_likelihood_traversals(stranded_kmer_graph;
             maximum_likelihood_path = last(kmer_arrival_paths[maximum_likelihood_path_index, end])
             for observed_path_index in length(observed_path):-1:1
                 maximum_likelihood_arrival_path = kmer_arrival_paths[maximum_likelihood_path_index, observed_path_index]
-                maximum_likelihood_path = vcat(maximum_likelihood_arrival_path[1:end-1], maximum_likelihood_path)
+                maximum_likelihood_path = vcat(
+                    maximum_likelihood_arrival_path[1:(end - 1)], maximum_likelihood_path)
                 maximum_likelihood_path_index = first(maximum_likelihood_path)
             end
         else
             maximum_likelihood_path = [maximum_likelihood_path_index]
         end
         observed_sequence = path_to_sequence(stranded_kmer_graph.gprops[:stranded_kmers], observed_path)
-        maximum_likelihood_sequence = path_to_sequence(stranded_kmer_graph.gprops[:stranded_kmers], maximum_likelihood_path)
+        maximum_likelihood_sequence = path_to_sequence(
+            stranded_kmer_graph.gprops[:stranded_kmers], maximum_likelihood_path)
         if verbosity in ["debug", "reads"]
             println("\tobserved sequence                 $observed_sequence")
             println("\tmaximum likelihood sequence       $maximum_likelihood_sequence")
@@ -812,10 +824,12 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Process and error-correct a FASTQ record by walking a Rhizomorph graph.
 """
-function process_fastq_record(;record, graph, weighted_graph, traversal::Symbol=:probabilistic, max_steps::Union{Int,Nothing}=nothing, seed::Union{Int,Nothing}=nothing)
+function process_fastq_record(;
+        record, graph, weighted_graph, traversal::Symbol = :probabilistic,
+        max_steps::Union{Int, Nothing} = nothing, seed::Union{Int, Nothing} = nothing)
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
-        return (record=record, polished_record=record, status=:empty_graph)
+        return (record = record, polished_record = record, status = :empty_graph)
     end
 
     first_label = first(labels)
@@ -830,7 +844,7 @@ function process_fastq_record(;record, graph, weighted_graph, traversal::Symbol=
         record_sequence = FASTX.sequence(sequence_type, record)
         record_kmers = collect(_record_kmer_iterator(sequence_type, k, record_sequence))
         if isempty(record_kmers)
-            return (record=record, polished_record=record, status=:short_record)
+            return (record = record, polished_record = record, status = :short_record)
         end
         start_vertex = record_kmers[1]
         if !haskey(weighted_graph, start_vertex) && !Graphs.is_directed(graph.graph)
@@ -857,7 +871,7 @@ function process_fastq_record(;record, graph, weighted_graph, traversal::Symbol=
     end
 
     path = if traversal == :probabilistic
-        Mycelia.Rhizomorph.probabilistic_walk_next(weighted_graph, start_vertex, max_steps; seed=seed)
+        Mycelia.Rhizomorph.probabilistic_walk_next(weighted_graph, start_vertex, max_steps; seed = seed)
     elseif traversal == :greedy
         Mycelia.Rhizomorph.maximum_weight_walk_next(weighted_graph, start_vertex, max_steps)
     else
@@ -865,14 +879,16 @@ function process_fastq_record(;record, graph, weighted_graph, traversal::Symbol=
     end
 
     polished_sequence = Mycelia.Rhizomorph.path_to_sequence(path, weighted_graph)
-    polished_sequence_str = polished_sequence isa AbstractString ? polished_sequence : string(polished_sequence)
+    polished_sequence_str = polished_sequence isa AbstractString ? polished_sequence :
+                            string(polished_sequence)
 
     quality_scores = Int.(collect(FASTX.quality_scores(record)))
     if isempty(quality_scores)
         quality_scores = fill(30, length(polished_sequence_str))
     elseif length(quality_scores) != length(polished_sequence_str)
         if length(quality_scores) < length(polished_sequence_str)
-            padding = fill(last(quality_scores), length(polished_sequence_str) - length(quality_scores))
+            padding = fill(last(quality_scores), length(polished_sequence_str) -
+                                                 length(quality_scores))
             quality_scores = vcat(quality_scores, padding)
         else
             quality_scores = quality_scores[1:length(polished_sequence_str)]
@@ -880,12 +896,13 @@ function process_fastq_record(;record, graph, weighted_graph, traversal::Symbol=
     end
 
     polished_record = Mycelia.fastq_record(
-        identifier=record_identifier,
-        sequence=polished_sequence_str,
-        quality_scores=quality_scores
+        identifier = record_identifier,
+        sequence = polished_sequence_str,
+        quality_scores = quality_scores
     )
 
-    return (record=record, polished_record=polished_record, traversal=traversal, max_steps=max_steps)
+    return (record = record, polished_record = polished_record,
+        traversal = traversal, max_steps = max_steps)
 end
 
 """
@@ -893,14 +910,16 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Compatibility wrapper for process_fastq_record using the Rhizomorph traversal.
 """
-function process_fastq_record_with_polishing(;record, graph, weighted_graph, traversal::Symbol=:probabilistic, max_steps::Union{Int,Nothing}=nothing, seed::Union{Int,Nothing}=nothing)
+function process_fastq_record_with_polishing(;
+        record, graph, weighted_graph, traversal::Symbol = :probabilistic,
+        max_steps::Union{Int, Nothing} = nothing, seed::Union{Int, Nothing} = nothing)
     return process_fastq_record(
-        record=record,
-        graph=graph,
-        weighted_graph=weighted_graph,
-        traversal=traversal,
-        max_steps=max_steps,
-        seed=seed
+        record = record,
+        graph = graph,
+        weighted_graph = weighted_graph,
+        traversal = traversal,
+        max_steps = max_steps,
+        seed = seed
     )
 end
 
@@ -910,14 +929,14 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Polish FASTQ reads by traversing a Rhizomorph graph with configurable traversal and weighting.
 """
 function polish_fastq(;
-    fastq,
-    k=1,
-    graph_mode::Symbol=:singlestrand,
-    traversal::Symbol=:probabilistic,
-    weighting::Symbol=:quality,
-    seed::Union{Int,Nothing}=nothing,
-    max_steps::Union{Int,Nothing}=nothing,
-    dataset_id::String="dataset_01"
+        fastq,
+        k = 1,
+        graph_mode::Symbol = :singlestrand,
+        traversal::Symbol = :probabilistic,
+        weighting::Symbol = :quality,
+        seed::Union{Int, Nothing} = nothing,
+        max_steps::Union{Int, Nothing} = nothing,
+        dataset_id::String = "dataset_01"
 )
     if !isfile(fastq)
         error("FASTQ file not found: $(fastq)")
@@ -944,23 +963,24 @@ function polish_fastq(;
     end
 
     graph = if weighting == :quality
-        Mycelia.Rhizomorph.build_qualmer_graph(records, assembly_k; dataset_id=dataset_id, mode=graph_mode)
+        Mycelia.Rhizomorph.build_qualmer_graph(records, assembly_k; dataset_id = dataset_id, mode = graph_mode)
     else
-        Mycelia.Rhizomorph.build_kmer_graph(records, assembly_k; dataset_id=dataset_id, mode=graph_mode)
+        Mycelia.Rhizomorph.build_kmer_graph(records, assembly_k; dataset_id = dataset_id, mode = graph_mode)
     end
 
-    edge_weight = weighting == :quality ? Mycelia.Rhizomorph.edge_quality_weight : Mycelia.Rhizomorph.compute_edge_weight
-    weighted_graph = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight=edge_weight)
+    edge_weight = weighting == :quality ? Mycelia.Rhizomorph.edge_quality_weight :
+                  Mycelia.Rhizomorph.compute_edge_weight
+    weighted_graph = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight = edge_weight)
 
     revised_records = FASTX.FASTQ.Record[]
     for record in records
         result = process_fastq_record(
-            record=record,
-            graph=graph,
-            weighted_graph=weighted_graph,
-            traversal=traversal,
-            max_steps=max_steps,
-            seed=seed
+            record = record,
+            graph = graph,
+            weighted_graph = weighted_graph,
+            traversal = traversal,
+            max_steps = max_steps,
+            seed = seed
         )
         push!(revised_records, result.polished_record)
     end
@@ -973,7 +993,8 @@ function polish_fastq(;
         close(fastx_io)
     end
     run(`gzip --force $(fastq_out)`)
-    return (fastq = fastq_out * ".gz", k=assembly_k, traversal=traversal, weighting=weighting, graph_mode=graph_mode)
+    return (fastq = fastq_out * ".gz", k = assembly_k, traversal = traversal,
+        weighting = weighting, graph_mode = graph_mode)
 end
 
 """
@@ -982,35 +1003,36 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Iterative polishing that reuses the traversal and weighting configuration.
 """
 function iterative_polishing(
-    fastq,
-    max_k = 53;
-    graph_mode::Symbol=:singlestrand,
-    traversal::Symbol=:probabilistic,
-    weighting::Symbol=:quality,
-    seed::Union{Int,Nothing}=nothing,
-    max_steps::Union{Int,Nothing}=nothing
+        fastq,
+        max_k = 53;
+        graph_mode::Symbol = :singlestrand,
+        traversal::Symbol = :probabilistic,
+        weighting::Symbol = :quality,
+        seed::Union{Int, Nothing} = nothing,
+        max_steps::Union{Int, Nothing} = nothing
 )
     polishing_results = [polish_fastq(
-        fastq=fastq,
-        k=11,
-        graph_mode=graph_mode,
-        traversal=traversal,
-        weighting=weighting,
-        seed=seed,
-        max_steps=max_steps
+        fastq = fastq,
+        k = 11,
+        graph_mode = graph_mode,
+        traversal = traversal,
+        weighting = weighting,
+        seed = seed,
+        max_steps = max_steps
     )]
 
     while (!ismissing(last(polishing_results).k)) && (last(polishing_results).k < max_k)
         next_k = first(filter(k -> k > last(polishing_results).k, Mycelia.ks()))
-        push!(polishing_results, polish_fastq(
-            fastq=last(polishing_results).fastq,
-            k=next_k,
-            graph_mode=graph_mode,
-            traversal=traversal,
-            weighting=weighting,
-            seed=seed,
-            max_steps=max_steps
-        ))
+        push!(polishing_results,
+            polish_fastq(
+                fastq = last(polishing_results).fastq,
+                k = next_k,
+                graph_mode = graph_mode,
+                traversal = traversal,
+                weighting = weighting,
+                seed = seed,
+                max_steps = max_steps
+            ))
     end
 
     return polishing_results
@@ -1032,17 +1054,17 @@ end
 # #     display(simple_kmer_graph)
 # #     display(filtered_simple_kmer_graph)
 #     kmers = sort!(graph_to_kmers(filtered_simple_kmer_graph))
-    
+
 #     old_kmers = graph_to_kmers(simple_kmer_graph)
-    
+
 #     k = filtered_simple_kmer_graph.gprops[:k]
-    
+
 #     polished_fastq_file = replace(fastq_file, ".fastq" => ".k$k.d$(min_depth).fastq")
 
 #     transition_probabilities = initialize_transition_probabilities(filtered_simple_kmer_graph)
 #     state_likelihoods = [Float64(filtered_simple_kmer_graph.vprops[v][:weight]) for v in Graphs.vertices(filtered_simple_kmer_graph)]
 #     state_likelihoods ./= sum(state_likelihoods)
-    
+
 # #     @info "counting the number of records to establish runtime estimate"
 #     number_of_records = 0
 #     for fastq_record in FASTX.FASTQ.Reader(open(fastq_file))
@@ -1062,9 +1084,9 @@ end
 #             canonical_kmer = min(kmer.fw, kmer.bw)
 #             orientation = canonical_kmer == kmer.fw
 #             kmer_index_range = searchsorted(kmers, canonical_kmer)
-            
+
 #             old_kmer_index = searchsortedfirst(old_kmers, canonical_kmer)
-            
+
 # #             FASTX.identifier(fastx_record) == "4" && @show kmer_index_range
 # #             FASTX.identifier(fastx_record) == "4" && @show kmers[kmer_index_range]
 # #             FASTX.identifier(fastx_record) == "4" && @show old_kmers[old_kmer_index]
@@ -1209,8 +1231,6 @@ end
 #     return polished_fastq_file
 # end
 
-
-
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1286,11 +1306,11 @@ end
 #     connected_components = Graphs.connected_components(graph.graph)
 #     vertices_to_keep = Int[]
 #     for connected_component in connected_components
-        
+
 #         component_coverage = graph.counts[connected_component]
 #         median = Statistics.median(component_coverage)
 #         standard_deviation = Statistics.std(component_coverage)
-        
+
 #         for vertex in connected_component
 #             keep = true
 #             if Graphs.degree(graph.graph, vertex) == 1
@@ -1306,10 +1326,10 @@ end
 #             end
 #         end
 #     end
-    
+
 #     KmerType = first(typeof(graph).parameters)
 #     pruned_graph = KmerGraph(KmerType, observations, graph.kmers[vertices_to_keep], graph.counts[vertices_to_keep])
-    
+
 #     return pruned_graph
 # end
 

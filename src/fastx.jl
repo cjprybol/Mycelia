@@ -24,13 +24,13 @@ records, elapsed time, and records/second as an indefinite spinner. Control its
 frequency with `progress_every` to reduce overhead.
 """
 function fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
-                                       output_path::Union{Nothing,AbstractString}=nothing,
-                                       human_readable_id::Union{String,Nothing}=nothing,
-                                       force_truncate::Bool=false,
-                                       show_progress::Bool=true,
-                                       progress_every::Int=1000,
-                                       progress_desc::AbstractString="Streaming normalization",
-                                       progress_output::IO=stderr)
+        output_path::Union{Nothing, AbstractString} = nothing,
+        human_readable_id::Union{String, Nothing} = nothing,
+        force_truncate::Bool = false,
+        show_progress::Bool = true,
+        progress_every::Int = 1000,
+        progress_desc::AbstractString = "Streaming normalization",
+        progress_output::IO = stderr)
 
     # --- Extract human_readable_id from filename if not provided ---
     if isnothing(human_readable_id)
@@ -67,10 +67,10 @@ function fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
             try
                 _write_ndjson_stream(
                     gz, fastx_path, human_readable_id, file_type;
-                    show_progress=show_progress,
-                    progress_every=progress_every,
-                    progress_desc=progress_desc,
-                    progress_output=progress_output,
+                    show_progress = show_progress,
+                    progress_every = progress_every,
+                    progress_desc = progress_desc,
+                    progress_output = progress_output
                 )
                 flush(gz)
             finally
@@ -81,10 +81,10 @@ function fastx2normalized_jsonl_stream(; fastx_path::AbstractString,
         open(out_path, "w") do io
             _write_ndjson_stream(
                 io, fastx_path, human_readable_id, file_type;
-                show_progress=show_progress,
-                progress_every=progress_every,
-                progress_desc=progress_desc,
-                progress_output=progress_output,
+                show_progress = show_progress,
+                progress_every = progress_every,
+                progress_desc = progress_desc,
+                progress_output = progress_output
             )
             flush(io)
         end
@@ -112,17 +112,17 @@ function _default_out_path(fastx_path::AbstractString)
 end
 
 # Core streaming writer: one JSON object per record, with optional progress meter
-function _write_ndjson_stream(io::IO, fastx_path::AbstractString, human_readable_id::String, file_type::Symbol;
-                              show_progress::Bool,
-                              progress_every::Int,
-                              progress_desc::AbstractString,
-                              progress_output::IO)
-
+function _write_ndjson_stream(
+        io::IO, fastx_path::AbstractString, human_readable_id::String, file_type::Symbol;
+        show_progress::Bool,
+        progress_every::Int,
+        progress_desc::AbstractString,
+        progress_output::IO)
     n_processed::Int = 0
     t0 = time()
     p = nothing
     if show_progress
-        p = ProgressMeter.ProgressUnknown(desc=progress_desc, dt=0.5, output=progress_output)
+        p = ProgressMeter.ProgressUnknown(desc = progress_desc, dt = 0.5, output = progress_output)
     end
 
     for record in Mycelia.open_fastx(fastx_path)
@@ -138,11 +138,13 @@ function _write_ndjson_stream(io::IO, fastx_path::AbstractString, human_readable
         # Compute derived fields
         record_identifier = FASTX.identifier(record)
         record_description = FASTX.description(record)
-        sequence_hash = create_base58_hash(record_sequence, encoded_length=16)
+        sequence_hash = create_base58_hash(record_sequence, encoded_length = 16)
         record_alphabet = join(sort(collect(Set(uppercase(record_sequence)))))
         record_type = string(Mycelia.detect_alphabet(record_sequence))
-        mean_record_quality = (record_quality === nothing) ? nothing : Statistics.mean(record_quality)
-        median_record_quality = (record_quality === nothing) ? nothing : Statistics.median(record_quality)
+        mean_record_quality = (record_quality === nothing) ? nothing :
+                              Statistics.mean(record_quality)
+        median_record_quality = (record_quality === nothing) ? nothing :
+                                Statistics.median(record_quality)
         record_length = length(record_sequence)
 
         # Simplified hierarchical identifier without joint sequence hash
@@ -166,7 +168,7 @@ function _write_ndjson_stream(io::IO, fastx_path::AbstractString, human_readable
             median_record_quality = median_record_quality,
             record_quality = record_quality,
             record_sequence = record_sequence,
-            file_type = String(file_type),
+            file_type = String(file_type)
         )
 
         JSON.print(io, obj)
@@ -177,22 +179,24 @@ function _write_ndjson_stream(io::IO, fastx_path::AbstractString, human_readable
         if show_progress && (n_processed % progress_every == 0)
             elapsed = time() - t0
             rps = elapsed > 0 ? (n_processed / elapsed) : 0.0
-            ProgressMeter.next!(p; showvalues=[
-                (:records, n_processed),
-                (:elapsed, _fmt_hms(elapsed)),
-                (:rps, round(rps, digits=2)),
-            ])
+            ProgressMeter.next!(p;
+                showvalues = [
+                    (:records, n_processed),
+                    (:elapsed, _fmt_hms(elapsed)),
+                    (:rps, round(rps, digits = 2))
+                ])
         end
     end
 
     if show_progress
         elapsed = time() - t0
         rps = elapsed > 0 ? (n_processed / elapsed) : 0.0
-        ProgressMeter.finish!(p; showvalues=[
-            (:records, n_processed),
-            (:elapsed, _fmt_hms(elapsed)),
-            (:rps, round(rps, digits=2)),
-        ])
+        ProgressMeter.finish!(p;
+            showvalues = [
+                (:records, n_processed),
+                (:elapsed, _fmt_hms(elapsed)),
+                (:rps, round(rps, digits = 2))
+            ])
     end
 
     nothing
@@ -233,23 +237,23 @@ Writes a normalized DataFrame to a FASTA or FASTQ file, with an option for GZIP 
 - `deduplicate::Bool=true`: If `true`, de-duplicate contigs to keep only one copy of each unique sequence.
 """
 function normalized_table2fastx(
-    table::DataFrames.DataFrame;
-    output_dir::AbstractString=".",
-    output_basename::Union{AbstractString, Nothing}=nothing,
-    force::Bool=false,
-    verbose::Bool=false,
-    gzip::Bool=false,
-    deduplicate::Bool=true
+        table::DataFrames.DataFrame;
+        output_dir::AbstractString = ".",
+        output_basename::Union{AbstractString, Nothing} = nothing,
+        force::Bool = false,
+        verbose::Bool = false,
+        gzip::Bool = false,
+        deduplicate::Bool = true
 )
     # --- 1. Determine Output Format and Record Type ---
     is_fastq = !all(ismissing, table.record_quality)
-    
+
     # Update file extension logic to handle compression
     file_extension = is_fastq ? ".fq" : ".fna"
     if gzip
         file_extension *= ".gz"
     end
-    
+
     # --- 2. Determine Final Output Path ---
     local basename
     if isnothing(output_basename)
@@ -270,7 +274,7 @@ function normalized_table2fastx(
         RecordType = is_fastq ? FASTX.FASTQ.Record : FASTX.FASTA.Record
         records = RecordType[]
         sizehint!(records, DataFrames.nrow(table))
-    
+
         for row in eachrow(table)
             if is_fastq
                 quality_integers = round.(Int, row.record_quality)
@@ -286,20 +290,21 @@ function normalized_table2fastx(
             unique!(records)
             n_removed = n_initial_records - length(records)
             if verbose && n_removed > 0
-                percent_duplication = round(n_removed / n_initial_records * 100, digits=3)
+                percent_duplication = round(n_removed / n_initial_records * 100, digits = 3)
                 @warn "$(n_removed) duplicate records detected ($(percent_duplication)%); keeping $(length(records)) unique records"
             end
         end
-        
+
         # --- 4. Call Your Existing Writer Function ---
         if is_fastq
-            written_outfile = Mycelia.write_fastq(filename=final_outfile, records=records, gzip=gzip)
+            written_outfile = Mycelia.write_fastq(filename = final_outfile, records = records, gzip = gzip)
         else
-            written_outfile = Mycelia.write_fasta(outfile=final_outfile, records=records, gzip=gzip)
+            written_outfile = Mycelia.write_fasta(outfile = final_outfile, records = records, gzip = gzip)
         end
         @assert written_outfile == final_outfile
-    
-        verbose && Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
+
+        verbose &&
+            Printf.@printf "Successfully prepared %d records for writing to %s\n" length(records) final_outfile
     else
         verbose && @warn "$(final_outfile) already present, use force=true to overwrite"
     end
@@ -312,34 +317,35 @@ end
 Internal function to intelligently extract a human-readable identifier from a FASTX filename.
 Handles common bioinformatics naming patterns and attempts to find the longest meaningful prefix.
 """
-function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, force_truncate::Bool=false)
+function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, force_truncate::Bool = false)
     filename = basename(fastx_path)
-    
+
     # Remove file extensions using existing regex patterns
     base_name = if occursin(Mycelia.FASTA_REGEX, filename)
         replace(filename, Mycelia.FASTA_REGEX => "")
-    elseif occursin(Mycelia.FASTQ_REGEX, filename) 
+    elseif occursin(Mycelia.FASTQ_REGEX, filename)
         replace(filename, Mycelia.FASTQ_REGEX => "")
     else
         error("File '$(filename)' does not match FASTA or FASTQ naming patterns. Supported extensions: .fasta, .fna, .faa, .fa, .frn, .fastq, .fq (optionally .gz compressed)")
     end
-    
+
     # If already <= 16 characters, return as-is
     if length(base_name) <= 16
         return base_name
     end
-    
+
     # Try to find meaningful prefixes by splitting on common delimiters
     delimiters = ['_', '-', ' ', '.']
     viable_prefixes = String[]
-    
+
     for delimiter in delimiters
         if occursin(delimiter, base_name)
             parts = split(base_name, delimiter)
             # Build cumulative prefixes
             current_prefix = ""
             for part in parts
-                test_prefix = isempty(current_prefix) ? part : current_prefix * string(delimiter) * part
+                test_prefix = isempty(current_prefix) ? part :
+                              current_prefix * string(delimiter) * part
                 if length(test_prefix) <= 16
                     current_prefix = test_prefix
                     push!(viable_prefixes, current_prefix)
@@ -349,29 +355,33 @@ function _extract_human_readable_id_from_fastx_path(fastx_path::AbstractString, 
             end
         end
     end
-    
+
     # Find the longest viable prefix
     if !isempty(viable_prefixes)
         longest_prefix = viable_prefixes[argmax(length.(viable_prefixes))]
-        
+
         # Skip very short prefixes that aren't meaningful for common patterns
         if length(longest_prefix) >= 3
             # Check for common bioinformatics prefixes we want to avoid stopping at
-            meaningless_prefixes = ["GCA", "GCF", "NC", "NZ", "NW", "NT", "AC", "AE", "AF", "AY", "DQ", "EF", "EU", "FJ", "GQ", "HM", "JF", "JN", "JQ", "JX", "KC", "KF", "KJ", "KM", "KP", "KR", "KT", "KU", "KX", "KY", "MF", "MG", "MH", "MK", "MN", "MT", "MW", "MZ"]
-            
+            meaningless_prefixes = ["GCA", "GCF", "NC", "NZ", "NW", "NT", "AC", "AE", "AF",
+                "AY", "DQ", "EF", "EU", "FJ", "GQ", "HM", "JF", "JN",
+                "JQ", "JX", "KC", "KF", "KJ", "KM", "KP", "KR", "KT", "KU",
+                "KX", "KY", "MF", "MG", "MH", "MK", "MN", "MT", "MW", "MZ"]
+
             # If we have a short meaningless prefix, try to get more context
             if longest_prefix in meaningless_prefixes && length(viable_prefixes) > 1
                 # Look for a longer prefix that includes more meaningful information
-                longer_prefixes = filter(p -> length(p) > length(longest_prefix) && length(p) <= 16, viable_prefixes)
+                longer_prefixes = filter(
+                    p -> length(p) > length(longest_prefix) && length(p) <= 16, viable_prefixes)
                 if !isempty(longer_prefixes)
                     longest_prefix = longer_prefixes[argmax(length.(longer_prefixes))]
                 end
             end
-            
+
             return longest_prefix
         end
     end
-    
+
     # If no viable prefix found, either truncate with warning or error
     if force_truncate
         truncated = base_name[1:16]
@@ -402,11 +412,17 @@ Reads a FASTA or FASTQ file and converts its records into a normalized `DataFram
 # Returns
 - `DataFrames.DataFrame`: A data frame with standardized columns, including the new hierarchical identifiers.
 """
-function fastx2normalized_table(fastx_path::AbstractString; human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false)
-    return fastx2normalized_table(; fastx_path=fastx_path, human_readable_id=human_readable_id, force_truncate=force_truncate)
+function fastx2normalized_table(
+        fastx_path::AbstractString; human_readable_id::Union{String, Nothing} = nothing,
+        force_truncate::Bool = false)
+    return fastx2normalized_table(;
+        fastx_path = fastx_path, human_readable_id = human_readable_id,
+        force_truncate = force_truncate)
 end
 
-function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id::Union{String,Nothing}=nothing, force_truncate::Bool=false)
+function fastx2normalized_table(;
+        fastx_path::AbstractString, human_readable_id::Union{String, Nothing} = nothing,
+        force_truncate::Bool = false)
     # --- Extract human_readable_id from filename if not provided ---
     if isnothing(human_readable_id)
         human_readable_id = _extract_human_readable_id_from_fastx_path(fastx_path, force_truncate)
@@ -434,7 +450,7 @@ function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id:
         mean_record_quality = Union{Float64, Missing}[],
         median_record_quality = Union{Float64, Missing}[],
         record_length = Int[],
-        record_sequence = String[],
+        record_sequence = String[]
     )
 
     # --- File Type Detection (using Mycelia) ---
@@ -445,34 +461,39 @@ function fastx2normalized_table(; fastx_path::AbstractString, human_readable_id:
     else
         error("File is not FASTA or FASTQ")
     end
-    
+
     # --- Record Processing (using Mycelia) ---
     for record in Mycelia.open_fastx(fastx_path)
         record_sequence = FASTX.sequence(String, record)
-        record_quality = file_type == :fastq ? collect(FASTX.quality_scores(record)) : missing
+        record_quality = file_type == :fastq ? collect(FASTX.quality_scores(record)) :
+                         missing
 
-        push!(normalized_table, (
-            record_identifier = FASTX.identifier(record),
-            record_description = FASTX.description(record),
-            sequence_hash = create_base58_hash(record_sequence, encoded_length=16),
-            record_quality = record_quality,
-            record_alphabet = join(sort(collect(Set(uppercase(record_sequence))))),
-            record_type = string(Mycelia.detect_alphabet(record_sequence)), # Restored Mycelia call
-            mean_record_quality = !ismissing(record_quality) ? Statistics.mean(record_quality) : missing,
-            median_record_quality = !ismissing(record_quality) ? Statistics.median(record_quality) : missing,
-            record_length = length(record_sequence),
-            record_sequence = record_sequence,
-        ))
+        push!(normalized_table,
+            (
+                record_identifier = FASTX.identifier(record),
+                record_description = FASTX.description(record),
+                sequence_hash = create_base58_hash(record_sequence, encoded_length = 16),
+                record_quality = record_quality,
+                record_alphabet = join(sort(collect(Set(uppercase(record_sequence))))),
+                record_type = string(Mycelia.detect_alphabet(record_sequence)), # Restored Mycelia call
+                mean_record_quality = !ismissing(record_quality) ?
+                                      Statistics.mean(record_quality) : missing,
+                median_record_quality = !ismissing(record_quality) ?
+                                        Statistics.median(record_quality) : missing,
+                record_length = length(record_sequence),
+                record_sequence = record_sequence
+            ))
     end
 
     # --- Add New Hierarchical Identifier Columns ---
     current_columns = names(normalized_table)
-    fastx_hash = generate_joint_sequence_hash(normalized_table.sequence_hash, encoded_length=16)
+    fastx_hash = generate_joint_sequence_hash(normalized_table.sequence_hash, encoded_length = 16)
 
     normalized_table[!, "human_readable_id"] .= human_readable_id
     normalized_table[!, "fastx_hash"] .= fastx_hash
     normalized_table[!, "fastx_identifier"] .= human_readable_id .* "_" .* fastx_hash
-    normalized_table[!, "sequence_identifier"] .= normalized_table.fastx_identifier .* "_" .* normalized_table.sequence_hash
+    normalized_table[!, "sequence_identifier"] .= normalized_table.fastx_identifier .* "_" .*
+                                                  normalized_table.sequence_hash
     @assert all(length.(normalized_table[!, "sequence_identifier"]) .<= 50) "NCBI identifier length limit of 50 characters exceeded."
     normalized_table[!, "fastx_path"] .= Base.basename(fastx_path)
 
@@ -506,8 +527,11 @@ the sequence diversity of the tree of life.
 
 This function now calls the comprehensive create_blake3_hash function.
 """
-function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int=64, normalize_case::Bool=true)::String
-    return create_blake3_hash(data_to_hash; encoding=:base58, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=true)
+function create_base58_hash(data_to_hash::AbstractString; encoded_length::Int = 64,
+        normalize_case::Bool = true)::String
+    return create_blake3_hash(
+        data_to_hash; encoding = :base58, encoded_length = encoded_length,
+        normalize_case = normalize_case, allow_truncation = true)
 end
 
 """
@@ -531,7 +555,10 @@ different order.
 # Returns
 - `String`: A single, stable hash representing the joint set of sequences.
 """
-function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function generate_joint_sequence_hash(
+        sequences::Vector{<:AbstractString}; hash_function::Symbol = :blake3,
+        encoding::Symbol = :base58, encoded_length::Int = 64,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     if isempty(sequences)
         error("Input sequence vector cannot be empty.")
     end
@@ -540,7 +567,10 @@ function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; hash_
     individual_hashes = Vector{String}(undef, length(sequences))
     for i in 1:length(sequences)
         # Use create_sequence_hash with user-specified hash function and encoding
-        individual_hashes[i] = create_sequence_hash(sequences[i], hash_function=hash_function, encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        individual_hashes[i] = create_sequence_hash(
+            sequences[i], hash_function = hash_function,
+            encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     end
 
     # 2. Sort the list of hashes. This is the key to making it order-independent!
@@ -551,7 +581,10 @@ function generate_joint_sequence_hash(sequences::Vector{<:AbstractString}; hash_
 
     # 4. Hash the combined string to get the final joint sequence hash with same encoding length
     # Use normalize_case=false here because we're hashing encoded strings, not biological sequences
-    final_joint_sequence_hash = create_sequence_hash(combined_data, hash_function=hash_function, encoding=encoding, encoded_length=encoded_length, normalize_case=false, allow_truncation=allow_truncation)
+    final_joint_sequence_hash = create_sequence_hash(
+        combined_data, hash_function = hash_function,
+        encoding = encoding, encoded_length = encoded_length,
+        normalize_case = false, allow_truncation = allow_truncation)
 
     return final_joint_sequence_hash
 end
@@ -577,7 +610,10 @@ This is the recommended function for biological sequence hashing, defaulting to
 BLAKE3 with Base58 encoding for optimal collision resistance and compactness.
 When encoded_length=missing, each hash function uses its optimal default length.
 """
-function create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbol=:blake3, encoding::Symbol=:base58, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_sequence_hash(
+        data_to_hash::AbstractString; hash_function::Symbol = :blake3,
+        encoding::Symbol = :base58, encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     # Validate input - empty sequences are not valid in biological context
     if isempty(data_to_hash)
         error("Empty sequences are not valid for biological sequence hashing")
@@ -586,24 +622,42 @@ function create_sequence_hash(data_to_hash::AbstractString; hash_function::Symbo
         # For Blake3, pass through encoded_length (will use 64 as default if missing)
         if ismissing(encoded_length)
             # return create_blake3_hash(data_to_hash; encoding=encoding, encoded_length=64, normalize_case=normalize_case, allow_truncation=allow_truncation)
-            return create_blake3_hash(data_to_hash; encoding=encoding, normalize_case=normalize_case, allow_truncation=allow_truncation)
+            return create_blake3_hash(
+                data_to_hash; encoding = encoding, normalize_case = normalize_case,
+                allow_truncation = allow_truncation)
         else
-            return create_blake3_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+            return create_blake3_hash(
+                data_to_hash; encoding = encoding, encoded_length = encoded_length,
+                normalize_case = normalize_case, allow_truncation = allow_truncation)
         end
     elseif hash_function == :sha256
-        return create_sha256_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_sha256_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     elseif hash_function == :sha512
-        return create_sha512_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_sha512_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     elseif hash_function == :md5
-        return create_md5_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_md5_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     elseif hash_function == :sha1
-        return create_sha1_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_sha1_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     elseif hash_function == :sha3_256
-        return create_sha3_256_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_sha3_256_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     elseif hash_function == :sha3_512
-        return create_sha3_512_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_sha3_512_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     elseif hash_function == :crc32
-        return create_crc32_hash(data_to_hash; encoding=encoding, encoded_length=encoded_length, normalize_case=normalize_case, allow_truncation=allow_truncation)
+        return create_crc32_hash(
+            data_to_hash; encoding = encoding, encoded_length = encoded_length,
+            normalize_case = normalize_case, allow_truncation = allow_truncation)
     else
         error("Unsupported hash function: $hash_function")
     end
@@ -686,7 +740,7 @@ function find_fasta_files(input_path::String)
             error("Input file does not match FASTA format: $(input_path)")
         end
     elseif isdir(input_path)
-        return filter(f -> occursin(FASTA_REGEX, f), readdir(input_path, join=true))
+        return filter(f -> occursin(FASTA_REGEX, f), readdir(input_path, join = true))
     else
         error("Input path does not exist: $(input_path)")
     end
@@ -710,9 +764,9 @@ Given a collection of fastq files, creates:
 Returns: Tuple of output file paths (tsv_out, fastq_out)
 """
 function join_fastqs_with_uuid(
-    fastq_files::Vector{String};
-    fastq_out::String = Mycelia.normalized_current_datetime() * ".joint_reads.fq.gz",
-    tsv_out::String = replace(fastq_out, Mycelia.FASTQ_REGEX => ".tsv.gz")
+        fastq_files::Vector{String};
+        fastq_out::String = Mycelia.normalized_current_datetime() * ".joint_reads.fq.gz",
+        tsv_out::String = replace(fastq_out, Mycelia.FASTQ_REGEX => ".tsv.gz")
 )
     # Build mapping as a DataFrame in memory
     mapping = DataFrames.DataFrame(
@@ -721,7 +775,8 @@ function join_fastqs_with_uuid(
         new_uuid = String[]
     )
 
-    if (!isfile(fastq_out) || filesize(fastq_out) == 0) || (!isfile(tsv_out) || filesize(tsv_out) == 0)
+    if (!isfile(fastq_out) || filesize(fastq_out) == 0) ||
+       (!isfile(tsv_out) || filesize(tsv_out) == 0)
         # Prepare gzipped FASTQ writer using CodecZlib
         gz_out = CodecZlib.GzipCompressorStream(open(fastq_out, "w"))
         writer = FASTX.FASTQ.Writer(gz_out)
@@ -743,12 +798,12 @@ function join_fastqs_with_uuid(
 
         # Write mapping table as gzipped TSV using CodecZlib
         tsv_io = CodecZlib.GzipCompressorStream(open(tsv_out, "w"))
-        CSV.write(tsv_io, mapping; delim='\t')
+        CSV.write(tsv_io, mapping; delim = '\t')
         CodecZlib.close(tsv_io)
     else
         @warn "Output files already exist and are not empty: $fastq_out, $tsv_out"
     end
-    return (;tsv_out, fastq_out)
+    return (; tsv_out, fastq_out)
 end
 
 """
@@ -766,10 +821,10 @@ Concatenate FASTQ files into a single output FASTQ (optionally gzipped).
 - `String`: Path to the concatenated FASTQ.
 """
 function concatenate_fastq_files(;
-    fastq_files::Vector{String},
-    output_fastq::String,
-    gzip::Union{Nothing,Bool}=nothing,
-    force::Bool=false
+        fastq_files::Vector{String},
+        output_fastq::String,
+        gzip::Union{Nothing, Bool} = nothing,
+        force::Bool = false
 )
     @assert !isempty(fastq_files) "fastq_files must not be empty"
     for fastq_file in fastq_files
@@ -780,10 +835,13 @@ function concatenate_fastq_files(;
         return output_fastq
     end
     mkpath(dirname(output_fastq))
-    out_io = gzip_mode ? CodecZlib.GzipCompressorStream(open(output_fastq, "w")) : open(output_fastq, "w")
+    out_io = gzip_mode ? CodecZlib.GzipCompressorStream(open(output_fastq, "w")) :
+             open(output_fastq, "w")
     buffer = Vector{UInt8}(undef, 1 << 20)
     for fastq_file in fastq_files
-        in_io = endswith(fastq_file, ".gz") ? CodecZlib.GzipDecompressorStream(open(fastq_file, "r")) : open(fastq_file, "r")
+        in_io = endswith(fastq_file, ".gz") ?
+                CodecZlib.GzipDecompressorStream(open(fastq_file, "r")) :
+                open(fastq_file, "r")
         while true
             n = readbytes!(in_io, buffer)
             n == 0 && break
@@ -819,20 +877,20 @@ Split a FASTA into one file per record, returning a mapping of sanitized id to o
 - `Dict{String,String}` mapping sanitized identifier to original identifier.
 """
 function split_fasta_by_record(;
-    fasta_in::String,
-    outdir::String,
-    gzip::Bool=false,
-    force::Bool=false
+        fasta_in::String,
+        outdir::String,
+        gzip::Bool = false,
+        force::Bool = false
 )
     @assert isfile(fasta_in) "Input FASTA not found: $(fasta_in)"
     mkpath(outdir)
-    id_map = Dict{String,String}()
+    id_map = Dict{String, String}()
     for record in Mycelia.open_fastx(fasta_in)
         record_id = String(FASTX.identifier(record))
         safe_id = sanitize_fastx_identifier(record_id)
         outfile = joinpath(outdir, safe_id * ".fna" * (gzip ? ".gz" : ""))
         if !isfile(outfile) || force
-            Mycelia.write_fasta(outfile=outfile, records=[record], gzip=gzip)
+            Mycelia.write_fasta(outfile = outfile, records = [record], gzip = gzip)
         end
         id_map[safe_id] = record_id
     end
@@ -844,7 +902,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Normalize a reference label to its original identifier using a sanitized-id map.
 """
-function normalize_reference_label(label::AbstractString, id_map::AbstractDict{<:AbstractString,<:AbstractString})
+function normalize_reference_label(
+        label::AbstractString, id_map::AbstractDict{<:AbstractString, <:AbstractString})
     base = replace(basename(label), r"\.msh$" => "")
     base = replace(base, Mycelia.FASTA_REGEX => "")
     return get(id_map, base, base)
@@ -867,12 +926,12 @@ Write a FASTA file containing only records whose identifiers are in `ids`.
 - `String`: Path to the output FASTA.
 """
 function subset_fasta_by_ids(;
-    fasta_in::String,
-    ids::AbstractVector{<:AbstractString},
-    fasta_out::String,
-    gzip::Union{Nothing,Bool}=nothing,
-    force::Bool=false,
-    require_all::Bool=true
+        fasta_in::String,
+        ids::AbstractVector{<:AbstractString},
+        fasta_out::String,
+        gzip::Union{Nothing, Bool} = nothing,
+        force::Bool = false,
+        require_all::Bool = true
 )
     @assert isfile(fasta_in) "Input FASTA not found: $(fasta_in)"
     ids_set = Set(String.(ids))
@@ -881,7 +940,8 @@ function subset_fasta_by_ids(;
         return fasta_out
     end
     mkpath(dirname(fasta_out))
-    out_io = gzip_mode ? CodecZlib.GzipCompressorStream(open(fasta_out, "w")) : open(fasta_out, "w")
+    out_io = gzip_mode ? CodecZlib.GzipCompressorStream(open(fasta_out, "w")) :
+             open(fasta_out, "w")
     writer = FASTX.FASTA.Writer(out_io)
     found = Set{String}()
     for record in Mycelia.open_fastx(fasta_in)
@@ -930,14 +990,14 @@ the file is written uncompressed first and then gzipped with `pigz`/`gzip` via
 Named tuple `(out_fastq, mapping_out, sample_tag)`.
 """
 function prefix_fastq_reads(
-    fastq_file::AbstractString;
-    sample_tag::AbstractString,
-    out_fastq::AbstractString,
-    mapping_out::Union{Nothing,String}=nothing,
-    mapping_format::Symbol=:arrow,
-    id_delimiter::AbstractString="::",
-    force::Bool=false,
-    compress_threads::Integer=get_default_threads()
+        fastq_file::AbstractString;
+        sample_tag::AbstractString,
+        out_fastq::AbstractString,
+        mapping_out::Union{Nothing, String} = nothing,
+        mapping_format::Symbol = :arrow,
+        id_delimiter::AbstractString = "::",
+        force::Bool = false,
+        compress_threads::Integer = get_default_threads()
 )
     @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
     @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
@@ -948,7 +1008,8 @@ function prefix_fastq_reads(
     input_bytes = filesize(fastq_file)
 
     # Always write uncompressed first when `.gz` is requested, then gzip externally.
-    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") : out_fastq
+    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") :
+                      out_fastq
     tmp_fastq_plain = out_fastq_plain * ".tmp"
 
     map_plain = nothing
@@ -956,19 +1017,24 @@ function prefix_fastq_reads(
     if mapping_out !== nothing
         mkpath(dirname(mapping_out))
         if mapping_format == :arrow
-            endswith(mapping_out, ".gz") && error("Arrow mapping_out should not be gzipped: $mapping_out")
+            endswith(mapping_out, ".gz") &&
+                error("Arrow mapping_out should not be gzipped: $mapping_out")
         else
-            map_plain = endswith(mapping_out, ".gz") ? replace(mapping_out, r"\.gz$" => "") : mapping_out
+            map_plain = endswith(mapping_out, ".gz") ?
+                        replace(mapping_out, r"\.gz$" => "") : mapping_out
             tmp_map_plain = map_plain * ".tmp"
         end
     end
 
-    if !force && nonempty_file(out_fastq) && (mapping_out === nothing || nonempty_file(mapping_out))
-        return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+    if !force && nonempty_file(out_fastq) &&
+       (mapping_out === nothing || nonempty_file(mapping_out))
+        return (
+            out_fastq = out_fastq, mapping_out = mapping_out, sample_tag = sanitized_tag)
     end
 
     # Resume: if the uncompressed intermediate exists from a prior run, just gzip it.
-    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) && nonempty_file(out_fastq_plain)
+    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) &&
+       nonempty_file(out_fastq_plain)
         mapping_ready = if mapping_out === nothing
             true
         elseif mapping_format == :arrow
@@ -980,17 +1046,23 @@ function prefix_fastq_reads(
         end
 
         if mapping_ready
-            if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) && nonempty_file(map_plain)
-                Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            if mapping_out !== nothing && mapping_format == :tsv &&
+               endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) &&
+               nonempty_file(map_plain)
+                Mycelia.gzip_file(
+                    map_plain; outfile = mapping_out, threads = compress_threads,
+                    force = force, keep_input = false)
             end
-            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
-            return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+            Mycelia.gzip_file(out_fastq_plain; outfile = out_fastq,
+                threads = compress_threads, force = force, keep_input = false)
+            return (out_fastq = out_fastq, mapping_out = mapping_out,
+                sample_tag = sanitized_tag)
         end
     end
 
-    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force = true)
     if tmp_map_plain !== nothing
-        isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+        isfile(tmp_map_plain) && rm(tmp_map_plain; force = true)
     end
 
     # Gracefully handle 0-byte input files (including 0-byte `.gz` placeholders).
@@ -1006,23 +1078,29 @@ function prefix_fastq_reads(
                 end
             else
                 tmp_arrow = mapping_out * ".tmp"
-                isfile(tmp_arrow) && rm(tmp_arrow; force=true)
-                Arrow.write(tmp_arrow, DataFrames.DataFrame(sample_tag=String[], original_read_id=String[], new_read_id=String[]))
-                mv(tmp_arrow, mapping_out; force=true)
+                isfile(tmp_arrow) && rm(tmp_arrow; force = true)
+                Arrow.write(tmp_arrow,
+                    DataFrames.DataFrame(
+                        sample_tag = String[], original_read_id = String[],
+                        new_read_id = String[]))
+                mv(tmp_arrow, mapping_out; force = true)
             end
         end
 
-        mv(tmp_fastq_plain, out_fastq_plain; force=true)
+        mv(tmp_fastq_plain, out_fastq_plain; force = true)
         if mapping_out !== nothing && mapping_format == :tsv
-            mv(tmp_map_plain, map_plain; force=true)
+            mv(tmp_map_plain, map_plain; force = true)
         end
         if endswith(out_fastq, ".gz")
-            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+            Mycelia.gzip_file(out_fastq_plain; outfile = out_fastq,
+                threads = compress_threads, force = force, keep_input = false)
         end
         if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
-            Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            Mycelia.gzip_file(map_plain; outfile = mapping_out, threads = compress_threads,
+                force = force, keep_input = false)
         end
-        return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+        return (
+            out_fastq = out_fastq, mapping_out = mapping_out, sample_tag = sanitized_tag)
     end
 
     tsv_io = nothing
@@ -1048,9 +1126,12 @@ function prefix_fastq_reads(
             FASTX.write(writer, new_record)
             if mapping_out !== nothing
                 if mapping_format == :tsv
-                    write(tsv_io, string(sanitized_tag, '\t', original_id, '\t', new_id, '\n'))
+                    write(tsv_io, string(
+                        sanitized_tag, '\t', original_id, '\t', new_id, '\n'))
                 else
-                    push!(mapping_rows, (sample_tag=sanitized_tag, original_read_id=original_id, new_read_id=new_id))
+                    push!(mapping_rows,
+                        (sample_tag = sanitized_tag,
+                            original_read_id = original_id, new_read_id = new_id))
                 end
             end
         end
@@ -1076,12 +1157,12 @@ function prefix_fastq_reads(
             end
         end
         try
-            isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+            isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force = true)
         catch
         end
         if tmp_map_plain !== nothing
             try
-                isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+                isfile(tmp_map_plain) && rm(tmp_map_plain; force = true)
             catch
             end
         end
@@ -1110,36 +1191,38 @@ function prefix_fastq_reads(
         close(tsv_io)
     end
 
-    mv(tmp_fastq_plain, out_fastq_plain; force=true)
+    mv(tmp_fastq_plain, out_fastq_plain; force = true)
     if mapping_out !== nothing && mapping_format == :tsv
-        mv(tmp_map_plain, map_plain; force=true)
+        mv(tmp_map_plain, map_plain; force = true)
     end
 
     if mapping_out !== nothing && mapping_format == :arrow
         tmp_arrow = mapping_out * ".tmp"
-        isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+        isfile(tmp_arrow) && rm(tmp_arrow; force = true)
         Arrow.write(tmp_arrow, DataFrames.DataFrame(mapping_rows))
-        mv(tmp_arrow, mapping_out; force=true)
+        mv(tmp_arrow, mapping_out; force = true)
     end
 
     if endswith(out_fastq, ".gz")
-        Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+        Mycelia.gzip_file(out_fastq_plain; outfile = out_fastq,
+            threads = compress_threads, force = force, keep_input = false)
     end
     if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
-        Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+        Mycelia.gzip_file(map_plain; outfile = mapping_out, threads = compress_threads,
+            force = force, keep_input = false)
     end
 
-    return (out_fastq=out_fastq, mapping_out=mapping_out, sample_tag=sanitized_tag)
+    return (out_fastq = out_fastq, mapping_out = mapping_out, sample_tag = sanitized_tag)
 end
 
 function uuid_fastq_reads(
-    fastq_file::AbstractString;
-    out_fastq::AbstractString,
-    mapping_out::Union{Nothing,String}=nothing,
-    mapping_format::Symbol=:arrow,
-    source_fastq::Union{Nothing,String}=nothing,
-    force::Bool=false,
-    compress_threads::Integer=get_default_threads()
+        fastq_file::AbstractString;
+        out_fastq::AbstractString,
+        mapping_out::Union{Nothing, String} = nothing,
+        mapping_format::Symbol = :arrow,
+        source_fastq::Union{Nothing, String} = nothing,
+        force::Bool = false,
+        compress_threads::Integer = get_default_threads()
 )
     @assert isfile(fastq_file) "Input FASTQ not found: $fastq_file"
     @assert mapping_format in (:arrow, :tsv) "mapping_format must be :arrow or :tsv"
@@ -1153,25 +1236,30 @@ function uuid_fastq_reads(
     nonempty_file(path::AbstractString) = isfile(path) && filesize(path) > 0
     input_bytes = filesize(fastq_file)
 
-    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") : out_fastq
+    out_fastq_plain = endswith(out_fastq, ".gz") ? replace(out_fastq, r"\.gz$" => "") :
+                      out_fastq
     tmp_fastq_plain = out_fastq_plain * ".tmp"
 
     map_plain = nothing
     tmp_map_plain = nothing
     if mapping_out !== nothing
         if mapping_format == :arrow
-            endswith(mapping_out, ".gz") && error("Arrow mapping_out should not be gzipped: $mapping_out")
+            endswith(mapping_out, ".gz") &&
+                error("Arrow mapping_out should not be gzipped: $mapping_out")
         else
-            map_plain = endswith(mapping_out, ".gz") ? replace(mapping_out, r"\.gz$" => "") : mapping_out
+            map_plain = endswith(mapping_out, ".gz") ?
+                        replace(mapping_out, r"\.gz$" => "") : mapping_out
             tmp_map_plain = map_plain * ".tmp"
         end
     end
 
-    if !force && nonempty_file(out_fastq) && (mapping_out === nothing || nonempty_file(mapping_out))
-        return (out_fastq=out_fastq, mapping_out=mapping_out)
+    if !force && nonempty_file(out_fastq) &&
+       (mapping_out === nothing || nonempty_file(mapping_out))
+        return (out_fastq = out_fastq, mapping_out = mapping_out)
     end
 
-    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) && nonempty_file(out_fastq_plain)
+    if endswith(out_fastq, ".gz") && !nonempty_file(out_fastq) &&
+       nonempty_file(out_fastq_plain)
         mapping_ready = if mapping_out === nothing
             true
         elseif mapping_format == :arrow
@@ -1183,17 +1271,22 @@ function uuid_fastq_reads(
         end
 
         if mapping_ready
-            if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) && nonempty_file(map_plain)
-                Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            if mapping_out !== nothing && mapping_format == :tsv &&
+               endswith(mapping_out, ".gz") && !nonempty_file(mapping_out) &&
+               nonempty_file(map_plain)
+                Mycelia.gzip_file(
+                    map_plain; outfile = mapping_out, threads = compress_threads,
+                    force = force, keep_input = false)
             end
-            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
-            return (out_fastq=out_fastq, mapping_out=mapping_out)
+            Mycelia.gzip_file(out_fastq_plain; outfile = out_fastq,
+                threads = compress_threads, force = force, keep_input = false)
+            return (out_fastq = out_fastq, mapping_out = mapping_out)
         end
     end
 
-    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force=true)
+    isfile(tmp_fastq_plain) && rm(tmp_fastq_plain; force = true)
     if tmp_map_plain !== nothing
-        isfile(tmp_map_plain) && rm(tmp_map_plain; force=true)
+        isfile(tmp_map_plain) && rm(tmp_map_plain; force = true)
     end
 
     if input_bytes == 0
@@ -1206,23 +1299,27 @@ function uuid_fastq_reads(
                 end
             else
                 tmp_arrow = mapping_out * ".tmp"
-                isfile(tmp_arrow) && rm(tmp_arrow; force=true)
-                Arrow.write(tmp_arrow, DataFrames.DataFrame(source_fastq=String[], original_read_id=String[], uuid=String[]))
-                mv(tmp_arrow, mapping_out; force=true)
+                isfile(tmp_arrow) && rm(tmp_arrow; force = true)
+                Arrow.write(tmp_arrow,
+                    DataFrames.DataFrame(source_fastq = String[],
+                        original_read_id = String[], uuid = String[]))
+                mv(tmp_arrow, mapping_out; force = true)
             end
         end
 
-        mv(tmp_fastq_plain, out_fastq_plain; force=true)
+        mv(tmp_fastq_plain, out_fastq_plain; force = true)
         if mapping_out !== nothing && mapping_format == :tsv
-            mv(tmp_map_plain, map_plain; force=true)
+            mv(tmp_map_plain, map_plain; force = true)
         end
         if endswith(out_fastq, ".gz")
-            Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+            Mycelia.gzip_file(out_fastq_plain; outfile = out_fastq,
+                threads = compress_threads, force = force, keep_input = false)
         end
         if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
-            Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+            Mycelia.gzip_file(map_plain; outfile = mapping_out, threads = compress_threads,
+                force = force, keep_input = false)
         end
-        return (out_fastq=out_fastq, mapping_out=mapping_out)
+        return (out_fastq = out_fastq, mapping_out = mapping_out)
     end
 
     tsv_io = nothing
@@ -1248,9 +1345,12 @@ function uuid_fastq_reads(
             FASTX.write(writer, new_record)
             if mapping_out !== nothing
                 if mapping_format == :tsv
-                    write(tsv_io, string(source_fastq, '\t', original_id, '\t', new_id, '\n'))
+                    write(tsv_io, string(
+                        source_fastq, '\t', original_id, '\t', new_id, '\n'))
                 else
-                    push!(mapping_rows, (source_fastq=source_fastq, original_read_id=original_id, uuid=new_id))
+                    push!(mapping_rows,
+                        (source_fastq = source_fastq,
+                            original_read_id = original_id, uuid = new_id))
                 end
             end
         end
@@ -1303,26 +1403,28 @@ function uuid_fastq_reads(
         end
     end
 
-    mv(tmp_fastq_plain, out_fastq_plain; force=true)
+    mv(tmp_fastq_plain, out_fastq_plain; force = true)
     if mapping_out !== nothing
         if mapping_format == :tsv
-            mv(tmp_map_plain, map_plain; force=true)
+            mv(tmp_map_plain, map_plain; force = true)
         else
             tmp_arrow = mapping_out * ".tmp"
-            isfile(tmp_arrow) && rm(tmp_arrow; force=true)
+            isfile(tmp_arrow) && rm(tmp_arrow; force = true)
             Arrow.write(tmp_arrow, DataFrames.DataFrame(mapping_rows))
-            mv(tmp_arrow, mapping_out; force=true)
+            mv(tmp_arrow, mapping_out; force = true)
         end
     end
 
     if endswith(out_fastq, ".gz")
-        Mycelia.gzip_file(out_fastq_plain; outfile=out_fastq, threads=compress_threads, force=force, keep_input=false)
+        Mycelia.gzip_file(out_fastq_plain; outfile = out_fastq,
+            threads = compress_threads, force = force, keep_input = false)
     end
     if mapping_out !== nothing && mapping_format == :tsv && endswith(mapping_out, ".gz")
-        Mycelia.gzip_file(map_plain; outfile=mapping_out, threads=compress_threads, force=force, keep_input=false)
+        Mycelia.gzip_file(map_plain; outfile = mapping_out, threads = compress_threads,
+            force = force, keep_input = false)
     end
 
-    return (out_fastq=out_fastq, mapping_out=mapping_out)
+    return (out_fastq = out_fastq, mapping_out = mapping_out)
 end
 
 """
@@ -1333,7 +1435,9 @@ Maintains input order and works for both single-end and paired-end files (one st
 Uses system `cat`/`zcat` (or `gzip -cd`) and optional `pigz`/`gzip` compression when
 the output path ends with `.gz`.
 """
-function concatenate_fastx(inputs::AbstractVector{<:AbstractString}; output_path::AbstractString, threads=get_default_threads(), force=false)
+function concatenate_fastx(
+        inputs::AbstractVector{<:AbstractString}; output_path::AbstractString,
+        threads = get_default_threads(), force = false)
     if isempty(inputs)
         error("No input files provided for concatenation")
     end
@@ -1343,13 +1447,15 @@ function concatenate_fastx(inputs::AbstractVector{<:AbstractString}; output_path
         end
     end
     mkpath(dirname(output_path))
-    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") : output_path
+    out_plain = endswith(output_path, ".gz") ? replace(output_path, r"\.gz$" => "") :
+                output_path
     tmp_out = out_plain * ".tmp"
     cat_cmd = Sys.which("cat")
     zcat_cmd = Sys.which("zcat")
     gzip_cmd = Sys.which("gzip")
     has_gz_inputs = any(endswith.(inputs, ".gz"))
-    use_system = cat_cmd !== nothing && (!has_gz_inputs || zcat_cmd !== nothing || gzip_cmd !== nothing)
+    use_system = cat_cmd !== nothing &&
+                 (!has_gz_inputs || zcat_cmd !== nothing || gzip_cmd !== nothing)
     if use_system
         open(tmp_out, "w") do out_io
             for f in inputs
@@ -1362,14 +1468,15 @@ function concatenate_fastx(inputs::AbstractVector{<:AbstractString}; output_path
                 else
                     Cmd([cat_cmd, f])
                 end
-                run(pipeline(cmd, stdout=out_io))
+                run(pipeline(cmd, stdout = out_io))
             end
         end
     else
         open(tmp_out, "w") do out_io
             buffer = Vector{UInt8}(undef, 1 << 20)
             for f in inputs
-                in_io = endswith(f, ".gz") ? CodecZlib.GzipDecompressorStream(open(f, "r")) : open(f, "r")
+                in_io = endswith(f, ".gz") ?
+                        CodecZlib.GzipDecompressorStream(open(f, "r")) : open(f, "r")
                 while true
                     n = readbytes!(in_io, buffer)
                     n == 0 && break
@@ -1379,9 +1486,10 @@ function concatenate_fastx(inputs::AbstractVector{<:AbstractString}; output_path
             end
         end
     end
-    mv(tmp_out, out_plain; force=true)
+    mv(tmp_out, out_plain; force = true)
     if endswith(output_path, ".gz")
-        Mycelia.gzip_file(out_plain; outfile=output_path, threads=threads, force=force, keep_input=false)
+        Mycelia.gzip_file(out_plain; outfile = output_path, threads = threads,
+            force = force, keep_input = false)
     end
     return output_path
 end
@@ -1406,13 +1514,12 @@ run_fastqc(fastq="reads.fastq")
 run_fastqc(forward="reads_R1.fastq", reverse="reads_R2.fastq")
 ```
 """
-function run_fastqc(; fastq::Union{String,Nothing}=nothing, 
-                      forward::Union{String,Nothing}=nothing, 
-                      reverse::Union{String,Nothing}=nothing,
-                      outdir::Union{String,Nothing}=nothing)
-    
+function run_fastqc(; fastq::Union{String, Nothing} = nothing,
+        forward::Union{String, Nothing} = nothing,
+        reverse::Union{String, Nothing} = nothing,
+        outdir::Union{String, Nothing} = nothing)
     Mycelia.add_bioconda_env("fastqc")
-    
+
     # Determine input files and output directory
     if fastq !== nothing
         # Single-end mode
@@ -1432,7 +1539,7 @@ function run_fastqc(; fastq::Union{String,Nothing}=nothing,
     else
         error("Must specify either 'fastq' for single-end or both 'forward' and 'reverse' for paired-end")
     end
-    
+
     # Create output directory and run FastQC
     if !isdir(outdir)
         mkpath(outdir)
@@ -1485,11 +1592,12 @@ result_path = assess_duplication_rates("data/sample.fastq")
 result_path = assess_duplication_rates("data/sample.fastq", results_table="results/duplication_analysis.tsv")
 ```
 """
-function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FASTQ_REGEX => ".duplication_rates.tsv"))
+function assess_duplication_rates(fastq;
+        results_table = replace(fastq, Mycelia.FASTQ_REGEX => ".duplication_rates.tsv"))
     # @show results_table
     if isfile(results_table) && (filesize(results_table) > 0)
         println("$results_table already exists.")
-        display(DataFrames.DataFrame(uCSV.read(results_table, delim='\t', header=1)))
+        display(DataFrames.DataFrame(uCSV.read(results_table, delim = '\t', header = 1)))
         return results_table
     end
     # First pass: count total records
@@ -1499,15 +1607,15 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
         total_records += 1
     end
     println("Found $total_records total records.")
-    
+
     # Initialize sets for unique sequences
     unique_observations = Set{String}()
     unique_canonical_observations = Set{String}()
-    
+
     # Create progress meter
     println("Analyzing duplication rates...")
-    prog = ProgressMeter.Progress(total_records, desc="Processing: ", showspeed=true)
-    
+    prog = ProgressMeter.Progress(total_records, desc = "Processing: ", showspeed = true)
+
     # Second pass: process records with progress meter
     for record in Mycelia.open_fastx(fastq)
         seq = FASTX.sequence(record)
@@ -1515,28 +1623,29 @@ function assess_duplication_rates(fastq; results_table=replace(fastq, Mycelia.FA
         converted_seq = BioSequences.LongDNA{4}(seq)
         push!(unique_observations, string(converted_seq))
         push!(unique_canonical_observations, string(BioSequences.canonical(converted_seq)))
-        
+
         # Update progress meter
         ProgressMeter.next!(prog)
     end
-    
+
     total_unique_observations = length(unique_observations)
     total_unique_canonical_observations = length(unique_canonical_observations)
     percent_unique_observations = (total_unique_observations / total_records) * 100
-    percent_unique_canonical_observations = (total_unique_canonical_observations / total_records) * 100
+    percent_unique_canonical_observations = (total_unique_canonical_observations /
+                                             total_records) * 100
     percent_duplication_rate = 100 - percent_unique_observations
     percent_canonical_duplication_rate = 100 - percent_unique_canonical_observations
 
-    results_df = DataFrames.DataFrame(;total_records,
-                total_unique_observations,
-                total_unique_canonical_observations,
-                percent_unique_observations,
-                percent_unique_canonical_observations,
-                percent_duplication_rate,
-                percent_canonical_duplication_rate
-            )
+    results_df = DataFrames.DataFrame(; total_records,
+        total_unique_observations,
+        total_unique_canonical_observations,
+        percent_unique_observations,
+        percent_unique_canonical_observations,
+        percent_duplication_rate,
+        percent_canonical_duplication_rate
+    )
     display(results_df)
-    uCSV.write(results_table, results_df, delim='\t')
+    uCSV.write(results_table, results_df, delim = '\t')
     return results_table
 end
 
@@ -1556,27 +1665,28 @@ Trim paired-end FASTQ reads using Trim Galore, a wrapper around Cutadapt and Fas
 # Dependencies
 Requires trim_galore conda environment
 """
-function trim_galore_paired(;forward_reads::String, reverse_reads::String, outdir::String=pwd(), threads=min(get_default_threads(), 4))
+function trim_galore_paired(; forward_reads::String, reverse_reads::String,
+        outdir::String = pwd(), threads = min(get_default_threads(), 4))
     Mycelia.add_bioconda_env("trim-galore")
     # Create output directory if it doesn't exist
     trim_galore_dir = mkpath(joinpath(outdir, "trim_galore"))
-    
+
     # Get base filename without path and extension for output naming
     forward_base = basename(forward_reads)
     reverse_base = basename(reverse_reads)
-    
+
     # Construct output filenames according to trim_galore naming convention
     trimmed_forward = joinpath(trim_galore_dir, replace(forward_base, Mycelia.FASTQ_REGEX => "_val_1.fq.gz"))
     trimmed_reverse = joinpath(trim_galore_dir, replace(reverse_base, Mycelia.FASTQ_REGEX => "_val_2.fq.gz"))
-    
+
     if !isfile(trimmed_forward) && !isfile(trimmed_reverse)
         cmd = `$(Mycelia.CONDA_RUNNER) run -n trim-galore trim_galore --suppress_warn --cores $(threads) --output_dir $(trim_galore_dir) --paired $(forward_reads) $(reverse_reads)`
         run(cmd)
     else
         @info "$(trimmed_forward) & $(trimmed_reverse) already present"
     end
-    
-    return (;trimmed_forward, trimmed_reverse, outdir)
+
+    return (; trimmed_forward, trimmed_reverse, outdir)
 end
 
 """
@@ -1617,13 +1727,15 @@ This ensures the process won't be killed due to out-of-memory conditions while m
 function qc_filter_short_reads_fastp(;
         forward_reads::String,
         reverse_reads::String,
-        out_forward::String=replace(forward_reads, Mycelia.FASTQ_REGEX => ".fastp.1.fq.gz"),
-        out_reverse::String=replace(reverse_reads, Mycelia.FASTQ_REGEX => ".fastp.2.fq.gz"),
-        report_title::String="$(forward_reads) $(reverse_reads) fastp report",
-        html::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.html",
-        json::String=Mycelia.find_matching_prefix(out_forward, out_reverse) * ".fastp_report.json",
-        enable_dedup::Union{Bool,Nothing}=nothing
-    )
+        out_forward::String = replace(forward_reads, Mycelia.FASTQ_REGEX => ".fastp.1.fq.gz"),
+        out_reverse::String = replace(reverse_reads, Mycelia.FASTQ_REGEX => ".fastp.2.fq.gz"),
+        report_title::String = "$(forward_reads) $(reverse_reads) fastp report",
+        html::String = Mycelia.find_matching_prefix(out_forward, out_reverse) *
+                       ".fastp_report.html",
+        json::String = Mycelia.find_matching_prefix(out_forward, out_reverse) *
+                       ".fastp_report.json",
+        enable_dedup::Union{Bool, Nothing} = nothing
+)
     # usage: fastp -i <in1> -o <out1> [-I <in1> -O <out2>] [options...]
     # options:
     #   # I/O options
@@ -1646,14 +1758,14 @@ function qc_filter_short_reads_fastp(;
     #       --reads_to_process             specify how many reads/pairs to be processed. Default 0 means process all reads. (int [=0])
     #       --dont_overwrite               don't overwrite existing files. Overwritting is allowed by default.
     #       --fix_mgi_id                     the MGI FASTQ ID format is not compatible with many BAM operation tools, enable this option to fix it.
-    
+
     #   # adapter trimming options
     #   -A, --disable_adapter_trimming     adapter trimming is enabled by default. If this option is specified, adapter trimming is disabled
     #   -a, --adapter_sequence               the adapter for read1. For SE data, if not specified, the adapter will be auto-detected. For PE data, this is used if R1/R2 are found not overlapped. (string [=auto])
     #       --adapter_sequence_r2            the adapter for read2 (PE data only). This is used if R1/R2 are found not overlapped. If not specified, it will be the same as <adapter_sequence> (string [=])
     #       --adapter_fasta                  specify a FASTA file to trim both read1 and read2 (if PE) by all the sequences in this FASTA file (string [=])
     #       --detect_adapter_for_pe          by default, the adapter sequence auto-detection is enabled for SE data only, turn on this option to enable it for PE data.
-    
+
     #   # global trimming options
     #   -f, --trim_front1                    trimming how many bases in front for read1, default is 0 (int [=0])
     #   -t, --trim_tail1                     trimming how many bases in tail for read1, default is 0 (int [=0])
@@ -1661,21 +1773,21 @@ function qc_filter_short_reads_fastp(;
     #   -F, --trim_front2                    trimming how many bases in front for read2. If it's not specified, it will follow read1's settings (int [=0])
     #   -T, --trim_tail2                     trimming how many bases in tail for read2. If it's not specified, it will follow read1's settings (int [=0])
     #   -B, --max_len2                       if read2 is longer than max_len2, then trim read2 at its tail to make it as long as max_len2. Default 0 means no limitation. If it's not specified, it will follow read1's settings (int [=0])
-    
+
     #   # duplication evaluation and deduplication
     #   -D, --dedup                          enable deduplication to drop the duplicated reads/pairs
     #       --dup_calc_accuracy              accuracy level to calculate duplication (1~6), higher level uses more memory (1G, 2G, 4G, 8G, 16G, 24G). Default 1 for no-dedup mode, and 3 for dedup mode. (int [=0])
     #       --dont_eval_duplication          don't evaluate duplication rate to save time and use less memory.
-    
+
     #   # polyG tail trimming, useful for NextSeq/NovaSeq data
     #   -g, --trim_poly_g                  force polyG tail trimming, by default trimming is automatically enabled for Illumina NextSeq/NovaSeq data
     #       --poly_g_min_len                 the minimum length to detect polyG in the read tail. 10 by default. (int [=10])
     #   -G, --disable_trim_poly_g          disable polyG tail trimming, by default trimming is automatically enabled for Illumina NextSeq/NovaSeq data
-    
+
     #   # polyX tail trimming
     #   -x, --trim_poly_x                    enable polyX trimming in 3' ends.
     #       --poly_x_min_len                 the minimum length to detect polyX in the read tail. 10 by default. (int [=10])
-    
+
     #   # per read cutting by quality options
     #   -5, --cut_front                      move a sliding window from front (5') to tail, drop the bases in the window if its mean quality < threshold, stop otherwise.
     #   -3, --cut_tail                       move a sliding window from tail (3') to front, drop the bases in the window if its mean quality < threshold, stop otherwise.
@@ -1688,67 +1800,66 @@ function qc_filter_short_reads_fastp(;
     #       --cut_tail_mean_quality          the mean quality requirement option for cut_tail, default to cut_mean_quality if not specified (int [=20])
     #       --cut_right_window_size          the window size option of cut_right, default to cut_window_size if not specified (int [=4])
     #       --cut_right_mean_quality         the mean quality requirement option for cut_right, default to cut_mean_quality if not specified (int [=20])
-    
+
     #   # quality filtering options
     #   -Q, --disable_quality_filtering    quality filtering is enabled by default. If this option is specified, quality filtering is disabled
     #   -q, --qualified_quality_phred      the quality value that a base is qualified. Default 15 means phred quality >=Q15 is qualified. (int [=15])
     #   -u, --unqualified_percent_limit    how many percents of bases are allowed to be unqualified (0~100). Default 40 means 40% (int [=40])
     #   -n, --n_base_limit                 if one read's number of N base is >n_base_limit, then this read/pair is discarded. Default is 5 (int [=5])
     #   -e, --average_qual                 if one read's average quality score <avg_qual, then this read/pair is discarded. Default 0 means no requirement (int [=0])
-    
-    
+
     #   # length filtering options
     #   -L, --disable_length_filtering     length filtering is enabled by default. If this option is specified, length filtering is disabled
     #   -l, --length_required              reads shorter than length_required will be discarded, default is 15. (int [=15])
     #       --length_limit                 reads longer than length_limit will be discarded, default 0 means no limitation. (int [=0])
-    
+
     #   # low complexity filtering
     #   -y, --low_complexity_filter          enable low complexity filter. The complexity is defined as the percentage of base that is different from its next base (base[i] != base[i+1]).
     #   -Y, --complexity_threshold           the threshold for low complexity filter (0~100). Default is 30, which means 30% complexity is required. (int [=30])
-    
+
     #   # filter reads with unwanted indexes (to remove possible contamination)
     #       --filter_by_index1               specify a file contains a list of barcodes of index1 to be filtered out, one barcode per line (string [=])
     #       --filter_by_index2               specify a file contains a list of barcodes of index2 to be filtered out, one barcode per line (string [=])
     #       --filter_by_index_threshold      the allowed difference of index barcode for index filtering, default 0 means completely identical. (int [=0])
-    
+
     #   # base correction by overlap analysis options
     #   -c, --correction                   enable base correction in overlapped regions (only for PE data), default is disabled
     #       --overlap_len_require            the minimum length to detect overlapped region of PE reads. This will affect overlap analysis based PE merge, adapter trimming and correction. 30 by default. (int [=30])
     #       --overlap_diff_limit             the maximum number of mismatched bases to detect overlapped region of PE reads. This will affect overlap analysis based PE merge, adapter trimming and correction. 5 by default. (int [=5])
     #       --overlap_diff_percent_limit     the maximum percentage of mismatched bases to detect overlapped region of PE reads. This will affect overlap analysis based PE merge, adapter trimming and correction. Default 20 means 20%. (int [=20])
-    
+
     #   # UMI processing
     #   -U, --umi                          enable unique molecular identifier (UMI) preprocessing
     #       --umi_loc                      specify the location of UMI, can be (index1/index2/read1/read2/per_index/per_read, default is none (string [=])
     #       --umi_len                      if the UMI is in read1/read2, its length should be provided (int [=0])
     #       --umi_prefix                   if specified, an underline will be used to connect prefix and UMI (i.e. prefix=UMI, UMI=AATTCG, final=UMI_AATTCG). No prefix by default (string [=])
     #       --umi_skip                       if the UMI is in read1/read2, fastp can skip several bases following UMI, default is 0 (int [=0])
-    
+
     #   # overrepresented sequence analysis
     #   -p, --overrepresentation_analysis    enable overrepresented sequence analysis.
     #   -P, --overrepresentation_sampling    One in (--overrepresentation_sampling) reads will be computed for overrepresentation analysis (1~10000), smaller is slower, default is 20. (int [=20])
-    
+
     #   # reporting options
     #   -j, --json                         the json format report file name (string [=fastp.json])
     #   -h, --html                         the html format report file name (string [=fastp.html])
     #   -R, --report_title                 should be quoted with ' or ", default is "fastp report" (string [=fastp report])
-    
+
     #   # threading options
     #   -w, --thread                       worker thread number, default is 3 (int [=3])
-    
+
     #   # output splitting options
     #   -s, --split                        split output by limiting total split file number with this option (2~999), a sequential number prefix will be added to output name ( 0001.out.fq, 0002.out.fq...), disabled by default (int [=0])
     #   -S, --split_by_lines               split output by limiting lines of each file with this option(>=1000), a sequential number prefix will be added to output name ( 0001.out.fq, 0002.out.fq...), disabled by default (long [=0])
     #   -d, --split_prefix_digits          the digits for the sequential number padding (1~10), default is 4, so the filename will be padded as 0001.xxx, 0 to disable padding (int [=4])
-    
+
     #   # help
     #   -?, --help                         print this message
     if !isfile(out_forward) || !isfile(out_reverse) || !isfile(json) || !isfile(html)
         Mycelia.add_bioconda_env("fastp")
-        
+
         ## Smart deduplication logic based on file size and available memory
         dedup_args = String[]
-        
+
         if enable_dedup === false
             ## User explicitly disabled dedup - don't add any dedup arguments
             @info "Deduplication explicitly disabled by user"
@@ -1756,12 +1867,12 @@ function qc_filter_short_reads_fastp(;
             ## User explicitly enabled dedup - use default settings but check memory
             file_size_bytes = filesize(forward_reads) + filesize(reverse_reads)
             available_memory = Sys.free_memory()
-            
+
             ## fastp dedup accuracy levels: 1G, 2G, 4G, 8G, 16G, 24G (levels 1-6)
             ## Default is level 3 (4GB) for dedup mode
             dedup_memory_gb = 4
             dedup_memory_bytes = dedup_memory_gb * 1024^3
-            
+
             if dedup_memory_bytes > available_memory
                 @warn "Not enough memory for default deduplication (need $(Base.format_bytes(dedup_memory_bytes)), have $(Base.format_bytes(available_memory))). Using lower accuracy level."
                 ## Try progressively lower accuracy levels
@@ -1782,14 +1893,14 @@ function qc_filter_short_reads_fastp(;
             ## enable_dedup is nothing - use automatic logic based on file size and memory
             file_size_bytes = filesize(forward_reads) + filesize(reverse_reads)
             available_memory = Sys.free_memory()
-            
+
             ## Heuristic: if files are small (< 100MB total), dedup is probably not worth the memory cost
             if file_size_bytes < 100 * 1024^2
                 @info "Small input files ($(Base.format_bytes(file_size_bytes))). Skipping deduplication for efficiency."
             else
                 ## For larger files, check if we have enough memory for dedup
                 dedup_memory_bytes = 4 * 1024^3  ## Default level 3 needs 4GB
-                
+
                 if dedup_memory_bytes <= available_memory
                     push!(dedup_args, "--dedup")
                     @info "Enabling deduplication with default settings (4GB memory, $(Base.format_bytes(available_memory)) available)"
@@ -1804,7 +1915,7 @@ function qc_filter_short_reads_fastp(;
                 end
             end
         end
-        
+
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastp fastp
                 --in1 $(forward_reads)
                 --in2 $(reverse_reads)
@@ -1852,13 +1963,13 @@ This function uses fastplong to filter long reads based on quality and length cr
 It is optimized for Oxford Nanopore, PacBio, or similar long-read datasets.
 """
 function qc_filter_long_reads_fastplong(;
-                            in_fastq::String,
-                            report_title::String=in_fastq * " fastplong report",
-                            out_fastq::String=Mycelia.replace(in_fastq, Mycelia.FASTQ_REGEX => ".fastplong.fq.gz"),
-                            html_report::String=out_fastq * ".html",
-                            json_report::String=out_fastq * ".json",
-                            min_length::Int=1000,
-                            max_length::Int=0)
+        in_fastq::String,
+        report_title::String = in_fastq * " fastplong report",
+        out_fastq::String = Mycelia.replace(in_fastq, Mycelia.FASTQ_REGEX => ".fastplong.fq.gz"),
+        html_report::String = out_fastq * ".html",
+        json_report::String = out_fastq * ".json",
+        min_length::Int = 1000,
+        max_length::Int = 0)
     # Build command with required parameters
     outputs_exist = isfile(out_fastq) && isfile(html_report) && isfile(json_report)
     if !outputs_exist
@@ -1912,7 +2023,7 @@ function qc_filter_long_reads_filtlong(;
         out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".filtlong.fq.gz"),
         min_mean_q = 20,
         keep_percent = 95
-    )
+)
     if !isfile(out_fastq)
         Mycelia.add_bioconda_env("filtlong")
         Mycelia.add_bioconda_env("pigz")
@@ -1952,26 +2063,26 @@ function qc_filter_long_reads_chopper(;
         out_fastq::String = replace(in_fastq, Mycelia.FASTQ_REGEX => ".chopper.fq.gz"),
         quality_threshold::Int = 20,
         min_length::Int = 1000
-    )
+)
     if !isfile(out_fastq)
         Mycelia.add_bioconda_env("chopper")
         # chopper reads from STDIN and writes to STDOUT, so we pipe the file
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n chopper chopper --quality $(quality_threshold) --minlength $(min_length)`
-        
+
         # Handle both compressed and uncompressed input files
         input_cmd = if endswith(in_fastq, ".gz")
             `zcat $(in_fastq)`
         else
             `cat $(in_fastq)`
         end
-        
+
         # Create pipeline: input file -> chopper -> gzip -> output
         pipeline_cmd = pipeline(
             input_cmd,
             cmd,
             `gzip`
         )
-        
+
         run(pipeline(pipeline_cmd, out_fastq))
     end
     return out_fastq
@@ -2001,7 +2112,7 @@ https://bioinf.shenwei.me/seqkit/usage/#stats
 function fastx_stats(fastx)
     Mycelia.add_bioconda_env("seqkit")
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit stats --N 90 --all --tabular $(fastx)`
-    return DataFrames.DataFrame(uCSV.read(open(cmd), header=1, delim='\t'))
+    return DataFrames.DataFrame(uCSV.read(open(cmd), header = 1, delim = '\t'))
 end
 
 """
@@ -2015,7 +2126,7 @@ If `gzip` is true or filename endswith .gz, output is gzipped.
 `records` must be an iterable of FASTX.FASTQ.Record.
 Accepts `outfile` as an alias for `filename` for consistency with write_fasta.
 """
-function write_fastq(;records, filename=nothing, outfile=nothing, gzip=false)
+function write_fastq(; records, filename = nothing, outfile = nothing, gzip = false)
     output_path = isnothing(filename) ? outfile : filename
     if isnothing(output_path)
         error("Provide either filename or outfile")
@@ -2149,8 +2260,10 @@ Performs a set-based comparison of DNA sequences by hashing each sequence.
 Sequence order differences between files do not affect the result.
 """
 function equivalent_fasta_sequences(fasta_1, fasta_2)
-    fasta_1_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_1))
-    fasta_2_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record))) for record in Mycelia.open_fastx(fasta_2))
+    fasta_1_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record)))
+    for record in Mycelia.open_fastx(fasta_1))
+    fasta_2_hashes = Set(hash(BioSequences.LongDNA{2}(FASTX.sequence(record)))
+    for record in Mycelia.open_fastx(fasta_2))
     @show setdiff(fasta_1_hashes, fasta_2_hashes)
     @show setdiff(fasta_2_hashes, fasta_1_hashes)
     return fasta_1_hashes == fasta_2_hashes
@@ -2163,7 +2276,7 @@ Join fasta files while adding origin prefixes to the identifiers.
 
 Does not guarantee uniqueness but will warn if conflicts arise
 """
-function merge_fasta_files(;fasta_files, fasta_file)
+function merge_fasta_files(; fasta_files, fasta_file)
     @info "merging $(length(fasta_files)) files..."
     identifiers = Set{String}()
     open(fasta_file, "w") do io
@@ -2242,7 +2355,8 @@ function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_
                 pruned_seq_length = Int(floor(length(raw_seq)/3)) * 3
                 truncated_seq = raw_seq[1:pruned_seq_length]
                 amino_acid_seq = BioSequences.translate(truncated_seq)
-                amino_acid_record = FASTX.FASTA.Record(FASTX.identifier(record), FASTX.description(record), amino_acid_seq)
+                amino_acid_record = FASTX.FASTA.Record(
+                    FASTX.identifier(record), FASTX.description(record), amino_acid_seq)
                 write(writer, amino_acid_record)
             catch
                 @warn "unable to translate record", record
@@ -2308,27 +2422,26 @@ sorts longest to shortest!!
 
 http://thegenomefactory.blogspot.com/2012/11/sorting-fastq-files-by-sequence-length.html
 """
-function sort_fastq(input_fastq, output_fastq="")
-    
+function sort_fastq(input_fastq, output_fastq = "")
     if endswith(input_fastq, ".gz")
         p = pipeline(
-                `gzip -dc $input_fastq`,
-                `paste - - - -`,
-                `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
-                `sort -nr`,
-                `cut -f2-`,
-                `tr "\t" "\n"`,
-                `gzip`
-                )
+            `gzip -dc $input_fastq`,
+            `paste - - - -`,
+            `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
+            `sort -nr`,
+            `cut -f2-`,
+            `tr "\t" "\n"`,
+            `gzip`
+        )
     else
         p = pipeline(
-                `cat $input_fastq`,
-                `paste - - - -`,
-                `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
-                `sort -nr`,
-                `cut -f2-`,
-                `tr "\t" "\n"`
-                )
+            `cat $input_fastq`,
+            `paste - - - -`,
+            `perl -ne '@x=split m/\t/; unshift @x, length($x[1]); print join "\t",@x;'`,
+            `sort -nr`,
+            `cut -f2-`,
+            `tr "\t" "\n"`
+        )
     end
     run(pipeline(p, output_fastq))
     return output_fastq
@@ -2371,9 +2484,9 @@ function determine_read_lengths(fastq_file; total_reads = Inf)
     end
     read_lengths = zeros(Int, total_reads)
     @info "determining read lengths"
-    p = ProgressMeter.Progress(total_reads; dt=1)
+    p = ProgressMeter.Progress(total_reads; dt = 1)
     for (i, record) in enumerate(open_fastx(fastq_file))
-#         push!(read_lengths, length(FASTX.sequence(record)))
+        #         push!(read_lengths, length(FASTX.sequence(record)))
         read_lengths[i] = length(FASTX.sequence(record))
         ProgressMeter.next!(p)
     end
@@ -2446,17 +2559,23 @@ Subsample reads from a FASTQ file using seqkit.
 # Returns
 - `String`: Path to the output FASTQ file
 """
-function subsample_reads_seqkit(;in_fastq::String, out_fastq::String="", n_reads::Union{Missing, Int}=missing, proportion_reads::Union{Missing, Float64}=missing)
+function subsample_reads_seqkit(;
+        in_fastq::String, out_fastq::String = "", n_reads::Union{Missing, Int} = missing,
+        proportion_reads::Union{Missing, Float64} = missing)
     Mycelia.add_bioconda_env("seqkit")
     if ismissing(n_reads) && ismissing(proportion_reads)
         error("please specify the number or proportion of reads")
     elseif !ismissing(n_reads)
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --two-pass --number $(n_reads) $(in_fastq)`, `gzip`)
+        p = pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --two-pass --number $(n_reads) $(in_fastq)`,
+            `gzip`)
         if isempty(out_fastq)
             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.N$(n_reads).fq.gz")
         end
     elseif !ismissing(proportion_reads)
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --proportion $(proportion_reads) $(in_fastq)`, `gzip`)
+        p = pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n seqkit seqkit sample --proportion $(proportion_reads) $(in_fastq)`,
+            `gzip`)
         if isempty(out_fastq)
             out_fastq = replace(in_fastq, Mycelia.FASTQ_REGEX => ".seqkit.P$(proportion_reads).fq.gz")
         end
@@ -2511,7 +2630,7 @@ from the reference.
 - Creates a `{fasta}.fai` index file in the same directory as input
 - Installs samtools via conda if not already present
 """
-function samtools_index_fasta(;fasta)
+function samtools_index_fasta(; fasta)
     Mycelia.add_bioconda_env("samtools")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(fasta)`)
 end
@@ -2538,10 +2657,12 @@ Construct a FASTX FASTQ record from its components.
   3. Plus line
   4. Quality scores (ASCII encoded)
 """
-function fastq_record(;identifier, sequence, quality_scores)
+function fastq_record(; identifier, sequence, quality_scores)
     # Fastx wont parse anything higher than 93
     quality_scores = min.(quality_scores, 93)
-    record_string = join(["@" * identifier, sequence, "+", join([Char(x+33) for x in quality_scores])], "\n")
+    record_string = join(
+        [
+            "@" * identifier, sequence, "+", join([Char(x+33) for x in quality_scores])], "\n")
     return FASTX.parse(FASTX.FASTQRecord, record_string)
 end
 
@@ -2566,7 +2687,8 @@ A DataFrame with per-contig statistics including:
 Note: Only primary alignments (isprimary=true) and mapped reads (ismapped=true) are considered.
 """
 function fastx_to_contig_lengths(fastx)
-    OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fastx))
+    OrderedCollections.OrderedDict(String(FASTX.identifier(record)) => length(FASTX.sequence(record))
+    for record in Mycelia.open_fastx(fastx))
 end
 
 """
@@ -2629,12 +2751,12 @@ Writes FASTA records to a file, optionally gzipped.
 - `outfile::String`: The path to the output FASTA file (including ".gz" if applicable).
 """
 function write_fasta(;
-    outfile::AbstractString=tempname()*".fna",
-    records::Vector{FASTX.FASTA.Record},
-    gzip::Bool=false,
-    show_progress::Union{Bool,Nothing}=nothing,
-    use_pigz::Union{Bool,Nothing}=nothing,
-    pigz_threads::Int=get_default_threads()
+        outfile::AbstractString = tempname()*".fna",
+        records::Vector{FASTX.FASTA.Record},
+        gzip::Bool = false,
+        show_progress::Union{Bool, Nothing} = nothing,
+        use_pigz::Union{Bool, Nothing} = nothing,
+        pigz_threads::Int = get_default_threads()
 )
     # Determine if gzip compression should be used based on both the filename and the gzip argument
     gzip = occursin(r"\.gz$", outfile) || gzip
@@ -2647,7 +2769,8 @@ function write_fasta(;
 
     # Estimate file size based on record lengths (approximate)
     # Average FASTA overhead: ~60 bytes per record (identifier line + newlines)
-    estimated_size_bytes = sum(length(FASTX.FASTA.sequence(record)) for record in records) + (length(records) * 60)
+    estimated_size_bytes = sum(length(FASTX.FASTA.sequence(record)) for record in records) +
+                           (length(records) * 60)
 
     # Auto-detect pigz usage: use for files ≥50 MB if pigz is available
     use_pigz_compression = if isnothing(use_pigz) && gzip
@@ -2675,7 +2798,7 @@ function write_fasta(;
 
         FASTX.FASTA.Writer(io) do fastx_io
             if display_progress
-                progress = ProgressMeter.Progress(length(records); desc="Writing FASTA records: ")
+                progress = ProgressMeter.Progress(length(records); desc = "Writing FASTA records: ")
                 for record in records
                     Base.write(fastx_io, record)
                     ProgressMeter.next!(progress)
@@ -2718,7 +2841,7 @@ Path to the output FASTA file
 - Requires EMBOSS suite (installed automatically via Conda)
 - Will not regenerate output if it already exists unless force=true
 """
-function genbank_to_fasta(;genbank, fasta=genbank * ".fna", force=false)
+function genbank_to_fasta(; genbank, fasta = genbank * ".fna", force = false)
     add_bioconda_env("emboss")
     if !isfile(fasta) || force
         run(`$(Mycelia.CONDA_RUNNER) run -n emboss --live-stream seqret $(genbank) fasta:$(fasta)`)

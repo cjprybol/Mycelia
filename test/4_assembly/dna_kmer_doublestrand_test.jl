@@ -27,14 +27,13 @@ import FASTX
 import Kmers
 
 Test.@testset "DNA K-mer Doublestrand Graph" begin
-
     Test.@testset "Canonical K-mer Merging - Basic" begin
         # Read with ATG and its RC CAT
         seq1 = "ATGCAT"
         record = FASTX.FASTA.Record("read_001", seq1)
 
         # Use canonical builder for canonical behavior (merging forward and RC)
-        graph = Mycelia.Rhizomorph.build_kmer_graph_canonical([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_canonical([record], 3; dataset_id = "test")
 
         # Canonical form of ATG is ATG (ATG < CAT lexicographically)
         # Canonical form of CAT is ATG
@@ -51,7 +50,7 @@ Test.@testset "DNA K-mer Doublestrand Graph" begin
         # Reverse read: GCAT (RC of ATGC)
         record2 = FASTX.FASTA.Record("read_rev", "GCAT")
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record1, record2], 3; dataset_id = "test")
 
         # Both reads should contribute to canonical k-mers
         # Check that observation count reflects both strands
@@ -64,7 +63,7 @@ Test.@testset "DNA K-mer Doublestrand Graph" begin
 
     Test.@testset "Strand Evidence is Preserved" begin
         record = FASTX.FASTA.Record("read_001", "ATGC")
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id = "test")
 
         canon_atg = BioSequences.canonical(Kmers.DNAKmer{3}("ATG"))
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, canon_atg)
@@ -81,7 +80,7 @@ Test.@testset "DNA K-mer Doublestrand Graph" begin
     Test.@testset "Palindromic K-mers" begin
         # Palindromic k-mer: GCGC has RC = GCGC
         record = FASTX.FASTA.Record("read_001", "GCGCGC")
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 4; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 4; dataset_id = "test")
 
         kmer = Kmers.DNAKmer{4}("GCGC")
         canon = BioSequences.canonical(kmer)
@@ -94,7 +93,7 @@ Test.@testset "DNA K-mer Doublestrand Graph" begin
 
     Test.@testset "Graph Query Functions Work on Doublestrand" begin
         record = FASTX.FASTA.Record("read_001", "ATGCGATCG")
-        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3; dataset_id = "test")
 
         # Query functions should work
         sources = Mycelia.Rhizomorph.get_all_sources(graph)

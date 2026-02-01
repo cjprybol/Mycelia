@@ -79,7 +79,8 @@ Test.@testset "TDA metrics (graph invariants)" begin
         end
 
         summary = Mycelia.tda_on_graph(g, cfg; vertex_weights = ones(Float64, Graphs.nv(g)))
-        expected = Float64(maximum(summary.metrics.betti1) + maximum(summary.metrics.betti0))
+        expected = Float64(maximum(summary.metrics.betti1) +
+                           maximum(summary.metrics.betti0))
         Test.@test Mycelia.tda_graph_score(summary.metrics) == expected
     end
 end

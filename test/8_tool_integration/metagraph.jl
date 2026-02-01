@@ -47,7 +47,7 @@ Test.@testset "MetaGraph Tool Integration" begin
         Test.@test string(cmd.exec[1]) == Mycelia.CONDA_RUNNER
         Test.@test "metagraph" in cmd.exec
 
-        cmd_prot = Mycelia.metagraph_cmd(["build"]; executable="metagraph_Protein")
+        cmd_prot = Mycelia.metagraph_cmd(["build"]; executable = "metagraph_Protein")
         Test.@test "metagraph_Protein" in cmd_prot.exec
     end
 
@@ -62,7 +62,7 @@ Test.@testset "MetaGraph Tool Integration" begin
                 try
                     Mycelia.install_metagraph()
                     Test.@test Mycelia.check_bioconda_env_is_installed(Mycelia.METAGRAPH_CONDA_ENV)
-                    Mycelia.run_metagraph(["--version"]; live_stream=false)
+                    Mycelia.run_metagraph(["--version"]; live_stream = false)
                     Test.@test true
                 catch
                     Test.@test false
@@ -79,13 +79,13 @@ Test.@testset "MetaGraph Tool Integration" begin
                     end
 
                     Mycelia.metagraph_build([fasta_path];
-                        k=15,
-                        outfile_base="graph",
-                        out_dir=tmp_dir,
-                        verbose=false
+                        k = 15,
+                        outfile_base = "graph",
+                        out_dir = tmp_dir,
+                        verbose = false
                     )
 
-                    dbg_files = filter(path -> endswith(path, ".dbg"), readdir(tmp_dir; join=true))
+                    dbg_files = filter(path -> endswith(path, ".dbg"), readdir(tmp_dir; join = true))
                     Test.@test !isempty(dbg_files)
 
                     Mycelia.metagraph_stats(first(dbg_files))

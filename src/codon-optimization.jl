@@ -44,11 +44,13 @@ natural occurrence. Each selected codon is guaranteed to translate back to the o
 """
 function reverse_translate(protein_sequence::BioSequences.LongAA)
     this_sequence = BioSequences.LongDNA{2}()
-    codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}() for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
+    codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}()
+    for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
     for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
         amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
-        codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) + 1
-    end    
+        codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) +
+                                               1
+    end
     for amino_acid in protein_sequence
         # I'm collecting first because I'm worried about the keys and values not being sorted the same between queries, but that feels like it's not a viable worry
         collected = collect(codon_frequencies[amino_acid])
@@ -56,7 +58,8 @@ function reverse_translate(protein_sequence::BioSequences.LongAA)
         frequencies = last.(collected)
         chosen_codon_index = StatsBase.sample(1:length(codons), StatsBase.weights(frequencies))
         chosen_codon = codons[chosen_codon_index]
-        @assert first(BioSequences.translate(BioSequences.LongDNA{2}(chosen_codon))) == amino_acid
+        @assert first(BioSequences.translate(BioSequences.LongDNA{2}(chosen_codon))) ==
+                amino_acid
         this_sequence *= chosen_codon
     end
     @assert BioSequences.translate(this_sequence) == protein_sequence
@@ -81,7 +84,7 @@ Optimizes the DNA sequence encoding for a given protein sequence using codon usa
 # Returns
 - `BioSequences.LongDNA{2}`: Optimized DNA sequence encoding the input protein
 """
-function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
+function codon_optimize(; normalized_codon_frequencies, protein_sequence::BioSequences.LongAA, n_iterations)
     best_sequence = reverse_translate(protein_sequence)
     # codons = last.(collect(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(best_sequence), 3)))
     codons = first.(collect(Kmers.UnambiguousDNAMers{3}(BioSequences.LongDNA{4}(best_sequence))))[1:3:end]
@@ -93,7 +96,7 @@ function codon_optimize(;normalized_codon_frequencies, protein_sequence::BioSequ
     best_likelihood = initial_log_likelihood
 
     ProgressMeter.@showprogress for i in 1:n_iterations
-    # for iteration in 1:n_iterations
+        # for iteration in 1:n_iterations
         this_sequence = BioSequences.LongDNA{2}()
         this_log_likelihood = -log10(1.0)
         for amino_acid in protein_sequence
@@ -134,7 +137,7 @@ function amino_acids_to_codons()
     for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
         amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
         amino_acid_to_codon_map[amino_acid] = codon
-    end   
+    end
     return amino_acid_to_codon_map
 end
 
@@ -176,15 +179,17 @@ Nested dictionary mapping amino acids to their corresponding codon usage counts:
 - Determines coding strand based on presence of stop codons and start codons
 - Skips ambiguous sequences that cannot be confidently oriented
 """
-function genbank_to_codon_frequencies(genbank; allow_all=true)
+function genbank_to_codon_frequencies(genbank; allow_all = true)
     # create an initial codon frequency table, where we initialize all possible codons with equal probability
     # this way, if we don't see the amino acid in the observed proteins we're optimizing, we can still produce an codon profile
-    codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}() for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
+    codon_frequencies = Dict(a => Dict{Kmers.DNACodon, Int}()
+    for a in vcat(Mycelia.AA_ALPHABET..., [BioSequences.AA_Term]))
     if allow_all
         for codon in Mycelia.generate_all_possible_kmers(3, Mycelia.DNA_ALPHABET)
             amino_acid = first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
-            codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) + 1
-        end    
+            codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) +
+                                                   1
+        end
     end
     genome_genbank_data = GenomicAnnotations.readgbk(genbank)
     for chromosome in genome_genbank_data
@@ -193,7 +198,6 @@ function genbank_to_codon_frequencies(genbank; allow_all=true)
             gene_type = GenomicAnnotations.feature(gene)
             # is_terminator = occursin(r"^TERM", gene.label)
             if (length(gene_range) % 3 == 0) && (gene_type == :misc_feature)
-
                 fw_dnaseq = GenomicAnnotations.sequence(gene)
                 revcom_dnaseq = BioSequences.reverse_complement(fw_dnaseq)
 
@@ -216,11 +220,14 @@ function genbank_to_codon_frequencies(genbank; allow_all=true)
                     # @show "ambiguous"
                     continue
                 end
-                
+
                 # for (mer, amino_acid) in zip(BioSequences.each(BioSequences.DNAMer{3}, dnaseq, 3), aaseq)
-                for ((i, codon), amino_acid) in zip(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(dnaseq), 3), aaseq)
-                    @assert amino_acid == first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
-                    codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) + 1
+                for ((i, codon), amino_acid) in
+                    zip(Kmers.SpacedKmers{Kmers.DNACodon}(BioSequences.LongDNA{4}(dnaseq), 3), aaseq)
+                    @assert amino_acid ==
+                            first(BioSequences.translate(BioSequences.LongDNA{2}(codon)))
+                    codon_frequencies[amino_acid][codon] = get(codon_frequencies[amino_acid], codon, 0) +
+                                                           1
                 end
             end
         end
@@ -240,11 +247,13 @@ Normalizes codon frequencies for each amino acid such that frequencies sum to 1.
 - Normalized codon frequencies where values for each amino acid sum to 1.0
 """
 function normalize_codon_frequencies(codon_frequencies)
-    normalized_codon_frequencies = Dict{BioSymbols.AminoAcid, Dict{Kmers.DNACodon, Float64}}()
+    normalized_codon_frequencies = Dict{
+        BioSymbols.AminoAcid, Dict{Kmers.DNACodon, Float64}}()
     for (amino_acid, amino_acid_codon_frequencies) in codon_frequencies
         total_count = sum(values(amino_acid_codon_frequencies))
         normalized_codon_frequencies[amino_acid] = Dict(
-            amino_acid_codon => amino_acid_codon_frequency/total_count for (amino_acid_codon, amino_acid_codon_frequency) in amino_acid_codon_frequencies
+            amino_acid_codon => amino_acid_codon_frequency/total_count
+        for (amino_acid_codon, amino_acid_codon_frequency) in amino_acid_codon_frequencies
         )
         if !isempty(normalized_codon_frequencies[amino_acid])
             @assert abs(1-sum(values(normalized_codon_frequencies[amino_acid]))) <= eps()
@@ -269,6 +278,7 @@ function normalize_kmer_counts(kmer_counts)
     if total_kmer_counts == 0
         return DataStructures.OrderedDict(k => 0.0 for (k, _) in kmer_counts)
     end
-    normalized_kmer_frequencies = DataStructures.OrderedDict(k => v/total_kmer_counts for (k,v) in kmer_counts)
+    normalized_kmer_frequencies = DataStructures.OrderedDict(k => v/total_kmer_counts
+    for (k, v) in kmer_counts)
     return normalized_kmer_frequencies
 end

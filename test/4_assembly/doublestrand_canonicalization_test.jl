@@ -30,8 +30,8 @@ Test.@testset "DNA DoubleStrand Mode Fix Test (Rhizomorph)" begin
     graph = Mycelia.Rhizomorph.build_kmer_graph(
         reads,
         5;
-        dataset_id="ds_fix",
-        mode=:doublestrand,
+        dataset_id = "ds_fix",
+        mode = :doublestrand
     )
 
     Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -41,7 +41,8 @@ Test.@testset "DNA DoubleStrand Mode Fix Test (Rhizomorph)" begin
     for label in MetaGraphsNext.labels(graph)
         vertex_data = graph[label]
         Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
-        strands = Set(obs.strand for obs in Iterators.flatten(values(vertex_data.evidence["ds_fix"])))
+        strands = Set(obs.strand
+        for obs in Iterators.flatten(values(vertex_data.evidence["ds_fix"])))
         if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
             has_forward_and_reverse = true
         end

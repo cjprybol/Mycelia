@@ -16,7 +16,7 @@ function materialize_fastq(input_fastq::AbstractString, output_fastq::AbstractSt
     reader = Mycelia.open_fastx(input_fastq)
     records = collect(reader)
     close(reader)
-    Mycelia.write_fastq(records=records, filename=output_fastq)
+    Mycelia.write_fastq(records = records, filename = output_fastq)
     return output_fastq
 end
 
@@ -24,22 +24,22 @@ Test.@testset "HPC Assembly Wrappers" begin
     if RUN_EXTERNAL
         mktempdir() do dir
             rng = StableRNGs.StableRNG(2025)
-            record = Mycelia.random_fasta_record(moltype=:DNA, seed=rand(rng, 1:typemax(Int)), L=5000)
+            record = Mycelia.random_fasta_record(moltype = :DNA, seed = rand(rng, 1:typemax(Int)), L = 5000)
             reference = joinpath(dir, "reference.fasta")
-            Mycelia.write_fasta(outfile=reference, records=[record])
+            Mycelia.write_fasta(outfile = reference, records = [record])
 
             illumina = Mycelia.simulate_illumina_reads(
-                fasta=reference,
-                coverage=20,
-                read_length=100,
-                rndSeed=1234,
-                quiet=true
+                fasta = reference,
+                coverage = 20,
+                read_length = 100,
+                rndSeed = 1234,
+                quiet = true
             )
             pacbio_reads = Mycelia.simulate_pacbio_reads(
-                fasta=reference,
-                quantity="10x",
-                quiet=true,
-                seed=5678
+                fasta = reference,
+                quantity = "10x",
+                quiet = true,
+                seed = 5678
             )
 
             short_1 = materialize_fastq(illumina.forward_reads, joinpath(dir, "short_1.fastq"))
@@ -49,7 +49,9 @@ Test.@testset "HPC Assembly Wrappers" begin
             Test.@testset "metaVelvet assembly" begin
                 outdir = joinpath(dir, "metavelvet_assembly")
                 try
-                    result = Mycelia.run_metavelvet(short_1; fastq2=short_2, outdir=outdir, k=21, min_contig_lgth=100)
+                    result = Mycelia.run_metavelvet(
+                        short_1; fastq2 = short_2, outdir = outdir,
+                        k = 21, min_contig_lgth = 100)
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.contigs)
                 catch e
@@ -61,7 +63,9 @@ Test.@testset "HPC Assembly Wrappers" begin
             Test.@testset "Unicycler hybrid assembly" begin
                 outdir = joinpath(dir, "unicycler_assembly")
                 try
-                    result = Mycelia.run_unicycler(short_1=short_1, short_2=short_2, long_reads=long_reads, outdir=outdir, threads=2, spades_options="-m 4", kmers="21,33,55")
+                    result = Mycelia.run_unicycler(short_1 = short_1, short_2 = short_2,
+                        long_reads = long_reads, outdir = outdir, threads = 2,
+                        spades_options = "-m 4", kmers = "21,33,55")
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.assembly)
                 catch e
@@ -73,7 +77,7 @@ Test.@testset "HPC Assembly Wrappers" begin
             Test.@testset "Apollo polishing" begin
                 outdir = joinpath(dir, "apollo_polish")
                 try
-                    result = Mycelia.run_apollo(reference, long_reads; outdir=outdir)
+                    result = Mycelia.run_apollo(reference, long_reads; outdir = outdir)
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.polished_assembly)
                 catch e
@@ -85,7 +89,7 @@ Test.@testset "HPC Assembly Wrappers" begin
             Test.@testset "Homopolish polishing" begin
                 outdir = joinpath(dir, "homopolish_polish")
                 try
-                    result = Mycelia.run_homopolish(reference, reference; outdir=outdir, threads=2)
+                    result = Mycelia.run_homopolish(reference, reference; outdir = outdir, threads = 2)
                     Test.@test result.outdir == outdir
                     Test.@test isfile(result.polished_assembly)
                 catch e

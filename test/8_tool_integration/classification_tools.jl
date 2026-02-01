@@ -38,16 +38,15 @@ Test.@testset "Classification Tools Integration Tests" begin
     # Sourmash Tests
     # ========================================================================
     Test.@testset "Sourmash Integration" begin
-
         if RUN_EXTERNAL
             Test.@testset "Sourmash sketch, search, and gather" begin
                 workdir = mktempdir()
 
                 # Download PhiX genome as test data
                 phix_fasta = Mycelia.download_genome_by_accession(
-                    accession="NC_001422.1",
-                    outdir=workdir,
-                    compressed=false
+                    accession = "NC_001422.1",
+                    outdir = workdir,
+                    compressed = false
                 )
                 Test.@test isfile(phix_fasta)
 
@@ -56,21 +55,21 @@ Test.@testset "Classification Tools Integration Tests" begin
                 seq_record = first(fasta_records)
                 seq_str = String(FASTX.sequence(seq_record))
 
-                mutated_seq = Mycelia.mutate_dna_substitution_fraction(seq_str; fraction=0.05)
+                mutated_seq = Mycelia.mutate_dna_substitution_fraction(seq_str; fraction = 0.05)
                 mutated_fasta = joinpath(workdir, "phix_mutated.fasta")
                 Mycelia.write_fasta(
-                    outfile=mutated_fasta,
-                    records=[FASTX.FASTA.Record("phix_mutated", BioSequences.LongDNA{4}(mutated_seq))]
+                    outfile = mutated_fasta,
+                    records = [FASTX.FASTA.Record("phix_mutated", BioSequences.LongDNA{4}(mutated_seq))]
                 )
                 Test.@test isfile(mutated_fasta)
 
                 # Test 1: Create signatures (sketches)
                 sketch_result = Mycelia.run_sourmash_sketch(
-                    input_files=[phix_fasta, mutated_fasta],
-                    outdir=joinpath(workdir, "sketches"),
-                    k_sizes=[21, 31],
-                    scaled=100,
-                    molecule="dna"
+                    input_files = [phix_fasta, mutated_fasta],
+                    outdir = joinpath(workdir, "sketches"),
+                    k_sizes = [21, 31],
+                    scaled = 100,
+                    molecule = "dna"
                 )
 
                 Test.@test isdir(sketch_result.outdir)
@@ -82,11 +81,11 @@ Test.@testset "Classification Tools Integration Tests" begin
 
                 # Test 2: Search one signature against the other
                 search_result = Mycelia.run_sourmash_search(
-                    query_sig=sketch_result.signatures[1],
-                    database_sig=sketch_result.signatures[2],
-                    outdir=joinpath(workdir, "search_results"),
-                    threshold=0.01,
-                    k_size=31
+                    query_sig = sketch_result.signatures[1],
+                    database_sig = sketch_result.signatures[2],
+                    outdir = joinpath(workdir, "search_results"),
+                    threshold = 0.01,
+                    k_size = 31
                 )
 
                 Test.@test isdir(search_result.outdir)
@@ -108,10 +107,10 @@ Test.@testset "Classification Tools Integration Tests" begin
                 end
 
                 combined_sketch = Mycelia.run_sourmash_sketch(
-                    input_files=[combined_fasta],
-                    outdir=joinpath(workdir, "combined_sketch"),
-                    k_sizes=[31],
-                    scaled=100
+                    input_files = [combined_fasta],
+                    outdir = joinpath(workdir, "combined_sketch"),
+                    k_sizes = [31],
+                    scaled = 100
                 )
 
                 # Create a database from the reference signatures
@@ -122,18 +121,18 @@ Test.@testset "Classification Tools Integration Tests" begin
                 end
 
                 gather_result = Mycelia.run_sourmash_gather(
-                    query_sig=combined_sketch.signatures[1],
-                    database_sig=db_dir,
-                    outdir=joinpath(workdir, "gather_results"),
-                    k_size=31,
-                    threshold_bp=100
+                    query_sig = combined_sketch.signatures[1],
+                    database_sig = db_dir,
+                    outdir = joinpath(workdir, "gather_results"),
+                    k_size = 31,
+                    threshold_bp = 100
                 )
 
                 Test.@test isdir(gather_result.outdir)
                 Test.@test isfile(gather_result.results_csv)
 
                 # Cleanup
-                rm(workdir; recursive=true, force=true)
+                rm(workdir; recursive = true, force = true)
             end
         else
             @info "Skipping sourmash integration test; external tool execution is opt-in via MYCELIA_RUN_EXTERNAL=true"
@@ -144,7 +143,6 @@ Test.@testset "Classification Tools Integration Tests" begin
     # MetaPhlAn Tests
     # ========================================================================
     Test.@testset "MetaPhlAn Integration" begin
-
         Test.@testset "MetaPhlAn profile parsing" begin
             # Test parsing with mock profile data (no external tools needed)
             temp_profile = tempname()
@@ -179,7 +177,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                 Test.@test occursin("Proteobacteria", df.clade_name[2])
                 Test.@test occursin("Firmicutes", df.clade_name[4])
             finally
-                rm(temp_profile, force=true)
+                rm(temp_profile, force = true)
             end
         end
 
@@ -190,8 +188,8 @@ Test.@testset "Classification Tools Integration Tests" begin
                 try
                     # Download real genome (with fallback to simulated if NCBI unavailable)
                     test_genome_info = Mycelia.get_test_genome_fasta(
-                        use_ncbi=true,
-                        accession="GCF_000005845.2"  # E. coli K-12 MG1655
+                        use_ncbi = true,
+                        accession = "GCF_000005845.2"  # E. coli K-12 MG1655
                     )
                     test_fasta = test_genome_info.fasta
 
@@ -201,9 +199,9 @@ Test.@testset "Classification Tools Integration Tests" begin
                     else
                         # Simulate realistic paired-end Illumina reads (100bp, >70bp requirement)
                         sim_result = Mycelia.simulate_illumina_hs20_100bp(
-                            fasta=test_fasta,
-                            read_count=10000,
-                            quiet=true
+                            fasta = test_fasta,
+                            read_count = 10000,
+                            quiet = true
                         )
                         forward_reads = sim_result.forward_reads
                         reverse_reads = sim_result.reverse_reads
@@ -211,26 +209,25 @@ Test.@testset "Classification Tools Integration Tests" begin
                         # Create synthetic reads with random sequences to verify
                         # tool doesn't misclassify fake data (using randdnaseq for valid DNA)
                         Random.seed!(42)  # For reproducibility
-                        synthetic_records = [
-                            FASTX.FASTQ.Record(
-                                "synthetic_read$(i)",
-                                BioSequences.randdnaseq(Random.default_rng(), 100),
-                                fill(Int8(40), 100)  # Quality score 40 ('I')
-                            )
-                            for i in 1:50
-                        ]
+                        synthetic_records = [FASTX.FASTQ.Record(
+                                                 "synthetic_read$(i)",
+                                                 BioSequences.randdnaseq(Random.default_rng(), 100),
+                                                 fill(Int8(40), 100)  # Quality score 40 ('I')
+                                             )
+                                             for i in 1:50]
                         synthetic_fastq = joinpath(workdir, "synthetic_reads.fq")
-                        Mycelia.write_fastq(records=synthetic_records, filename=synthetic_fastq)
+                        Mycelia.write_fastq(records = synthetic_records, filename = synthetic_fastq)
 
                         # Test with single-end reads (forward + synthetic)
                         combined_fastq = joinpath(workdir, "combined_reads.fq")
-                        Mycelia.concatenate_fastx([forward_reads, synthetic_fastq], output_path=combined_fastq)
+                        Mycelia.concatenate_fastx(
+                            [forward_reads, synthetic_fastq], output_path = combined_fastq)
 
                         result = Mycelia.run_metaphlan(
-                            input_file=combined_fastq,
-                            outdir=joinpath(workdir, "metaphlan_output_single"),
-                            input_type="fastq",
-                            nprocs=2
+                            input_file = combined_fastq,
+                            outdir = joinpath(workdir, "metaphlan_output_single"),
+                            input_type = "fastq",
+                            nprocs = 2
                         )
 
                         Test.@test isdir(result.outdir)
@@ -248,7 +245,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                         test_genome_info.cleanup()
                     end
                 finally
-                    rm(workdir; recursive=true, force=true)
+                    rm(workdir; recursive = true, force = true)
                 end
             end
         else
@@ -260,7 +257,6 @@ Test.@testset "Classification Tools Integration Tests" begin
     # Metabuli Tests
     # ========================================================================
     Test.@testset "Metabuli Integration" begin
-
         Test.@testset "Metabuli report parsing" begin
             # Test parsing with actual Metabuli report format (no header row)
             # Format: percentage, num_reads, num_direct_reads, rank, taxid, name
@@ -302,7 +298,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                 Test.@test df.taxid[3] == 562
                 Test.@test df.name[3] == "Escherichia coli"
             finally
-                rm(temp_report, force=true)
+                rm(temp_report, force = true)
             end
         end
 
@@ -343,8 +339,8 @@ Test.@testset "Classification Tools Integration Tests" begin
                 Test.@test "sample1" in combined.sample
                 Test.@test "sample2" in combined.sample
             finally
-                rm(temp_report1, force=true)
-                rm(temp_report2, force=true)
+                rm(temp_report1, force = true)
+                rm(temp_report2, force = true)
             end
         end
 
@@ -377,21 +373,21 @@ Test.@testset "Classification Tools Integration Tests" begin
                 Test.@test df.read_id[1] == "read_001"
                 Test.@test df.read_id[5] == "read_005"
             finally
-                rm(temp_classifications, force=true)
+                rm(temp_classifications, force = true)
             end
         end
 
         if RUN_EXTERNAL
             Test.@testset "Metabuli full execution" begin
                 # Use the virus database for unit testing to avoid larger downloads.
-                db_path = Mycelia.get_metabuli_db_path(db_name="refseq_virus")
+                db_path = Mycelia.get_metabuli_db_path(db_name = "refseq_virus")
                 workdir = mktempdir()
 
                 try
                     # Download real genome (with fallback to simulated if NCBI unavailable)
                     test_genome_info = Mycelia.get_test_genome_fasta(
-                        use_ncbi=true,
-                        accession="GCF_000819615.1"  # phiX174 (virus)
+                        use_ncbi = true,
+                        accession = "GCF_000819615.1"  # phiX174 (virus)
                     )
                     test_fasta = test_genome_info.fasta
 
@@ -401,36 +397,35 @@ Test.@testset "Classification Tools Integration Tests" begin
                     else
                         # Simulate realistic paired-end Illumina reads
                         sim_result = Mycelia.simulate_illumina_hs20_100bp(
-                            fasta=test_fasta,
-                            read_count=10000,
-                            quiet=true
+                            fasta = test_fasta,
+                            read_count = 10000,
+                            quiet = true
                         )
                         forward_reads = sim_result.forward_reads
                         reverse_reads = sim_result.reverse_reads
 
                         # Create synthetic reads with random sequences
                         Random.seed!(42)
-                        synthetic_records = [
-                            FASTX.FASTQ.Record(
-                                "synthetic_read$(i)",
-                                BioSequences.randdnaseq(Random.default_rng(), 100),
-                                fill(Int8(40), 100)
-                            )
-                            for i in 1:50
-                        ]
+                        synthetic_records = [FASTX.FASTQ.Record(
+                                                 "synthetic_read$(i)",
+                                                 BioSequences.randdnaseq(Random.default_rng(), 100),
+                                                 fill(Int8(40), 100)
+                                             )
+                                             for i in 1:50]
                         synthetic_fastq = joinpath(workdir, "synthetic_reads.fq")
-                        Mycelia.write_fastq(records=synthetic_records, filename=synthetic_fastq)
+                        Mycelia.write_fastq(records = synthetic_records, filename = synthetic_fastq)
 
                         # Test with single-end reads (forward + synthetic)
                         combined_fastq = joinpath(workdir, "combined_reads.fq.gz")
-                        Mycelia.concatenate_fastx([forward_reads, synthetic_fastq], output_path=combined_fastq)
+                        Mycelia.concatenate_fastx(
+                            [forward_reads, synthetic_fastq], output_path = combined_fastq)
 
                         result = Mycelia.run_metabuli_classify(
-                            input_files=[combined_fastq],
-                            database_path=db_path,
-                            outdir=joinpath(workdir, "metabuli_output"),
-                            seq_mode="1",
-                            threads=1
+                            input_files = [combined_fastq],
+                            database_path = db_path,
+                            outdir = joinpath(workdir, "metabuli_output"),
+                            seq_mode = "1",
+                            threads = 1
                         )
 
                         Test.@test isdir(result.outdir)
@@ -443,7 +438,8 @@ Test.@testset "Classification Tools Integration Tests" begin
                             Test.@test report_df isa DataFrames.DataFrame
                         end
 
-                        if isfile(result.classifications_file) && filesize(result.classifications_file) > 0
+                        if isfile(result.classifications_file) &&
+                           filesize(result.classifications_file) > 0
                             class_df = Mycelia.parse_metabuli_classifications(result.classifications_file)
                             Test.@test class_df isa DataFrames.DataFrame
                         end
@@ -454,7 +450,7 @@ Test.@testset "Classification Tools Integration Tests" begin
                         test_genome_info.cleanup()
                     end
                 finally
-                    rm(workdir; recursive=true, force=true)
+                    rm(workdir; recursive = true, force = true)
                 end
             end
         else
@@ -466,12 +462,11 @@ Test.@testset "Classification Tools Integration Tests" begin
     # Input Validation Tests (no external tools needed)
     # ========================================================================
     Test.@testset "Input Validation" begin
-
         Test.@testset "Sourmash input validation" begin
             # Test nonexistent file
             Test.@test_throws ErrorException Mycelia.run_sourmash_sketch(
-                input_files=["nonexistent_$(rand(1000:9999)).fq"],
-                outdir=tempdir()
+                input_files = ["nonexistent_$(rand(1000:9999)).fq"],
+                outdir = tempdir()
             )
 
             # Test invalid molecule type
@@ -479,20 +474,20 @@ Test.@testset "Classification Tools Integration Tests" begin
             touch(temp_file)
             try
                 Test.@test_throws ErrorException Mycelia.run_sourmash_sketch(
-                    input_files=[temp_file],
-                    outdir=tempdir(),
-                    molecule="invalid"
+                    input_files = [temp_file],
+                    outdir = tempdir(),
+                    molecule = "invalid"
                 )
             finally
-                rm(temp_file, force=true)
+                rm(temp_file, force = true)
             end
         end
 
         Test.@testset "MetaPhlAn input validation" begin
             # Test nonexistent file
             Test.@test_throws ErrorException Mycelia.run_metaphlan(
-                input_file="nonexistent_$(rand(1000:9999)).fq",
-                outdir=tempdir()
+                input_file = "nonexistent_$(rand(1000:9999)).fq",
+                outdir = tempdir()
             )
 
             # Test invalid input type
@@ -500,21 +495,21 @@ Test.@testset "Classification Tools Integration Tests" begin
             touch(temp_file)
             try
                 Test.@test_throws ErrorException Mycelia.run_metaphlan(
-                    input_file=temp_file,
-                    outdir=tempdir(),
-                    input_type="invalid_type"
+                    input_file = temp_file,
+                    outdir = tempdir(),
+                    input_type = "invalid_type"
                 )
             finally
-                rm(temp_file, force=true)
+                rm(temp_file, force = true)
             end
         end
 
         Test.@testset "Metabuli input validation" begin
             # Test nonexistent input file
             Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                input_files=["nonexistent_$(rand(1000:9999)).fq"],
-                database_path=tempdir(),
-                outdir=tempdir()
+                input_files = ["nonexistent_$(rand(1000:9999)).fq"],
+                database_path = tempdir(),
+                outdir = tempdir()
             )
 
             # Test nonexistent database
@@ -522,12 +517,12 @@ Test.@testset "Classification Tools Integration Tests" begin
             touch(temp_file)
             try
                 Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                    input_files=[temp_file],
-                    database_path="nonexistent_db_$(rand(1000:9999))",
-                    outdir=tempdir()
+                    input_files = [temp_file],
+                    database_path = "nonexistent_db_$(rand(1000:9999))",
+                    outdir = tempdir()
                 )
             finally
-                rm(temp_file, force=true)
+                rm(temp_file, force = true)
             end
 
             # Test invalid seq_mode
@@ -535,13 +530,13 @@ Test.@testset "Classification Tools Integration Tests" begin
             touch(temp_file)
             try
                 Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                    input_files=[temp_file],
-                    database_path=tempdir(),
-                    outdir=tempdir(),
-                    seq_mode="invalid"
+                    input_files = [temp_file],
+                    database_path = tempdir(),
+                    outdir = tempdir(),
+                    seq_mode = "invalid"
                 )
             finally
-                rm(temp_file, force=true)
+                rm(temp_file, force = true)
             end
         end
 

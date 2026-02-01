@@ -20,7 +20,7 @@ the sentencepiece package via pip.
 This function is called automatically by wrapper functions when SentencePiece
 is not installed. The environment uses Python 3.9 and pip to install sentencepiece.
 """
-function _setup_sentencepiece_environment(force_reinstall::Bool=false)
+function _setup_sentencepiece_environment(force_reinstall::Bool = false)
     env_name = "sentencepiece_env"
 
     if force_reinstall && _check_conda_env_exists(env_name)
@@ -60,7 +60,9 @@ function _check_sentencepiece_installed()
         return false
     end
     try
-        result = Base.read(`$(Mycelia.CONDA_RUNNER) run -n $env_name python -c "import sentencepiece; print('ok')"`, String)
+        result = Base.read(
+            `$(Mycelia.CONDA_RUNNER) run -n $env_name python -c "import sentencepiece; print('ok')"`,
+            String)
         return occursin("ok", result)
     catch
         return false
@@ -197,14 +199,14 @@ println("Vocab: ", result.vocab_file)
 ```
 """
 function train_sentencepiece_model(;
-    input_file::String,
-    model_prefix::String,
-    vocab_size::Int=8000,
-    model_type::Symbol=:bpe,
-    character_coverage::Float64=1.0,
-    input_sentence_size::Int=0,
-    shuffle_input_sentence::Bool=true,
-    user_defined_symbols::Vector{String}=String[]
+        input_file::String,
+        model_prefix::String,
+        vocab_size::Int = 8000,
+        model_type::Symbol = :bpe,
+        character_coverage::Float64 = 1.0,
+        input_sentence_size::Int = 0,
+        shuffle_input_sentence::Bool = true,
+        user_defined_symbols::Vector{String} = String[]
 )
     # Input validation
     @assert isfile(input_file) "Input file does not exist: $input_file"
@@ -223,7 +225,8 @@ function train_sentencepiece_model(;
     )
 
     # Build user symbols argument
-    user_symbols_arg = isempty(user_defined_symbols) ? "" : "user_defined_symbols='$(join(user_defined_symbols, ","))',"
+    user_symbols_arg = isempty(user_defined_symbols) ? "" :
+                       "user_defined_symbols='$(join(user_defined_symbols, ","))',"
 
     # Escape paths for Python
     input_file_escaped = replace(input_file, "\\" => "\\\\")
@@ -264,7 +267,7 @@ print('TRAINING_COMPLETED')
     @assert isfile(model_file) "Model file was not created: $model_file"
     @assert isfile(vocab_file) "Vocab file was not created: $vocab_file"
 
-    return (model_file=model_file, vocab_file=vocab_file)
+    return (model_file = model_file, vocab_file = vocab_file)
 end
 
 """
@@ -291,12 +294,12 @@ result = train_sentencepiece_model_from_sequences(
 ```
 """
 function train_sentencepiece_model_from_sequences(;
-    sequences::Vector{<:Union{BioSequences.BioSequence, AbstractString}},
-    model_prefix::String,
-    vocab_size::Int=8000,
-    model_type::Symbol=:bpe,
-    character_coverage::Float64=1.0,
-    kwargs...
+        sequences::Vector{<:Union{BioSequences.BioSequence, AbstractString}},
+        model_prefix::String,
+        vocab_size::Int = 8000,
+        model_type::Symbol = :bpe,
+        character_coverage::Float64 = 1.0,
+        kwargs...
 )
     @assert !isempty(sequences) "sequences cannot be empty"
 
@@ -314,11 +317,11 @@ function train_sentencepiece_model_from_sequences(;
         end
 
         return train_sentencepiece_model(;
-            input_file=temp_input,
-            model_prefix=model_prefix,
-            vocab_size=vocab_size,
-            model_type=model_type,
-            character_coverage=character_coverage,
+            input_file = temp_input,
+            model_prefix = model_prefix,
+            vocab_size = vocab_size,
+            model_type = model_type,
+            character_coverage = character_coverage,
             kwargs...
         )
     finally
@@ -340,12 +343,12 @@ Train a SentencePiece model from sequences in a FASTA file.
 - `kwargs...`: Additional arguments passed to train_sentencepiece_model
 """
 function train_sentencepiece_model_from_fasta(;
-    fasta_file::String,
-    model_prefix::String,
-    vocab_size::Int=8000,
-    model_type::Symbol=:bpe,
-    character_coverage::Float64=1.0,
-    kwargs...
+        fasta_file::String,
+        model_prefix::String,
+        vocab_size::Int = 8000,
+        model_type::Symbol = :bpe,
+        character_coverage::Float64 = 1.0,
+        kwargs...
 )
     @assert isfile(fasta_file) "FASTA file does not exist: $fasta_file"
     @assert occursin(FASTA_REGEX, fasta_file) "File does not appear to be a FASTA file: $fasta_file"
@@ -361,11 +364,11 @@ function train_sentencepiece_model_from_fasta(;
         end
 
         return train_sentencepiece_model(;
-            input_file=temp_input,
-            model_prefix=model_prefix,
-            vocab_size=vocab_size,
-            model_type=model_type,
-            character_coverage=character_coverage,
+            input_file = temp_input,
+            model_prefix = model_prefix,
+            vocab_size = vocab_size,
+            model_type = model_type,
+            character_coverage = character_coverage,
             kwargs...
         )
     finally
@@ -387,12 +390,12 @@ Train a SentencePiece model from sequences in a FASTQ file.
 - `kwargs...`: Additional arguments passed to train_sentencepiece_model
 """
 function train_sentencepiece_model_from_fastq(;
-    fastq_file::String,
-    model_prefix::String,
-    vocab_size::Int=8000,
-    model_type::Symbol=:bpe,
-    character_coverage::Float64=1.0,
-    kwargs...
+        fastq_file::String,
+        model_prefix::String,
+        vocab_size::Int = 8000,
+        model_type::Symbol = :bpe,
+        character_coverage::Float64 = 1.0,
+        kwargs...
 )
     @assert isfile(fastq_file) "FASTQ file does not exist: $fastq_file"
     @assert occursin(FASTQ_REGEX, fastq_file) "File does not appear to be a FASTQ file: $fastq_file"
@@ -408,11 +411,11 @@ function train_sentencepiece_model_from_fastq(;
         end
 
         return train_sentencepiece_model(;
-            input_file=temp_input,
-            model_prefix=model_prefix,
-            vocab_size=vocab_size,
-            model_type=model_type,
-            character_coverage=character_coverage,
+            input_file = temp_input,
+            model_prefix = model_prefix,
+            vocab_size = vocab_size,
+            model_type = model_type,
+            character_coverage = character_coverage,
             kwargs...
         )
     finally
@@ -469,12 +472,13 @@ sampled = encode_sentencepiece(
 ```
 """
 function encode_sentencepiece(;
-    model_file::String,
-    input::Union{AbstractString, BioSequences.BioSequence, Vector{<:Union{AbstractString, BioSequences.BioSequence}}},
-    output_format::Symbol=:pieces,
-    enable_sampling::Bool=false,
-    alpha::Float64=0.1,
-    nbest_size::Int=-1
+        model_file::String,
+        input::Union{AbstractString, BioSequences.BioSequence,
+            Vector{<:Union{AbstractString, BioSequences.BioSequence}}},
+        output_format::Symbol = :pieces,
+        enable_sampling::Bool = false,
+        alpha::Float64 = 0.1,
+        nbest_size::Int = -1
 )
     @assert isfile(model_file) "Model file does not exist: $model_file"
     @assert output_format in [:pieces, :ids] "output_format must be :pieces or :ids"
@@ -486,17 +490,21 @@ function encode_sentencepiece(;
     # Handle batch vs single input
     if input isa Vector
         @assert !isempty(input) "input cannot be empty"
-        return _encode_sentencepiece_batch(model_file_escaped, input, output_format, enable_sampling, alpha, nbest_size)
+        return _encode_sentencepiece_batch(
+            model_file_escaped, input, output_format, enable_sampling, alpha, nbest_size)
     else
-        return _encode_sentencepiece_single(model_file_escaped, input, output_format, enable_sampling, alpha, nbest_size)
+        return _encode_sentencepiece_single(
+            model_file_escaped, input, output_format, enable_sampling, alpha, nbest_size)
     end
 end
 
 # Internal helper for single input encoding
-function _encode_sentencepiece_single(model_file_escaped::String, input, output_format::Symbol,
-                                       enable_sampling::Bool, alpha::Float64, nbest_size::Int)
+function _encode_sentencepiece_single(
+        model_file_escaped::String, input, output_format::Symbol,
+        enable_sampling::Bool, alpha::Float64, nbest_size::Int)
     # Convert BioSequence to string if needed
-    input_str = input isa BioSequences.BioSequence ? sentencepiece_biosequence_to_string(input) : string(input)
+    input_str = input isa BioSequences.BioSequence ?
+                sentencepiece_biosequence_to_string(input) : string(input)
 
     # Escape special characters for Python string
     input_escaped = replace(input_str, "\\" => "\\\\")
@@ -505,12 +513,12 @@ function _encode_sentencepiece_single(model_file_escaped::String, input, output_
 
     if enable_sampling
         encode_call = output_format == :pieces ?
-            "sp.encode('$(input_escaped)', out_type=str, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size))" :
-            "sp.encode('$(input_escaped)', out_type=int, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size))"
+                      "sp.encode('$(input_escaped)', out_type=str, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size))" :
+                      "sp.encode('$(input_escaped)', out_type=int, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size))"
     else
         encode_call = output_format == :pieces ?
-            "sp.encode_as_pieces('$(input_escaped)')" :
-            "sp.encode_as_ids('$(input_escaped)')"
+                      "sp.encode_as_pieces('$(input_escaped)')" :
+                      "sp.encode_as_ids('$(input_escaped)')"
     end
 
     python_script = """
@@ -539,10 +547,12 @@ print(json.dumps(result))
 end
 
 # Internal helper for batch encoding
-function _encode_sentencepiece_batch(model_file_escaped::String, input::Vector, output_format::Symbol,
-                                      enable_sampling::Bool, alpha::Float64, nbest_size::Int)
+function _encode_sentencepiece_batch(
+        model_file_escaped::String, input::Vector, output_format::Symbol,
+        enable_sampling::Bool, alpha::Float64, nbest_size::Int)
     # Convert all inputs to strings
-    input_strings = [s isa BioSequences.BioSequence ? sentencepiece_biosequence_to_string(s) : string(s) for s in input]
+    input_strings = [s isa BioSequences.BioSequence ?
+                     sentencepiece_biosequence_to_string(s) : string(s) for s in input]
 
     # Write inputs to temp file (JSON array)
     temp_input = tempname() * ".json"
@@ -552,12 +562,12 @@ function _encode_sentencepiece_batch(model_file_escaped::String, input::Vector, 
 
         if enable_sampling
             encode_line = output_format == :pieces ?
-                "results.append(sp.encode(text, out_type=str, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size)))" :
-                "results.append(sp.encode(text, out_type=int, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size)))"
+                          "results.append(sp.encode(text, out_type=str, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size)))" :
+                          "results.append(sp.encode(text, out_type=int, enable_sampling=True, alpha=$(alpha), nbest_size=$(nbest_size)))"
         else
             encode_line = output_format == :pieces ?
-                "results.append(sp.encode_as_pieces(text))" :
-                "results.append(sp.encode_as_ids(text))"
+                          "results.append(sp.encode_as_pieces(text))" :
+                          "results.append(sp.encode_as_ids(text))"
         end
 
         python_script = """
@@ -578,7 +588,8 @@ print(json.dumps(results))
         script_file = tempname() * ".py"
         try
             write(script_file, python_script)
-            result_str = Base.read(`$(Mycelia.CONDA_RUNNER) run -n sentencepiece_env python $(script_file)`, String)
+            result_str = Base.read(
+                `$(Mycelia.CONDA_RUNNER) run -n sentencepiece_env python $(script_file)`, String)
             results = JSON.parse(strip(result_str))
 
             if output_format == :pieces
@@ -633,8 +644,9 @@ texts = decode_sentencepiece(
 ```
 """
 function decode_sentencepiece(;
-    model_file::String,
-    input::Union{Vector{String}, Vector{Int}, Vector{Vector{String}}, Vector{Vector{Int}}}
+        model_file::String,
+        input::Union{
+            Vector{String}, Vector{Int}, Vector{Vector{String}}, Vector{Vector{Int}}}
 )
     @assert isfile(model_file) "Model file does not exist: $model_file"
     @assert !isempty(input) "input cannot be empty"
@@ -779,7 +791,7 @@ function load_sentencepiece_model(model_file::String)
 
     vocab_size = sentencepiece_vocab_size(model_file)
 
-    return (model_file=model_file, vocab_size=vocab_size)
+    return (model_file = model_file, vocab_size = vocab_size)
 end
 
 """

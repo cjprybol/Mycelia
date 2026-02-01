@@ -30,30 +30,30 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
             ref_fasta = joinpath(dir, "ref.fasta")
             rng = StableRNGs.StableRNG(42)
             seq = BioSequences.randdnaseq(rng, 2_000)
-            Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("ref", seq)])
+            Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
 
             sim = Mycelia.simulate_illumina_reads(
-                fasta=ref_fasta,
-                coverage=5,
-                outbase=joinpath(dir, "sim_plass"),
-                read_length=100,
-                mflen=200,
-                seqSys="HS25",
-                paired=true,
-                errfree=true,
-                rndSeed=42,
-                quiet=true
+                fasta = ref_fasta,
+                coverage = 5,
+                outbase = joinpath(dir, "sim_plass"),
+                read_length = 100,
+                mflen = 200,
+                seqSys = "HS25",
+                paired = true,
+                errfree = true,
+                rndSeed = 42,
+                quiet = true
             )
 
             outdir = joinpath(dir, "plass_out")
             try
                 result = Mycelia.run_plass_assemble(
-                    reads1=sim.forward_reads,
-                    reads2=sim.reverse_reads,
-                    outdir=outdir,
-                    min_length=20,
-                    num_iterations=1,
-                    threads=threads
+                    reads1 = sim.forward_reads,
+                    reads2 = sim.reverse_reads,
+                    outdir = outdir,
+                    min_length = 20,
+                    num_iterations = 1,
+                    threads = threads
                 )
                 Test.@test isfile(result.assembly)
             catch e
@@ -68,32 +68,33 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
             ref_fasta = joinpath(dir, "ref.fasta")
             rng = StableRNGs.StableRNG(43)
             seq = BioSequences.randdnaseq(rng, 2_000)
-            Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("ref", seq)])
+            Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
 
             sim = Mycelia.simulate_illumina_reads(
-                fasta=ref_fasta,
-                coverage=5,
-                outbase=joinpath(dir, "sim_penguin_guided"),
-                read_length=100,
-                mflen=200,
-                seqSys="HS25",
-                paired=true,
-                errfree=true,
-                rndSeed=43,
-                quiet=true
+                fasta = ref_fasta,
+                coverage = 5,
+                outbase = joinpath(dir, "sim_penguin_guided"),
+                read_length = 100,
+                mflen = 200,
+                seqSys = "HS25",
+                paired = true,
+                errfree = true,
+                rndSeed = 43,
+                quiet = true
             )
 
             outdir = joinpath(dir, "penguin_guided_out")
             try
                 result = Mycelia.run_penguin_guided_nuclassemble(
-                    reads1=sim.forward_reads,
-                    reads2=sim.reverse_reads,
-                    outdir=outdir,
-                    threads=threads
+                    reads1 = sim.forward_reads,
+                    reads2 = sim.reverse_reads,
+                    outdir = outdir,
+                    threads = threads
                 )
                 Test.@test isfile(result.assembly)
             catch e
-                @error "PenguiN guided_nuclassemble test failed." exception=(e, catch_backtrace())
+                @error "PenguiN guided_nuclassemble test failed." exception=(
+                    e, catch_backtrace())
                 Test.@test false
             end
         end
@@ -104,28 +105,28 @@ Test.@testset "Protein/Nucleotide Assembly (PLASS/PenguiN)" begin
             ref_fasta = joinpath(dir, "ref.fasta")
             rng = StableRNGs.StableRNG(44)
             seq = BioSequences.randdnaseq(rng, 2_000)
-            Mycelia.write_fasta(outfile=ref_fasta, records=[FASTX.FASTA.Record("ref", seq)])
+            Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
 
             sim = Mycelia.simulate_illumina_reads(
-                fasta=ref_fasta,
-                coverage=5,
-                outbase=joinpath(dir, "sim_penguin"),
-                read_length=100,
-                mflen=200,
-                seqSys="HS25",
-                paired=true,
-                errfree=true,
-                rndSeed=44,
-                quiet=true
+                fasta = ref_fasta,
+                coverage = 5,
+                outbase = joinpath(dir, "sim_penguin"),
+                read_length = 100,
+                mflen = 200,
+                seqSys = "HS25",
+                paired = true,
+                errfree = true,
+                rndSeed = 44,
+                quiet = true
             )
 
             outdir = joinpath(dir, "penguin_out")
             try
                 result = Mycelia.run_penguin_nuclassemble(
-                    reads1=sim.forward_reads,
-                    reads2=sim.reverse_reads,
-                    outdir=outdir,
-                    threads=threads
+                    reads1 = sim.forward_reads,
+                    reads2 = sim.reverse_reads,
+                    outdir = outdir,
+                    threads = threads
                 )
                 Test.@test isfile(result.assembly)
             catch e

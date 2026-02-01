@@ -38,7 +38,7 @@ Indels  5  20
         Test.@test parsed.distance ≈ 0.005
         Test.@test parsed.distance_aligned ≈ 0.003
 
-        rm(temp_dir; recursive=true, force=true)
+        rm(temp_dir; recursive = true, force = true)
     end
 
     Test.@testset "Genome Fragmentation" begin
@@ -48,7 +48,7 @@ Indels  5  20
 
         write(input_fasta, ">seq1\nACGTACGTAC\n>seq2\nTTGACCA\n")
 
-        result_path = Mycelia.fragment_genome(input_fasta, 4; out_path=output_fasta)
+        result_path = Mycelia.fragment_genome(input_fasta, 4; out_path = output_fasta)
         Test.@test result_path == output_fasta
         Test.@test isfile(output_fasta)
 
@@ -65,7 +65,7 @@ Indels  5  20
         Test.@test length(FASTX.sequence(records[3])) == 4
 
         output_with_tail = joinpath(temp_dir, "fragments_with_tail.fasta")
-        Mycelia.fragment_genome(input_fasta, 4; out_path=output_with_tail, discard_tail=false)
+        Mycelia.fragment_genome(input_fasta, 4; out_path = output_with_tail, discard_tail = false)
         tail_records = open(output_with_tail) do io
             collect(FASTX.FASTA.Reader(io))
         end
@@ -77,7 +77,7 @@ Indels  5  20
         Test.@test length(FASTX.sequence(tail_records[4])) == 4
         Test.@test length(FASTX.sequence(tail_records[5])) == 3
 
-        rm(temp_dir; recursive=true, force=true)
+        rm(temp_dir; recursive = true, force = true)
     end
 
     Test.@testset "FASTA Normalization" begin
@@ -88,7 +88,7 @@ Indels  5  20
 
         write(input_fasta, ">b_record\nacgt\n>a_record\nTTaa\n")
 
-        Mycelia.normalize_fasta(input_fasta; out_path=output_fasta, sort_records=false, force=true)
+        Mycelia.normalize_fasta(input_fasta; out_path = output_fasta, sort_records = false, force = true)
         records = open(output_fasta) do io
             collect(FASTX.FASTA.Reader(io))
         end
@@ -97,14 +97,14 @@ Indels  5  20
         Test.@test FASTX.identifier(records[2]) == "a_record"
         Test.@test String(FASTX.sequence(records[2])) == "TTAA"
 
-        Mycelia.normalize_fasta(input_fasta; out_path=output_sorted, sort_records=true, force=true)
+        Mycelia.normalize_fasta(input_fasta; out_path = output_sorted, sort_records = true, force = true)
         sorted_records = open(output_sorted) do io
             collect(FASTX.FASTA.Reader(io))
         end
         Test.@test FASTX.identifier(sorted_records[1]) == "a_record"
         Test.@test FASTX.identifier(sorted_records[2]) == "b_record"
 
-        rm(temp_dir; recursive=true, force=true)
+        rm(temp_dir; recursive = true, force = true)
     end
 
     Test.@testset "Circular Canonicalization" begin
@@ -128,14 +128,17 @@ Indels  5  20
         rotated = seq[5:end] * seq[1:4]
         write(input_fasta, ">contig1 circular genome\n$(rotated)\n")
 
-        prepared = Mycelia.prepare_genome_for_comparison(input_fasta; outdir=output_dir, circular=:auto, force=true)
+        prepared = Mycelia.prepare_genome_for_comparison(
+            input_fasta; outdir = output_dir, circular = :auto, force = true)
         prepared_seq = open(prepared) do io
             first(FASTX.FASTA.Reader(io)) |> FASTX.sequence |> String
         end
         canonical_seq, _, _ = Mycelia.canonical_circular_sequence(seq)
         Test.@test prepared_seq == canonical_seq
 
-        non_circular = Mycelia.prepare_genome_for_comparison(input_fasta; outdir=joinpath(temp_dir, "prep2"), circular=false, force=true)
+        non_circular = Mycelia.prepare_genome_for_comparison(
+            input_fasta; outdir = joinpath(temp_dir, "prep2"),
+            circular = false, force = true)
         non_circular_seq = open(non_circular) do io
             first(FASTX.FASTA.Reader(io)) |> FASTX.sequence |> String
         end
@@ -148,11 +151,11 @@ Indels  5  20
 
         heuristic_prepped = Mycelia.prepare_genome_for_comparison(
             heuristic_fasta;
-            outdir=heuristic_outdir,
-            circular=:auto,
-            circular_heuristic=true,
-            circular_overlap_bp=3,
-            force=true
+            outdir = heuristic_outdir,
+            circular = :auto,
+            circular_heuristic = true,
+            circular_overlap_bp = 3,
+            force = true
         )
         heuristic_seq = open(heuristic_prepped) do io
             first(FASTX.FASTA.Reader(io)) |> FASTX.sequence |> String
@@ -160,7 +163,7 @@ Indels  5  20
         canonical_seq2, _, _ = Mycelia.canonical_circular_sequence(seq2)
         Test.@test heuristic_seq == canonical_seq2
 
-        rm(temp_dir; recursive=true, force=true)
+        rm(temp_dir; recursive = true, force = true)
     end
 
     Test.@testset "Genome Pair ID" begin
@@ -174,7 +177,7 @@ Indels  5  20
         id2 = Mycelia.genome_pair_id(reference_fasta, query_fasta)
         Test.@test id1 == id2
 
-        rm(temp_dir; recursive=true, force=true)
+        rm(temp_dir; recursive = true, force = true)
     end
 
     Test.@testset "PyOrthoANI Output Parsing" begin
@@ -218,23 +221,24 @@ Indels  5  20
             write(reference_fasta, ">reference_1\n$(ref_seq1)\n>reference_2\n$(ref_seq2)\n")
             write(query_fasta, ">query_1\n$(query_seq1)\n>query_2\n$(query_seq2)\n")
 
-            ani, df = Mycelia.calculate_gold_standard_ani(
-                query=query_fasta,
-                reference=reference_fasta,
-                outdir=joinpath(temp_dir, "ani"),
-                threads=1,
-                fragment_size=512,
-                min_coverage_pct=70.0,
-                min_identity_pct=30.0,
-                task="blastn",
-                force=true
+            ani,
+            df = Mycelia.calculate_gold_standard_ani(
+                query = query_fasta,
+                reference = reference_fasta,
+                outdir = joinpath(temp_dir, "ani"),
+                threads = 1,
+                fragment_size = 512,
+                min_coverage_pct = 70.0,
+                min_identity_pct = 30.0,
+                task = "blastn",
+                force = true
             )
 
             Test.@test ani >= 95.0
             Test.@test ani <= 100.0
             Test.@test DataFrames.nrow(df) >= 2
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -243,7 +247,8 @@ Indels  5  20
             Test.@test_skip "Gold-standard AAI requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
         else
             rng = StableRNGs.StableRNG(7)
-            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
+                'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
 
             random_protein = len -> String(rand(rng, aa_alphabet, len))
             function mutate_protein(seq::AbstractString, mutation_rate::Float64)
@@ -270,21 +275,22 @@ Indels  5  20
             write(reference_fasta, ">ref_p1\n$(ref_p1)\n>ref_p2\n$(ref_p2)\n")
             write(query_fasta, ">query_p1\n$(query_p1)\n>query_p2\n$(query_p2)\n")
 
-            aai, df = Mycelia.calculate_gold_standard_aai(
-                query_proteins=query_fasta,
-                reference_proteins=reference_fasta,
-                outdir=joinpath(temp_dir, "aai"),
-                threads=1,
-                min_coverage_pct=70.0,
-                min_identity_pct=30.0,
-                force=true
+            aai,
+            df = Mycelia.calculate_gold_standard_aai(
+                query_proteins = query_fasta,
+                reference_proteins = reference_fasta,
+                outdir = joinpath(temp_dir, "aai"),
+                threads = 1,
+                min_coverage_pct = 70.0,
+                min_identity_pct = 30.0,
+                force = true
             )
 
             Test.@test aai >= 90.0
             Test.@test aai <= 100.0
             Test.@test DataFrames.nrow(df) >= 2
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -302,12 +308,13 @@ Indels  5  20
             write(reference_fasta, ">reference\n$(seq)\n")
             write(query_fasta, ">query\n$(seq)\n")
 
-            result = Mycelia.ani_mummer(reference_fasta, query_fasta; outdir=joinpath(temp_dir, "anim"), force=true)
+            result = Mycelia.ani_mummer(reference_fasta, query_fasta;
+                outdir = joinpath(temp_dir, "anim"), force = true)
             Test.@test result.ani_1to1 isa Float64
             Test.@test result.ani_1to1 >= 99.0
             Test.@test isfile(result.report_path)
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -343,12 +350,12 @@ Indels  5  20
             result = Mycelia.ani_blast(
                 reference_fasta,
                 query_fasta;
-                outdir=joinpath(temp_dir, "anib"),
-                fragment_size=256,
-                min_id=70.0,
-                min_aln_frac=0.7,
-                threads=1,
-                force=true
+                outdir = joinpath(temp_dir, "anib"),
+                fragment_size = 256,
+                min_id = 70.0,
+                min_aln_frac = 0.7,
+                threads = 1,
+                force = true
             )
 
             Test.@test result.ani isa Float64
@@ -359,9 +366,9 @@ Indels  5  20
             result_default = Mycelia.ani_blast(
                 reference_fasta,
                 query_fasta;
-                outdir=joinpath(temp_dir, "anib_default"),
-                threads=1,
-                force=true
+                outdir = joinpath(temp_dir, "anib_default"),
+                threads = 1,
+                force = true
             )
 
             Test.@test result_default.params.mode == :strict
@@ -374,7 +381,7 @@ Indels  5  20
             Test.@test result_default.n_query_fragments == 4
             Test.@test result_default.n_reference_fragments == 4
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -409,18 +416,18 @@ Indels  5  20
             result = Mycelia.compare_genomes_gold(
                 reference_fasta,
                 query_fasta;
-                methods=Symbol[:ANIb],
-                outdir=joinpath(temp_dir, "gold_compare"),
-                fragment_size=256,
-                threads=1,
-                force=true
+                methods = Symbol[:ANIb],
+                outdir = joinpath(temp_dir, "gold_compare"),
+                fragment_size = 256,
+                threads = 1,
+                force = true
             )
 
             Test.@test result.summary.anib_ani isa Float64
             Test.@test result.summary.anib_ani >= 95.0
             Test.@test result.summary.anib_af_query_vs_ref >= 0.9
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -429,7 +436,8 @@ Indels  5  20
             Test.@test_skip "AAI RBH requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
         else
             rng = StableRNGs.StableRNG(11)
-            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
+                'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
 
             random_protein = len -> String(rand(rng, aa_alphabet, len))
             function mutate_protein(seq::AbstractString, mutation_rate::Float64)
@@ -459,19 +467,19 @@ Indels  5  20
             result = Mycelia.aai_rbh(
                 reference_fasta,
                 query_fasta;
-                proteins_a=reference_fasta,
-                proteins_b=query_fasta,
-                tool=:blastp,
-                threads=1,
-                outdir=joinpath(temp_dir, "aai_rbh"),
-                force=true
+                proteins_a = reference_fasta,
+                proteins_b = query_fasta,
+                tool = :blastp,
+                threads = 1,
+                outdir = joinpath(temp_dir, "aai_rbh"),
+                force = true
             )
 
             Test.@test result.aai isa Float64
             Test.@test result.aai >= 90.0
             Test.@test result.ortholog_fraction >= 0.9
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -480,7 +488,8 @@ Indels  5  20
             Test.@test_skip "POCP requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
         else
             rng = StableRNGs.StableRNG(19)
-            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
+                'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
 
             random_protein = len -> String(rand(rng, aa_alphabet, len))
             function mutate_protein(seq::AbstractString, mutation_rate::Float64)
@@ -510,12 +519,12 @@ Indels  5  20
             result = Mycelia.pocp(
                 reference_fasta,
                 query_fasta;
-                proteins_a=reference_fasta,
-                proteins_b=query_fasta,
-                tool=:blastp,
-                threads=1,
-                outdir=joinpath(temp_dir, "pocp"),
-                force=true
+                proteins_a = reference_fasta,
+                proteins_b = query_fasta,
+                tool = :blastp,
+                threads = 1,
+                outdir = joinpath(temp_dir, "pocp"),
+                force = true
             )
 
             Test.@test result.pocp isa Float64
@@ -524,7 +533,7 @@ Indels  5  20
             Test.@test result.pocpu_rbh >= 90.0
             Test.@test result.n_rbh == 2
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -561,17 +570,17 @@ Indels  5  20
             write(query_fasta, ">query_1\n$(query_seq1)\n>query_2\n$(query_seq2)\n")
 
             results = Mycelia.run_pyorthoani(
-                query=query_fasta,
-                reference=reference_fasta,
-                outdir=joinpath(temp_dir, "pyorthoani"),
-                force=true
+                query = query_fasta,
+                reference = reference_fasta,
+                outdir = joinpath(temp_dir, "pyorthoani"),
+                force = true
             )
 
             Test.@test isfile(results.output_path)
             Test.@test results.ani >= 95.0
             Test.@test results.ani <= 100.0
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -591,19 +600,19 @@ Indels  5  20
             write(query_fasta, ">query\n$(seq)\n")
 
             delta_path = Mycelia.run_nucmer(
-                reference=reference_fasta,
-                query=query_fasta,
-                outdir=outdir,
-                prefix="test",
-                threads=1,
-                min_match=10
+                reference = reference_fasta,
+                query = query_fasta,
+                outdir = outdir,
+                prefix = "test",
+                threads = 1,
+                min_match = 10
             )
 
             Test.@test isfile(delta_path)
             Test.@test endswith(delta_path, ".delta")
             Test.@test filesize(delta_path) > 0
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 
@@ -623,11 +632,11 @@ Indels  5  20
             write(query_fasta, ">query\n$(query_seq)\n")
 
             results = Mycelia.calculate_mummer_genome_distance(
-                reference=reference_fasta,
-                query=query_fasta,
-                outdir=joinpath(temp_dir, "distance"),
-                prefix="distance",
-                force=true
+                reference = reference_fasta,
+                query = query_fasta,
+                outdir = joinpath(temp_dir, "distance"),
+                prefix = "distance",
+                force = true
             )
 
             Test.@test isfile(results.dnadiff.report)
@@ -636,7 +645,7 @@ Indels  5  20
             Test.@test results.report_metrics.distance isa Float64
             Test.@test results.report_metrics.distance <= 0.01
 
-            rm(temp_dir; recursive=true, force=true)
+            rm(temp_dir; recursive = true, force = true)
         end
     end
 end

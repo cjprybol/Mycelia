@@ -9,7 +9,7 @@ Return the alphabet associated with a `BioSequence` type.
 # Returns
 `BioSymbols.Alphabet` of the sequence type.
 """
-function get_biosequence_alphabet(s::T) where T<:BioSequences.BioSequence
+function get_biosequence_alphabet(s::T) where {T <: BioSequences.BioSequence}
     return first(T.parameters)
 end
 
@@ -90,7 +90,8 @@ function detect_alphabet(seq::AbstractString)::Symbol
 
     # --- Step 5: No Alphabet Found ---
     # If the sequence characters do not form a subset of any known alphabet.
-    unmatched_chars = setdiff(seq_chars, union(AMBIGUOUS_DNA_CHARSET, AMBIGUOUS_RNA_CHARSET, AMBIGUOUS_AA_CHARSET))
+    unmatched_chars = setdiff(
+        seq_chars, union(AMBIGUOUS_DNA_CHARSET, AMBIGUOUS_RNA_CHARSET, AMBIGUOUS_AA_CHARSET))
     throw(ArgumentError("Sequence contains characters that do not belong to any known alphabet: $(join(unmatched_chars, ", "))"))
 end
 
@@ -104,7 +105,6 @@ Always returns `:DNA`.
 function detect_alphabet(sequence::BioSequences.LongDNA)
     return :DNA
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

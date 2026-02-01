@@ -32,31 +32,31 @@ Test.@testset "Long Read Metagenomic Assembly" begin
         genome1 = BioSequences.randdnaseq(rng1, 4_000)
         genome2 = BioSequences.randdnaseq(rng2, 3_000)
         Mycelia.write_fasta(
-            outfile=ref_fasta,
-            records=[
+            outfile = ref_fasta,
+            records = [
                 FASTX.FASTA.Record("meta_flye_genome_1", genome1),
-                FASTX.FASTA.Record("meta_flye_genome_2", genome2),
+                FASTX.FASTA.Record("meta_flye_genome_2", genome2)
             ]
         )
 
-        reads_gz = Mycelia.simulate_pacbio_reads(fasta=ref_fasta, quantity="10x", quiet=true)
+        reads_gz = Mycelia.simulate_pacbio_reads(fasta = ref_fasta, quantity = "10x", quiet = true)
         reads_fastq = joinpath(dir, "meta_flye_reads.fq")
         run(pipeline(`gunzip -c $(reads_gz)`, reads_fastq))
 
         outdir = joinpath(dir, "metaflye_assembly")
-        isdir(outdir) && rm(outdir, recursive=true, force=true)
+        isdir(outdir) && rm(outdir, recursive = true, force = true)
         try
             result = Mycelia.run_metaflye(
-                fastq=reads_fastq,
-                outdir=outdir,
-                genome_size="7k",
-                read_type="pacbio-hifi",
-                threads=threads
+                fastq = reads_fastq,
+                outdir = outdir,
+                genome_size = "7k",
+                read_type = "pacbio-hifi",
+                threads = threads
             )
             Test.@test result.outdir == outdir
             Test.@test isfile(result.assembly)
         finally
-            rm(outdir, recursive=true, force=true)
+            rm(outdir, recursive = true, force = true)
         end
     end
 end

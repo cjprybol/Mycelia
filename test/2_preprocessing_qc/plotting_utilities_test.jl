@@ -3,9 +3,10 @@ import Mycelia
 
 Test.@testset "Plotting Utilities" begin
     Test.@testset "Optimal subsequence length" begin
-        Test.@test Mycelia.optimal_subsequence_length(error_rate=0.0) == typemax(Int)
-        Test.@test Mycelia.optimal_subsequence_length(error_rate=1.0) == 1
-        Test.@test Mycelia.optimal_subsequence_length(error_rate=0.01, threshold=0.99) == 1
+        Test.@test Mycelia.optimal_subsequence_length(error_rate = 0.0) == typemax(Int)
+        Test.@test Mycelia.optimal_subsequence_length(error_rate = 1.0) == 1
+        Test.@test Mycelia.optimal_subsequence_length(error_rate = 0.01, threshold = 0.99) ==
+                   1
     end
 
     Test.@testset "Jitter" begin

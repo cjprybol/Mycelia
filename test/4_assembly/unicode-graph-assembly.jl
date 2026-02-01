@@ -27,7 +27,6 @@ import MetaGraphsNext
 
 # to implement
 
-
 # create basic directed graph, find connected components, collapse unbranching paths, return minimal graph
 
 # create basic undirectected graph, find connected components, collapse unbranching paths, return minimal graph
@@ -36,9 +35,10 @@ import MetaGraphsNext
 Test.@testset "banana string graph" begin
     s = "banana"
     n = 2
-    g = Mycelia.Rhizomorph.build_ngram_graph([s], n; dataset_id="test")
+    g = Mycelia.Rhizomorph.build_ngram_graph([s], n; dataset_id = "test")
     Test.@test Set(MetaGraphsNext.labels(g)) == Set(["an", "ba", "na"])
-    Test.@test Set(MetaGraphsNext.edge_labels(g)) == Set([("an", "na"), ("ba", "an"), ("na", "an")])
+    Test.@test Set(MetaGraphsNext.edge_labels(g)) ==
+               Set([("an", "na"), ("ba", "an"), ("na", "an")])
 end
 
 # add longer n's, find connected components, collapse unbranching paths, return minimal string graph
@@ -46,9 +46,10 @@ end
 Test.@testset "Mycelia string graph" begin
     s = "mycelia"
     n = 3
-    g = Mycelia.Rhizomorph.build_ngram_graph([s], n; dataset_id="test")
+    g = Mycelia.Rhizomorph.build_ngram_graph([s], n; dataset_id = "test")
     Test.@test Set(MetaGraphsNext.labels(g)) == Set(["cel", "eli", "lia", "myc", "yce"])
-    Test.@test Set(MetaGraphsNext.edge_labels(g)) == Set([("cel", "eli"), ("eli", "lia"), ("myc", "yce"), ("yce", "cel")])
+    Test.@test Set(MetaGraphsNext.edge_labels(g)) ==
+               Set([("cel", "eli"), ("eli", "lia"), ("myc", "yce"), ("yce", "cel")])
 end
 
 # repeat with `Random.randstring()` with simulated observations
@@ -66,7 +67,7 @@ Test.@testset "NGram Assembly" begin
     alphabet = ['A', 'C', 'G', 'T']
     reads = ["ACGT", "CGTA", "GTAC", "TACG"]
     k = 3
-    graph = Mycelia.Rhizomorph.build_ngram_graph(reads, k; dataset_id="test")
+    graph = Mycelia.Rhizomorph.build_ngram_graph(reads, k; dataset_id = "test")
 
     Test.@testset "Graph Construction" begin
         Test.@test !isnothing(graph)

@@ -36,29 +36,29 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
             db_name = "ref_viroids_rep_genomes"
             db_dir = mktempdir(test_tmp_root)
             try
-                db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
+                db_path = Mycelia.download_blast_db(db = db_name, dbdir = db_dir)
                 Test.@test isa(db_path, String)
                 Test.@test isdir(db_dir)
-                metadata = Mycelia.get_blastdb_metadata(blastdb=db_path)
+                metadata = Mycelia.get_blastdb_metadata(blastdb = db_path)
                 Test.@test haskey(metadata, "dbtype")
                 Test.@test haskey(metadata, "last-updated")
             finally
-                rm(db_dir, recursive=true, force=true)
+                rm(db_dir, recursive = true, force = true)
             end
         end
         Test.@testset "BLAST DB to Arrow and FASTA" begin
             db_name = "ref_viroids_rep_genomes"
             db_dir = mktempdir(test_tmp_root)
             try
-                db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
+                db_path = Mycelia.download_blast_db(db = db_name, dbdir = db_dir)
                 table = Mycelia.blastdb2table(
-                    blastdb=db_path,
-                    blastdbs_dir=db_dir,
-                    ALL_FIELDS=false,
-                    accession=true,
-                    taxid=true,
-                    sequence=false,
-                    sequence_sha256=false
+                    blastdb = db_path,
+                    blastdbs_dir = db_dir,
+                    ALL_FIELDS = false,
+                    accession = true,
+                    taxid = true,
+                    sequence = false,
+                    sequence_sha256 = false
                 )
                 Test.@test table isa DataFrames.DataFrame
                 Test.@test DataFrames.nrow(table) > 0
@@ -75,30 +75,30 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
                 Test.@test !isempty(entries)
                 fasta_file = withenv("TMPDIR" => db_dir) do
                     Mycelia.blastdb_to_fasta(
-                        blastdb=db_path,
-                        entries=entries,
-                        outfile=joinpath(db_dir, "$(db_name).fna.gz"),
-                        force=true,
-                        max_cores=1
+                        blastdb = db_path,
+                        entries = entries,
+                        outfile = joinpath(db_dir, "$(db_name).fna.gz"),
+                        force = true,
+                        max_cores = 1
                     )
                 end
                 Test.@test isfile(fasta_file)
             finally
-                rm(db_dir, recursive=true, force=true)
+                rm(db_dir, recursive = true, force = true)
             end
         end
         Test.@testset "Filter by Taxid/Entry" begin
             db_name = "ref_viroids_rep_genomes"
             db_dir = mktempdir(test_tmp_root)
             try
-                db_path = Mycelia.download_blast_db(db=db_name, dbdir=db_dir)
+                db_path = Mycelia.download_blast_db(db = db_name, dbdir = db_dir)
                 filtered = Mycelia.blastdb2table(
-                    blastdb=db_path,
-                    blastdbs_dir=db_dir,
-                    ALL_FIELDS=false,
-                    taxid=true,
-                    sequence=false,
-                    sequence_sha256=false
+                    blastdb = db_path,
+                    blastdbs_dir = db_dir,
+                    ALL_FIELDS = false,
+                    taxid = true,
+                    sequence = false,
+                    sequence_sha256 = false
                 )
                 Test.@test !isempty(filtered)
                 if "taxid" in DataFrames.names(filtered)
@@ -107,11 +107,12 @@ if run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
                     has_taxids = any(!isempty, taxid_strings)
                     Test.@test has_taxids
                     if has_taxids && !any(taxid_strings .== "12884")
-                        @info "Taxid 12884 not present in filtered table; sample taxids" unique(first(filtered.taxid, min(length(filtered.taxid), 5)))
+                        @info "Taxid 12884 not present in filtered table; sample taxids" unique(first(
+                            filtered.taxid, min(length(filtered.taxid), 5)))
                     end
                 end
             finally
-                rm(db_dir, recursive=true, force=true)
+                rm(db_dir, recursive = true, force = true)
             end
         end
     end

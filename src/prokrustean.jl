@@ -10,7 +10,7 @@ const PROKRUSTEAN_TOOLCHAIN_PACKAGES = [
     "make",
     "git",
     "gcc_linux-64",
-    "gxx_linux-64",
+    "gxx_linux-64"
 ]
 
 function _prokrustean_install_dir()
@@ -21,7 +21,7 @@ function _prokrustean_build_dir(install_dir::AbstractString)
     return joinpath(install_dir, "build")
 end
 
-function _prokrustean_executable(name::AbstractString; install_dir::AbstractString=_prokrustean_install_dir())
+function _prokrustean_executable(name::AbstractString; install_dir::AbstractString = _prokrustean_install_dir())
     return joinpath(_prokrustean_build_dir(install_dir), name)
 end
 
@@ -70,7 +70,7 @@ function _prokrustean_compiler_supports_ranges(compiler::AbstractString)
         end
         return true
     finally
-        rm(workdir; recursive=true, force=true)
+        rm(workdir; recursive = true, force = true)
     end
 end
 
@@ -112,10 +112,12 @@ function _prokrustean_module_candidates()
     end
 
     gcc_candidates = filter(name -> startswith(name, "gcc/"), candidates)
-    llvm_candidates = filter(name -> startswith(name, "llvm/") || startswith(name, "clang/"), candidates)
+    llvm_candidates = filter(
+        name -> startswith(name, "llvm/") ||
+                startswith(name, "clang/"), candidates)
 
-    sort!(gcc_candidates; by=_prokrustean_module_version_key, rev=true)
-    sort!(llvm_candidates; by=_prokrustean_module_version_key, rev=true)
+    sort!(gcc_candidates; by = _prokrustean_module_version_key, rev = true)
+    sort!(llvm_candidates; by = _prokrustean_module_version_key, rev = true)
 
     return vcat(gcc_candidates, llvm_candidates)
 end
@@ -134,12 +136,13 @@ function _prokrustean_module_supports_ranges(module_name::AbstractString)
     catch
         return false
     finally
-        rm(workdir; recursive=true, force=true)
+        rm(workdir; recursive = true, force = true)
     end
 end
 
-function _prokrustean_build_with_module(module_name::AbstractString, source_dir::AbstractString, build_dir::AbstractString;
-                                        cxx_standard::Int=20)
+function _prokrustean_build_with_module(
+        module_name::AbstractString, source_dir::AbstractString, build_dir::AbstractString;
+        cxx_standard::Int = 20)
     mkpath(build_dir)
     cmd = `bash -lc "module load $(module_name) && cmake -S $(source_dir) -B $(build_dir) -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=$(cxx_standard) -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF && cmake --build $(build_dir)"`
     run(cmd)
@@ -150,8 +153,9 @@ function _prokrustean_conda_available()
     return isfile(Mycelia.CONDA_RUNNER)
 end
 
-function _prokrustean_ensure_conda_toolchain_env(; env_name::AbstractString=PROKRUSTEAN_TOOLCHAIN_ENV,
-                                                  force::Bool=false)
+function _prokrustean_ensure_conda_toolchain_env(;
+        env_name::AbstractString = PROKRUSTEAN_TOOLCHAIN_ENV,
+        force::Bool = false)
     if !_prokrustean_conda_available()
         throw(ErrorException("Conda runner not available at $(Mycelia.CONDA_RUNNER)."))
     end
@@ -169,8 +173,9 @@ function _prokrustean_ensure_conda_toolchain_env(; env_name::AbstractString=PROK
     return env_name
 end
 
-function _prokrustean_build_with_conda(source_dir::AbstractString, build_dir::AbstractString;
-                                       cxx_standard::Int=20)
+function _prokrustean_build_with_conda(
+        source_dir::AbstractString, build_dir::AbstractString;
+        cxx_standard::Int = 20)
     env_name = _prokrustean_ensure_conda_toolchain_env()
     mkpath(build_dir)
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) cmake -S $(source_dir) -B $(build_dir) -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=$(cxx_standard) -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF`)
@@ -178,13 +183,15 @@ function _prokrustean_build_with_conda(source_dir::AbstractString, build_dir::Ab
     return nothing
 end
 
-function _prokrustean_configure_and_build(source_dir::AbstractString, build_dir::AbstractString;
-                                          cxx_standard::Int=20)
+function _prokrustean_configure_and_build(
+        source_dir::AbstractString, build_dir::AbstractString;
+        cxx_standard::Int = 20)
     mkpath(build_dir)
 
     missing_build_tools = _prokrustean_missing_tools(("cmake", "make"))
     compiler = _prokrustean_compiler()
-    if isempty(missing_build_tools) && !isempty(compiler) && _prokrustean_compiler_supports_ranges(compiler)
+    if isempty(missing_build_tools) && !isempty(compiler) &&
+       _prokrustean_compiler_supports_ranges(compiler)
         run(`cmake -S $source_dir -B $build_dir -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=$cxx_standard -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF`)
         run(`cmake --build $build_dir`)
         return nothing
@@ -199,7 +206,7 @@ function _prokrustean_configure_and_build(source_dir::AbstractString, build_dir:
         if _prokrustean_module_supports_ranges(module_name)
             @info "Building Prokrustean with module $(module_name)"
             try
-                _prokrustean_build_with_module(module_name, source_dir, build_dir; cxx_standard=cxx_standard)
+                _prokrustean_build_with_module(module_name, source_dir, build_dir; cxx_standard = cxx_standard)
                 return nothing
             catch e
                 @warn "Module build failed with $(module_name): $(e)"
@@ -209,7 +216,7 @@ function _prokrustean_configure_and_build(source_dir::AbstractString, build_dir:
 
     if _prokrustean_conda_available()
         @info "Building Prokrustean with conda toolchain $(PROKRUSTEAN_TOOLCHAIN_ENV)"
-        _prokrustean_build_with_conda(source_dir, build_dir; cxx_standard=cxx_standard)
+        _prokrustean_build_with_conda(source_dir, build_dir; cxx_standard = cxx_standard)
         return nothing
     end
 
@@ -219,10 +226,11 @@ function _prokrustean_configure_and_build(source_dir::AbstractString, build_dir:
     throw(ErrorException(message))
 end
 
-function _prokrustean_ensure_executable(name::AbstractString; install_dir::AbstractString=_prokrustean_install_dir())
-    executable = _prokrustean_executable(name; install_dir=install_dir)
+function _prokrustean_ensure_executable(
+        name::AbstractString; install_dir::AbstractString = _prokrustean_install_dir())
+    executable = _prokrustean_executable(name; install_dir = install_dir)
     if !isfile(executable)
-        install_prokrustean(dest_dir=install_dir)
+        install_prokrustean(dest_dir = install_dir)
     end
     if !isfile(executable)
         error("Prokrustean executable not found at $(executable). Please run install_prokrustean().")
@@ -241,17 +249,17 @@ Clones the repository, builds with CMake/Make, and sets up executables.
 - `force::Bool=false`: Force re-installation if already present.
 """
 function install_prokrustean(;
-    dest_dir::String=_prokrustean_install_dir(),
-    force::Bool=false
+        dest_dir::String = _prokrustean_install_dir(),
+        force::Bool = false
 )
-    main_executable = _prokrustean_executable("prokrustean"; install_dir=dest_dir)
+    main_executable = _prokrustean_executable("prokrustean"; install_dir = dest_dir)
     if isfile(main_executable) && !force
         @info "Prokrustean already installed at $(dest_dir). Use `force=true` to reinstall."
         return dest_dir
     end
 
     if isdir(dest_dir) && force
-        rm(dest_dir; recursive=true, force=true)
+        rm(dest_dir; recursive = true, force = true)
     end
 
     if !isdir(dest_dir)
@@ -293,10 +301,10 @@ Construct a Prokrustean graph from an eBWT file.
 - `install_dir::String`: Path to Prokrustean installation (optional).
 """
 function prokrustean_build_graph(
-    bwt_file::String,
-    output_file::String;
-    kmin::Int=20,
-    install_dir::String=_prokrustean_install_dir()
+        bwt_file::String,
+        output_file::String;
+        kmin::Int = 20,
+        install_dir::String = _prokrustean_install_dir()
 )
     if !isfile(bwt_file)
         throw(ArgumentError("BWT file not found: $(bwt_file)"))
@@ -305,7 +313,7 @@ function prokrustean_build_graph(
         throw(ArgumentError("kmin must be a positive integer, got $(kmin)"))
     end
 
-    executable = _prokrustean_ensure_executable("prokrustean"; install_dir=install_dir)
+    executable = _prokrustean_ensure_executable("prokrustean"; install_dir = install_dir)
     mkpath(dirname(output_file))
 
     cmd = `$executable -i $bwt_file -l $kmin`
@@ -314,7 +322,7 @@ function prokrustean_build_graph(
     default_output = "$(bwt_file).prokrustean"
     if isfile(default_output)
         if default_output != output_file
-            mv(default_output, output_file; force=true)
+            mv(default_output, output_file; force = true)
         end
         return output_file
     end
@@ -339,17 +347,17 @@ Count the number of distinct k-mers for k=kmin...L using a Prokrustean graph.
 - `install_dir::String`: Path to Prokrustean installation.
 """
 function prokrustean_kmer_count(
-    graph_file::String,
-    output_file::String;
-    install_dir::String=_prokrustean_install_dir()
+        graph_file::String,
+        output_file::String;
+        install_dir::String = _prokrustean_install_dir()
 )
     if !isfile(graph_file)
         throw(ArgumentError("Graph file not found: $(graph_file)"))
     end
-    executable = _prokrustean_ensure_executable("prokrustean_kmer_count"; install_dir=install_dir)
+    executable = _prokrustean_ensure_executable("prokrustean_kmer_count"; install_dir = install_dir)
     mkpath(dirname(output_file))
 
-    cmd = pipeline(`$executable -p $graph_file`, stdout=output_file)
+    cmd = pipeline(`$executable -p $graph_file`, stdout = output_file)
     run(cmd)
     return output_file
 end
@@ -367,17 +375,17 @@ Count the number of maximal unitigs of de Bruijn graphs for k=kmin...L.
 - `install_dir::String`: Path to Prokrustean installation.
 """
 function prokrustean_unitig_count(
-    graph_file::String,
-    output_file::String;
-    install_dir::String=_prokrustean_install_dir()
+        graph_file::String,
+        output_file::String;
+        install_dir::String = _prokrustean_install_dir()
 )
     if !isfile(graph_file)
         throw(ArgumentError("Graph file not found: $(graph_file)"))
     end
-    executable = _prokrustean_ensure_executable("prokrustean_unitig_count"; install_dir=install_dir)
+    executable = _prokrustean_ensure_executable("prokrustean_unitig_count"; install_dir = install_dir)
     mkpath(dirname(output_file))
 
-    cmd = pipeline(`$executable -p $graph_file`, stdout=output_file)
+    cmd = pipeline(`$executable -p $graph_file`, stdout = output_file)
     run(cmd)
     return output_file
 end
@@ -396,10 +404,10 @@ Compute Bray-Curtis dissimilarities between samples for k=kmin...L.
 - `install_dir::String`: Path to Prokrustean installation.
 """
 function prokrustean_braycurtis(
-    graph_file::String,
-    sample_ids_file::String,
-    output_file::String;
-    install_dir::String=_prokrustean_install_dir()
+        graph_file::String,
+        sample_ids_file::String,
+        output_file::String;
+        install_dir::String = _prokrustean_install_dir()
 )
     if !isfile(graph_file)
         throw(ArgumentError("Graph file not found: $(graph_file)"))
@@ -407,10 +415,10 @@ function prokrustean_braycurtis(
     if !isfile(sample_ids_file)
         throw(ArgumentError("Sample IDs file not found: $(sample_ids_file)"))
     end
-    executable = _prokrustean_ensure_executable("prokrustean_braycurtis"; install_dir=install_dir)
+    executable = _prokrustean_ensure_executable("prokrustean_braycurtis"; install_dir = install_dir)
     mkpath(dirname(output_file))
 
-    cmd = pipeline(`$executable -p $graph_file -s $sample_ids_file`, stdout=output_file)
+    cmd = pipeline(`$executable -p $graph_file -s $sample_ids_file`, stdout = output_file)
     run(cmd)
     return output_file
 end
@@ -428,17 +436,17 @@ Count vertex degrees of the overlap graph for k >= kmin.
 - `install_dir::String`: Path to Prokrustean installation.
 """
 function prokrustean_overlap(
-    graph_file::String,
-    output_file::String;
-    install_dir::String=_prokrustean_install_dir()
+        graph_file::String,
+        output_file::String;
+        install_dir::String = _prokrustean_install_dir()
 )
     if !isfile(graph_file)
         throw(ArgumentError("Graph file not found: $(graph_file)"))
     end
-    executable = _prokrustean_ensure_executable("prokrustean_overlap"; install_dir=install_dir)
+    executable = _prokrustean_ensure_executable("prokrustean_overlap"; install_dir = install_dir)
     mkpath(dirname(output_file))
 
-    cmd = pipeline(`$executable -p $graph_file`, stdout=output_file)
+    cmd = pipeline(`$executable -p $graph_file`, stdout = output_file)
     run(cmd)
     return output_file
 end

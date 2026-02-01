@@ -21,20 +21,23 @@ Test.@testset "Utility Functions" begin
     end
 
     Test.@testset "Collapse duplicates" begin
-        df = Mycelia.DataFrames.DataFrame(id=[1, 1, 2], a=[1, missing, 2], b=["x", "x", "y"])
+        df = Mycelia.DataFrames.DataFrame(id = [1, 1, 2], a = [1, missing, 2], b = [
+            "x", "x", "y"])
         collapsed = Mycelia.collapse_duplicates(df, :id)
         Test.@test Mycelia.DataFrames.nrow(collapsed) == 2
         Test.@test collapsed[collapsed.id .== 1, :a][1] == 1
         Test.@test collapsed[collapsed.id .== 1, :b][1] == "x"
 
-        conflict_df = Mycelia.DataFrames.DataFrame(id=[1, 1], a=[1, 2])
-        conflict_collapsed = Mycelia.collapse_duplicates(conflict_df, :id; warn_on_conflict=false, summarize_conflicts=false)
+        conflict_df = Mycelia.DataFrames.DataFrame(id = [1, 1], a = [1, 2])
+        conflict_collapsed = Mycelia.collapse_duplicates(
+            conflict_df, :id; warn_on_conflict = false, summarize_conflicts = false)
         Test.@test Mycelia.DataFrames.nrow(conflict_collapsed) == 2
     end
 
     Test.@testset "Retry helper" begin
         attempts = Ref(0)
-        result = Mycelia.with_retry(max_attempts=3, initial_delay=0.0, backoff_factor=1.0, log_on_retry=false) do
+        result = Mycelia.with_retry(max_attempts = 3, initial_delay = 0.0,
+            backoff_factor = 1.0, log_on_retry = false) do
             attempts[] += 1
             attempts[] < 2 && error("fail")
             "ok"
@@ -42,7 +45,9 @@ Test.@testset "Utility Functions" begin
         Test.@test result == "ok"
         Test.@test attempts[] == 2
 
-        Test.@test_throws ErrorException Mycelia.with_retry(max_attempts=2, initial_delay=0.0, log_on_retry=false, log_on_failure=false) do
+        Test.@test_throws ErrorException Mycelia.with_retry(
+            max_attempts = 2, initial_delay = 0.0,
+            log_on_retry = false, log_on_failure = false) do
             error("always")
         end
     end
@@ -67,9 +72,9 @@ Test.@testset "Utility Functions" begin
 
     Test.@testset "TSV GZ roundtrip" begin
         temp_dir = mktempdir()
-        df = Mycelia.DataFrames.DataFrame(a=[1, 2], b=["x", "y"])
+        df = Mycelia.DataFrames.DataFrame(a = [1, 2], b = ["x", "y"])
         out_path = joinpath(temp_dir, "data.tsv.gz")
-        written = Mycelia.write_tsvgz(df=df, filename=out_path)
+        written = Mycelia.write_tsvgz(df = df, filename = out_path)
         Test.@test written == out_path
 
         loaded = Mycelia.read_tsvgz(out_path)
@@ -79,16 +84,16 @@ Test.@testset "Utility Functions" begin
     end
 
     Test.@testset "DataFrame utilities" begin
-        df = Mycelia.DataFrames.DataFrame(a=[1, nothing], b=["x", "y"])
+        df = Mycelia.DataFrames.DataFrame(a = [1, nothing], b = ["x", "y"])
         Mycelia.dataframe_replace_nothing_with_missing(df)
         Test.@test df.a[2] === missing
 
-        dict_df = Mycelia.DataFrames.DataFrame(meta=[Dict("a" => 1), Dict("b" => 2)])
+        dict_df = Mycelia.DataFrames.DataFrame(meta = [Dict("a" => 1), Dict("b" => 2)])
         json_df = Mycelia.dataframe_convert_dicts_to_json(dict_df)
         Test.@test json_df.meta[1] == Mycelia.JSON.json(Dict("a" => 1))
 
-        downcast_df = Mycelia.DataFrames.DataFrame(a=[1.0, 2.0], b=[1.5, 2.5])
-        Mycelia.downcast_float_columns(downcast_df; target_type=Float32)
+        downcast_df = Mycelia.DataFrames.DataFrame(a = [1.0, 2.0], b = [1.5, 2.5])
+        Mycelia.downcast_float_columns(downcast_df; target_type = Float32)
         Test.@test eltype(downcast_df.a) == Float32
         Test.@test eltype(downcast_df.b) == Float32
 
@@ -101,12 +106,13 @@ Test.@testset "Utility Functions" begin
     Test.@testset "JSON helpers" begin
         Test.@test Mycelia.normalize_json_value(missing) === nothing
         Test.@test Mycelia.normalize_json_value(:alpha) == "alpha"
-        Test.@test Mycelia.normalize_json_value((a=1, b=:two)) == Dict("a" => 1, "b" => "two")
+        Test.@test Mycelia.normalize_json_value((a = 1, b = :two)) ==
+                   Dict("a" => 1, "b" => "two")
 
         df = Mycelia.DataFrames.DataFrame(
-            id=[1, 2],
-            name=["a", "b"],
-            created=[Mycelia.Dates.DateTime(2024, 1, 2, 3, 4), missing]
+            id = [1, 2],
+            name = ["a", "b"],
+            created = [Mycelia.Dates.DateTime(2024, 1, 2, 3, 4), missing]
         )
         ndjson = Mycelia.dataframe_to_ndjson(df)
         lines = split(ndjson, '\n')
@@ -120,8 +126,9 @@ Test.@testset "Utility Functions" begin
         dense_bytes = Mycelia.estimate_dense_matrix_memory(2, 3)
         Test.@test dense_bytes == Base.sizeof(Float64) * 2 * 3
 
-        sparse_bytes = Mycelia.estimate_sparse_matrix_memory(2, 3; nnz=4)
-        expected_sparse = Base.sizeof(Float64) * 4 + Base.sizeof(Int) * 4 + Base.sizeof(Int) * 4
+        sparse_bytes = Mycelia.estimate_sparse_matrix_memory(2, 3; nnz = 4)
+        expected_sparse = Base.sizeof(Float64) * 4 + Base.sizeof(Int) * 4 +
+                          Base.sizeof(Int) * 4
         Test.@test sparse_bytes == expected_sparse
 
         mem_check = Mycelia.check_matrix_fits_in_memory(1)
@@ -149,8 +156,10 @@ Test.@testset "Utility Functions" begin
     end
 
     Test.@testset "Sequence utilities" begin
-        Test.@test Mycelia.alphabet_to_biosequence_type(:DNA) == Mycelia.BioSequences.LongDNA{4}
-        Test.@test Mycelia.alphabet_to_biosequence_type(:RNA) == Mycelia.BioSequences.LongRNA{4}
+        Test.@test Mycelia.alphabet_to_biosequence_type(:DNA) ==
+                   Mycelia.BioSequences.LongDNA{4}
+        Test.@test Mycelia.alphabet_to_biosequence_type(:RNA) ==
+                   Mycelia.BioSequences.LongRNA{4}
         Test.@test Mycelia.alphabet_to_biosequence_type(:AA) == Mycelia.BioSequences.LongAA
         Test.@test_throws ArgumentError Mycelia.alphabet_to_biosequence_type(:XYZ)
 
@@ -168,20 +177,20 @@ Test.@testset "Utility Functions" begin
             Mycelia.FASTX.FASTA.Record("r2", "GG")
         ]
         gc_pct = Mycelia.calculate_gc_content(records)
-        Test.@test isapprox(gc_pct, 66.6666667; atol=1e-6)
+        Test.@test isapprox(gc_pct, 66.6666667; atol = 1e-6)
     end
 
     Test.@testset "Ranges and sampling" begin
         Test.@test Mycelia.get_base_extension("sample.fna.gz") == ".fna"
         Test.@test Mycelia.get_base_extension("sample.txt") == ".txt"
 
-        ranges = Mycelia.find_true_ranges([false, true, true, false, true]; min_length=2)
+        ranges = Mycelia.find_true_ranges([false, true, true, false, true]; min_length = 2)
         Test.@test ranges == [(2, 3)]
 
         samples = Mycelia.equally_spaced_samples(collect(1:10), 3)
         Test.@test samples == [1, 6, 10]
 
-        avg = Mycelia.rolling_centered_avg([1, 2, 3, 4, 5]; window_size=3)
+        avg = Mycelia.rolling_centered_avg([1, 2, 3, 4, 5]; window_size = 3)
         Test.@test avg[1] == 1.5
         Test.@test avg[3] == 3.0
     end
@@ -197,7 +206,8 @@ Test.@testset "Utility Functions" begin
     end
 
     Test.@testset "DataFrame structure helpers" begin
-        df = Mycelia.DataFrames.DataFrame(a=[missing, missing], b=["", ""], c=["x", ""])
+        df = Mycelia.DataFrames.DataFrame(a = [missing, missing], b = ["", ""], c = [
+            "x", ""])
         nonempty = Mycelia.find_nonempty_columns(df)
         Test.@test nonempty == [false, false, true]
 
@@ -228,8 +238,8 @@ Test.@testset "Utility Functions" begin
 
     Test.@testset "Distribution helpers" begin
         normalized = Mycelia.normalize_countmap(Dict("a" => 2, "b" => 1))
-        Test.@test isapprox(normalized["a"], 2 / 3; atol=1e-8)
-        Test.@test isapprox(normalized["b"], 1 / 3; atol=1e-8)
+        Test.@test isapprox(normalized["a"], 2 / 3; atol = 1e-8)
+        Test.@test isapprox(normalized["b"], 1 / 3; atol = 1e-8)
 
         sha_values = [repeat("a", 64), repeat("b", 64)]
         meta1 = Mycelia.metasha256(sha_values)
@@ -257,8 +267,9 @@ Test.@testset "Utility Functions" begin
     end
 
     Test.@testset "String helpers" begin
-        Test.@test Mycelia.scientific_notation(12.34; precision=2) == "1.23e+01"
-        Test.@test Mycelia.find_matching_prefix("sample-01.fastq", "sample-02.fastq") == "sample-0"
+        Test.@test Mycelia.scientific_notation(12.34; precision = 2) == "1.23e+01"
+        Test.@test Mycelia.find_matching_prefix("sample-01.fastq", "sample-02.fastq") ==
+                   "sample-0"
     end
 
     Test.@testset "Math utilities" begin
@@ -276,7 +287,8 @@ Test.@testset "Utility Functions" begin
         open(existing_path, "w") do io
             write(io, "data")
         end
-        Test.@test Mycelia.select_first_existing([missing_path, existing_path]) == existing_path
+        Test.@test Mycelia.select_first_existing([missing_path, existing_path]) ==
+                   existing_path
         Test.@test Mycelia.select_first_existing([missing_path]) === nothing
     end
 end

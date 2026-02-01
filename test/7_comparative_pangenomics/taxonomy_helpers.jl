@@ -45,7 +45,7 @@ Test.@testset "Taxonomy helpers - top call summary" begin
         "rank" => ["species", "species", "genus"],
         "taxid" => [11, 22, 33],
         "taxon" => ["A", "B", "C"],
-        "rel_conf" => [0.7, 0.3, 1.0],
+        "rel_conf" => [0.7, 0.3, 1.0]
     )
 
     summary = Mycelia.summarize_top_calls(conf_df)
@@ -55,8 +55,8 @@ Test.@testset "Taxonomy helpers - top call summary" begin
     Test.@test DataFrames.nrow(species_row) == 1
     Test.@test species_row[1, "taxid"] == 11
     Test.@test species_row[1, "taxon"] == "A"
-    Test.@test isapprox(species_row[1, "top_rel_conf"], 0.7; atol=1e-12)
-    Test.@test isapprox(species_row[1, "delta_to_second"], 0.4; atol=1e-12)
+    Test.@test isapprox(species_row[1, "top_rel_conf"], 0.7; atol = 1e-12)
+    Test.@test isapprox(species_row[1, "delta_to_second"], 0.4; atol = 1e-12)
     Test.@test species_row[1, "n_taxa_considered"] == 2
 
     missing_df = DataFrames.DataFrame(
@@ -64,7 +64,7 @@ Test.@testset "Taxonomy helpers - top call summary" begin
         "rank" => ["species", "species"],
         "taxid" => [11, 22],
         "taxon" => ["A", "B"],
-        "rel_conf" => [missing, missing],
+        "rel_conf" => [missing, missing]
     )
     missing_summary = Mycelia.summarize_top_calls(missing_df)
     Test.@test DataFrames.nrow(missing_summary) == 1
@@ -94,7 +94,7 @@ Test.@testset "Taxonomy helpers - aggregation and streamlining" begin
         "species_taxid" => [missing, 10, 20],
         "relative_alignment_proportion" => [0.5, 0.3, 0.2],
         "percent_identity" => [95.0, 90.0, 88.0],
-        "mappingquality" => [60, 55, 50],
+        "mappingquality" => [60, 55, 50]
     )
 
     aggregated = Mycelia.aggregate_by_rank_nonmissing(df, ["domain", "species"])
@@ -109,16 +109,16 @@ Test.@testset "Taxonomy helpers - aggregation and streamlining" begin
     Test.@test ranks == Set(["1_domain", "2_species"])
 
     counts = ["A" => 10, "B" => 1, "C" => 1]
-    relative = Mycelia.streamline_counts(counts; threshold=0.2, min_len=0)
+    relative = Mycelia.streamline_counts(counts; threshold = 0.2, min_len = 0)
     Test.@test length(relative) == 2
     Test.@test relative[1] == ("A" => 10)
     Test.@test relative[2] == ("Other" => 2)
 
-    absolute = Mycelia.streamline_counts(counts; threshold=5, min_len=0)
+    absolute = Mycelia.streamline_counts(counts; threshold = 5, min_len = 0)
     Test.@test length(absolute) == 2
     Test.@test absolute[1] == ("A" => 10)
     Test.@test absolute[2] == ("Other" => 2)
 
-    untouched = Mycelia.streamline_counts(counts; min_len=10)
+    untouched = Mycelia.streamline_counts(counts; min_len = 10)
     Test.@test untouched == counts
 end

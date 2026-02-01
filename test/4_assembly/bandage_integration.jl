@@ -55,16 +55,16 @@ Test.@testset "Bandage download and CLI (opt-in)" begin
             "XDG_RUNTIME_DIR" => dir
         ) do
             img_path = Mycelia.bandage_visualize(
-                gfa=gfa,
-                img=joinpath(dir, "graph.png"),
-                extra_args=["--dpi", "1"],
-                force=true
+                gfa = gfa,
+                img = joinpath(dir, "graph.png"),
+                extra_args = ["--dpi", "1"],
+                force = true
             )
             Test.@test isfile(img_path)
 
             reduced = Mycelia.bandage_reduce(
-                fastg=fastg,
-                gfa=joinpath(dir, "reduced.gfa")
+                fastg = fastg,
+                gfa = joinpath(dir, "reduced.gfa")
             )
             Test.@test isfile(reduced)
         end

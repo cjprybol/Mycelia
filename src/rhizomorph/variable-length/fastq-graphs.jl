@@ -91,11 +91,11 @@ graph = build_fastq_graph(reads; min_overlap=21)
 - `get_fastq_graph_statistics`: Get graph statistics including quality
 """
 function build_fastq_graph(
-    records::Vector{FASTX.FASTQ.Record};
-    dataset_id::String="dataset_01",
-    min_overlap::Int=3
+        records::Vector{FASTX.FASTQ.Record};
+        dataset_id::String = "dataset_01",
+        min_overlap::Int = 3
 )
-    return build_fastq_graph_olc(records; dataset_id=dataset_id, min_overlap=min_overlap)
+    return build_fastq_graph_olc(records; dataset_id = dataset_id, min_overlap = min_overlap)
 end
 
 # Note: The core implementation (build_fastq_graph_olc, find_biosequence_overlap_length)
@@ -130,9 +130,9 @@ graph = build_fastq_graph_from_file("reads.fastq.gz"; min_overlap=9)
 ```
 """
 function build_fastq_graph_from_file(
-    filepath::String;
-    dataset_id::Union{String,Nothing}=nothing,
-    min_overlap::Int=3
+        filepath::String;
+        dataset_id::Union{String, Nothing} = nothing,
+        min_overlap::Int = 3
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -155,7 +155,7 @@ function build_fastq_graph_from_file(
         error("FASTQ graphs require FASTQ input. File appears to be FASTA: $filepath")
     end
 
-    return build_fastq_graph(records; dataset_id=dataset_id, min_overlap=min_overlap)
+    return build_fastq_graph(records; dataset_id = dataset_id, min_overlap = min_overlap)
 end
 
 """
@@ -189,15 +189,15 @@ end
 ```
 """
 function build_fastq_graph_from_files(
-    filepaths::Vector{String};
-    min_overlap::Int=3
+        filepaths::Vector{String};
+        min_overlap::Int = 3
 )
     if isempty(filepaths)
         error("No files provided")
     end
 
     # Build graph from first file
-    graph = build_fastq_graph_from_file(filepaths[1]; min_overlap=min_overlap)
+    graph = build_fastq_graph_from_file(filepaths[1]; min_overlap = min_overlap)
 
     # Get Mycelia module for open_fastx
     Mycelia_module = parentmodule(Rhizomorph)
@@ -293,8 +293,8 @@ stats_sample_a = get_fastq_graph_statistics(graph; dataset_id="sample_A")
 ```
 """
 function get_fastq_graph_statistics(
-    graph::MetaGraphsNext.MetaGraph;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph;
+        dataset_id::Union{String, Nothing} = nothing
 )
     if isempty(MetaGraphsNext.labels(graph))
         return Dict(
@@ -403,9 +403,9 @@ very_high_qual = find_high_quality_sequences(graph, 100; dataset_id="sample_A")
 ```
 """
 function find_high_quality_sequences(
-    graph::MetaGraphsNext.MetaGraph,
-    min_quality::Int;
-    dataset_id::Union{String,Nothing}=nothing
+        graph::MetaGraphsNext.MetaGraph,
+        min_quality::Int;
+        dataset_id::Union{String, Nothing} = nothing
 )
     result = []
 

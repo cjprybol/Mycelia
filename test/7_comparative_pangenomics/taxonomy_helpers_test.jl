@@ -37,7 +37,7 @@ Test.@testset "Taxonomy Helpers" begin
 
     Test.@testset "Streamline counts" begin
         counts = ["A" => 10, "B" => 1, "C" => 1]
-        streamlined = Mycelia.streamline_counts(counts; threshold=0.2, min_len=1)
+        streamlined = Mycelia.streamline_counts(counts; threshold = 0.2, min_len = 1)
         Test.@test length(streamlined) == 2
         Test.@test streamlined[2][1] == "Other"
     end

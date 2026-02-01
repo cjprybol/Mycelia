@@ -29,7 +29,7 @@ Test.@testset "JET Static Analysis" begin
     ## Run analysis and capture the result
     result = JET.report_package("Mycelia")
     reports = JET.get_reports(result)
-    
+
     if isempty(reports)
         println("\n✅ No type instabilities or errors detected by JET!")
     else
@@ -38,10 +38,10 @@ Test.@testset "JET Static Analysis" begin
             println(report)
         end
     end
-    
+
     ## Currently not enforcing zero issues - uncomment when ready:
     ## Test.@test isempty(reports)
-    
+
     ## For now, just test that JET ran successfully
     Test.@test result !== nothing
 end

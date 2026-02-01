@@ -26,7 +26,7 @@ function sanity_check_matrix(M::AbstractMatrix)
     # Check dimensions
     ndims(M) == 2 || throw(ArgumentError("Input must be a 2D matrix"))
     n_features, n_samples = size(M)
-    summary = Dict{Symbol,Any}()
+    summary = Dict{Symbol, Any}()
     summary[:n_features] = n_features
     summary[:n_samples] = n_samples
 
@@ -42,17 +42,17 @@ function sanity_check_matrix(M::AbstractMatrix)
 
     # Probability vector check: each column non-negative, sums to 1 (within tolerance)
     function is_probability_vector_matrix(M)
-        all(x -> x >= 0, M) && all(abs.(sum(M, dims=1) .- 1) .< 1e-8)
+        all(x -> x >= 0, M) && all(abs.(sum(M, dims = 1) .- 1) .< 1e-8)
     end
     summary[:is_probability_vector] = is_probability_vector_matrix(M)
 
     # Centering
-    feature_means = mapslices(Statistics.mean, M; dims=2)
+    feature_means = mapslices(Statistics.mean, M; dims = 2)
     centered = all(abs.(feature_means) .< 1e-6)
     summary[:is_centered] = centered
 
     # Overdispersion (for count data)
-    feature_vars = mapslices(Statistics.var, M; dims=2)
+    feature_vars = mapslices(Statistics.var, M; dims = 2)
     feature_means_vec = vec(feature_means)
     feature_vars_vec = vec(feature_vars)
     overdispersion = summary[:is_integer] && summary[:is_nonnegative] &&
@@ -88,7 +88,8 @@ function sanity_check_matrix(M::AbstractMatrix)
         suggested_distance = :euclidean_distance
     end
     summary[:suggested_epca_raw] = suggested_epca
-    summary[:suggested_epca] = EXP_FAMILY_PCA_ENABLED || suggested_epca == :pca_transform ? suggested_epca : nothing
+    summary[:suggested_epca] = EXP_FAMILY_PCA_ENABLED || suggested_epca == :pca_transform ?
+                               suggested_epca : nothing
     summary[:exp_family_pca_enabled] = EXP_FAMILY_PCA_ENABLED
     summary[:suggested_distance] = suggested_distance
 
@@ -131,57 +132,57 @@ A NamedTuple with fields
 - `chosen_k` : the number of components actually used
 """
 function pca_transform(
-  M::AbstractMatrix{<:Real};
-  k::Int = 0,
-  var_prop::Float64 = 1.0
+        M::AbstractMatrix{<:Real};
+        k::Int = 0,
+        var_prop::Float64 = 1.0
 )
-  if any(!isfinite, M)
-    throw(ArgumentError("PCA input contains non-finite values (NaN or Inf)."))
-  end
-  n_feats, n_samps = size(M)
-  # Warn if not centered
-  feature_means = mapslices(Statistics.mean, M; dims=2)
-  if any(abs.(feature_means) .> 1e-6)
-    @warn "PCA assumes centered data (mean ≈ 0 for each feature); consider centering before PCA."
-  end
-  # max possible PCs = full rank of X (columns = samples)
-  rank_max = min(n_samps - 1, n_feats)
-
-  # user‐supplied k takes priority
-  if k > 0
-    chosen_k = min(k, rank_max)
-    model = MultivariateStats.fit(
-      MultivariateStats.PCA, M; maxoutdim=chosen_k
-    )
-    Z = MultivariateStats.transform(model, M)           # (n_samples × chosen_k)
-
-  else
-    # need to auto‐select by variance proportion
-    # fit full‐rank PCA to get all eigenvariances
-    full = MultivariateStats.fit(
-      MultivariateStats.PCA, M; maxoutdim=rank_max
-    )
-    vars = MultivariateStats.principalvars(full)        # length = rank_max
-    total = MultivariateStats.tvar(full)               # = sum(vars) :contentReference[oaicite:1]{index=1}
-    # find smallest k so cum‐var / total ≥ var_prop
-    if var_prop < 1.0
-      cum = cumsum(vars) ./ total
-      idx = findfirst(x -> x ≥ var_prop, cum)
-      chosen_k = idx === nothing ? rank_max : idx
-    else
-      chosen_k = rank_max
+    if any(!isfinite, M)
+        throw(ArgumentError("PCA input contains non-finite values (NaN or Inf)."))
     end
-    # slice out the first chosen_k components
-    Z = MultivariateStats.transform(full, M)[:, 1:chosen_k]  # (n_samples × chosen_k)
-    model = full
-  end
+    n_feats, n_samps = size(M)
+    # Warn if not centered
+    feature_means = mapslices(Statistics.mean, M; dims = 2)
+    if any(abs.(feature_means) .> 1e-6)
+        @warn "PCA assumes centered data (mean ≈ 0 for each feature); consider centering before PCA."
+    end
+    # max possible PCs = full rank of X (columns = samples)
+    rank_max = min(n_samps - 1, n_feats)
 
-  return (
-    model    = model,
-    scores   = transpose(Z),                       # (chosen_k × n_samples)
-    loadings = MultivariateStats.projection(model)'[:, 1:chosen_k],  # (chosen_k × n_features)
-    chosen_k = chosen_k
-  )
+    # user‐supplied k takes priority
+    if k > 0
+        chosen_k = min(k, rank_max)
+        model = MultivariateStats.fit(
+            MultivariateStats.PCA, M; maxoutdim = chosen_k
+        )
+        Z = MultivariateStats.transform(model, M)           # (n_samples × chosen_k)
+
+    else
+        # need to auto‐select by variance proportion
+        # fit full‐rank PCA to get all eigenvariances
+        full = MultivariateStats.fit(
+            MultivariateStats.PCA, M; maxoutdim = rank_max
+        )
+        vars = MultivariateStats.principalvars(full)        # length = rank_max
+        total = MultivariateStats.tvar(full)               # = sum(vars) :contentReference[oaicite:1]{index=1}
+        # find smallest k so cum‐var / total ≥ var_prop
+        if var_prop < 1.0
+            cum = cumsum(vars) ./ total
+            idx = findfirst(x -> x ≥ var_prop, cum)
+            chosen_k = idx === nothing ? rank_max : idx
+        else
+            chosen_k = rank_max
+        end
+        # slice out the first chosen_k components
+        Z = MultivariateStats.transform(full, M)[:, 1:chosen_k]  # (n_samples × chosen_k)
+        model = full
+    end
+
+    return (
+        model = model,
+        scores = transpose(Z),                       # (chosen_k × n_samples)
+        loadings = MultivariateStats.projection(model)'[:, 1:chosen_k],  # (chosen_k × n_features)
+        chosen_k = chosen_k
+    )
 end
 
 #=
@@ -327,38 +328,41 @@ function negbin_pca_epca(
 end
 =#
 
-
 # ── 4. PCoA from a distance matrix ───────────────────────────────────────────
 
 struct MDSWarningFilterLogger <: Logging.AbstractLogger
     parent::Logging.AbstractLogger
 end
 
-Logging.min_enabled_level(logger::MDSWarningFilterLogger) =
+function Logging.min_enabled_level(logger::MDSWarningFilterLogger)
     Logging.min_enabled_level(logger.parent)
+end
 
-Logging.shouldlog(logger::MDSWarningFilterLogger, level, _module, group, id) =
+function Logging.shouldlog(logger::MDSWarningFilterLogger, level, _module, group, id)
     Logging.shouldlog(logger.parent, level, _module, group, id)
+end
 
-Logging.catch_exceptions(logger::MDSWarningFilterLogger) =
+function Logging.catch_exceptions(logger::MDSWarningFilterLogger)
     Logging.catch_exceptions(logger.parent)
+end
 
 function Logging.handle_message(
-    logger::MDSWarningFilterLogger,
-    level,
-    message,
-    _module,
-    group,
-    id,
-    file,
-    line;
-    kwargs...
+        logger::MDSWarningFilterLogger,
+        level,
+        message,
+        _module,
+        group,
+        id,
+        file,
+        line;
+        kwargs...
 )
     msg = message isa AbstractString ? message : string(message)
     if level == Logging.Warn && occursin("degenerate with", msg)
         return
     end
-    return Logging.handle_message(logger.parent, level, message, _module, group, id, file, line; kwargs...)
+    return Logging.handle_message(
+        logger.parent, level, message, _module, group, id, file, line; kwargs...)
 end
 
 """
@@ -376,20 +380,20 @@ NamedTuple with fields
 - `coordinates`: maxoutdim×n_samples matrix of embedded coordinates  
 """
 function pcoa_from_dist(
-    D::AbstractMatrix{<:Real};
-    maxoutdim::Int = 3
+        D::AbstractMatrix{<:Real};
+        maxoutdim::Int = 3
 )
-    @assert size(D, 1) == size(D,2) "size(D,1) != size(D,2) $(size(D))"
+    @assert size(D, 1) == size(D, 2) "size(D,1) != size(D,2) $(size(D))"
     model = Logging.with_logger(MDSWarningFilterLogger(Logging.current_logger())) do
         MultivariateStats.fit(
-            MultivariateStats.MDS, D; distances=true, maxoutdim=maxoutdim
+            MultivariateStats.MDS, D; distances = true, maxoutdim = maxoutdim
         )
     end
     Y = MultivariateStats.predict(model)
 
     return (
-      model       = model,
-      coordinates = Y
+        model = model,
+        coordinates = Y
     )
 end
 
@@ -418,10 +422,10 @@ pcoa_df = Mycelia.pcoa_to_dataframe(pcoa, sample_names)
 ```
 """
 function pcoa_to_dataframe(
-    pcoa_result,
-    sample_names::AbstractVector;
-    metadata::Union{Nothing, DataFrames.DataFrame}=nothing,
-    sample_col::Symbol=:sample
+        pcoa_result,
+        sample_names::AbstractVector;
+        metadata::Union{Nothing, DataFrames.DataFrame} = nothing,
+        sample_col::Symbol = :sample
 )
     n_dims = size(pcoa_result.coordinates, 1)
     n_samples = size(pcoa_result.coordinates, 2)
@@ -437,7 +441,7 @@ function pcoa_to_dataframe(
 
     # Join with metadata if provided
     if metadata !== nothing
-        df = DataFrames.leftjoin(df, metadata, on=:sample => sample_col)
+        df = DataFrames.leftjoin(df, metadata, on = :sample => sample_col)
     end
 
     return df
@@ -466,22 +470,22 @@ Use for visualizing high-dimensional data in 2 or 3 dimensions, especially when 
 - `model`        : the trained UMAP.UMAP model  
 """
 function umap_embed(X::AbstractMatrix{<:Real};
-                    n_neighbors::Int=Mycelia.nearest_prime(Int(round(log(maximum(size(X)))))),
-                    min_dist::Float64=0.1,
-                    n_components::Int=2)
+        n_neighbors::Int = Mycelia.nearest_prime(Int(round(log(maximum(size(X)))))),
+        min_dist::Float64 = 0.1,
+        n_components::Int = 2)
     if any(!isfinite, X)
         throw(ArgumentError("UMAP input contains non-finite values (NaN or Inf)."))
     end
 
     if size(X, 2) < 4096
-        dist_matrix = Distances.pairwise(Distances.Euclidean(), X; dims=2)
+        dist_matrix = Distances.pairwise(Distances.Euclidean(), X; dims = 2)
         model = UMAP.UMAP_(dist_matrix, n_components;
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            metric=:precomputed
+            n_neighbors = n_neighbors,
+            min_dist = min_dist,
+            metric = :precomputed
         )
     else
-        model = UMAP.UMAP_(X, n_components, n_neighbors=n_neighbors, min_dist=min_dist)
+        model = UMAP.UMAP_(X, n_components, n_neighbors = n_neighbors, min_dist = min_dist)
     end
 
     return model

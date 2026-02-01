@@ -12,7 +12,8 @@ function _quality_scores_from_vertex_evidence(vertex_data, sequence_length::Int)
         end
         for evidence_set in values(dataset_evidence)
             for entry in evidence_set
-                if entry isa QualityEvidenceEntry && length(entry.quality_scores) == sequence_length
+                if entry isa QualityEvidenceEntry &&
+                   length(entry.quality_scores) == sequence_length
                     return copy(entry.quality_scores)
                 end
             end
@@ -32,7 +33,7 @@ Preserves evidence (quality-aware graphs keep quality evidence).
 function convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
-        return MetaGraphsNext.MetaGraph(Graphs.DiGraph(); label_type=String)
+        return MetaGraphsNext.MetaGraph(Graphs.DiGraph(); label_type = String)
     end
 
     first_label = first(labels)
@@ -45,10 +46,11 @@ function convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
     graph_type = typeof(graph.graph)
     new_graph = MetaGraphsNext.MetaGraph(
         graph_type();
-        label_type=sequence_type,
-        vertex_data_type=is_quality ? QualityBioSequenceVertexData{sequence_type} : BioSequenceVertexData{sequence_type},
-        edge_data_type=is_quality ? QualityBioSequenceEdgeData : BioSequenceEdgeData,
-        weight_function=compute_edge_weight
+        label_type = sequence_type,
+        vertex_data_type = is_quality ? QualityBioSequenceVertexData{sequence_type} :
+                           BioSequenceVertexData{sequence_type},
+        edge_data_type = is_quality ? QualityBioSequenceEdgeData : BioSequenceEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Add vertices
@@ -56,11 +58,15 @@ function convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
         sequence = sequence_type(string(label))
         if !haskey(new_graph, sequence)
             source_vertex_data = graph[label]
-            quality_scores = is_quality ? _quality_scores_from_vertex_evidence(source_vertex_data, length(sequence)) : UInt8[]
-            vertex_data = is_quality ? QualityBioSequenceVertexData(sequence, quality_scores) : BioSequenceVertexData(sequence)
+            quality_scores = is_quality ?
+                             _quality_scores_from_vertex_evidence(source_vertex_data, length(sequence)) :
+                             UInt8[]
+            vertex_data = is_quality ?
+                          QualityBioSequenceVertexData(sequence, quality_scores) :
+                          BioSequenceVertexData(sequence)
             new_graph[sequence] = vertex_data
         end
-        _copy_vertex_evidence!(new_graph[sequence], graph[label]; drop_quality=false)
+        _copy_vertex_evidence!(new_graph[sequence], graph[label]; drop_quality = false)
     end
 
     # Add edges with overlap length = k - 1
@@ -68,8 +74,9 @@ function convert_fixed_to_variable(graph::MetaGraphsNext.MetaGraph)
         new_src = sequence_type(string(src))
         new_dst = sequence_type(string(dst))
         edge_data = graph[src, dst]
-        new_edge = is_quality ? QualityBioSequenceEdgeData(k - 1) : BioSequenceEdgeData(k - 1)
-        _copy_edge_evidence!(new_edge, edge_data; drop_quality=false)
+        new_edge = is_quality ? QualityBioSequenceEdgeData(k - 1) :
+                   BioSequenceEdgeData(k - 1)
+        _copy_edge_evidence!(new_edge, edge_data; drop_quality = false)
         new_graph[new_src, new_dst] = new_edge
     end
 
@@ -84,10 +91,11 @@ into a fixed-length k-mer graph of the specified `KmerType`.
 All sequences must match the requested k.
 Quality-aware evidence is preserved unless `drop_quality=true`.
 """
-function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerType}; drop_quality::Bool=false) where {KmerType<:Kmers.Kmer}
+function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerType};
+        drop_quality::Bool = false) where {KmerType <: Kmers.Kmer}
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
-        return MetaGraphsNext.MetaGraph(Graphs.DiGraph(); label_type=KmerType)
+        return MetaGraphsNext.MetaGraph(Graphs.DiGraph(); label_type = KmerType)
     end
 
     k = Kmers.ksize(KmerType)
@@ -110,10 +118,10 @@ function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerT
 
     new_graph = MetaGraphsNext.MetaGraph(
         graph_type();
-        label_type=ActualKmerType,
-        vertex_data_type=KmerVertexData{ActualKmerType},
-        edge_data_type=KmerEdgeData,
-        weight_function=compute_edge_weight
+        label_type = ActualKmerType,
+        vertex_data_type = KmerVertexData{ActualKmerType},
+        edge_data_type = KmerEdgeData,
+        weight_function = compute_edge_weight
     )
 
     for seq in labels
@@ -121,7 +129,7 @@ function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerT
         if !haskey(new_graph, kmer_label)
             new_graph[kmer_label] = KmerVertexData(kmer_label)
         end
-        _copy_vertex_evidence!(new_graph[kmer_label], graph[seq]; drop_quality=effective_drop_quality)
+        _copy_vertex_evidence!(new_graph[kmer_label], graph[seq]; drop_quality = effective_drop_quality)
     end
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
@@ -129,7 +137,7 @@ function convert_variable_to_fixed(graph::MetaGraphsNext.MetaGraph, ::Type{KmerT
         new_dst = ActualKmerType(dst)
         edge_data = graph[src, dst]
         new_edge = KmerEdgeData()
-        _copy_edge_evidence!(new_edge, edge_data; drop_quality=effective_drop_quality)
+        _copy_edge_evidence!(new_edge, edge_data; drop_quality = effective_drop_quality)
         new_graph[new_src, new_dst] = new_edge
     end
 
@@ -165,22 +173,22 @@ function _drop_quality_kmer_graph(graph::MetaGraphsNext.MetaGraph)
     kmer_type = typeof(first_label)
     new_graph = MetaGraphsNext.MetaGraph(
         typeof(graph.graph)();
-        label_type=kmer_type,
-        vertex_data_type=KmerVertexData{kmer_type},
-        edge_data_type=KmerEdgeData,
-        weight_function=compute_edge_weight
+        label_type = kmer_type,
+        vertex_data_type = KmerVertexData{kmer_type},
+        edge_data_type = KmerEdgeData,
+        weight_function = compute_edge_weight
     )
 
     for label in labels
         if !haskey(new_graph, label)
             new_graph[label] = KmerVertexData(label)
         end
-        _copy_vertex_evidence!(new_graph[label], graph[label]; drop_quality=true)
+        _copy_vertex_evidence!(new_graph[label], graph[label]; drop_quality = true)
     end
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         new_edge = KmerEdgeData()
-        _copy_edge_evidence!(new_edge, graph[src, dst]; drop_quality=true)
+        _copy_edge_evidence!(new_edge, graph[src, dst]; drop_quality = true)
         new_graph[src, dst] = new_edge
     end
 
@@ -193,17 +201,17 @@ function _drop_quality_biosequence_graph(graph::MetaGraphsNext.MetaGraph)
     seq_type = typeof(first_label)
     new_graph = MetaGraphsNext.MetaGraph(
         typeof(graph.graph)();
-        label_type=seq_type,
-        vertex_data_type=BioSequenceVertexData{seq_type},
-        edge_data_type=BioSequenceEdgeData,
-        weight_function=compute_edge_weight
+        label_type = seq_type,
+        vertex_data_type = BioSequenceVertexData{seq_type},
+        edge_data_type = BioSequenceEdgeData,
+        weight_function = compute_edge_weight
     )
 
     for label in labels
         if !haskey(new_graph, label)
             new_graph[label] = BioSequenceVertexData(label)
         end
-        _copy_vertex_evidence!(new_graph[label], graph[label]; drop_quality=true)
+        _copy_vertex_evidence!(new_graph[label], graph[label]; drop_quality = true)
     end
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
@@ -213,7 +221,7 @@ function _drop_quality_biosequence_graph(graph::MetaGraphsNext.MetaGraph)
         else
             new_edge = BioSequenceEdgeData(0)
         end
-        _copy_edge_evidence!(new_edge, edge_data; drop_quality=true)
+        _copy_edge_evidence!(new_edge, edge_data; drop_quality = true)
         new_graph[src, dst] = new_edge
     end
 

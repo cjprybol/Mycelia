@@ -68,7 +68,9 @@ function _select_primary_bam(bam_files::Vector{String})
     return bam_files[idx]
 end
 
-function _downsample_bam(bam::String, output_bam::String; fraction::Float64=COMEBIN_SAMPLE_FRACTION, seed::Int=COMEBIN_SAMPLE_SEED, threads::Int=Mycelia.get_default_threads())
+function _downsample_bam(
+        bam::String, output_bam::String; fraction::Float64 = COMEBIN_SAMPLE_FRACTION,
+        seed::Int = COMEBIN_SAMPLE_SEED, threads::Int = Mycelia.get_default_threads())
     if isfile(output_bam) && filesize(output_bam) > 0 && isfile(output_bam * ".bai")
         return output_bam
     end
@@ -90,7 +92,7 @@ end
 
 Download the COMEBin test dataset from Google Drive and extract it.
 """
-function download_and_prep_comebin_data(output_dir::String; force_download::Bool=false)
+function download_and_prep_comebin_data(output_dir::String; force_download::Bool = false)
     mkpath(output_dir)
     utils_env = _ensure_gdown("mycelia_utils")
 
@@ -105,7 +107,7 @@ function download_and_prep_comebin_data(output_dir::String; force_download::Bool
     end
 
     if isempty(_find_files_by_extension(output_dir, [".bam"])) ||
-            isempty(_find_files_by_extension(output_dir, [".fasta", ".fa", ".fna"]))
+       isempty(_find_files_by_extension(output_dir, [".fasta", ".fa", ".fna"]))
         @info "Extracting COMEBin test data..."
         run(`unzip -o $(zip_path) -d $(output_dir)`)
     end

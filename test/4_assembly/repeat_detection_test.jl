@@ -7,9 +7,9 @@ Test.@testset "Repeat Detection" begin
     Test.@testset "Repeat region identification" begin
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
-            label_type=String,
-            vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-            edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
         )
 
         repeat_center = "R"
@@ -18,7 +18,8 @@ Test.@testset "Repeat Detection" begin
         incoming_sources = ["X1", "X2", "X3"]
         outgoing_targets = ["Y1", "Y2", "Y3"]
 
-        for label in vcat([repeat_center], in_nodes, out_nodes, incoming_sources, outgoing_targets)
+        for label in
+            vcat([repeat_center], in_nodes, out_nodes, incoming_sources, outgoing_targets)
             graph[label] = Mycelia.Rhizomorph.StringVertexData(label)
         end
 
@@ -59,7 +60,7 @@ Test.@testset "Repeat Detection" begin
         Test.@test all(label -> label in local_vertices, vcat(in_nodes, out_nodes))
         Test.@test all(label -> !(label in local_vertices), vcat(incoming_sources, outgoing_targets))
 
-        repeats = Mycelia.Rhizomorph.resolve_repeats_next(graph; min_repeat_length=1)
+        repeats = Mycelia.Rhizomorph.resolve_repeats_next(graph; min_repeat_length = 1)
         Test.@test length(repeats) == 1
 
         region = repeats[1]

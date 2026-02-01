@@ -28,7 +28,6 @@ import FASTX
 import Kmers
 
 Test.@testset "AA K-mer Graph - Singlestrand" begin
-
     Test.@testset "AA K-mer Extraction" begin
         # Protein sequence
         aa_seq = BioSequences.LongAA("MKVLWAALL")
@@ -47,7 +46,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "MKVLW")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have 3 unique AA k-mers
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 3
@@ -64,7 +63,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
             FASTX.FASTA.Record("protein_001", "MKVLW"),
             FASTX.FASTA.Record("protein_002", "MKVLW")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Same k-mers, but observed twice
         kmer = Kmers.AAKmer{3}("MKV")
@@ -76,7 +75,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "MKVLW")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="aa_test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "aa_test")
 
         kmer = Kmers.AAKmer{3}("MKV")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -103,8 +102,8 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
             records,
             3;
-            dataset_id="test",
-            type_hint=:AA
+            dataset_id = "test",
+            type_hint = :AA
         )
 
         # Should have 2 separate vertices
@@ -119,7 +118,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "MKVXXLW")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have MKV at minimum
         Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.AAKmer{3}("MKV"))
@@ -134,7 +133,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "MKVL")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.AAKmer{3}("MKV")
         dst = Kmers.AAKmer{3}("KVL")
@@ -158,7 +157,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "MKVLW")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Get path
         path = [
@@ -178,7 +177,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "MKVLWALL")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Test source/sink detection
         sources = Mycelia.Rhizomorph.get_all_sources(graph)
@@ -201,7 +200,7 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("protein_001", "GPGPGPG")  # Collagen-like repeat
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should handle repeated k-mers
         kmer_gpg = Kmers.AAKmer{3}("GPG")
@@ -221,12 +220,12 @@ Test.@testset "AA K-mer Graph - Singlestrand" begin
         reduced_seq = Mycelia.reduce_amino_acid_alphabet(full_seq, :MURPHY2)
         records = [FASTX.FASTA.Record("protein_reduced", reduced_seq)]
 
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="reduced")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "reduced")
 
         # Graph should build and contain only reduced alphabet symbols (I/E) in labels
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) > 0
         vertex_labels = collect(Mycelia.Rhizomorph.get_all_vertices(graph))
-        Test.@test all(label -> all(c -> c in ('I','E'), String(label)), vertex_labels)
+        Test.@test all(label -> all(c -> c in ('I', 'E'), String(label)), vertex_labels)
     end
 end
 

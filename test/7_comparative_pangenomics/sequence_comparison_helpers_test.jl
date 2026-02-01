@@ -5,10 +5,10 @@ Test.@testset "Sequence Comparison Helpers" begin
     Test.@testset "Entropy and richness" begin
         seq = "ATAT"
         Test.@test Mycelia.shannon_entropy(seq) > 0.0
-        Test.@test Mycelia.renyi_entropy(seq; α=2) > 0.0
-        Test.@test Mycelia.kmer_richness(seq, 2; normalize=false) == 2
+        Test.@test Mycelia.renyi_entropy(seq; α = 2) > 0.0
+        Test.@test Mycelia.kmer_richness(seq, 2; normalize = false) == 2
 
-        profile, summary = Mycelia.linguistic_complexity(seq; kmax=2)
+        profile, summary = Mycelia.linguistic_complexity(seq; kmax = 2)
         Test.@test length(profile) == 2
         Test.@test summary <= 1.0
     end
@@ -44,6 +44,6 @@ Test.@testset "Sequence Comparison Helpers" begin
         Test.@test orientation == :forward
 
         Test.@test Mycelia.header_says_circular("plasmid circular genome")
-        Test.@test Mycelia.has_terminal_overlap("ATGCATGC"; overlap_bp=4)
+        Test.@test Mycelia.has_terminal_overlap("ATGCATGC"; overlap_bp = 4)
     end
 end

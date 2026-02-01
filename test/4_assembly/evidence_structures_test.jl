@@ -25,7 +25,6 @@ import Test
 import Mycelia
 
 Test.@testset "Evidence Entry Structures" begin
-
     Test.@testset "EvidenceEntry - Basic Construction" begin
         # EvidenceEntry should store position and strand only
         # observation_id is stored as Dict key, not in the entry itself
@@ -128,7 +127,6 @@ Test.@testset "Evidence Entry Structures" begin
 end
 
 Test.@testset "Evidence Storage Structure - Nested Dictionaries" begin
-
     Test.@testset "Evidence Dictionary Structure" begin
         # Evidence is stored as: dataset_id -> observation_id -> Set{EvidenceEntry}
         # This provides O(1) lookup by dataset or observation
@@ -148,9 +146,9 @@ Test.@testset "Evidence Storage Structure - Nested Dictionaries" begin
         end
 
         push!(evidence[dataset_id][observation_id],
-              Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         push!(evidence[dataset_id][observation_id],
-              Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(10, Mycelia.Rhizomorph.Forward))
 
         # Test structure
         Test.@test haskey(evidence, dataset_id)
@@ -165,18 +163,18 @@ Test.@testset "Evidence Storage Structure - Nested Dictionaries" begin
         evidence["dataset_01"] = Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()
         evidence["dataset_01"]["read_001"] = Set{Mycelia.Rhizomorph.EvidenceEntry}()
         push!(evidence["dataset_01"]["read_001"],
-              Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
 
         # Dataset 1, Observation 2
         evidence["dataset_01"]["read_002"] = Set{Mycelia.Rhizomorph.EvidenceEntry}()
         push!(evidence["dataset_01"]["read_002"],
-              Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
 
         # Dataset 2, Observation 1
         evidence["dataset_02"] = Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()
         evidence["dataset_02"]["read_001"] = Set{Mycelia.Rhizomorph.EvidenceEntry}()
         push!(evidence["dataset_02"]["read_001"],
-              Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Reverse))
+            Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Reverse))
 
         # Verify structure
         Test.@test length(keys(evidence)) == 2  # Two datasets
@@ -195,7 +193,7 @@ Test.@testset "Evidence Storage Structure - Nested Dictionaries" begin
                 obs_id = "read_$(lpad(obs_num, 3, '0'))"
                 evidence[dataset_id][obs_id] = Set{Mycelia.Rhizomorph.EvidenceEntry}()
                 push!(evidence[dataset_id][obs_id],
-                      Mycelia.Rhizomorph.EvidenceEntry(obs_num, Mycelia.Rhizomorph.Forward))
+                    Mycelia.Rhizomorph.EvidenceEntry(obs_num, Mycelia.Rhizomorph.Forward))
             end
         end
 
@@ -222,7 +220,7 @@ Test.@testset "Evidence Storage Structure - Nested Dictionaries" begin
         evidence[dataset_id][observation_id] = Set{Mycelia.Rhizomorph.EvidenceEntry}()
         for pos in 1:100
             push!(evidence[dataset_id][observation_id],
-                  Mycelia.Rhizomorph.EvidenceEntry(pos, Mycelia.Rhizomorph.Forward))
+                Mycelia.Rhizomorph.EvidenceEntry(pos, Mycelia.Rhizomorph.Forward))
         end
 
         # observation_id is stored once as key, not 100 times in entries
@@ -237,7 +235,6 @@ Test.@testset "Evidence Storage Structure - Nested Dictionaries" begin
 end
 
 Test.@testset "Evidence Structure Types" begin
-
     Test.@testset "Type Stability" begin
         # All evidence structures should be concretely typed
 

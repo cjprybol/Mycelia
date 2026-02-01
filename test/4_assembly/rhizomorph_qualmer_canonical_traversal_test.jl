@@ -27,7 +27,7 @@ import Kmers
 Test.@testset "Rhizomorph qualmer canonical traversal" begin
     # DNA qualmer canonical
     dq_record = FASTX.FASTQ.Record("dq1", "ATGCA", "IIIII")
-    ss_q = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([dq_record], 3; dataset_id="dnaq")
+    ss_q = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([dq_record], 3; dataset_id = "dnaq")
     canon_q = Mycelia.Rhizomorph.convert_to_canonical(ss_q)
     paths = Mycelia.Rhizomorph.find_eulerian_paths_next(canon_q)
     Test.@test !isempty(paths)
@@ -43,7 +43,7 @@ Test.@testset "Rhizomorph qualmer canonical traversal" begin
 
     # RNA qualmer canonical
     rq_record = FASTX.FASTQ.Record("rq1", "AUGCA", "IIIII")
-    ss_rq = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([rq_record], 3; dataset_id="rnaq")
+    ss_rq = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([rq_record], 3; dataset_id = "rnaq")
     canon_rq = Mycelia.Rhizomorph.convert_to_canonical(ss_rq)
     rpaths = Mycelia.Rhizomorph.find_eulerian_paths_next(canon_rq)
     Test.@test !isempty(rpaths)

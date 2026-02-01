@@ -7,15 +7,15 @@ This function treats the problem as a graph clustering task where:
 - Connected components represent clusters of similar sequences
 - The first occurrence (by original order) in each cluster is retained as representative
 """
-function deduplicate_sequences(df::DataFrames.DataFrame, threshold::Float64=99.5)
+function deduplicate_sequences(df::DataFrames.DataFrame, threshold::Float64 = 99.5)
     # Get all unique sequences and create mapping
     all_sequences = unique([df.query; df.reference])
     seq_to_index = Dict(seq => i for (i, seq) in enumerate(all_sequences))
     n_sequences = length(all_sequences)
-    
+
     # Create undirected graph
     graph = Graphs.SimpleGraph(n_sequences)
-    
+
     # Add edges for sequence pairs meeting threshold
     for row in DataFrames.eachrow(df)
         if row."%_identity" >= threshold
@@ -24,10 +24,10 @@ function deduplicate_sequences(df::DataFrames.DataFrame, threshold::Float64=99.5
             Graphs.add_edge!(graph, query_idx, ref_idx)
         end
     end
-    
+
     # Find connected components (clusters)
     components = Graphs.connected_components(graph)
-    
+
     # For each cluster, find the representative (earliest appearing sequence)
     representatives = String[]
     cluster_info = DataFrames.DataFrame(
@@ -35,11 +35,11 @@ function deduplicate_sequences(df::DataFrames.DataFrame, threshold::Float64=99.5
         cluster_size = Int[],
         cluster_members = Vector{String}[]
     )
-    
+
     for component in components
         # Get sequences in this cluster
         cluster_seqs = all_sequences[component]
-        
+
         # Find the representative (first occurrence in original data)
         # Check both query and reference columns for first appearance
         first_positions = Int[]
@@ -53,20 +53,21 @@ function deduplicate_sequences(df::DataFrames.DataFrame, threshold::Float64=99.5
                 push!(first_positions, typemax(Int))  # Should not happen
             end
         end
-        
+
         # Representative is sequence with minimum first position
         min_pos_idx = argmin(first_positions)
         representative = cluster_seqs[min_pos_idx]
-        
+
         push!(representatives, representative)
-        push!(cluster_info, (
-            representative = representative,
-            cluster_size = length(cluster_seqs),
-            cluster_members = cluster_seqs
-        ))
+        push!(cluster_info,
+            (
+                representative = representative,
+                cluster_size = length(cluster_seqs),
+                cluster_members = cluster_seqs
+            ))
     end
-    
-    return (;representatives, cluster_info)
+
+    return (; representatives, cluster_info)
 end
 
 """
@@ -74,7 +75,8 @@ Filter original dataframe to only include rows involving representative sequence
 """
 function filter_to_representatives(df::DataFrames.DataFrame, representatives::Vector{String})
     rep_set = Set(representatives)
-    mask = [row.query in rep_set && row.reference in rep_set for row in DataFrames.eachrow(df)]
+    mask = [row.query in rep_set && row.reference in rep_set
+            for row in DataFrames.eachrow(df)]
     return df[mask, :]
 end
 
@@ -85,9 +87,9 @@ function clustering_summary(original_df::DataFrames.DataFrame, cluster_info::Dat
     n_original_sequences = length(unique([original_df.query; original_df.reference]))
     n_clusters = nrow(cluster_info)
     n_representatives = n_clusters
-    
+
     cluster_sizes = cluster_info.cluster_size
-    
+
     println("=== Sequence Deduplication Summary ===")
     println("Original sequences: $n_original_sequences")
     println("Representative sequences: $n_representatives")
@@ -100,7 +102,7 @@ function clustering_summary(original_df::DataFrames.DataFrame, cluster_info::Dat
         count = size_counts[size]
         println("  Size $size: $count clusters")
     end
-    
+
     return (
         original_count = n_original_sequences,
         representative_count = n_representatives,
@@ -127,7 +129,7 @@ minimum coverage threshold of 80% (-c 0.8). The output TSV file format contains
 tab-separated cluster representative and member sequences.
 """
 # --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
-function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mktempdir())
+function mmseqs_easy_cluster(; fasta, output = fasta*".mmseqs_easy_cluster", tmp = mktempdir())
     outfile = "$(output)_cluster.tsv"
     if !isfile(outfile)
         Mycelia.add_bioconda_env("mmseqs2")
@@ -135,7 +137,7 @@ function mmseqs_easy_cluster(;fasta, output=fasta*".mmseqs_easy_cluster", tmp=mk
         # --min-seq-id 0.5 -c 0.8
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`)
     end
-    rm(tmp, recursive=true)
+    rm(tmp, recursive = true)
     return "$(output)_cluster.tsv"
 end
 
@@ -171,10 +173,10 @@ function hclust_to_metagraph(hcl::Clustering.Hclust)
     # Create MetaGraphsNext graph
     mg = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=String,
-        vertex_data_type=HclustVertexData,
-        edge_data_type=Nothing,
-        graph_data=hcl  # Store original clustering object as graph metadata
+        label_type = String,
+        vertex_data_type = HclustVertexData,
+        edge_data_type = Nothing,
+        graph_data = hcl  # Store original clustering object as graph metadata
     )
 
     # Add leaf nodes
@@ -256,7 +258,7 @@ function heirarchically_cluster_distance_matrix(distance_matrix)
     # especially in radial layouts, as it can prevent branches from being overly long
     # and overlapping.  Other linkage methods like 'average' and 'complete' are also
     # common choices, however 'single' linkage is prone to chaining effects.
-    hcl = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
+    hcl = Clustering.hclust(distance_matrix, linkage = :ward, branchorder = :optimal)
     # this is equivalent to UPGMA
     # hcl = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
     return hcl
@@ -281,23 +283,23 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
     if isempty(valid_indices)
         error("No valid silhouette scores to plot.")
     end
-    
+
     valid_scores = avg_silhouette_scores[valid_indices]
     min_val = minimum(valid_scores)
     max_val = maximum(valid_scores)
     range_val = max_val - min_val
-    
+
     # Set sensible y-axis limits
     ylims_lower = max(-1.05, min(0, min_val - range_val * 0.1))
     ylims_upper = min(1.05, max_val + range_val * 0.1)
-    
+
     if isapprox(ylims_lower, ylims_upper)
         ylims_lower -= 0.1
         ylims_upper += 0.1
         ylims_lower = max(-1.05, ylims_lower)
         ylims_upper = min(1.05, ylims_upper)
     end
-    
+
     # Create figure with higher resolution
     # fig = CairoMakie.Figure(resolution = (1200, 800), fontsize = 16)
     fig = CairoMakie.Figure(size = (900, 600), fontsize = 16)
@@ -308,7 +310,7 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
         title = "Clustering Performance vs. Number of Clusters\n(higher is better)",
         titlesize = 20
     )
-    
+
     # Plot scatter points
     CairoMakie.scatter!(
         ax,
@@ -320,7 +322,7 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
         strokecolor = :black,
         label = "Avg Score"
     )
-    
+
     # Add line connecting points for better visualization
     CairoMakie.lines!(
         ax,
@@ -329,7 +331,7 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
         color = (:steelblue, 0.3),
         linewidth = 2
     )
-    
+
     # Add vertical line at optimal k
     CairoMakie.vlines!(
         ax,
@@ -339,7 +341,7 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
         linewidth = 2.5,
         label = "Inferred optimum = $(optimal_k)"
     )
-    
+
     # Add horizontal reference line at y=0
     CairoMakie.hlines!(
         ax,
@@ -349,13 +351,13 @@ function plot_silhouette_scores_makie(ks, avg_silhouette_scores, optimal_k)
         linewidth = 1.5,
         label = "Score = 0"
     )
-    
+
     # Set axis limits
     CairoMakie.ylims!(ax, ylims_lower, ylims_upper)
-    
+
     # Add legend
     CairoMakie.axislegend(ax, position = :rt)
-    
+
     return fig
 end
 
@@ -378,22 +380,22 @@ function plot_silhouette_scores_statsplots(ks, avg_silhouette_scores, optimal_k)
     if isempty(valid_indices)
         error("No valid silhouette scores to plot.")
     end
-    
+
     valid_scores = avg_silhouette_scores[valid_indices]
     min_val = minimum(valid_scores)
     max_val = maximum(valid_scores)
     range_val = max_val - min_val
-    
+
     ylims_lower = max(-1.05, min(0, min_val - range_val * 0.1))
     ylims_upper = min(1.05, max_val + range_val * 0.1)
-    
+
     if isapprox(ylims_lower, ylims_upper)
         ylims_lower -= 0.1
         ylims_upper += 0.1
         ylims_lower = max(-1.05, ylims_lower)
         ylims_upper = min(1.05, ylims_upper)
     end
-    
+
     p = StatsPlots.scatter(
         ks,
         avg_silhouette_scores,
@@ -402,12 +404,13 @@ function plot_silhouette_scores_statsplots(ks, avg_silhouette_scores, optimal_k)
         ylabel = "Average Silhouette Score",
         label = "Avg Score",
         markersize = 5,
-        markerstrokewidth = 0.5,
+        markerstrokewidth = 0.5
     )
-    
+
     StatsPlots.ylims!(p, (ylims_lower, ylims_upper))
-    StatsPlots.vline!(p, [optimal_k], color = :red, linestyle = :dash, label = "Inferred optimum = $(optimal_k)")
-    
+    StatsPlots.vline!(p, [optimal_k], color = :red, linestyle = :dash,
+        label = "Inferred optimum = $(optimal_k)")
+
     return p
 end
 
@@ -441,17 +444,17 @@ function identify_optimal_number_of_clusters(
         min_k = nothing,
         max_k = nothing,
         plot_backend = :cairomakie
-    )
+)
     # Validate that user doesn't pass both ks and min_k/max_k
     if !isnothing(ks) && (!isnothing(min_k) || !isnothing(max_k))
         error("Cannot specify both 'ks' and 'min_k'/'max_k'. Choose one approach.")
     end
-    
+
     # Ensure the input is a square matrix
     if size(distance_matrix, 1) != size(distance_matrix, 2)
         error("Input distance_matrix must be square.")
     end
-    
+
     n_items = size(distance_matrix, 1)
     if n_items < 2
         error("Need at least 2 items to perform clustering.")
@@ -466,22 +469,24 @@ function identify_optimal_number_of_clusters(
     if N != n_items
         @warn "Number of labels in Hclust object ($(N)) does not match distance matrix size ($(n_items)). Using Hclust labels count."
     end
-    
+
     # Determine k range to test
     if isnothing(ks)
         # Use min_k and max_k with defaults
         default_min_k = max(Int(floor(log10(N))), 2)
         default_max_k = min(N, Int(ceil(sqrt(N))))
-        
+
         actual_min_k = isnothing(min_k) ? default_min_k : min_k
         actual_max_k = isnothing(max_k) ? default_max_k : max_k
-        
+
         if actual_max_k < 2
             println("Not enough items (N=$N) to test multiple cluster numbers (k >= 2). Cannot determine optimal k.")
             @warn "Returning trivial clustering with k=$N as optimal k could not be determined."
-            return (hcl = hcl, optimal_number_of_clusters = N, assignments = Clustering.cutree(hcl, k=N), figure = nothing, ks = [N], silhouette_scores = [NaN])
+            return (hcl = hcl, optimal_number_of_clusters = N,
+                assignments = Clustering.cutree(hcl, k = N),
+                figure = nothing, ks = [N], silhouette_scores = [NaN])
         end
-        
+
         ks = actual_min_k:actual_max_k
     else
         # Validate user-provided ks
@@ -492,7 +497,7 @@ function identify_optimal_number_of_clusters(
             error("All k values must be between 2 and $N (number of items).")
         end
     end
-    
+
     k_vec = collect(ks)
     n_ks = length(k_vec)
     println("Evaluating average silhouette scores for k in range: $(minimum(k_vec)) to $(maximum(k_vec))...")
@@ -501,12 +506,13 @@ function identify_optimal_number_of_clusters(
     avg_silhouette_scores = zeros(Float64, n_ks)
 
     # Progress meter setup
-    pm = ProgressMeter.Progress(n_ks; dt=1, desc="Calculating Avg Silhouette Scores: ", barlen=50)
+    pm = ProgressMeter.Progress(n_ks; dt = 1, desc = "Calculating Avg Silhouette Scores: ", barlen = 50)
 
     # Parallel computation of silhouette scores
     Threads.@threads for i in 1:n_ks
         k = k_vec[i]
-        avg_silhouette_scores[i] = Statistics.mean(Clustering.silhouettes(Clustering.cutree(hcl, k=k), distance_matrix))
+        avg_silhouette_scores[i] = Statistics.mean(Clustering.silhouettes(
+            Clustering.cutree(hcl, k = k), distance_matrix))
         ProgressMeter.next!(pm)
     end
 
@@ -525,7 +531,8 @@ function identify_optimal_number_of_clusters(
     max_idx_original = valid_indices[local_max_idx_valid]
     optimal_number_of_clusters = k_vec[max_idx_original]
 
-    println("\nOptimal number of clusters inferred (max avg silhouette score): ", optimal_number_of_clusters)
+    println("\nOptimal number of clusters inferred (max avg silhouette score): ",
+        optimal_number_of_clusters)
     println("Maximum average silhouette score: ", max_score_valid)
 
     # Create visualization
@@ -536,13 +543,13 @@ function identify_optimal_number_of_clusters(
     else
         error("Unknown plot_backend: $(plot_backend). Choose :cairomakie or :statsplots.")
     end
-    
+
     display(fig)
 
     return (
         hcl = hcl,
         optimal_number_of_clusters = optimal_number_of_clusters,
-        assignments = Clustering.cutree(hcl, k=optimal_number_of_clusters),
+        assignments = Clustering.cutree(hcl, k = optimal_number_of_clusters),
         figure = fig,
         ks = k_vec,
         silhouette_scores = avg_silhouette_scores
@@ -587,13 +594,13 @@ end
 #     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
 #     # N = size(distance_matrix, 1)
 #     # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
-    
+
 #     # Int(round(size(distance_matrix, 1)/2))
 #     # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
 #     # ks_to_try = vcat([2^i for i in 0:Int(floor(log2(size(distance_matrix, 1))))], size(distance_matrix, 1))
 #     # @info "ks = $(ks_to_try)"
 #     @show ks_to_try
-    
+
 #     # can calculate this for k >= 1
 #     # within_cluster_sum_of_squares = Union{Float64, Missing}[]
 #     within_cluster_sum_of_squares = Float64[]
@@ -610,7 +617,7 @@ end
 #             this_silhouette_score = 0
 #         else
 #             this_silhouette_score = Statistics.mean(Clustering.silhouettes(this_clustering, distance_matrix))
-            
+
 #         end
 #         push!(silhouette_scores, this_silhouette_score)
 #         @show this_silhouette_score
@@ -647,7 +654,7 @@ end
 #             ]
 #         # @show sort(vcat(midpoints, window_of_focus))
 #         @show midpoints
-        
+
 #         for k in midpoints
 #             insertion_index = first(searchsorted(ks_to_try, k))
 #             if ks_to_try[insertion_index] != k
@@ -660,7 +667,7 @@ end
 #                 @show this_silhouette_score
 #             end
 #         end
-        
+
 #         previous_optimal_number_of_clusters = optimal_number_of_clusters
 #         optimal_silhouette, optimal_index = findmax(silhouette_scores)
 #         optimal_number_of_clusters = ks_to_try[optimal_index]
@@ -750,13 +757,13 @@ end
 #     # ks_to_try = [1, Int(round(size(distance_matrix, 1)/2)), size(distance_matrix, 1)]
 #     # N = size(distance_matrix, 1)
 #     # ks_to_try = push!([2^i for i in 0:Int(floor(log2(N)))], N)
-    
+
 #     # Int(round(size(distance_matrix, 1)/2))
 #     # insert!(ks_to_try, 2, Int(round(size(distance_matrix, 1)))))
 #     # ks_to_try = vcat([2^i for i in 0:Int(floor(log2(size(distance_matrix, 1))))], size(distance_matrix, 1))
 #     # @info "ks = $(ks_to_try)"
 #     @show ks_to_try
-    
+
 #     # can calculate this for k >= 1
 #     # within_cluster_sum_of_squares = Union{Float64, Missing}[]
 #     # within_cluster_sum_of_squares = Float64[]
@@ -765,8 +772,6 @@ end
 #     # silhouette_scores = Union{Float64, Missing}[]
 #     silhouette_scores = Float64[]
 #     # wcss_scores = Float64[]
-
-
 
 #     @show "initial heirarchical clustering"
 #     @time hclust_result = Clustering.hclust(distance_matrix, linkage=:ward, branchorder=:optimal)
@@ -818,7 +823,7 @@ end
 #             ]
 #         # @show sort(vcat(midpoints, window_of_focus))
 #         @show midpoints
-        
+
 #         for k in midpoints
 #             insertion_index = first(searchsorted(ks_to_try, k))
 #             if ks_to_try[insertion_index] != k
@@ -832,7 +837,7 @@ end
 #                 @show this_silhouette_score
 #             end
 #         end
-        
+
 #         previous_optimal_number_of_clusters = optimal_number_of_clusters
 #         optimal_silhouette, optimal_index = findmax(silhouette_scores)
 #         optimal_number_of_clusters = ks_to_try[optimal_index]
@@ -848,18 +853,19 @@ end
 Find the medoid (most central point) within a group of indices.
 For :distance, minimizes sum of distances. For :similarity, maximizes sum of similarities.
 """
-function find_group_medoid(distance_matrix, indices; metric_type=:distance)
+function find_group_medoid(distance_matrix, indices; metric_type = :distance)
     if length(indices) == 1
         return indices[1]
     end
-    
+
     best_score = metric_type == :distance ? Inf : -Inf
     best_idx = indices[1]
-    
+
     for candidate in indices
         # Compute sum of pairwise metrics to all other members
-        current_score = sum(distance_matrix[candidate, i] for i in indices if i != candidate)
-        
+        current_score = sum(distance_matrix[candidate, i]
+        for i in indices if i != candidate)
+
         if metric_type == :distance
             if current_score < best_score
                 best_score = current_score
@@ -872,7 +878,7 @@ function find_group_medoid(distance_matrix, indices; metric_type=:distance)
             end
         end
     end
-    
+
     return best_idx
 end
 
@@ -881,22 +887,22 @@ end
 
 Find the point in the group that is most distant (or least similar) from the medoid.
 """
-function find_second_most_diverse(distance_matrix, indices, medoid_idx; metric_type=:distance)
+function find_second_most_diverse(distance_matrix, indices, medoid_idx; metric_type = :distance)
     if length(indices) <= 1
         return nothing
     end
-    
+
     # We want to maximize distance or minimize similarity
     best_score = metric_type == :distance ? -Inf : Inf
     best_idx = nothing
-    
+
     for candidate in indices
         if candidate == medoid_idx
             continue
         end
-        
+
         val = distance_matrix[candidate, medoid_idx]
-        
+
         if metric_type == :distance
             if val > best_score
                 best_score = val
@@ -909,7 +915,7 @@ function find_second_most_diverse(distance_matrix, indices, medoid_idx; metric_t
             end
         end
     end
-    
+
     return best_idx
 end
 
@@ -922,44 +928,45 @@ Greedily select samples to maximize minimum pairwise distance (or minimize max s
 Uses `weights` (e.g. abundance) as a tie-breaker.
 """
 function greedy_maxmin_diversity(
-    distance_matrix, 
-    initial_selected, 
-    candidate_pool, 
-    n_to_select,
-    weights,
-    group_ids,
-    max_per_group;
-    metric_type=:distance
+        distance_matrix,
+        initial_selected,
+        candidate_pool,
+        n_to_select,
+        weights,
+        group_ids,
+        max_per_group;
+        metric_type = :distance
 )
     selected = copy(initial_selected)
     remaining = setdiff(candidate_pool, selected)
-    
+
     # Track selection counts per group
     group_counts = Dict{Any, Int}()
     for idx in selected
         g = group_ids[idx]
         group_counts[g] = get(group_counts, g, 0) + 1
     end
-    
+
     for _ in 1:n_to_select
         best_candidate = nothing
-        
+
         # Tracking the "Min Distance" (we want to MAXIMIZE this)
         # Or "Max Similarity" (we want to MINIMIZE this)
         best_worst_pair_metric = metric_type == :distance ? -Inf : Inf
-        
+
         best_weight = -Inf
-        
+
         for candidate in remaining
             # Check constraints
             g = group_ids[candidate]
             # Handle max_per_group as Int or Dict
-            limit = isa(max_per_group, Dict) ? get(max_per_group, g, typemax(Int)) : max_per_group
-            
+            limit = isa(max_per_group, Dict) ? get(max_per_group, g, typemax(Int)) :
+                    max_per_group
+
             if get(group_counts, g, 0) >= limit
                 continue
             end
-            
+
             # Calculate metric to nearest neighbor in selected set
             if isempty(selected)
                 worst_pair_metric = metric_type == :distance ? Inf : -Inf
@@ -972,11 +979,11 @@ function greedy_maxmin_diversity(
                 # We want the candidate where this value is SMALLEST (MinMax)
                 worst_pair_metric = maximum(distance_matrix[candidate, s] for s in selected)
             end
-            
+
             # Tie-breaking logic
             current_weight = isnothing(weights) ? 0.0 : weights[candidate]
             is_better = false
-            
+
             if isempty(selected)
                 if current_weight > best_weight
                     is_better = true
@@ -984,33 +991,36 @@ function greedy_maxmin_diversity(
             elseif metric_type == :distance
                 if worst_pair_metric > best_worst_pair_metric * 1.0001 # slightly better distance
                     is_better = true
-                elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol=1e-4) && current_weight > best_weight
+                elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol = 1e-4) &&
+                       current_weight > best_weight
                     is_better = true
                 end
             else # similarity
                 if worst_pair_metric < best_worst_pair_metric * 0.9999 # slightly lower max similarity (better)
                     is_better = true
-                elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol=1e-4) && current_weight > best_weight
+                elseif isapprox(worst_pair_metric, best_worst_pair_metric; rtol = 1e-4) &&
+                       current_weight > best_weight
                     is_better = true
                 end
             end
-            
+
             if is_better
                 best_worst_pair_metric = worst_pair_metric
                 best_candidate = candidate
                 best_weight = current_weight
             end
         end
-        
+
         if isnothing(best_candidate)
             break
         end
-        
+
         push!(selected, best_candidate)
         remaining = setdiff(remaining, [best_candidate])
-        group_counts[group_ids[best_candidate]] = get(group_counts, group_ids[best_candidate], 0) + 1
+        group_counts[group_ids[best_candidate]] = get(group_counts, group_ids[best_candidate], 0) +
+                                                  1
     end
-    
+
     return selected
 end
 
@@ -1035,12 +1045,12 @@ Select maximally diverse representatives using a multi-stage approach:
 - `metric_type`: `:distance` (default, 0=identical) or `:similarity` (100% or 1.0=identical).
 """
 function select_diverse_representatives(
-    distance_matrix::AbstractMatrix,
-    group_ids::AbstractVector;
-    weights::Union{AbstractVector, Nothing}=nothing,
-    n_total::Int=100,
-    max_per_group::Union{Int, Dict}=2,
-    metric_type::Symbol=:distance
+        distance_matrix::AbstractMatrix,
+        group_ids::AbstractVector;
+        weights::Union{AbstractVector, Nothing} = nothing,
+        n_total::Int = 100,
+        max_per_group::Union{Int, Dict} = 2,
+        metric_type::Symbol = :distance
 )
     if size(distance_matrix, 1) != length(group_ids)
         error("Distance matrix dimension $(size(distance_matrix, 1)) does not match group_ids length $(length(group_ids))")
@@ -1057,25 +1067,27 @@ function select_diverse_representatives(
         end
         push!(groups[g], i)
     end
-    
+
     selected_medoids = Int[]
-    
+
     # Stage 1: Medoids & Second Diverse
     for (g, indices) in groups
         # 1. Medoid
-        medoid_idx = find_group_medoid(distance_matrix, indices; metric_type=metric_type)
+        medoid_idx = find_group_medoid(distance_matrix, indices; metric_type = metric_type)
         push!(selected_medoids, medoid_idx)
-        
+
         # 2. Second Diverse (if allowed)
-        limit = isa(max_per_group, Dict) ? get(max_per_group, g, typemax(Int)) : max_per_group
+        limit = isa(max_per_group, Dict) ? get(max_per_group, g, typemax(Int)) :
+                max_per_group
         if limit >= 2 && length(indices) > 1
-            second_idx = find_second_most_diverse(distance_matrix, indices, medoid_idx; metric_type=metric_type)
+            second_idx = find_second_most_diverse(
+                distance_matrix, indices, medoid_idx; metric_type = metric_type)
             if !isnothing(second_idx)
                 push!(selected_medoids, second_idx)
             end
         end
     end
-    
+
     # Stage 2: Fill remaining
     remaining_slots = n_total - length(selected_medoids)
 
@@ -1089,7 +1101,7 @@ function select_diverse_representatives(
             weights,
             group_ids,
             max_per_group;
-            metric_type=metric_type
+            metric_type = metric_type
         )
         return final_selected
     else
@@ -1103,7 +1115,6 @@ function select_diverse_representatives(
         return selected_medoids
     end
 end
-
 
 # =============================================================================
 # Cluster Ranking and Relational Clustering Pipeline
@@ -1133,7 +1144,6 @@ struct ClusterRanking
     intra_cluster_distances::Vector{Float64}
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1160,10 +1170,10 @@ rankings = Mycelia.rank_cluster_members(D, assignments, entity_ids)
 ```
 """
 function rank_cluster_members(
-    distance_matrix::Matrix{Float64},
-    cluster_assignments::Vector{Int},
-    entity_ids::Vector{String};
-    metric_type::Symbol = :distance
+        distance_matrix::Matrix{Float64},
+        cluster_assignments::Vector{Int},
+        entity_ids::Vector{String};
+        metric_type::Symbol = :distance
 )
     n_samples = size(distance_matrix, 1)
 
@@ -1185,23 +1195,25 @@ function rank_cluster_members(
 
         if length(cluster_indices) == 1
             ## Single-member cluster: it's its own medoid
-            push!(rankings, ClusterRanking(
-                cluster_id,
-                cluster_indices,
-                cluster_entity_ids,
-                cluster_indices[1],
-                nothing,
-                [1],
-                [0.0]
-            ))
+            push!(rankings,
+                ClusterRanking(
+                    cluster_id,
+                    cluster_indices,
+                    cluster_entity_ids,
+                    cluster_indices[1],
+                    nothing,
+                    [1],
+                    [0.0]
+                ))
             continue
         end
 
         ## Use existing find_group_medoid function
-        medoid_idx = find_group_medoid(distance_matrix, cluster_indices; metric_type=metric_type)
+        medoid_idx = find_group_medoid(distance_matrix, cluster_indices; metric_type = metric_type)
 
         ## Use existing find_second_most_diverse function
-        backup_idx = find_second_most_diverse(distance_matrix, cluster_indices, medoid_idx; metric_type=metric_type)
+        backup_idx = find_second_most_diverse(
+            distance_matrix, cluster_indices, medoid_idx; metric_type = metric_type)
 
         ## Calculate distances from medoid to all cluster members
         distances_to_medoid = [distance_matrix[idx, medoid_idx] for idx in cluster_indices]
@@ -1210,23 +1222,23 @@ function rank_cluster_members(
         rank_order = sortperm(distances_to_medoid)
         rankings_vec = invperm(rank_order)
 
-        push!(rankings, ClusterRanking(
-            cluster_id,
-            cluster_indices,
-            cluster_entity_ids,
-            medoid_idx,
-            backup_idx,
-            rankings_vec,
-            distances_to_medoid
-        ))
+        push!(rankings,
+            ClusterRanking(
+                cluster_id,
+                cluster_indices,
+                cluster_entity_ids,
+                medoid_idx,
+                backup_idx,
+                rankings_vec,
+                distances_to_medoid
+            ))
     end
 
     ## Sort by cluster_id for consistent output
-    sort!(rankings, by=r -> r.cluster_id)
+    sort!(rankings, by = r -> r.cluster_id)
 
     return rankings
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1248,8 +1260,8 @@ Convert cluster rankings to a DataFrame for analysis and export.
   - `distance_to_medoid`: Distance from entity to medoid (if include_distances=true)
 """
 function rankings_to_dataframe(
-    rankings::Vector{ClusterRanking};
-    include_distances::Bool = true
+        rankings::Vector{ClusterRanking};
+        include_distances::Bool = true
 )
     rows = NamedTuple[]
 
@@ -1276,7 +1288,6 @@ function rankings_to_dataframe(
     return DataFrames.DataFrame(rows)
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1297,8 +1308,8 @@ Generate summary statistics for cluster rankings.
   - `max_distance_to_medoid`: Maximum distance from any member to medoid
 """
 function cluster_summary(
-    rankings::Vector{ClusterRanking},
-    distance_matrix::Matrix{Float64}
+        rankings::Vector{ClusterRanking},
+        distance_matrix::Matrix{Float64}
 )
     rows = NamedTuple[]
 
@@ -1320,8 +1331,8 @@ function cluster_summary(
 
         ## Compute intra-cluster distances
         intra_dists = Float64[]
-        for i in 1:(n_members-1)
-            for j in (i+1):n_members
+        for i in 1:(n_members - 1)
+            for j in (i + 1):n_members
                 d = distance_matrix[indices[i], indices[j]]
                 if !isnan(d)
                     push!(intra_dists, d)
@@ -1332,20 +1343,20 @@ function cluster_summary(
         diameter = isempty(intra_dists) ? 0.0 : maximum(intra_dists)
         avg_intra = isempty(intra_dists) ? 0.0 : Statistics.mean(intra_dists)
 
-        push!(rows, (
-            cluster_id = cr.cluster_id,
-            n_members = n_members,
-            medoid_id = medoid_id,
-            backup_id = backup_id,
-            diameter = diameter,
-            avg_intra_distance = avg_intra,
-            max_distance_to_medoid = maximum(cr.intra_cluster_distances)
-        ))
+        push!(rows,
+            (
+                cluster_id = cr.cluster_id,
+                n_members = n_members,
+                medoid_id = medoid_id,
+                backup_id = backup_id,
+                diameter = diameter,
+                avg_intra_distance = avg_intra,
+                max_distance_to_medoid = maximum(cr.intra_cluster_distances)
+            ))
     end
 
     return DataFrames.DataFrame(rows)
 end
-
 
 # =============================================================================
 # Cluster Comparison Methods
@@ -1393,7 +1404,6 @@ function contingency_matrix(labels1::AbstractVector, labels2::AbstractVector)
     return (matrix = matrix, labels1 = unique1, labels2 = unique2)
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1436,17 +1446,17 @@ function adjusted_rand_index(labels1::AbstractVector, labels2::AbstractVector)
     nij = cont.matrix
 
     ## Sum of combinations C(n_ij, 2) for all cells
-    sum_comb_nij = sum((binomial(Int(cell), 2) for cell in nij if cell >= 2), init=0)
+    sum_comb_nij = sum((binomial(Int(cell), 2) for cell in nij if cell >= 2), init = 0)
 
     ## Row and column sums
-    row_sums = vec(sum(nij, dims=2))
-    col_sums = vec(sum(nij, dims=1))
+    row_sums = vec(sum(nij, dims = 2))
+    col_sums = vec(sum(nij, dims = 1))
 
     ## Sum of combinations for row sums
-    sum_comb_ai = sum((binomial(Int(ai), 2) for ai in row_sums if ai >= 2), init=0)
+    sum_comb_ai = sum((binomial(Int(ai), 2) for ai in row_sums if ai >= 2), init = 0)
 
     ## Sum of combinations for column sums
-    sum_comb_bj = sum((binomial(Int(bj), 2) for bj in col_sums if bj >= 2), init=0)
+    sum_comb_bj = sum((binomial(Int(bj), 2) for bj in col_sums if bj >= 2), init = 0)
 
     ## Total combinations
     total_comb = binomial(n, 2)
@@ -1469,7 +1479,6 @@ function adjusted_rand_index(labels1::AbstractVector, labels2::AbstractVector)
     ari = (sum_comb_nij - expected) / (max_index - expected)
     return ari
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1548,7 +1557,6 @@ function normalized_mutual_information(labels1::AbstractVector, labels2::Abstrac
     return nmi
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1587,8 +1595,8 @@ function adjusted_mutual_information(labels1::AbstractVector, labels2::AbstractV
     nij = cont.matrix
 
     ## Row and column sums
-    a = vec(sum(nij, dims=2))  ## row sums
-    b = vec(sum(nij, dims=1))  ## column sums
+    a = vec(sum(nij, dims = 2))  ## row sums
+    b = vec(sum(nij, dims = 1))  ## column sums
 
     R = length(a)  ## number of clusters in labels1
     C = length(b)  ## number of clusters in labels2
@@ -1614,7 +1622,8 @@ function adjusted_mutual_information(labels1::AbstractVector, labels2::AbstractV
         for j in 1:C
             for nij_val in max(1, a[i] + b[j] - n):min(a[i], b[j])
                 ## Hypergeometric probability
-                numerator = binomial(Int(a[i]), Int(nij_val)) * binomial(Int(n - a[i]), Int(b[j] - nij_val))
+                numerator = binomial(Int(a[i]), Int(nij_val)) *
+                            binomial(Int(n - a[i]), Int(b[j] - nij_val))
                 denominator = binomial(Int(n), Int(b[j]))
                 if denominator > 0
                     p_nij = numerator / denominator
@@ -1636,7 +1645,6 @@ function adjusted_mutual_information(labels1::AbstractVector, labels2::AbstractV
     ami = (MI - EMI) / (max_MI - EMI)
     return ami
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1721,7 +1729,6 @@ function v_measure(labels_true::AbstractVector, labels_pred::AbstractVector)
     return (homogeneity = homogeneity, completeness = completeness, v_measure = v)
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1759,8 +1766,8 @@ function fowlkes_mallows_index(labels1::AbstractVector, labels2::AbstractVector)
     FP = 0  ## False positives: same in 1, different in 2
     FN = 0  ## False negatives: different in 1, same in 2
 
-    for i in 1:(n-1)
-        for j in (i+1):n
+    for i in 1:(n - 1)
+        for j in (i + 1):n
             same1 = labels1[i] == labels1[j]
             same2 = labels2[i] == labels2[j]
 
@@ -1784,7 +1791,6 @@ function fowlkes_mallows_index(labels1::AbstractVector, labels2::AbstractVector)
     fmi = sqrt(precision * recall)
     return fmi
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1849,7 +1855,6 @@ function cluster_purity(labels_true::AbstractVector, labels_pred::AbstractVector
     return (overall_purity = overall_purity, cluster_purities = cluster_purities)
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1887,8 +1892,8 @@ function jaccard_index(labels1::AbstractVector, labels2::AbstractVector)
     b = 0  ## Pairs together in 1 only
     c = 0  ## Pairs together in 2 only
 
-    for i in 1:(n-1)
-        for j in (i+1):n
+    for i in 1:(n - 1)
+        for j in (i + 1):n
             same1 = labels1[i] == labels1[j]
             same2 = labels2[i] == labels2[j]
 
@@ -1908,7 +1913,6 @@ function jaccard_index(labels1::AbstractVector, labels2::AbstractVector)
 
     return a / (a + b + c)
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -1948,10 +1952,10 @@ println("NMI: ", summary.normalized_mutual_information)
 ```
 """
 function clustering_comparison_summary(
-    labels1::AbstractVector,
-    labels2::AbstractVector;
-    name1::String = "Clustering1",
-    name2::String = "Clustering2"
+        labels1::AbstractVector,
+        labels2::AbstractVector;
+        name1::String = "Clustering1",
+        name2::String = "Clustering2"
 )
     n = length(labels1)
     if length(labels2) != n
@@ -1987,7 +1991,6 @@ function clustering_comparison_summary(
     )
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2008,13 +2011,13 @@ Mycelia.print_clustering_comparison(labels_a, labels_b; name1="K-means", name2="
 ```
 """
 function print_clustering_comparison(
-    labels1::AbstractVector,
-    labels2::AbstractVector;
-    name1::String = "Clustering1",
-    name2::String = "Clustering2",
-    io::IO = stdout
+        labels1::AbstractVector,
+        labels2::AbstractVector;
+        name1::String = "Clustering1",
+        name2::String = "Clustering2",
+        io::IO = stdout
 )
-    summary = clustering_comparison_summary(labels1, labels2; name1=name1, name2=name2)
+    summary = clustering_comparison_summary(labels1, labels2; name1 = name1, name2 = name2)
 
     println(io, "")
     println(io, "=" ^ 60)
@@ -2028,8 +2031,10 @@ function print_clustering_comparison(
     println(io, "")
     println(io, "Agreement Metrics:")
     println(io, "  Adjusted Rand Index (ARI):       $(round(summary.adjusted_rand_index, digits=4))")
-    println(io, "  Normalized Mutual Info (NMI):    $(round(summary.normalized_mutual_information, digits=4))")
-    println(io, "  Adjusted Mutual Info (AMI):      $(round(summary.adjusted_mutual_information, digits=4))")
+    println(io,
+        "  Normalized Mutual Info (NMI):    $(round(summary.normalized_mutual_information, digits=4))")
+    println(io,
+        "  Adjusted Mutual Info (AMI):      $(round(summary.adjusted_mutual_information, digits=4))")
     println(io, "  V-measure:                       $(round(summary.v_measure.v_measure, digits=4))")
     println(io, "    - Homogeneity:                 $(round(summary.v_measure.homogeneity, digits=4))")
     println(io, "    - Completeness:                $(round(summary.v_measure.completeness, digits=4))")
@@ -2050,7 +2055,6 @@ function print_clustering_comparison(
 
     return summary
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)

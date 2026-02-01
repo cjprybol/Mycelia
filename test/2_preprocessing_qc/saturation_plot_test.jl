@@ -45,31 +45,31 @@ Test.@testset "Diversity Saturation Visualization" begin
     Test.@testset "Basic Plot (No Grouping)" begin
         fig = Mycelia.plot_diversity_saturation(
             y_data;
-            title="Simple Saturation",
-            reference_values=ref_val,
-            reference_labels=ref_label
+            title = "Simple Saturation",
+            reference_values = ref_val,
+            reference_labels = ref_label
         )
         Test.@test isa(fig, CairoMakie.Figure)
         output_path = "test_saturation_basic.png"
         CairoMakie.save(output_path, fig)
         Test.@test isfile(output_path)
-        rm(output_path; force=true)
+        rm(output_path; force = true)
     end
 
     Test.@testset "Grouped Plot (Discovery Waves)" begin
         fig = Mycelia.plot_diversity_saturation(
             y_data;
-            x_values=x_data,
-            grouping_values=groups,
-            title="Phage Discovery Waves",
-            reference_values=ref_val,
-            reference_labels=ref_label
+            x_values = x_data,
+            grouping_values = groups,
+            title = "Phage Discovery Waves",
+            reference_values = ref_val,
+            reference_labels = ref_label
         )
         Test.@test isa(fig, CairoMakie.Figure)
         output_path = "test_saturation_grouped.png"
         CairoMakie.save(output_path, fig)
         Test.@test isfile(output_path)
-        rm(output_path; force=true)
+        rm(output_path; force = true)
     end
 
     Test.@testset "Multiple Series" begin
@@ -77,15 +77,15 @@ Test.@testset "Diversity Saturation Visualization" begin
 
         fig = Mycelia.plot_diversity_saturation(
             [y_data, y_data_2];
-            labels=["Method A", "Method B"],
-            title="Method Comparison",
-            reference_values=ref_val,
-            reference_labels=ref_label
+            labels = ["Method A", "Method B"],
+            title = "Method Comparison",
+            reference_values = ref_val,
+            reference_labels = ref_label
         )
         Test.@test isa(fig, CairoMakie.Figure)
         output_path = "test_saturation_multi.png"
         CairoMakie.save(output_path, fig)
         Test.@test isfile(output_path)
-        rm(output_path; force=true)
+        rm(output_path; force = true)
     end
 end
