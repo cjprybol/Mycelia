@@ -10,14 +10,15 @@
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
 
 const MYCELIA_RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
-const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
+                             lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 const PROJECT_ROOT = dirname(@__DIR__)
 
 const TEST_ARTIFACT_DIRS = [
     joinpath(PROJECT_ROOT, "busco_downloads"),
     joinpath(PROJECT_ROOT, "busco_results"),
     joinpath(PROJECT_ROOT, "test", "busco_downloads"),
-    joinpath(PROJECT_ROOT, "test", "busco_results"),
+    joinpath(PROJECT_ROOT, "test", "busco_results")
 ]
 
 function cleanup_test_artifacts()
@@ -26,7 +27,7 @@ function cleanup_test_artifacts()
     end
     for path in TEST_ARTIFACT_DIRS
         if isdir(path)
-            rm(path; recursive=true, force=true)
+            rm(path; recursive = true, force = true)
         end
     end
     return nothing
@@ -59,6 +60,9 @@ include("aqua.jl")
 
 # JET.jl static analysis - uncomment to enable (can be slow)
 include("jet.jl")
+
+# ExplicitImports.jl - enforce import style (no implicit imports from using)
+include("explicit_imports.jl")
 
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # For debugging individual suites, include explicit files instead of the directory sweep.
