@@ -181,8 +181,12 @@ remaining_files = [
     "xam.jl"
 ]
 
+# Use @__DIR__ which is always available at compile time, instead of pathof()
+# which can return nothing during static analysis
+const _MODULE_DIR = @__DIR__
+
 for file in remaining_files
-    file_path = joinpath(dirname(pathof(Mycelia)), file)
+    file_path = joinpath(_MODULE_DIR, file)
     if isfile(file_path)
         include(file)
     end
