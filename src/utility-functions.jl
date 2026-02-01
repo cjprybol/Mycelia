@@ -3044,38 +3044,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Recursively include all files matching a pattern in a directory and its subdirectories.
-
-# Arguments
-- `dir::AbstractString`: Directory path to search recursively
-- `pattern::Regex=r"\\.jl\$"`: Regular expression pattern to match files (defaults to .jl files)
-
-# Details
-Files are processed in sorted order within each directory. This is useful for 
-loading test files, examples, or other Julia modules in a predictable order.
-
-# Examples
-```julia
-# Include all Julia files in a directory tree
-include_all_files("test/modules")
-
-# Include all text files
-include_all_files("docs", r"\\.txt\$")
-```
-"""
-function include_all_files(dir::AbstractString; pattern::Regex = r"\.jl$")
-    for (root, dirs, files) in walkdir(dir)
-        for file in sort(files)
-            if occursin(pattern, file)
-                include(joinpath(root, file))
-            end
-        end
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Calculate the theoretical k-mer space size for a given k-mer length and alphabet size.
 
 # Arguments
