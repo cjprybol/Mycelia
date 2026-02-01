@@ -451,3 +451,28 @@ bd ready --json | jq '.[] | select(.title | test("Mycelia|\\[B\\]"))'
 - Check `planning-docs/` for architectural context
 - Run `julia --project=. -e "?Mycelia.function_name"` for docstrings
 - See `docs/src/workflow-map.md` for capability matrix
+
+---
+
+## Agentic Quality Infrastructure
+
+This workspace inherits global hooks from `~/.claude/settings.json`:
+- **Audit logging:** All bash commands logged to `~/.claude/audit.log`
+- **Auto-formatting:** Julia (`.jl`) and Markdown (`.md`) files formatted on save
+- **Stop verification:** End-of-session prompts for git status, beads sync
+- **Dangerous op blocking:** Prevents `rm -rf`, `sudo`, etc.
+
+### Quality Protocols (Central Reference)
+
+See `~/workspace/todo/protocols/` for detailed guidance:
+- `agentic-quality-gates.md` - Three-layer review model (automated + AI + human)
+- `permission-tiers.md` - Crawl→Walk→Run trust escalation
+- `anti-patterns.md` - Common failure modes to avoid
+
+### Trust Tier
+
+This workspace operates at **development** tier:
+- Full read/write access
+- Git operations allowed
+- Julia/Python execution allowed
+- Beads operations allowed
