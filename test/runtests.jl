@@ -284,18 +284,6 @@ include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 #     include(joinpath(@__DIR__, file))
 # end
 
-# metaphlan issue to fix
-# Sun Dec 14 17:46:31 2025: [Warning] The number of reads in the sample (315) is below the recommended minimum of 10,000 reads.
-# Sun Dec 14 17:46:44 2025: [Warning] Warning: No species were detected.
-
-# metabuli to fix
-# [ Info: Skipping Metabuli classify test; set METABULI_DB or METABULI_DB_PATH to a valid database directory
-
-# external tool running issue
-# WARNING: redefinition of constant Main.RUN_EXTERNAL. This may fail, cause incorrect answers, or produce other errors.
-# [ Info: Skipping integration tests; set MYCELIA_RUN_EXTERNAL=true to run external tools
-
-# sentencepiece isn't working
 if MYCELIA_RUN_EXTERNAL
     include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
 else
