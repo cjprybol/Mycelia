@@ -5187,7 +5187,7 @@ function _create_heatmap_with_dendrograms(
         ylabel = titlecase(rank),
         title = plot_title,
         xticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
-        xticklabelrotation = deg2rad(45),
+        xticklabelrotation = deg2rad(config.label_rotation),
         xticklabelsize = label_fontsize,
         yticks = (1:n_taxa, taxa),
         yticklabelsize = 8,
