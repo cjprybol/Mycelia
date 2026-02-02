@@ -4518,6 +4518,7 @@ Base.@kwdef struct MicrobiomePlotConfig
     large_dataset_view::Symbol = :auto
     samples_per_page::Int = 150
     heatmap_threshold::Int = 300
+    heatmap_max_labels::Union{Int, Nothing} = nothing  # nothing = show all labels
 
     # Output
     output_formats::Vector{Symbol} = [:png, :svg]
@@ -5155,7 +5156,11 @@ function _create_heatmap_with_dendrograms(
     height = min(height, 1400)
 
     # Calculate tick step for sample labels
-    tick_step = calculate_tick_step(n_samples, max_labels = 50)
+    tick_step = if isnothing(config.heatmap_max_labels)
+        1  # Show all labels by default
+    else
+        calculate_tick_step(n_samples, max_labels = config.heatmap_max_labels)
+    end
     label_fontsize = adaptive_label_fontsize(n_samples, config = config)
 
     # Determine grid layout based on dendrogram settings
@@ -5182,7 +5187,7 @@ function _create_heatmap_with_dendrograms(
         ylabel = titlecase(rank),
         title = plot_title,
         xticks = (1:tick_step:n_samples, samples[1:tick_step:n_samples]),
-        xticklabelrotation = deg2rad(45),
+        xticklabelrotation = deg2rad(config.label_rotation),
         xticklabelsize = label_fontsize,
         yticks = (1:n_taxa, taxa),
         yticklabelsize = 8,

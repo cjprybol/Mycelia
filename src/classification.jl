@@ -1083,6 +1083,11 @@ function parse_metabuli_report(report_file::String)::DataFrames.DataFrame
         DataFrames.rename!(df, rename_pairs...)
     end
 
+    # Strip leading/trailing whitespace from name column (Kraken-style indentation)
+    if :name in propertynames(df)
+        df.name = strip.(df.name)
+    end
+
     return df
 end
 
